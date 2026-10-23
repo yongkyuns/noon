@@ -4,7 +4,9 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
-use noon::integration::{AudioMixFormat, ExportFrameSummary, MAX_AUDIO_MIX_BLOCK_FRAMES};
+use noon::integration::{
+    AudioMixFormat, ExportAudioGrid, ExportFrameSummary, MAX_AUDIO_MIX_BLOCK_FRAMES,
+};
 use noon::ExecutionSession;
 
 use super::check_publication_cancellation;
@@ -13,6 +15,23 @@ use crate::CaptureCancellation;
 pub(super) const SAMPLE_RATE: u32 = 48_000;
 pub(super) const CHANNELS: usize = 2;
 pub(super) const PCM_FILENAME: &str = "audio.f32le";
+
+/// One private PCM file for the existing encoder, whether mixed in this process
+/// or received from an explicit export boundary. This is output staging only.
+pub(super) trait StagedSoundtrack {
+    fn frames(&self) -> u64;
+    fn stage(&mut self, directory: &Path, cancellation: &CaptureCancellation) -> io::Result<()>;
+}
+
+pub(super) fn soundtrack_grid(sampling: ExportFrameSummary) -> io::Result<ExportAudioGrid> {
+    let grid = ExportAudioGrid::new(sampling, AudioMixFormat::STEREO_48_KHZ).map_err(invalid)?;
+    super::terminal_duration::validate_soundtrack_grid(
+        sampling.frame_rate,
+        sampling.frames,
+        grid.frames(),
+    )?;
+    Ok(grid)
+}
 
 /// Borrow the same immutable plan used for visual capture. No PCM copy or
 /// mutable playhead is retained. The full video grid is padded with silence;
@@ -26,21 +45,8 @@ pub(super) struct Soundtrack<'a> {
 
 impl<'a> Soundtrack<'a> {
     pub fn new(session: &'a ExecutionSession, sampling: ExportFrameSummary) -> io::Result<Self> {
-        let ticks = u128::from(sampling.frames)
-            * u128::from(sampling.frame_rate.denominator())
-            * u128::from(SAMPLE_RATE);
-        let frames = u64::try_from(ticks.div_ceil(u128::from(sampling.frame_rate.numerator())))
-            .ok()
-            .filter(|&frames| frames > 0 && frames <= (1_u64 << 53))
-            .ok_or_else(|| invalid("soundtrack sample count is not representable"))?;
-        frames
-            .checked_mul(CHANNELS as u64 * 4)
-            .ok_or_else(|| invalid("soundtrack byte count overflows"))?;
-        super::terminal_duration::validate_soundtrack_grid(
-            sampling.frame_rate,
-            sampling.frames,
-            frames,
-        )?;
+        let grid = soundtrack_grid(sampling)?;
+        let frames = grid.frames();
         // Check origin/index range before files are made. Each bounded block
         // also checks adjacent sample-time precision before its PCM is written.
         session
@@ -51,21 +57,11 @@ impl<'a> Soundtrack<'a> {
                 &mut [],
             )
             .map_err(invalid)?;
-        let (mut low, mut high) = (0, frames);
-        while low < high {
-            let middle = low + (high - low) / 2;
-            let time = sampling.start_time + middle as f64 / f64::from(SAMPLE_RATE);
-            if time < sampling.end_time {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
-        }
         Ok(Self {
             session,
             scene_start: sampling.start_time,
             frames,
-            mixed_frames: low,
+            mixed_frames: grid.mixed_frames(),
         })
     }
 
@@ -111,6 +107,16 @@ impl<'a> Soundtrack<'a> {
         }
         file.flush()?;
         check_publication_cancellation(cancellation)
+    }
+}
+
+impl StagedSoundtrack for Soundtrack<'_> {
+    fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    fn stage(&mut self, directory: &Path, cancellation: &CaptureCancellation) -> io::Result<()> {
+        Soundtrack::stage(self, directory, cancellation)
     }
 }
 

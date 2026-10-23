@@ -269,6 +269,10 @@ mod wasm {
             self.context.state() == AudioContextState::Running && !self.interrupted.get()
         }
 
+        pub(crate) fn context(&self) -> AudioContext {
+            self.context.clone()
+        }
+
         pub(crate) fn is_scheduled(&self) -> bool {
             self.graph.is_some()
         }
@@ -364,12 +368,22 @@ mod wasm {
         }
 
         pub(crate) fn preload(&mut self, session: &ExecutionSession) -> Result<(), JsValue> {
-            self.prepare(session).map(|_| ())
+            self.preload_clips(session.audio_playback().map_err(js_error)?)
         }
 
-        fn prepare(&mut self, session: &ExecutionSession) -> Result<Vec<PreparedVoice>, JsValue> {
+        pub(crate) fn preload_clips<'a>(
+            &mut self,
+            clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
+        ) -> Result<(), JsValue> {
+            self.prepare(clips).map(|_| ())
+        }
+
+        fn prepare<'a>(
+            &mut self,
+            clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
+        ) -> Result<Vec<PreparedVoice>, JsValue> {
             let mut prepared = Vec::new();
-            for clip in session.audio_playback().map_err(js_error)? {
+            for clip in clips {
                 let length = u32::try_from(clip.pcm.frames()).map_err(|_| {
                     JsValue::from_str("audio PCM frame count exceeds the Web Audio buffer limit")
                 })?;
@@ -424,12 +438,19 @@ mod wasm {
         /// Materialize the Runtime's finite schedule at the same accepted host
         /// anchor as visual playback. Browser time is only a device offset.
         pub(crate) fn start(&mut self, session: &ExecutionSession) -> Result<(), JsValue> {
+            self.start_clips(session.audio_playback().map_err(js_error)?)
+        }
+
+        pub(crate) fn start_clips<'a>(
+            &mut self,
+            clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
+        ) -> Result<(), JsValue> {
             if !self.is_ready() {
                 return Err(JsValue::from_str(
                     "enable audio from a user gesture before resuming audio playback",
                 ));
             }
-            let prepared = self.prepare(session)?;
+            let prepared = self.prepare(clips)?;
             let bus = self.context.create_gain()?;
             bus.gain().set_value(0.0);
             bus.connect_with_audio_node(&self.master)?;

@@ -1990,6 +1990,8 @@ dependencies = [
  "noon-core",
  "noon-render-wgpu",
  "pollster",
+ "serde",
+ "serde_json",
  "wgpu",
 ]
 

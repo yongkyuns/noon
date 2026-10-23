@@ -8,7 +8,9 @@
 mod mix;
 pub use mix::{AudioMixError, AudioMixFormat, MAX_AUDIO_MIX_BLOCK_FRAMES};
 
-use noon_core::{AudioResource, AudioResourceHandle, SemanticNodeId};
+use noon_core::{
+    AudioClipDefinition, AudioClipError, AudioResource, AudioResourceHandle, SemanticNodeId,
+};
 
 use crate::SceneInstance;
 
@@ -56,6 +58,7 @@ pub struct AudioLoopRegion {
 #[derive(Clone, Copy, Debug)]
 pub struct AudioPlaybackClip<'a> {
     pub clip: SemanticNodeId,
+    pub definition: &'a AudioClipDefinition,
     pub resource: AudioResourceHandle,
     pub pcm: &'a AudioResource,
     pub start_delay: f64,
@@ -102,60 +105,86 @@ impl SceneInstance {
     pub fn audio_playback(
         &self,
     ) -> Result<impl Iterator<Item = AudioPlaybackClip<'_>>, AudioPlaybackError> {
-        let time = self.frame.time;
+        self.audio_playback_at(self.frame.time)
+    }
+
+    /// Derive immutable device instructions at an explicit authored time without
+    /// evaluating or publishing a frame. Real worker transports use this to
+    /// prepare resources once; the accepted player clock still owns playback.
+    pub fn audio_playback_at(
+        &self,
+        time: f64,
+    ) -> Result<impl Iterator<Item = AudioPlaybackClip<'_>>, AudioPlaybackError> {
         if !time.is_finite() || time < 0.0 {
             return Err(AudioPlaybackError::InvalidTime(time));
         }
         Ok(self.compiled.audio_clips().iter().filter_map(move |clip| {
             let definition = clip.definition();
-            let origin = time.max(definition.start_time());
-            let position = definition
-                .state_at(origin)
-                .expect("current audio time was validated")?;
             let pcm = self
                 .compiled
                 .resources()
                 .audio(definition.resource())
                 .expect("compiled audio owns its immutable PCM closure");
-            let elapsed = origin - definition.start_time();
-            let duration = definition.end_time() - origin;
-            let mut gain_points = AudioGainEnvelope {
-                points: [AudioGainPoint::default(); 4],
-                len: 0,
-            };
-            gain_points.push(0.0, position.gain);
-            let fade_in_end = definition.fade_in() - elapsed;
-            if fade_in_end > 0.0 && fade_in_end < duration {
-                gain_points.push(fade_in_end, definition.gain());
-            }
-            let fade_out_start = definition.duration() - definition.fade_out() - elapsed;
-            if definition.fade_out() > 0.0 && fade_out_start > 0.0 && fade_out_start < duration {
-                gain_points.push(fade_out_start, definition.gain());
-            }
-            // The natural end has no active state. Its left envelope limit is
-            // zero with an authored fade-out, otherwise the authored gain.
-            gain_points.push(
-                duration,
-                if definition.fade_out() > 0.0 {
-                    0.0
-                } else {
-                    definition.gain()
-                },
-            );
-            let rate = f64::from(pcm.sample_rate());
-            Some(AudioPlaybackClip {
-                clip: clip.clip(),
-                resource: definition.resource(),
-                pcm,
-                start_delay: origin - time,
-                duration,
-                source_offset: position.source_frame / rate,
-                loop_region: definition.is_looped().then(|| AudioLoopRegion {
-                    start: definition.source_start_frame() as f64 / rate,
-                    end: definition.source_end_frame() as f64 / rate,
-                }),
-                gain_points,
-            })
+            AudioPlaybackClip::at_time(clip.clip(), definition, pcm, time)
+                .expect("compiled audio and the query time were validated")
+        }))
+    }
+}
+
+impl<'a> AudioPlaybackClip<'a> {
+    /// The shared stateless projection used by the Runtime and a validated audio
+    /// resource mirror at a genuine worker boundary. This owns no playback clock.
+    pub fn at_time(
+        clip: SemanticNodeId,
+        definition: &'a AudioClipDefinition,
+        pcm: &'a AudioResource,
+        time: f64,
+    ) -> Result<Option<Self>, AudioClipError> {
+        if !time.is_finite() || time < 0.0 {
+            return Err(AudioClipError::InvalidSceneTime);
+        }
+        definition.validate_resource(pcm)?;
+        let origin = time.max(definition.start_time());
+        let Some(position) = definition.state_at(origin)? else {
+            return Ok(None);
+        };
+        let elapsed = origin - definition.start_time();
+        let duration = definition.end_time() - origin;
+        let mut gain_points = AudioGainEnvelope {
+            points: [AudioGainPoint::default(); 4],
+            len: 0,
+        };
+        gain_points.push(0.0, position.gain);
+        let fade_in_end = definition.fade_in() - elapsed;
+        if fade_in_end > 0.0 && fade_in_end < duration {
+            gain_points.push(fade_in_end, definition.gain());
+        }
+        let fade_out_start = definition.duration() - definition.fade_out() - elapsed;
+        if definition.fade_out() > 0.0 && fade_out_start > 0.0 && fade_out_start < duration {
+            gain_points.push(fade_out_start, definition.gain());
+        }
+        gain_points.push(
+            duration,
+            if definition.fade_out() > 0.0 {
+                0.0
+            } else {
+                definition.gain()
+            },
+        );
+        let rate = f64::from(pcm.sample_rate());
+        Ok(Some(Self {
+            clip,
+            definition,
+            resource: definition.resource(),
+            pcm,
+            start_delay: origin - time,
+            duration,
+            source_offset: position.source_frame / rate,
+            loop_region: definition.is_looped().then(|| AudioLoopRegion {
+                start: definition.source_start_frame() as f64 / rate,
+                end: definition.source_end_frame() as f64 / rate,
+            }),
+            gain_points,
         }))
     }
 }

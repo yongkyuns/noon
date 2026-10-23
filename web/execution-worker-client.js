@@ -6,6 +6,7 @@ import {
 } from "./execution-transport.js";
 import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
+import { WorkerAudioDevice } from "./worker-audio-device.js";
 import {
   RENDER_HOST_MAIN_THREAD,
   RENDER_HOST_WORKER,
@@ -64,6 +65,8 @@ export class ExecutionWorkerClient {
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
   #ready = null;
   #playing = true;
+  #audioDevice = new WorkerAudioDevice(() => this.#audioInterrupted());
+  #audioControlGeneration = 0;
   #onError;
   #onRecoverableError;
   #semanticAuthoringClient = null;
@@ -294,12 +297,12 @@ export class ExecutionWorkerClient {
         ), initialPointerView },
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
-        ([engine, renderResult]) => ({
-          engine,
-          render: renderResult,
-          transportMode: this.#transportMode,
-          session: this.#session,
-        }),
+        async ([engine, renderResult]) => {
+          await this.#prepareAudio(engine);
+          this.#assertLifecycleCurrent(generation);
+          return { engine, render: renderResult,
+            transportMode: this.#transportMode, session: this.#session };
+        },
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
@@ -308,7 +311,7 @@ export class ExecutionWorkerClient {
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
       this.#semanticPacing = pacing;
-      this.#playing = !initiallyPaused;
+      this.#playing = ready.engine.playing ?? !initiallyPaused;
       this.#fatalOwner = null;
       return ready;
     } catch (error) {
@@ -396,6 +399,11 @@ export class ExecutionWorkerClient {
     const wasPlaying = this.#playing;
     const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
     const oldEngine = this.#engineWorker;
+    if (this.#audioDevice.available) {
+      this.#audioControlGeneration += 1;
+      this.#audioDevice.stop();
+      this.#rememberPlaying(await this.#requestEngine("pause", {}));
+    }
     const nextSession = checkedNextSession(this.#session);
     const control = new MessageChannel();
     const render = new MessageChannel();
@@ -460,15 +468,15 @@ export class ExecutionWorkerClient {
         this.#markFatalOwner("render");
         throw error;
       });
-      this.#ready = renderSwitched.then((renderResult) => ({
-        engine: candidateReady,
-        render: renderResult,
-        transportMode: this.#transportMode,
-        session: this.#session,
-      }));
+      this.#ready = renderSwitched.then(async (renderResult) => {
+        await this.#prepareAudio(candidateReady);
+        this.#assertLifecycleCurrent(generation);
+        return { engine: candidateReady, render: renderResult,
+          transportMode: this.#transportMode, session: this.#session };
+      });
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
-      this.#playing = continuationGeneration === null ? wasPlaying : true;
+      this.#playing = candidateReady.playing ?? (continuationGeneration === null ? wasPlaying : true);
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
@@ -506,22 +514,18 @@ export class ExecutionWorkerClient {
   }
 
   async pause() {
-    const result = await this.#requestEngine("pause", {});
-    this.#rememberPlaying(result);
-    return result;
+    return this.#audioCommand("pause", {});
   }
 
   async resume() {
-    const result = await this.#requestEngine("resume", {});
-    this.#rememberPlaying(result);
-    return result;
+    // Web Audio resume must be initiated in the click's activation turn.
+    const unlocked = this.#audioDevice.unlock();
+    return this.#audioCommand("resume", {}, unlocked);
   }
 
   async seek(timeSeconds) {
     const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
-    const result = await this.#requestEngine("seek", { time });
-    this.#rememberPlaying(result);
-    return result;
+    return this.#audioCommand("seek", { time });
   }
 
   // Advance one canonical session barrier to an exact authored time. The
@@ -580,9 +584,63 @@ export class ExecutionWorkerClient {
   }
 
   async restartPlayback() {
-    const result = await this.#requestEngine("restart_playback", {});
+    return this.#audioCommand("restart_playback", {});
+  }
+
+  async seekSection(previous = false) {
+    if (typeof previous !== "boolean") throw new TypeError("section direction must be boolean");
+    return this.#audioCommand("seek_section", { previous });
+  }
+
+  setAudioVolume(volume) { this.#audioDevice.setVolume(volume); }
+  setAudioMuted(muted) { this.#audioDevice.setMuted(muted); }
+
+  async beginFiniteExport(frameOptions) {
+    this.#audioControlGeneration += 1;
+    this.#audioDevice.stop();
+    const result = await this.#requestEngine("begin_finite_export", { frameOptions });
     this.#rememberPlaying(result);
-    return result;
+    return result.finiteExport;
+  }
+
+  async sampleFiniteExport() {
+    return (await this.#requestEngine("sample_finite_export", {})).finiteExport;
+  }
+
+  async acknowledgeFiniteExport(observation) {
+    return (await this.#requestEngine("acknowledge_finite_export", { observation })).finiteExport;
+  }
+
+  async finiteExportAudioBlock(firstFrame, frameCount) {
+    return (await this.#requestEngine("finite_export_audio", { firstFrame, frameCount })).audioBlock;
+  }
+
+  async cancelFiniteExport() {
+    return this.#requestEngine("cancel_finite_export", {});
+  }
+
+  async #audioCommand(type, payload, unlocked = null) {
+    const generation = ++this.#audioControlGeneration;
+    const lifecycle = this.#lifecycleGeneration;
+    const session = this.#session;
+    this.#audioDevice.pause();
+    if (unlocked !== null) await unlocked;
+    if (generation !== this.#audioControlGeneration || lifecycle !== this.#lifecycleGeneration) {
+      const error = new Error("audio playback command was superseded");
+      error.name = "AbortError";
+      throw error;
+    }
+    const result = await this.#requestEngine(type, payload);
+    if (generation === this.#audioControlGeneration && lifecycle === this.#lifecycleGeneration && session === this.#session) {
+      try { this.#audioDevice.applyAnchor(result.audioAnchor, session); }
+      catch (error) {
+        this.#audioDevice.stop();
+        await this.#requestEngine("pause", {});
+        throw error;
+      }
+      this.#rememberPlaying(result);
+    }
+    return this.#audioState(result);
   }
 
   async undoTranslationDrag() {
@@ -683,7 +741,9 @@ export class ExecutionWorkerClient {
   }
 
   async state() {
-    return this.#requestEngine("state", {});
+    const result = await this.#requestEngine("state", {});
+    this.#rememberPlaying(result);
+    return this.#audioState(result);
   }
 
   async metrics({ profilePublicationStages = false, profileRenderSubstages = false,
@@ -770,6 +830,7 @@ export class ExecutionWorkerClient {
     // canvas exactly once so a later owner can transfer a fresh element.
     const restoreTransferredCanvas = this.#renderWorker !== null;
     this.#lifecycleGeneration += 1;
+    this.#retireAudio();
     const cancellation = new Error(LIFECYCLE_CANCELLED_MESSAGE);
     this.#candidateEngineReject?.(cancellation);
     this.#candidateEngineReject = null;
@@ -911,6 +972,20 @@ export class ExecutionWorkerClient {
       const message = event.data;
       try {
         validateWorkerEnvelope(message, channel);
+        if (owner === "engine" && message.type === "audio_stopped") {
+          this.#audioControlGeneration += 1;
+          this.#audioDevice.stop();
+          return;
+        }
+        if (owner === "engine" && message.type === "audio_state") {
+          // Unsolicited anchors can only retire naturally completed output.
+          if (message.audioAnchor?.session !== this.#session || message.audioAnchor?.playing !== false) {
+            throw new Error("invalid terminal worker audio state");
+          }
+          this.#audioDevice.pause();
+          this.#playing = false;
+          return;
+        }
         if (owner === "engine" && message.type === "pointer_presented") {
           const receipt = message.receipt;
           if (!receipt || ![receipt.session, receipt.sequence, receipt.presentation, receipt.view_revision]
@@ -1070,6 +1145,7 @@ export class ExecutionWorkerClient {
   }
 
   #rollbackFailedStart(error, replaceCanvas) {
+    this.#retireAudio();
     retireSemanticEndpoint(this.#engineWorker);
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
@@ -1160,6 +1236,7 @@ export class ExecutionWorkerClient {
   }
 
   #notifyError(error, owner) {
+    this.#retireAudio();
     this.#markFatalOwner(owner);
     this.#onError?.(error, owner);
   }
@@ -1177,6 +1254,43 @@ export class ExecutionWorkerClient {
       this.#playing = result.playing;
     }
   }
+
+  async #prepareAudio(engine) {
+    globalThis.document?.removeEventListener?.("visibilitychange", this.#visibilityChanged);
+    globalThis.window?.removeEventListener?.("pagehide", this.#audioInterrupted);
+    await this.#audioDevice.install(engine.audioResources);
+    if (!this.#audioDevice.available) return;
+    if (Number.isFinite(engine.durationSeconds) && engine.durationSeconds > 0) {
+      this.#loopDurationSeconds = engine.durationSeconds;
+    }
+    document.addEventListener("visibilitychange", this.#visibilityChanged);
+    window.addEventListener("pagehide", this.#audioInterrupted);
+  }
+
+  #audioState(result) {
+    return this.#audioDevice.available ? { ...result,
+      audioReady: this.#audioDevice.ready, audioVolume: this.#audioDevice.volume,
+      audioMuted: this.#audioDevice.muted } : result;
+  }
+
+  #retireAudio() {
+    this.#audioControlGeneration += 1;
+    this.#audioDevice.dispose();
+    globalThis.document?.removeEventListener?.("visibilitychange", this.#visibilityChanged);
+    globalThis.window?.removeEventListener?.("pagehide", this.#audioInterrupted);
+  }
+
+  #visibilityChanged = () => {
+    if (document.hidden) this.#audioInterrupted();
+  };
+
+  #audioInterrupted = () => {
+    this.#audioControlGeneration += 1;
+    this.#audioDevice.stop();
+    if (this.#engineWorker === null || !this.#playing) return;
+    void this.#requestEngine("pause", {}).then(result => this.#rememberPlaying(result))
+      .catch(error => { if (this.#engineWorker !== null) this.#notifyError(error, "engine"); });
+  };
 
   #assertLifecycleCurrent(generation) {
     if (generation !== this.#lifecycleGeneration) {

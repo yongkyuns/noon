@@ -47,6 +47,9 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/authoring-execution-router-smoke.mjs
   node --check scripts/browser-smoke.mjs
   node --check scripts/background-audio-smoke.mjs
+  node --check scripts/browser-audio-observation.mjs
+  node --check scripts/python-background-audio-smoke.mjs
+  node --check scripts/export-python-scene.mjs
   node --check scripts/browser-backend-visual-parity.mjs
   node --check scripts/browser-visual-parity-lib.mjs
   node --check scripts/manim-raster-differential.mjs

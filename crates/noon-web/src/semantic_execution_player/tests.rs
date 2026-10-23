@@ -9,29 +9,77 @@ use noon_core::{
 };
 
 #[test]
-fn worker_player_rejects_audio_before_allocating_transport_resources() {
+fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
     let mut scene = noon::Scene::new();
     let resource =
-        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.0; 8_000], 32_000).unwrap();
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.1; 8_000], 32_000).unwrap();
     scene
         .audio(resource, noon_core::AudioClipOptions::default())
         .unwrap();
-    let session = scene.execution_session().unwrap();
-    let error = SemanticExecutionPlayer::from_session(session, 1.0, 99)
-        .err()
-        .expect("worker audio needs an explicit output path");
-    assert!(error.contains("Python/render worker channel"));
-    let session = scene.execution_session().unwrap();
-    let error = SemanticExecutionPlayer::from_live_session(
-        session,
+    let mut player =
+        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 99).unwrap();
+    assert!(player.has_audio_wasm());
+    assert_eq!(player.finite_audio_duration(), Some(1.0));
+    assert_eq!(player.clock.loop_duration(), None);
+    let resources = crate::worker_audio::WorkerAudioResources::decode(
+        &player.audio_resource_bundle_bytes().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resources.session(), 99);
+    assert_eq!(resources.at_time(0.5).unwrap()[0].source_offset, 0.5);
+    player.tick_callback_phase_json(1000.0).unwrap();
+    player.tick_callback_phase_json(2600.0).unwrap();
+    assert_eq!(player.time(), 1.0);
+    assert!(!player.is_playing());
+    player.seek_delta_json(0.25).unwrap();
+    assert_eq!(player.time(), 0.25);
+    assert!(player.seek_delta_json(1.01).is_err());
+    assert_eq!(player.time(), 0.25);
+    assert!(player.set_loop_duration(f64::NAN).is_err());
+    assert_eq!(player.finite_audio_duration(), Some(1.0));
+    assert!(
+        player.begin_replay_retention().is_err(),
+        "sequential source audio remains explicitly gated"
+    );
+    assert!(SemanticExecutionPlayer::from_session(
+        scene.execution_session().unwrap(),
+        f64::NAN,
+        100
+    )
+    .is_err());
+    let live = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
-        100,
+        101,
     )
-    .err()
-    .expect("live worker entry must have the same gate");
-    assert!(error.contains("Python/render worker channel"));
+    .unwrap();
+    assert_eq!(live.finite_audio_duration(), Some(1.0));
+}
+
+#[test]
+fn worker_audio_sections_use_shared_strict_nonwrapping_navigation() {
+    let scene = noon::example_scenes::background_music_lesson::scene().unwrap();
+    let navigation = scene.section_navigation();
+    let mut player =
+        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 30.0, 102)
+            .unwrap();
+    player.set_section_navigation(navigation);
+    player.pause();
+    player.seek_section_delta_json(false).unwrap();
+    assert_eq!(player.time(), 10.0);
+    player.seek_section_delta_json(false).unwrap();
+    assert_eq!(player.time(), 20.0);
+    player.seek_section_delta_json(false).unwrap();
+    assert_eq!(player.time(), 20.0);
+    player.seek_section_delta_json(true).unwrap();
+    assert_eq!(player.time(), 10.0);
+    player.seek_section_delta_json(true).unwrap();
+    assert_eq!(player.time(), 0.0);
+    player.seek_section_delta_json(true).unwrap();
+    assert_eq!(player.time(), 0.0);
+    assert!(!player.is_playing());
 }
 
 #[test]

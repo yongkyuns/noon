@@ -1,5 +1,7 @@
 import initNoonWeb, {
   WasmAuthoringStore,
+  WasmAudioSource,
+  WasmAudioClipOptions,
   WasmAuthoringFamilyHandle,
   WasmGlow,
   WasmGlowUpdate,
@@ -295,6 +297,8 @@ async function initializePyodide() {
     authoringStore.createManimGeometry(options);
   self.noonCreateAuthoringArrowHandle = (options) =>
     authoringStore.createManimArrow(options);
+  self.noonAudioSource = WasmAudioSource;
+  self.noonAudioClipOptions = (...args) => new WasmAudioClipOptions(...args);
   self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
     authoringStore.createSvgFromString(source, shouldCenter, height, width);
   self.noonTextColorBatch = () => new WasmTextColorBatch();

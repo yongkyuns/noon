@@ -26,6 +26,23 @@
       "beats": [{"time": 2.5, "label": "Assemble"}, {"time": 4.4, "label": "Morph"}, {"time": 7.8, "label": "Waves"}, {"time": 12.4, "label": "Spiral"}, {"time": 13.5, "label": "Exchange"}, {"time": 17.6, "label": "Finale"}]
     },
     {
+      "id": "showcase-background-music", "title": "Double the input",
+      "lesson": "Follow positive, negative, and zero inputs on two number lines, accompanied by the original score A Small Discovery.",
+      "primary_feature": "finite-background-music", "category": "Audio and timing",
+      "path": "python/examples/background_music_lesson.py",
+      "features": ["AudioSource", "Scene.audio", "ValueTracker", "bind_position", "declare_value", "sections"],
+      "duration": 30.0, "thumbnail_time": 8.0,
+      "thumbnail": "thumbnails/showcase/showcase-background-music.png",
+      "thumbnail_alt": "A blue input point and gold output point on two labeled number lines demonstrate y equals two x",
+      "still_intervals": [[0, 1], [9, 11], [19, 21], [29, 30]],
+      "beats": [
+        {"time": 5.0, "label": "Double a positive input"},
+        {"time": 13.0, "label": "Keep the sign"},
+        {"time": 25.0, "label": "Return to zero"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
       "id": "showcase-entrances-exits",
       "title": "Entrances and exits",
       "lesson": "Compare four ways to reveal and remove the same shape, using a shared duration.",

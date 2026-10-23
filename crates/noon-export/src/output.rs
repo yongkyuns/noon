@@ -5,10 +5,16 @@
 //! is reported successful before EOF, encoder exit and destination publication.
 mod audio;
 mod destination;
+mod prepared;
 mod process;
 mod session;
 mod terminal_duration;
 
+pub use prepared::{
+    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest,
+    PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate, PreparedPublication,
+    PreparedSample, PreparedStop,
+};
 pub use session::{export_session_file, SessionFileExportError};
 
 use std::error::Error;
@@ -240,12 +246,32 @@ impl FileSink {
     }
 
     fn with_soundtrack(
+        options: OutputOptions,
+        rate: FrameRate,
+        width: u32,
+        height: u32,
+        cancellation: CaptureCancellation,
+        mut soundtrack: Option<audio::Soundtrack<'_>>,
+    ) -> io::Result<Self> {
+        Self::with_staged_soundtrack(
+            options,
+            rate,
+            width,
+            height,
+            cancellation,
+            soundtrack
+                .as_mut()
+                .map(|source| source as &mut dyn audio::StagedSoundtrack),
+        )
+    }
+
+    fn with_staged_soundtrack(
         mut options: OutputOptions,
         rate: FrameRate,
         width: u32,
         height: u32,
         cancellation: CaptureCancellation,
-        soundtrack: Option<audio::Soundtrack<'_>>,
+        soundtrack: Option<&mut dyn audio::StagedSoundtrack>,
     ) -> io::Result<Self> {
         options.validate(rate, width, height)?;
         check_publication_cancellation(&cancellation)?;
@@ -277,7 +303,7 @@ impl FileSink {
         encoder.write(&[0, 0, 0, 255].repeat(4))?;
         encoder.finish()?;
         fs::remove_dir_all(probe)?;
-        let audio_frames = soundtrack.as_ref().map(|audio| audio.frames);
+        let audio_frames = soundtrack.as_ref().map(|audio| audio.frames());
         if let Some(audio) = soundtrack {
             audio.stage(&destination.work, &cancellation)?;
         }

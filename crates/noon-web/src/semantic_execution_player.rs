@@ -1,4 +1,5 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
+mod audio;
 #[cfg(target_arch = "wasm32")]
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -9,6 +10,7 @@ mod code;
 mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
 mod effects;
+mod export;
 #[cfg(any(target_arch = "wasm32", test))]
 mod graph;
 #[cfg(target_arch = "wasm32")]
@@ -141,6 +143,11 @@ pub struct SemanticExecutionPlayer {
     /// geometry ID generation, so two live callback leases cannot alias ID 0.
     callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
+    /// Admission-time endpoint of the finite audio profile, derived from the
+    /// existing runtime/scalar schedules. It is never advanced by device time.
+    finite_audio_end: Option<f64>,
+    finite_export: Option<export::FiniteExport>,
+    section_navigation: noon::SceneSectionNavigation,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     /// Immutable text/font/vector dependencies transferred once at the genuine
     /// authoring-worker to render-worker boundary.
@@ -445,7 +452,10 @@ impl SemanticExecutionPlayer {
     }
 
     fn playback_clock(session: &ExecutionSession, duration: f64) -> Result<PlaybackClock, String> {
-        if session.has_required_callbacks() {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(format!("invalid playback duration {duration}"));
+        }
+        if session.has_required_callbacks() || session.has_audio() {
             Ok(PlaybackClock::once())
         } else {
             PlaybackClock::looping(duration).map_err(|error| error.to_string())
@@ -538,6 +548,11 @@ impl SemanticExecutionPlayer {
             .encode_binary()
             .map_err(|error| error.to_string())?;
         Ok(Self {
+            finite_audio_end: session
+                .has_audio()
+                .then(|| duration.max(session.finite_timeline_end_time().unwrap())),
+            finite_export: None,
+            section_navigation: Default::default(),
             session,
             callback_geometry_sources: GeometryResourceArena::new(),
             clock,
@@ -588,6 +603,11 @@ impl SemanticExecutionPlayer {
             .encode_binary()
             .map_err(|error| error.to_string())?;
         Ok(Self {
+            finite_audio_end: session
+                .has_audio()
+                .then(|| duration.max(session.finite_timeline_end_time().unwrap())),
+            finite_export: None,
+            section_navigation: Default::default(),
             session,
             callback_geometry_sources: GeometryResourceArena::new(),
             clock,
@@ -611,10 +631,10 @@ impl SemanticExecutionPlayer {
     }
 
     fn require_worker_execution_profile(session: &ExecutionSession) -> Result<(), String> {
-        if session.has_audio() {
-            return Err(
-                "audio playback through the Python/render worker channel is not available yet; use the direct Rust/WASM audio host (#2263)".into(),
-            );
+        if session.has_audio()
+            && (session.finite_timeline_end_time().is_none() || session.replay_scope_active())
+        {
+            return Err("worker audio requires a complete finite immutable timeline without source history or callbacks (#2263)".into());
         }
         if session.has_playback_controls() {
             return Err(
@@ -646,8 +666,19 @@ impl SemanticExecutionPlayer {
             );
         }
         self.validate_live_loop_duration(duration)?;
+        let finite_audio_end = if self.session.has_audio() {
+            Some(
+                duration.max(
+                    self.session
+                        .finite_timeline_end_time()
+                        .ok_or("worker audio lost finite admission")?,
+                ),
+            )
+        } else {
+            None
+        };
         let mut clock = self.clock.clone();
-        if !self.session.has_required_callbacks() {
+        if !self.session.has_required_callbacks() && !self.session.has_audio() {
             clock
                 .set_loop_duration(duration)
                 .map_err(|error| error.to_string())?;
@@ -664,6 +695,7 @@ impl SemanticExecutionPlayer {
             .encode_binary()
             .map_err(|error| error.to_string())?;
         self.clock = clock;
+        self.finite_audio_end = finite_audio_end;
         self.resource_bundle = resource_bundle;
         self.encoder = encoder;
         self.worker_pointer_presentation = Default::default();
@@ -3796,6 +3828,8 @@ impl SemanticExecutionPlayer {
         let mut wake = self.session.wake_state();
         if callback_blocked || !self.clock.is_playing() {
             wake = wake.without_timeline_wake();
+        } else if let Some(end) = self.finite_audio_end {
+            wake = wake.with_additional_timeline(TimelineWakeState::Deadline(end));
         } else if let Some(loop_duration) = self.clock.loop_duration() {
             // A completed authored wait has duration even without animated
             // channels. An un-authored static scene still remains fully idle.
@@ -4134,7 +4168,9 @@ impl SemanticExecutionPlayer {
         let publication = self.session.take_renderer_publication();
         let mut changes = publication.changes().clone();
         if changes.is_empty()
-            && (presentation != self.last_sent_selection_overlay || pointer_refresh)
+            && (self.finite_export.is_some()
+                || presentation != self.last_sent_selection_overlay
+                || pointer_refresh)
         {
             // Presentation-only transport work, not authored/runtime dirtiness.
             // Reuse the existing sequence and backpressure; never invent a row.
@@ -5243,7 +5279,14 @@ impl SemanticExecutionPlayer {
         let requested = clock
             .scene_time(timestamp_ms)
             .map_err(|error| error.to_string())?;
+        let requested = self
+            .finite_audio_end
+            .map_or(requested, |end| requested.min(end));
         let phase = self.advance_to_callback_phase(requested)?;
+        if self.finite_audio_end == Some(requested) {
+            clock.seek(requested).map_err(|error| error.to_string())?;
+            clock.pause();
+        }
         if phase.is_none() {
             self.session
                 .advance_interactions(timestamp_ms / 1_000.0)
@@ -5906,7 +5949,12 @@ impl SemanticExecutionPlayer {
     pub fn tick_delta_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, String> {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
+        let time = self.finite_audio_end.map_or(time, |end| time.min(end));
         self.session.evaluate(time).map_err(|e| e.to_string())?;
+        if self.finite_audio_end == Some(time) {
+            clock.seek(time).map_err(|error| error.to_string())?;
+            clock.pause();
+        }
         self.session
             .advance_interactions(timestamp_ms / 1_000.0)
             .map_err(|error| error.to_string())?;
@@ -5945,6 +5993,9 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        if self.finite_audio_end.is_some_and(|end| time > end) {
+            return Err("audio seek exceeds the finite timeline".into());
+        }
         if self.session.has_required_callbacks() {
             return Err(
                 "direct seek is unsupported for required callbacks; begin a new authoring run"
@@ -5962,6 +6013,22 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setLoopDuration))]
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), String> {
+        if self.session.has_audio() {
+            if !duration.is_finite()
+                || duration <= 0.0
+                || duration
+                    < self
+                        .session
+                        .finite_timeline_end_time()
+                        .ok_or("worker audio lost finite admission")?
+            {
+                return Err(
+                    "audio playback duration must include the complete finite timeline".into(),
+                );
+            }
+            self.finite_audio_end = Some(duration);
+            return Ok(());
+        }
         if self.session.has_required_callbacks() {
             return Err(
                 "looping playback is unsupported for opaque required callbacks; begin a new authoring run"

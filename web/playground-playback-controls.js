@@ -14,6 +14,16 @@ export class PlaygroundPlaybackControls {
   #scrubber;
   #timeOutput;
   #liveStatus;
+  #audioControls;
+  #previousSection;
+  #nextSection;
+  #sectionNames;
+  #muteButton;
+  #volume;
+  #hasAudio = false;
+  #audioReady = false;
+  #audioMuted = false;
+  #sections = [];
   #durationSeconds;
   #timeSeconds = 0;
   #playing = true;
@@ -101,6 +111,42 @@ export class PlaygroundPlaybackControls {
     this.#timeOutput.setAttribute("aria-label", "Animation time");
 
     this.#root.append(this.#playButton, this.#restartButton, this.#undoDragButton, timeline, this.#timeOutput);
+    this.#audioControls = document.createElement("div");
+    this.#audioControls.className = "playback-audio-controls";
+    this.#audioControls.hidden = true;
+    this.#previousSection = document.createElement("button");
+    this.#previousSection.type = "button";
+    this.#previousSection.className = "playback-button playback-previous-section";
+    this.#previousSection.textContent = "Previous";
+    this.#previousSection.setAttribute("aria-label", "Previous lesson section");
+    this.#previousSection.addEventListener("click", this.#handlePreviousSection);
+    this.#nextSection = document.createElement("button");
+    this.#nextSection.type = "button";
+    this.#nextSection.className = "playback-button playback-next-section";
+    this.#nextSection.textContent = "Next";
+    this.#nextSection.setAttribute("aria-label", "Next lesson section");
+    this.#nextSection.addEventListener("click", this.#handleNextSection);
+    this.#sectionNames = document.createElement("span");
+    this.#sectionNames.className = "playback-section-names";
+    this.#muteButton = document.createElement("button");
+    this.#muteButton.type = "button";
+    this.#muteButton.className = "playback-button playback-mute";
+    this.#muteButton.addEventListener("click", this.#handleMute);
+    const volumeLabel = document.createElement("label");
+    volumeLabel.className = "playback-volume-label";
+    volumeLabel.textContent = "Music";
+    this.#volume = document.createElement("input");
+    this.#volume.type = "range";
+    this.#volume.min = "0";
+    this.#volume.max = "1";
+    this.#volume.step = "0.01";
+    this.#volume.value = "1";
+    this.#volume.setAttribute("aria-label", "Music volume");
+    this.#volume.addEventListener("input", this.#handleVolume);
+    volumeLabel.append(this.#volume);
+    this.#audioControls.append(this.#previousSection, this.#nextSection, this.#sectionNames,
+      this.#muteButton, volumeLabel);
+    this.#root.append(this.#audioControls);
     this.#render();
   }
 
@@ -140,7 +186,11 @@ export class PlaygroundPlaybackControls {
     if (this.#destroyed || this.#seekActive || this.#commandPending) return;
     // A continuation's current play/wait endpoint is not its full duration.
     // Only the completed source result may set the replay range via setDuration.
-    this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag });
+    this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag,
+      hasAudio: state.hasAudio, audioReady: state.audioReady, audioMuted: state.audioMuted,
+      audioVolume: state.audioVolume, sections: state.sections,
+      ...(state.hasAudio ? { durationSeconds: state.durationSeconds } : {}),
+    });
   }
 
   setBusy(busy) {
@@ -155,7 +205,9 @@ export class PlaygroundPlaybackControls {
     this.#desiredSeek = null;
   }
 
-  sync({ time, playing, durationSeconds = undefined, canUndoTranslationDrag = undefined }) {
+  sync({ time, playing, durationSeconds = undefined, canUndoTranslationDrag = undefined,
+    hasAudio = undefined, audioReady = undefined, audioMuted = undefined,
+    audioVolume = undefined, sections = undefined }) {
     if (this.#controllable && durationSeconds !== undefined) {
       this.#durationSeconds = validateDuration(durationSeconds);
     }
@@ -167,6 +219,11 @@ export class PlaygroundPlaybackControls {
     }
     this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
     this.#playing = playing;
+    if (hasAudio !== undefined) this.#hasAudio = hasAudio === true;
+    if (audioReady !== undefined) this.#audioReady = audioReady === true;
+    if (audioMuted !== undefined) this.#audioMuted = audioMuted === true;
+    if (audioVolume !== undefined) this.#volume.value = String(audioVolume);
+    if (sections !== undefined) this.#sections = sections;
     if (canUndoTranslationDrag !== undefined) {
       if (typeof canUndoTranslationDrag !== "boolean") {
         throw new TypeError("canUndoTranslationDrag must be boolean when provided");
@@ -197,6 +254,10 @@ export class PlaygroundPlaybackControls {
     this.#restartButton.removeEventListener("click", this.#handleRestart);
     this.#undoDragButton.removeEventListener("click", this.#handleUndoDrag);
     this.#scrubber.removeEventListener("input", this.#handleSeekInput);
+    this.#previousSection.removeEventListener("click", this.#handlePreviousSection);
+    this.#nextSection.removeEventListener("click", this.#handleNextSection);
+    this.#muteButton.removeEventListener("click", this.#handleMute);
+    this.#volume.removeEventListener("input", this.#handleVolume);
     renderPlaybackPlaceholder(this.#root);
   }
 
@@ -220,6 +281,28 @@ export class PlaygroundPlaybackControls {
       const result = await this.#player.undoTranslationDrag();
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
+  };
+
+  #handlePreviousSection = () => this.#handleSection(true);
+  #handleNextSection = () => this.#handleSection(false);
+  #handleSection(previous) {
+    void this.#runCommand(async generation => {
+      const result = await this.#player.seekSection(previous);
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
+    });
+  }
+
+  #handleMute = () => {
+    try {
+      this.#player.setAudioMuted(!this.#audioMuted);
+      this.#audioMuted = !this.#audioMuted;
+      this.#render();
+    } catch (error) { this.#reportError(error); }
+  };
+
+  #handleVolume = () => {
+    try { this.#player.setAudioVolume(Number(this.#volume.value)); }
+    catch (error) { this.#reportError(error); }
   };
 
   #handleSeekInput = () => {
@@ -287,7 +370,7 @@ export class PlaygroundPlaybackControls {
   }
 
   #reportError(error) {
-    if (this.#destroyed) return;
+    if (this.#destroyed || error?.name === "AbortError") return;
     if (this.#onError !== null) {
       this.#onError(error);
       return;
@@ -298,11 +381,20 @@ export class PlaygroundPlaybackControls {
   #render() {
     if (this.#destroyed) return;
     this.#playButton.textContent = this.#unavailableReason !== null ? "Complete" : !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
+    if (this.#hasAudio && this.#controllable && !this.#playing && !this.#audioReady) {
+      this.#playButton.textContent = "Play with sound";
+    }
     this.#playButton.setAttribute(
       "aria-label",
       !this.#controllable ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
     );
     this.#scrubber.hidden = !this.#controllable;
+    this.#audioControls.hidden = !this.#hasAudio;
+    this.#previousSection.hidden = this.#sections.length === 0;
+    this.#nextSection.hidden = this.#sections.length === 0;
+    this.#sectionNames.textContent = this.#sections.map(section => section.name).join(" · ");
+    this.#muteButton.textContent = this.#audioMuted ? "Unmute" : "Mute";
+    this.#muteButton.setAttribute("aria-pressed", String(this.#audioMuted));
     this.#liveStatus.hidden = this.#controllable;
     this.#liveStatus.textContent = this.#unavailableReason !== null ? "Replay unavailable" : "Duration pending";
     this.#scrubber.max = String(this.#durationSeconds);
@@ -338,6 +430,10 @@ export class PlaygroundPlaybackControls {
     this.#playButton.disabled = blockCommands;
     this.#restartButton.disabled = blockCommands;
     this.#undoDragButton.disabled = blockCommands || !this.#canUndoTranslationDrag;
+    this.#previousSection.disabled = blockCommands;
+    this.#nextSection.disabled = blockCommands;
+    this.#muteButton.disabled = this.#externalBusy;
+    this.#volume.disabled = this.#externalBusy;
     this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
     this.#root.dataset.busy = String(busy);
     this.#root.dataset.playing = String(this.#playing);
@@ -474,6 +570,26 @@ function installStyles() {
       text-overflow: ellipsis;
     }
     .playback-controls [hidden] { display: none !important; }
+    .playback-audio-controls {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .playback-section-names {
+      flex: 1 1 9rem;
+      color: #b9c3d6;
+      font-size: 0.68rem;
+    }
+    .playback-volume-label {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: #b9c3d6;
+      font-size: 0.68rem;
+    }
+    .playback-volume-label input { width: 5rem; accent-color: var(--accent); }
     .playback-controls[data-busy="true"] button:disabled,
     .playback-controls[data-busy="true"] input:disabled {
       cursor: wait;

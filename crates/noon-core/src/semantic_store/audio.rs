@@ -61,9 +61,10 @@ impl SemanticStore {
         self.audio_resources.insert(resource)
     }
 
-    /// Admit immutable PCM for one atomic semantic publication. The callback
-    /// must use a preflighted/atomic transaction: an error or unwind discards
-    /// only this fresh unpublished resource, preserving existing handles.
+    /// Admit immutable PCM for one atomic semantic publication, reusing an
+    /// earlier admitted clone of the same prepared source. The callback must
+    /// use a preflighted/atomic transaction: an error or unwind discards only a
+    /// fresh unpublished resource, preserving existing handles and clips.
     pub fn with_audio_resource<T, E>(
         &mut self,
         resource: AudioResource,
@@ -72,10 +73,11 @@ impl SemanticStore {
     where
         E: From<AudioResourceError>,
     {
-        let handle = self.audio_resources.insert(resource)?;
+        let (handle, fresh) = self.audio_resources.admit_shared(resource)?;
         let mut admission = AudioAdmission {
             store: self,
             handle,
+            fresh,
             committed: false,
         };
         let result = publish(admission.store, handle);
@@ -170,12 +172,13 @@ impl SemanticStore {
 struct AudioAdmission<'a> {
     store: &'a mut SemanticStore,
     handle: AudioResourceHandle,
+    fresh: bool,
     committed: bool,
 }
 
 impl Drop for AudioAdmission<'_> {
     fn drop(&mut self) {
-        if !self.committed {
+        if self.fresh && !self.committed {
             self.store.audio_resources.remove(self.handle);
         }
     }

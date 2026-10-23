@@ -1557,6 +1557,43 @@ class Scene:
     def declare_wait(self, duration: float = 1.0) -> Scene:
         return _scene_operations()._declare_wait(self, duration)
 
+    def declare_value(
+        self, tracker: object, target: float, *, run_time: float = 1.0,
+        rate_func: object = "smooth",
+    ) -> Scene:
+        """Predeclare a scalar interval on the shared Rust authoring cursor.
+
+        Use with Scene.value_tracker/bind_position before playback. This is an
+        explicit finite declaration, not a Scene.play continuation barrier.
+        """
+        return _scene_operations()._declare_value(
+            self, tracker, target, run_time=run_time, rate_func=rate_func,
+        )
+
+    def audio(
+        self, source: object, *, start_time: float = 0.0,
+        source_start_frame: int = 0, source_end_frame: int | None = None,
+        duration: float | None = None, loop: bool = False, gain: float = 1.0,
+        fade_in: float = 0.0, fade_out: float = 0.0,
+    ) -> Any:
+        """Declare a finite PCM clip before execution without advancing time.
+
+        Times are authored seconds; start_time is absolute and defaults to zero.
+        Source trims are half-open PCM frame indices. A loop requires duration;
+        fades apply once across the clip, including repeated source regions.
+        """
+        from _noon_audio import audio
+        return audio(
+            self, source, start_time=start_time, source_start_frame=source_start_frame,
+            source_end_frame=source_end_frame, duration=duration, loop=loop,
+            gain=gain, fade_in=fade_in, fade_out=fade_out,
+        )
+
+    def on_click_playback(self, target: Mobject, action: object) -> Scene:
+        """Declare a finite viewer control through the normal shared Rust picker."""
+        from _noon_audio import on_click_playback
+        return on_click_playback(self, target, action)
+
     @property
     def time(self) -> float:
         return _scene_operations()._canonical_scene_time(self)
@@ -1717,6 +1754,9 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "AudioSource": "_noon_audio",
+    "AudioClip": "_noon_audio",
+    "PlaybackControl": "_noon_audio",
     "typing": "_manim_typing",
     "get_unit_normal": "_manim_user_vector_bases",
     "z_to_vector": "_manim_user_vector_bases",

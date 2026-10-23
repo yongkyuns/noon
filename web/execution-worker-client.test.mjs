@@ -920,3 +920,36 @@ test("inspection reserved before termination is never delivered to a retired end
   assert.match((await pending).error?.message ?? "", /retired|transition|terminated/i);
   assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
 });
+
+test("a retired device unlock cannot resume its former worker", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  let completeUnlock;
+  const unlock = new Promise(resolve => { completeUnlock = resolve; });
+  let unlockCalls = 0;
+  t.mock.method(WorkerAudioDevice.prototype, "unlock", () => { unlockCalls += 1; return unlock; });
+  const { client, engine } = await startClient();
+  const resumed = client.resume();
+  assert.equal(unlockCalls, 1, "activation starts synchronously in the caller's turn");
+  client.terminate();
+  completeUnlock();
+  await assert.rejects(resumed, error => error.name === "AbortError");
+  assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+});
+
+test("pause supersedes an outstanding device unlock without a delayed restart", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  let completeUnlock;
+  const unlock = new Promise(resolve => { completeUnlock = resolve; });
+  t.mock.method(WorkerAudioDevice.prototype, "unlock", () => unlock);
+  const { client, engine } = await startClient();
+  try {
+    const resumed = client.resume();
+    const paused = client.pause();
+    const request = await waitForRequest(engine, "pause");
+    engine.emitMessage(engineMessage("pause", { requestId: request.requestId, time: 0, playing: false }));
+    assert.equal((await paused).playing, false);
+    completeUnlock();
+    await assert.rejects(resumed, error => error.name === "AbortError");
+    assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+  } finally { client.terminate(); }
+});

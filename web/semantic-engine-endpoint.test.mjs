@@ -2887,3 +2887,94 @@ test("non-replayable paused scenes drive native interaction wakes and settle", {
     assert.match(rejected.message, /Replay unavailable/);
   } finally { endpoint?.stop(); f.close(); }
 });
+
+test("finite audio prepares silently and anchors resume/seek only after matching presentation", async () => {
+  const f = fixture();
+  f.player.hasAudio = () => true;
+  f.player.finiteAudioDuration = () => 2;
+  f.player.sectionsJson = () => JSON.stringify([{ index: 0, name: "Opening", time: 0 }]);
+  f.player.audioResourceBundleBytes = () => new Uint8Array([2, 3, 4]);
+  f.player.audioAnchorJson = sampledEpochMs => JSON.stringify({
+    session: 7, time: f.player.time(), playing: f.player.isPlaying(), sampledEpochMs,
+  });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    const prepared = await ready;
+    assert.equal(prepared.playing, false);
+    assert.equal(prepared.hasAudio, true);
+    assert.deepEqual(prepared.audioResources, new Uint8Array([2, 3, 4]));
+    assert.deepEqual(prepared.sections, [{ index: 0, name: "Opening", time: 0 }]);
+    let settled = false;
+    const resumed = request(f.control.port2, "resume", 1).then(result => { settled = true; return result; });
+    await turn();
+    assert.equal(settled, false, "an unpresented first picture cannot start audio");
+    present(f.render.port2, await initial);
+    const playing = await resumed;
+    assert.equal(playing.audioAnchor.playing, true);
+    assert.equal(playing.audioAnchor.time, 0);
+    assert.ok(Number.isFinite(playing.audioAnchor.sampledEpochMs));
+    const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    settled = false;
+    const seeking = request(f.control.port2, "seek", 2, { time: 1.25 }).then(result => { settled = true; return result; });
+    const delta = await changed;
+    await turn();
+    assert.equal(settled, false, "seek must wait for the selected picture");
+    assert.equal(f.player.isPlaying(), false, "clock stays pinned during seek presentation");
+    present(f.render.port2, delta);
+    const sought = await seeking;
+    assert.equal(sought.audioAnchor.time, 1.25);
+    assert.equal(sought.audioAnchor.playing, true);
+    assert.equal(f.stats().created, 1, "the original player remains sole execution owner");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("finite export retains presentation barriers and rejects competing controls", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let active = false, acknowledged = 0, advances = 0, dirty = false;
+  const observation = () => ({ requested_time: acknowledged ? 1.5 : 1, published_time: 1,
+    publication: { scene_revision: "1", execution_revision: "2", frame_epoch: "3" } });
+  f.player.finiteExportActive = () => active;
+  f.player.beginFiniteExportJson = () => { active = true; return JSON.stringify({ audio: false }); };
+  f.player.finiteExportStatusJson = () => JSON.stringify({ kind: "needs_sample", requested_time: acknowledged ? 1.5 : 1, target_time: 1 });
+  f.player.observeFiniteExportJson = () => JSON.stringify({ kind: "sample", observation: observation(), frame: { held: acknowledged > 0 } });
+  f.player.acknowledgeFiniteExportJson = value => {
+    assert.deepEqual(JSON.parse(value), observation());
+    acknowledged += 1;
+    return JSON.stringify({ kind: "needs_sample", requested_time: 1.5, target_time: 1 });
+  };
+  f.player.cancelFiniteExport = () => { active = false; };
+  const advance = f.player.advanceForwardToCallbackPhaseJson;
+  f.player.advanceForwardToCallbackPhaseJson = time => { advances += 1; dirty = true; return advance(time); };
+  f.player.drainDeltaJson = () => { if (!dirty) return null; dirty = false; return f.player.initialDeltaJson(); };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    present(f.render.port2, await initial);
+    await request(f.control.port2, "begin_finite_export", 1, { frameOptions: {} });
+    const denied = await request(f.control.port2, "resume", 2);
+    assert.equal(denied.type, "error");
+    assert.match(denied.message, /finite export owns paused execution/);
+    assert.equal(f.player.isPlaying(), false);
+    const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    let settled = false;
+    const sampling = request(f.control.port2, "sample_finite_export", 3).then(value => { settled = true; return value; });
+    const delta = await changed;
+    await turn();
+    assert.equal(settled, false, "pixel consumers wait for the exact retained publication");
+    present(f.render.port2, delta);
+    const sampled = await sampling;
+    assert.equal(sampled.finiteExport.frame.held, false);
+    await request(f.control.port2, "acknowledge_finite_export", 4, { observation: sampled.finiteExport.observation });
+    const held = await request(f.control.port2, "sample_finite_export", 5);
+    assert.equal(held.finiteExport.frame.held, true);
+    assert.equal(advances, 1, "a terminal held frame reuses the same publication epoch");
+    await request(f.control.port2, "cancel_finite_export", 6);
+    assert.equal(active, false);
+  } finally { endpoint?.stop(); f.close(); }
+});
