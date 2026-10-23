@@ -10,6 +10,7 @@ use noon_core::{
 use noon_runtime::{PrefixBatch, ReplayLimits};
 
 mod admission;
+mod terminal;
 
 const A: SemanticClickIndicate = SemanticClickIndicate::new(1.25, Color::YELLOW, 0.5);
 const B: SemanticClickIndicate = SemanticClickIndicate::new(1.75, Color::RED, 1.0);

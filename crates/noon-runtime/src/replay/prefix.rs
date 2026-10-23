@@ -24,6 +24,12 @@ pub enum PrefixError {
         start: f64,
         end_exclusive: f64,
     },
+    /// The source is complete; waiting for more preparation cannot admit this time.
+    OutsideFinishedRange {
+        time: f64,
+        start: f64,
+        end: f64,
+    },
     Allocation,
     CapacityRequired {
         object_slots: usize,
@@ -74,6 +80,7 @@ pub struct PrefixPublisher {
     stream: Arc<()>,
     next_revision: usize,
     frontier: f64,
+    finished: bool,
     object_slots: usize,
     resources: CompiledResources,
 }
@@ -87,6 +94,7 @@ pub struct PrefixBatch {
     from_revision: usize,
     from_frontier: f64,
     frontier: f64,
+    terminal: bool,
     revisions: Vec<Revision>,
     stats: PrefixBatchStats,
     from_object_slots: usize,
@@ -112,18 +120,26 @@ impl PrefixBatch {
     pub fn frontier(&self) -> f64 {
         self.frontier
     }
+
+    /// Whether successful adoption closes this stream at its exact frontier.
+    /// Inspection alone neither installs the suffix nor marks a reader finished.
+    pub fn is_terminal(&self) -> bool {
+        self.terminal
+    }
 }
 
 /// A derived historical reader, with no mutable/source/runtime escape hatch.
 /// Presentation-only interaction uses the existing runtime without editing history.
-/// The interval is [start, frontier). Source can still mutate at the frontier's
-/// exact timestamp. Terminal endpoint publication is a separate future contract.
+/// The interval is [start, frontier) while preparation can still change the
+/// frontier. Adopting an explicitly terminal batch closes it to [start, frontier].
+/// Finalization does not seek, publish a displayed frame, or retire session effects.
 #[derive(Debug)]
 pub struct PrefixReader {
     runtime: SceneInstance,
     stream: Arc<()>,
     start: f64,
     frontier: f64,
+    finished: bool,
     received_revisions: usize,
     limits: ReplayLimits,
     object_capacity: usize,
@@ -133,6 +149,12 @@ impl PrefixReader {
     pub fn frontier(&self) -> f64 {
         self.frontier
     }
+    /// Exact, inclusive endpoint only after this reader adopts the terminal batch.
+    /// Producer completion or destruction alone does not change this observation.
+    pub fn end_time(&self) -> Option<f64> {
+        self.finished.then_some(self.frontier)
+    }
+
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
     }
@@ -168,7 +190,18 @@ impl PrefixReader {
     }
 
     fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
-        if !time.is_finite() || time < self.start || time >= self.frontier {
+        if !time.is_finite()
+            || time < self.start
+            || time > self.frontier
+            || (time == self.frontier && !self.finished)
+        {
+            if self.finished {
+                return Err(PrefixError::OutsideFinishedRange {
+                    time,
+                    start: self.start,
+                    end: self.frontier,
+                });
+            }
             return Err(PrefixError::OutsideRange {
                 time,
                 start: self.start,
@@ -281,10 +314,12 @@ impl PrefixReader {
     }
 
     fn validate_append(&self, batch: &PrefixBatch) -> Result<(usize, usize), PrefixError> {
-        if !Arc::ptr_eq(&self.stream, &batch.stream)
+        if self.finished
+            || !Arc::ptr_eq(&self.stream, &batch.stream)
             || batch.from_revision != self.received_revisions
             || batch.from_frontier != self.frontier
-            || batch.frontier <= self.frontier
+            || batch.frontier < self.frontier
+            || (batch.frontier == self.frontier && !batch.terminal)
         {
             return Err(PrefixError::UnexpectedBatch);
         }
@@ -348,6 +383,7 @@ impl PrefixReader {
         history.end = Some(batch.frontier);
         self.received_revisions = count;
         self.frontier = batch.frontier;
+        self.finished = batch.terminal;
         Ok(batch.stats)
     }
 }
@@ -386,6 +422,7 @@ impl SceneInstance {
             stream: stream.clone(),
             next_revision: history.revisions.len(),
             frontier: self.frame.time,
+            finished: false,
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
         };
@@ -411,6 +448,7 @@ impl SceneInstance {
             stream,
             start: history.start,
             frontier: self.frame.time,
+            finished: false,
             received_revisions: history.revisions.len(),
             limits: history.limits,
             object_capacity: self.compiled.objects().len(),
@@ -428,6 +466,27 @@ impl SceneInstance {
         &self,
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, false)
+    }
+
+    /// Publish the final suffix from a sealed source at its actual endpoint.
+    /// The owning session must still validate its source completion boundary.
+    /// Equal-frontier publication is allowed here: it carries any last writes
+    /// at that timestamp, or an empty terminal marker when no writes remain.
+    /// Failure does not consume the cursor. Success closes this publisher.
+    #[doc(hidden)]
+    pub fn prepare_prefix_finish(
+        &self,
+        publisher: &mut PrefixPublisher,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, true)
+    }
+
+    fn prepare_prefix_batch(
+        &self,
+        publisher: &mut PrefixPublisher,
+        terminal: bool,
+    ) -> Result<PrefixBatch, PrefixError> {
         let history = self
             .replay_history
             .as_ref()
@@ -440,10 +499,12 @@ impl SceneInstance {
         if let Some(error) = history.failure {
             return Err(error.into());
         }
-        if history.end.is_some()
-            || history.applied != history.revisions.len()
-            || self.frame.time <= publisher.frontier
-        {
+        let ready = if terminal {
+            history.end == Some(self.frame.time) && self.frame.time >= publisher.frontier
+        } else {
+            history.end.is_none() && self.frame.time > publisher.frontier
+        };
+        if publisher.finished || history.applied != history.revisions.len() || !ready {
             return Err(PrefixError::NotReady);
         }
         if self
@@ -516,6 +577,7 @@ impl SceneInstance {
             from_revision: publisher.next_revision,
             from_frontier: publisher.frontier,
             frontier: self.frame.time,
+            terminal,
             revisions,
             stats,
             from_object_slots: publisher.object_slots,
@@ -528,6 +590,7 @@ impl SceneInstance {
         publisher.object_slots = self.compiled.objects().len();
         publisher.next_revision = history.revisions.len();
         publisher.frontier = self.frame.time;
+        publisher.finished = terminal;
         Ok(batch)
     }
 }

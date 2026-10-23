@@ -206,3 +206,152 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
         eprintln!("PREFIX_LIFECYCLE_RASTER: 35 historical comparisons passed across late image creation, replacement, removal, reentry, producer destruction, fresh renderer");
     });
 }
+
+#[test]
+#[ignore = "requires Vulkan; explicitly invoked by focused qualification"]
+fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreation() {
+    pollster::block_on(async {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.15).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut source = scene.execution_session().unwrap();
+        source
+            .begin_replay_retention(ReplayLimits {
+                revisions: 128,
+                payloads: 2048,
+            })
+            .unwrap();
+        let boundary = source.wait_segment(1.0).unwrap();
+        source.advance_to(1.0).unwrap();
+        let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+        reader.seek(0.5).unwrap();
+        let mut raster = raster_support::Raster::new().await;
+        let before = raster.capture(&reader.take_renderer_publication());
+        let image = scene
+            .live(&mut source)
+            .create_image(image([230, 35, 15, 255]))
+            .unwrap();
+        scene.live(&mut source).add(&image).unwrap();
+        source.seal_replay().unwrap();
+        let mut oracle = raster_support::Raster::new().await;
+        let endpoint = oracle.capture(&source.take_renderer_publication());
+        assert_ne!(
+            before, endpoint,
+            "terminal resource must visibly change the frame"
+        );
+        let terminal = source
+            .finish_prepared_prefix(boundary, &mut publisher)
+            .unwrap();
+        assert_eq!(terminal.stats().resource_payloads, 1);
+        assert_eq!(terminal.stats().new_object_slots, 1);
+        reader
+            .reserve_object_capacity(terminal.required_object_capacity())
+            .unwrap();
+        reader.append(terminal).unwrap();
+        assert_eq!(reader.end_time(), Some(1.0));
+        assert_eq!(raster.capture(&reader.take_renderer_publication()), before);
+        drop(image);
+        drop(anchor);
+        drop(scene);
+        drop(source);
+        drop(publisher);
+        for time in [1.0, 0.5, 1.0, 0.0, 1.0] {
+            reader.seek(time).unwrap();
+            let expected = if time == 1.0 { &endpoint } else { &before };
+            assert_eq!(
+                &raster.capture(&reader.take_renderer_publication()),
+                expected
+            );
+        }
+        // No seek or manufactured full delta before renderer recreation.
+        let publication = reader.take_renderer_publication();
+        assert!(publication.changes().is_empty());
+        let context = publication.context();
+        assert_cold_image_recovery(&publication, &endpoint).await;
+        drop(publication);
+        assert_eq!(reader.take_renderer_publication().context(), context);
+        assert_eq!(reader.frame().time, 1.0);
+        assert_eq!(reader.end_time(), Some(1.0));
+
+        // A new renderer must also reconstruct an unchanged image when its
+        // first publication dirties only an unrelated analytic object.
+        let object = reader
+            .frame()
+            .objects
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.content.geometry(),
+                    Some(noon_core::GeometryRef::Circle { .. })
+                )
+            })
+            .unwrap()
+            .id;
+        let binding = noon_core::SemanticClickIndicate::new(1.25, noon_core::Color::YELLOW, 0.5);
+        let prepared = reader
+            .prepare_click_indicate(object, binding)
+            .unwrap()
+            .unwrap();
+        reader.start_transient_animation(prepared).unwrap();
+        reader.advance_interactions(10.0).unwrap();
+        reader.advance_interactions(10.25).unwrap();
+        let publication = reader.take_renderer_publication();
+        let image_index = publication
+            .frame()
+            .objects
+            .iter()
+            .position(|row| row.content.image().is_some())
+            .unwrap();
+        assert!(!publication.changes().is_empty());
+        assert!(!publication.changes().is_all());
+        assert!(!publication
+            .changes()
+            .object_indices()
+            .contains(&image_index));
+        let context = publication.context();
+        let expected = raster.capture(&publication);
+        assert_cold_image_recovery(&publication, &expected).await;
+        drop(publication);
+        assert_eq!(reader.take_renderer_publication().context(), context);
+        assert!(reader.interactions_active());
+        assert_eq!(reader.frame().time, 1.0);
+        reader.advance_interactions(10.5).unwrap();
+        assert_eq!(
+            raster.capture(&reader.take_renderer_publication()),
+            endpoint
+        );
+        eprintln!("PREFIX_TERMINAL_RASTER: exact endpoint, unchanged append, rewind, source destruction, clean/sparse cold recovery, visible projection, zero-upload warm reuse");
+    });
+}
+
+async fn assert_cold_image_recovery(
+    publication: &noon_runtime::RendererPublication<'_>,
+    expected: &[u8],
+) {
+    let visible: Vec<_> = publication
+        .painter_order()
+        .iter()
+        .map(|&index| index as usize)
+        .collect();
+    let mut fresh = raster_support::Raster::new().await;
+    assert_eq!(fresh.capture(publication).as_slice(), expected);
+    if publication.changes().is_empty() {
+        assert_eq!(fresh.capture(publication).as_slice(), expected);
+        assert_eq!(fresh.last_scene_upload_bytes, 0);
+        assert_eq!(fresh.last_scene_repacked, 0);
+    }
+
+    let mut viewport = raster_support::Raster::new().await;
+    assert_eq!(
+        viewport.capture_visible(publication, &visible).as_slice(),
+        expected
+    );
+    if publication.changes().is_empty() {
+        assert_eq!(
+            viewport.capture_visible(publication, &visible).as_slice(),
+            expected
+        );
+        assert_eq!(viewport.last_scene_upload_bytes, 0);
+        assert_eq!(viewport.last_scene_repacked, 0);
+    }
+}
