@@ -550,14 +550,36 @@ pub struct SemanticBounds {
 /// overestimation.
 pub fn semantic_path_bounds(path: &VectorPath, stroke_width: f64) -> SemanticBounds {
     let conservative = path
-        .conservative_bounds()
-        .map(|bounds| Bounds2D64 {
-            min_x: bounds.min.x as f64,
-            min_y: bounds.min.y as f64,
-            max_x: bounds.max.x as f64,
-            max_y: bounds.max.y as f64,
-        })
+        .semantic_control_bounds()
         .map(|bounds| bounds.expand(stroke_width.max(0.0) * 0.5));
+    if let Some(points) = path.manim_points() {
+        let mut layout: Option<Bounds2D64> = None;
+        let include = |bounds: &mut Option<Bounds2D64>, point: SemanticVec3| {
+            if let Some(bounds) = bounds {
+                bounds.include(point.x, point.y);
+            } else {
+                *bounds = Some(Bounds2D64::point(point.x, point.y));
+            }
+        };
+        for curve in points.as_chunks::<4>().0 {
+            include(&mut layout, curve[0]);
+            include(&mut layout, curve[3]);
+            include_cubic_extrema(
+                &mut layout,
+                curve[0].xy(),
+                curve[1].xy(),
+                curve[2].xy(),
+                curve[3].xy(),
+            );
+        }
+        if let Some(&tail) = points.get(points.len() / 4 * 4) {
+            include(&mut layout, tail);
+        }
+        return SemanticBounds {
+            layout: layout.map(|bounds| bounds.expand(stroke_width.max(0.0) * 0.5)),
+            conservative,
+        };
+    }
 
     let mut layout: Option<Bounds2D64> = None;
     let mut current: Option<(f64, f64)> = None;

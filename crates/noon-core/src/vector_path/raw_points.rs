@@ -43,6 +43,86 @@ impl VectorPath {
         Self::from_manim_points_drawing(points, false, false)
     }
 
+    /// Retain complete high-precision cubic contours and explicitly lower drawing.
+    /// Contour closure remains part of the path topology, including after transforms.
+    pub fn from_manim_cubic_contours(
+        contours: impl IntoIterator<Item = (Vec<[SemanticVec3; 4]>, bool)>,
+    ) -> Self {
+        let lower = |point: SemanticVec3| Vec2::new(point.x as f32, point.y as f32);
+        let mut path = Self::new();
+        let mut points = Vec::new();
+        for (mut curves, closed) in contours {
+            if curves.is_empty() {
+                continue;
+            }
+            // Use the existing canonical line controls for an implicit close.
+            // The final Close command is only the explicitly lowered join recipe.
+            if closed {
+                let first = curves[0][0];
+                let last = curves.last().expect("nonempty contour")[3];
+                if first != last {
+                    curves.push(Self::manim_line_controls(last, first));
+                }
+            }
+            let mut previous = None;
+            for curve in curves {
+                if previous != Some(curve[0]) {
+                    path = path.move_to(lower(curve[0]));
+                }
+                path = path.cubic_to(lower(curve[1]), lower(curve[2]), lower(curve[3]));
+                previous = Some(curve[3]);
+                points.extend(curve);
+            }
+            if closed {
+                path = path.close();
+            }
+        }
+        if !points.is_empty() {
+            path.manim_points = Some(points);
+        }
+        path
+    }
+
+    /// Rebuild the same authored contour/line/closure recipe from transformed
+    /// canonical controls; rounded drawable coordinates never become input.
+    pub(super) fn from_transformed_manim_points(
+        points: Vec<SemanticVec3>,
+        recipe: &[PathCommand],
+    ) -> Self {
+        let lower = |point: SemanticVec3| Vec2::new(point.x as f32, point.y as f32);
+        let mut path = Self::new();
+        let mut curve = 0;
+        for command in recipe {
+            path = match command {
+                PathCommand::MoveTo { .. } => {
+                    let Some(&point) = points.get(curve * 4) else {
+                        continue;
+                    };
+                    path.move_to(lower(point))
+                }
+                PathCommand::LineTo { .. } | PathCommand::CubicTo { .. } => {
+                    let Some(points) = points.get(curve * 4..curve * 4 + 4) else {
+                        continue;
+                    };
+                    curve += 1;
+                    if matches!(command, PathCommand::LineTo { .. }) {
+                        path.line_to(lower(points[3]))
+                    } else {
+                        path.cubic_to(lower(points[1]), lower(points[2]), lower(points[3]))
+                    }
+                }
+                PathCommand::Close => path.close(),
+                // External decoded data may contain an inconsistent old recipe.
+                // The canonical controls remain authoritative in that case too.
+                PathCommand::QuadraticTo { .. } => {
+                    return Self::from_manim_points_drawing(points, false, false);
+                }
+            };
+        }
+        path.manim_points = Some(points);
+        path
+    }
+
     pub(super) fn from_manim_points_drawing(
         points: Vec<SemanticVec3>,
         line_segments: bool,
@@ -89,16 +169,20 @@ impl VectorPath {
     pub fn from_manim_corners_3d(corners: &[SemanticVec3]) -> Self {
         let mut raw = Vec::with_capacity(corners.len().saturating_sub(1) * 4);
         for pair in corners.windows(2) {
-            let (start, end) = (pair[0], pair[1]);
-            for t in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
-                raw.push(SemanticVec3::new(
-                    (1.0 - t) * start.x + t * end.x,
-                    (1.0 - t) * start.y + t * end.y,
-                    (1.0 - t) * start.z + t * end.z,
-                ));
-            }
+            raw.extend(Self::manim_line_controls(pair[0], pair[1]));
         }
         Self::from_manim_points_drawing(raw, true, corners.first() == corners.last())
+    }
+
+    /// CE's complete cubic controls for a straight segment, without allocation.
+    pub fn manim_line_controls(start: SemanticVec3, end: SemanticVec3) -> [SemanticVec3; 4] {
+        [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0].map(|t| {
+            SemanticVec3::new(
+                (1.0 - t) * start.x + t * end.x,
+                (1.0 - t) * start.y + t * end.y,
+                (1.0 - t) * start.z + t * end.z,
+            )
+        })
     }
 
     /// The sole authored array, including all axes and incomplete trailing points.

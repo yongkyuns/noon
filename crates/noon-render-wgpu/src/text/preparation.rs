@@ -17,7 +17,7 @@ use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 use noon_core::TextResourceArena;
 use noon_core::{
-    Color, FontResourceLookup, GlyphRun, ObjectId, TextRenderItem, TextResourceHandle,
+    Color, DVec2, FontResourceLookup, GlyphRun, ObjectId, TextRenderItem, TextResourceHandle,
     TextResourceLookup, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, FrameState};
@@ -837,9 +837,12 @@ impl RetainedTextQuadPreparer {
         fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<(), TextPrepareError> {
+        for glyph in run.glyphs.iter() {
+            lower_text_point(run.transform.transform_point(glyph.origin))?;
+        }
         let requested_size = requested_raster_pixel_size(run, object_transform, metrics)?;
         let pixel_size = raster_size_bucket(requested_size);
-        let pixels_to_local = run.font_size / pixel_size;
+        let pixels_to_local = run.font_size / f64::from(pixel_size);
         let paint = super::resolve_text_paint(run.fill, object_fill).unwrap_or(Color::WHITE);
 
         for glyph in run.glyphs.iter() {
@@ -878,16 +881,18 @@ impl RetainedTextQuadPreparer {
             // color glyphs retain their existing placement and filtering behavior.
             let (phase_x, phase_y) = raster_phase_offset_for_format(image.format, phase);
             let local_origin = glyph.origin
-                + Vec2::new(
-                    (image.placement.left as f32 - phase_x) * pixels_to_local,
-                    (image.placement.top as f32 - image.placement.height as f32 - phase_y)
+                + DVec2::new(
+                    (f64::from(image.placement.left) - f64::from(phase_x)) * pixels_to_local,
+                    (f64::from(image.placement.top)
+                        - f64::from(image.placement.height)
+                        - f64::from(phase_y))
                         * pixels_to_local,
                 );
-            let local_axis_x = Vec2::new(image.placement.width as f32 * pixels_to_local, 0.0);
-            let local_axis_y = Vec2::new(0.0, image.placement.height as f32 * pixels_to_local);
-            let resource_origin = run.transform.transform_point(local_origin);
-            let resource_axis_x = run.transform.transform_vector(local_axis_x);
-            let resource_axis_y = run.transform.transform_vector(local_axis_y);
+            let local_axis_x = DVec2::new(f64::from(image.placement.width) * pixels_to_local, 0.0);
+            let local_axis_y = DVec2::new(0.0, f64::from(image.placement.height) * pixels_to_local);
+            let resource_origin = lower_text_point(run.transform.transform_point(local_origin))?;
+            let resource_axis_x = lower_text_point(run.transform.transform_vector(local_axis_x))?;
+            let resource_axis_y = lower_text_point(run.transform.transform_vector(local_axis_y))?;
             let world_origin = object_transform.transform_point(resource_origin);
             let world_axis_x = transform_vector(object_transform, resource_axis_x);
             let world_axis_y = transform_vector(object_transform, resource_axis_y);
@@ -1029,6 +1034,12 @@ fn atlas_texture_bytes(extent: u32, mask_pages: usize, color_pages: usize) -> u6
     page_texels.saturating_mul(weighted_pages)
 }
 
+fn lower_text_point(point: DVec2) -> Result<Vec2, TextPrepareError> {
+    point
+        .lower_f32()
+        .map_err(|_| TextPrepareError::InvalidTextTransform)
+}
+
 fn requested_raster_pixel_size(
     run: &GlyphRun,
     object_transform: Transform2D,
@@ -1037,15 +1048,15 @@ fn requested_raster_pixel_size(
     if !run.font_size.is_finite() || run.font_size <= 0.0 {
         return Err(TextPrepareError::Raster(GlyphRasterError::InvalidPixelSize));
     }
-    let resource_x = run.transform.transform_vector(Vec2::new(1.0, 0.0));
-    let resource_y = run.transform.transform_vector(Vec2::new(0.0, 1.0));
+    let resource_x = lower_text_point(run.transform.transform_vector(DVec2::new(1.0, 0.0)))?;
+    let resource_y = lower_text_point(run.transform.transform_vector(DVec2::new(0.0, 1.0)))?;
     let world_x = transform_vector(object_transform, resource_x);
     let world_y = transform_vector(object_transform, resource_y);
     let scale = largest_device_scale(world_x, world_y, metrics.pixels_per_world);
     if !scale.is_finite() {
         return Err(TextPrepareError::InvalidTextTransform);
     }
-    let requested = run.font_size * scale;
+    let requested = (run.font_size * f64::from(scale)) as f32;
     if !requested.is_finite() {
         return Err(TextPrepareError::InvalidTextTransform);
     }
@@ -1118,13 +1129,19 @@ fn glyph_color_for_plane(paint: Color, object_opacity: f32, plane: GlyphAtlasPla
 /// bitmap quads keep phase zero and the established filtered affine path.
 fn glyph_raster_phase(
     run: &GlyphRun,
-    glyph_origin: Vec2,
+    glyph_origin: impl Into<DVec2>,
     object_transform: Transform2D,
     metrics: TextDeviceMetrics,
     raster_pixels_per_device_pixel: f32,
 ) -> GlyphRasterPhase {
-    let resource_x = run.transform.transform_vector(Vec2::new(1.0, 0.0));
-    let resource_y = run.transform.transform_vector(Vec2::new(0.0, 1.0));
+    let Ok(resource_x) = lower_text_point(run.transform.transform_vector(DVec2::new(1.0, 0.0)))
+    else {
+        return GlyphRasterPhase::ZERO;
+    };
+    let Ok(resource_y) = lower_text_point(run.transform.transform_vector(DVec2::new(0.0, 1.0)))
+    else {
+        return GlyphRasterPhase::ZERO;
+    };
     let world_x = transform_vector(object_transform, resource_x);
     let world_y = transform_vector(object_transform, resource_y);
     let device_x = Vec2::new(
@@ -1145,7 +1162,10 @@ fn glyph_raster_phase(
         return GlyphRasterPhase::ZERO;
     }
 
-    let resource_origin = run.transform.transform_point(glyph_origin);
+    let Ok(resource_origin) = lower_text_point(run.transform.transform_point(glyph_origin.into()))
+    else {
+        return GlyphRasterPhase::ZERO;
+    };
     let world_origin = object_transform.transform_point(resource_origin);
     let device_origin = Vec2::new(
         metrics.world_origin_pixels.x + world_origin.x * metrics.pixels_per_world.x,

@@ -192,17 +192,17 @@ fn stage(
         })
         .delta::<AuthoringError>(
             Some(Bounds2D64 {
-                min_x: f64::from(bounds.min.x),
-                min_y: f64::from(bounds.min.y),
-                max_x: f64::from(bounds.max.x),
-                max_y: f64::from(bounds.max.y),
+                min_x: bounds.min.x,
+                min_y: bounds.min.y,
+                max_x: bounds.max.x,
+                max_y: bounds.max.y,
             }),
             |_, _| Ok((point[0], point[1])),
         )
         .map_err(TextAuthoringError::Semantic)?;
         if *number < 0.0 && options.direction[0] == 0.0 && resource.source.starts_with('-') {
             if let Some(glyph) = resource.runs.first().and_then(|run| run.glyphs.first()) {
-                x -= f64::from(glyph.bounds.width()) / 2.0;
+                x -= glyph.bounds.width() / 2.0;
             }
         }
         let mut state = value.decimal_state(

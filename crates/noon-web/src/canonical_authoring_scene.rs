@@ -12500,7 +12500,7 @@ mod tests {
         assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 40.5).abs() < 1e-6);
         assert_eq!(
             state.transform.scale.x,
-            f64::from(noon::integration::NATIVE_POINT_TO_SCENE_SCALE)
+            noon::integration::NATIVE_POINT_TO_SCENE_SCALE
         );
     }
 

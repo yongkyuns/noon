@@ -7,12 +7,12 @@
 use std::{fmt, sync::Arc};
 
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting,
-    GeometryResourceArena, GlyphRun, PositionedGlyph, Rect, StrokeCap, StrokeJoin,
+    Color, DRect, DVec2, FontFaceIdentity, FontResourceArena, FontResourceError,
+    FontVariationSetting, GeometryResourceArena, GlyphRun, PositionedGlyph, StrokeCap, StrokeJoin,
     TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke, TextLayoutArtifact,
     TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem, TextResource,
     TextResourceValidationError, TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle,
-    Vec2, VectorPath,
+    VectorPath,
 };
 use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
@@ -28,7 +28,7 @@ use typst_svg::{svg, SvgOptions};
 
 pub const TYPST_BACKEND_VERSION: &str = "0.15.1";
 /// Deterministic identity of Noon's Typst normalization template.
-pub const TYPST_TEMPLATE_VERSION: &str = "noon-typst-page-v2";
+pub const TYPST_TEMPLATE_VERSION: &str = "noon-typst-page-v3-f64";
 const TEMPLATE_PREFIX: &str =
     "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(size: 10pt)\n";
 
@@ -54,7 +54,7 @@ pub struct TypstSvgArtifact {
     pub source: Arc<str>,
     pub prepared_source: Arc<str>,
     pub svg: Arc<str>,
-    pub size_points: Vec2,
+    pub size_points: DVec2,
     pub layout: TextLayoutArtifact,
 }
 
@@ -163,7 +163,7 @@ where
         source: Arc::from(source),
         prepared_source: Arc::from(prepared_source.as_str()),
         svg: Arc::from(svg.as_str()),
-        size_points: Vec2::new(size.x.to_pt() as f32, size.y.to_pt() as f32),
+        size_points: DVec2::new(size.x.to_pt(), size.y.to_pt()),
         layout: layout_artifact(&prepared_source),
     })
 }
@@ -191,12 +191,12 @@ where
     let (document, prepared_source) = compile_document(source, mode, fonts)?;
     let page = one_page(&document)?;
     let size = page.frame.size();
-    let width = size.x.to_pt() as f32;
-    let height = size.y.to_pt() as f32;
+    let width = size.x.to_pt();
+    let height = size.y.to_pt();
     let full_span = TextSourceSpan::new(0, source_len);
-    let page_bounds = Rect::new(
-        Vec2::new(-0.5 * width, -0.5 * height),
-        Vec2::new(0.5 * width, 0.5 * height),
+    let page_bounds = DRect::new(
+        DVec2::new(-0.5 * width, -0.5 * height),
+        DVec2::new(0.5 * width, 0.5 * height),
     );
 
     let mut normalizer = FrameNormalizer {
@@ -232,7 +232,7 @@ where
     for vector in &mut normalizer.vectors {
         vector.transform = vector.transform.then(recenter);
     }
-    let centered_bounds = Rect::new(ink_bounds.min - ink_center, ink_bounds.max - ink_center);
+    let centered_bounds = DRect::new(ink_bounds.min - ink_center, ink_bounds.max - ink_center);
 
     // The entire mobject is always one addressable part. Labeled Typst groups are
     // appended as narrower semantic parts during traversal.
@@ -256,7 +256,7 @@ where
         render_items: normalizer.render_items.into(),
         parts: normalizer.parts.into(),
         bounds: centered_bounds,
-        baseline: 0.5 * height - page.frame.baseline().to_pt() as f32 - ink_center.y,
+        baseline: 0.5 * height - page.frame.baseline().to_pt() - ink_center.y,
         layout_artifact: Some(layout_artifact(&prepared_source)),
     };
     resource
@@ -358,11 +358,11 @@ struct FrameNormalizer {
     geometry: GeometryResourceArena,
     fonts: FontResourceArena,
     clusters: u32,
-    ink_bounds: Option<Rect>,
+    ink_bounds: Option<DRect>,
 }
 
 impl FrameNormalizer {
-    fn include_ink_bounds(&mut self, bounds: Rect) {
+    fn include_ink_bounds(&mut self, bounds: DRect) {
         self.ink_bounds = Some(match self.ink_bounds {
             Some(current) => current.union(bounds),
             None => bounds,
@@ -454,17 +454,17 @@ impl FrameNormalizer {
         let fill = inherited_color(&text.fill)?;
         let stroke = text.stroke.as_ref().map(text_glyph_stroke).transpose()?;
 
-        let mut cursor = Vec2::ZERO;
-        let font_size = text.size.to_pt() as f32;
+        let mut cursor = DVec2::ZERO;
+        let font_size = text.size.to_pt();
         let mut glyphs = Vec::with_capacity(text.glyphs.len());
         for glyph in &text.glyphs {
-            let offset = Vec2::new(
-                glyph.x_offset.at(text.size).to_pt() as f32,
-                glyph.y_offset.at(text.size).to_pt() as f32,
+            let offset = DVec2::new(
+                glyph.x_offset.at(text.size).to_pt(),
+                glyph.y_offset.at(text.size).to_pt(),
             );
-            let advance = Vec2::new(
-                glyph.x_advance.at(text.size).to_pt() as f32,
-                glyph.y_advance.at(text.size).to_pt() as f32,
+            let advance = DVec2::new(
+                glyph.x_advance.at(text.size).to_pt(),
+                glyph.y_advance.at(text.size).to_pt(),
             );
             let origin = cursor + offset;
             let semantic_key = inherited_key.clone().or_else(|| {
@@ -476,12 +476,12 @@ impl FrameNormalizer {
             // and do not require extracting a path from the font.
             let x1 = origin.x.min(origin.x + advance.x);
             let mut x2 = origin.x.max(origin.x + advance.x);
-            if (x2 - x1).abs() < f32::EPSILON {
+            if (x2 - x1).abs() < f64::EPSILON {
                 x2 = x1 + 0.5 * font_size;
             }
-            let bounds = Rect::new(
-                Vec2::new(x1, origin.y - 0.3 * font_size),
-                Vec2::new(x2, origin.y + 0.9 * font_size),
+            let bounds = DRect::new(
+                DVec2::new(x1, origin.y - 0.3 * font_size),
+                DVec2::new(x2, origin.y + 0.9 * font_size),
             );
             glyphs.push(PositionedGlyph {
                 glyph_id: u32::from(glyph.id),
@@ -597,74 +597,90 @@ fn typst_line_join(join: TypstLineJoin) -> StrokeJoin {
 }
 
 fn point_translation(point: Point) -> TextAffineTransform {
-    TextAffineTransform::translation(point.x.to_pt() as f32, point.y.to_pt() as f32)
+    TextAffineTransform::translation(point.x.to_pt(), point.y.to_pt())
 }
 
 fn typst_transform(transform: Transform) -> TextAffineTransform {
     TextAffineTransform {
-        xx: transform.sx.get() as f32,
-        yx: transform.ky.get() as f32,
-        xy: transform.kx.get() as f32,
-        yy: transform.sy.get() as f32,
-        tx: transform.tx.to_pt() as f32,
-        ty: transform.ty.to_pt() as f32,
+        xx: transform.sx.get(),
+        yx: transform.ky.get(),
+        xy: transform.kx.get(),
+        yy: transform.sy.get(),
+        tx: transform.tx.to_pt(),
+        ty: transform.ty.to_pt(),
     }
 }
 
 fn transformed_typst_rect(
     rect: typst_library::layout::Rect,
     transform: TextAffineTransform,
-) -> Option<Rect> {
+) -> Option<DRect> {
     let min = point_vec(rect.min);
     let max = point_vec(rect.max);
     if !min.x.is_finite() || !min.y.is_finite() || !max.x.is_finite() || !max.y.is_finite() {
         return None;
     }
 
-    Rect::from_points([
-        transform.transform_point(Vec2::new(min.x, min.y)),
-        transform.transform_point(Vec2::new(max.x, min.y)),
-        transform.transform_point(Vec2::new(min.x, max.y)),
-        transform.transform_point(Vec2::new(max.x, max.y)),
+    DRect::from_points([
+        transform.transform_point(DVec2::new(min.x, min.y)),
+        transform.transform_point(DVec2::new(max.x, min.y)),
+        transform.transform_point(DVec2::new(min.x, max.y)),
+        transform.transform_point(DVec2::new(max.x, max.y)),
     ])
 }
 
 fn geometry_path(geometry: &Geometry) -> VectorPath {
+    use noon_core::SemanticVec3;
+    let point = |p: Point| SemanticVec3::new(p.x.to_pt(), p.y.to_pt(), 0.0);
     match geometry {
-        Geometry::Line(end) => VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(point_vec(*end)),
+        Geometry::Line(end) => {
+            VectorPath::from_manim_corners_3d(&[SemanticVec3::ZERO, point(*end)])
+        }
         Geometry::Rect(size) => {
-            let width = size.x.to_pt() as f32;
-            let height = size.y.to_pt() as f32;
-            VectorPath::new()
-                .move_to(Vec2::ZERO)
-                .line_to(Vec2::new(width, 0.0))
-                .line_to(Vec2::new(width, height))
-                .line_to(Vec2::new(0.0, height))
-                .close()
+            let (w, h) = (size.x.to_pt(), size.y.to_pt());
+            VectorPath::from_manim_corners_f64(&[
+                (0.0, 0.0),
+                (w, 0.0),
+                (w, h),
+                (0.0, h),
+                (0.0, 0.0),
+            ])
         }
         Geometry::Curve(curve) => {
-            let mut path = VectorPath::new();
+            let mut contours = Vec::new();
+            let mut curves = Vec::new();
+            let mut current = SemanticVec3::ZERO;
             for item in &curve.0 {
-                path = match item {
-                    CurveItem::Move(point) => path.move_to(point_vec(*point)),
-                    CurveItem::Line(point) => path.line_to(point_vec(*point)),
-                    CurveItem::Cubic(control1, control2, point) => path.cubic_to(
-                        point_vec(*control1),
-                        point_vec(*control2),
-                        point_vec(*point),
-                    ),
-                    CurveItem::Close => path.close(),
-                };
+                match item {
+                    CurveItem::Move(p) => {
+                        if !curves.is_empty() {
+                            contours.push((std::mem::take(&mut curves), false));
+                        }
+                        current = point(*p);
+                    }
+                    CurveItem::Line(p) => {
+                        let end = point(*p);
+                        curves.push(VectorPath::manim_line_controls(current, end));
+                        current = end;
+                    }
+                    CurveItem::Cubic(a, b, p) => {
+                        let end = point(*p);
+                        curves.push([current, point(*a), point(*b), end]);
+                        current = end;
+                    }
+                    CurveItem::Close => contours.push((std::mem::take(&mut curves), true)),
+                }
             }
-            path
+            if !curves.is_empty() {
+                contours.push((curves, false));
+            }
+            VectorPath::from_manim_cubic_contours(contours)
         }
     }
 }
 
-fn point_vec(point: Point) -> Vec2 {
-    Vec2::new(point.x.to_pt() as f32, point.y.to_pt() as f32)
+fn point_vec(point: Point) -> DVec2 {
+    DVec2::new(point.x.to_pt(), point.y.to_pt())
 }
 
 fn text_glyph_stroke(stroke: &FixedStroke) -> Result<TextGlyphStroke, TypstBackendError> {

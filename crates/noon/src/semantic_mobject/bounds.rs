@@ -87,17 +87,18 @@ pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f
 
 /// Bounds of a retained text rectangle under the shared semantic transform.
 pub(crate) fn transformed_rect_layout_bounds(
-    local: noon_core::Rect,
+    local: impl Into<noon_core::DRect>,
     transform: SemanticTransform2_5D,
 ) -> Bounds2D64 {
+    let local = local.into();
     let mut bounds = None;
-    for point in [
-        local.min,
-        Vec2::new(local.min.x, local.max.y),
-        Vec2::new(local.max.x, local.min.y),
-        local.max,
+    for (x, y) in [
+        (local.min.x, local.min.y),
+        (local.min.x, local.max.y),
+        (local.max.x, local.min.y),
+        (local.max.x, local.max.y),
     ] {
-        include_layout_point(&mut bounds, transform_layout_point(transform, point));
+        include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
     }
     bounds.expect("a rectangle has four corners")
 }

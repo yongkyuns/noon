@@ -9,7 +9,7 @@
 use std::{fmt, sync::Arc};
 
 use super::{GlyphRun, TextPart, TextRenderItem, TextResource, TextSourceSpan};
-use crate::{Rect, Vec2};
+use crate::{DRect, DVec2};
 
 const SOURCE_PART_KEY_PREFIX: &str = "noon:text:source";
 
@@ -105,9 +105,9 @@ impl TextResource {
             let mut projected: GlyphRun = run.clone();
             projected.glyphs = glyphs.into();
             for glyph in projected.glyphs.iter() {
-                let glyph_bounds = transform_rect(glyph.bounds, run.transform);
+                let glyph_bounds = run.transform.transform_bounds(glyph.bounds);
                 bounds =
-                    Some(bounds.map_or(glyph_bounds, |current: Rect| current.union(glyph_bounds)));
+                    Some(bounds.map_or(glyph_bounds, |current: DRect| current.union(glyph_bounds)));
             }
             let new_index = u32::try_from(projected_runs.len())
                 .map_err(|_| TextPartQueryError::NonContiguousClusters)?;
@@ -132,13 +132,13 @@ impl TextResource {
             if let Some(local) =
                 crate::semantic_path_bounds(path, f64::from(vector.style.stroke_width)).layout
             {
-                let local = Rect::new(
-                    Vec2::new(local.min_x as f32, local.min_y as f32),
-                    Vec2::new(local.max_x as f32, local.max_y as f32),
+                let local = DRect::new(
+                    DVec2::new(local.min_x, local.min_y),
+                    DVec2::new(local.max_x, local.max_y),
                 );
-                let vector_bounds = transform_rect(local, vector.transform);
+                let vector_bounds = vector.transform.transform_bounds(local);
                 bounds = Some(
-                    bounds.map_or(vector_bounds, |current: Rect| current.union(vector_bounds)),
+                    bounds.map_or(vector_bounds, |current: DRect| current.union(vector_bounds)),
                 );
             }
         }
@@ -173,7 +173,7 @@ impl TextResource {
             vector_items: projected_vectors.into(),
             render_items: render_items.into(),
             parts: std::sync::Arc::from([projected_part]),
-            bounds: bounds.unwrap_or_else(|| Rect::new(Vec2::ZERO, Vec2::ZERO)),
+            bounds: bounds.unwrap_or_else(|| DRect::new(DVec2::ZERO, DVec2::ZERO)),
             baseline: self.baseline,
             layout_artifact: self.layout_artifact.clone(),
         };
@@ -231,25 +231,6 @@ impl TextResource {
             .collect::<Result<Vec<_>, _>>()?;
         project_source_parts(self, &spans)
     }
-}
-
-fn transform_rect(bounds: Rect, transform: super::TextAffineTransform) -> Rect {
-    let corners = [
-        bounds.min,
-        Vec2::new(bounds.max.x, bounds.min.y),
-        bounds.max,
-        Vec2::new(bounds.min.x, bounds.max.y),
-    ]
-    .map(|point| transform.transform_point(point));
-    let mut min = corners[0];
-    let mut max = corners[0];
-    for point in corners.into_iter().skip(1) {
-        min.x = min.x.min(point.x);
-        min.y = min.y.min(point.y);
-        max.x = max.x.max(point.x);
-        max.y = max.y.max(point.y);
-    }
-    Rect::new(min, max)
 }
 
 fn source_part_key(span: TextSourceSpan) -> Arc<str> {
@@ -391,8 +372,8 @@ fn project_source_parts(
 mod tests {
     use super::*;
     use crate::{
-        FontFaceIdentity, GlyphRun, PositionedGlyph, Rect, TextAffineTransform,
-        TextClusterIdentity, TextDirection, TextRenderItem, TextSourceKind, Vec2,
+        DRect, DVec2, FontFaceIdentity, GlyphRun, PositionedGlyph, TextAffineTransform,
+        TextClusterIdentity, TextDirection, TextRenderItem, TextSourceKind,
     };
 
     fn sample_text(source: &str) -> TextResource {
@@ -409,11 +390,11 @@ mod tests {
                         cluster_ordinal: ordinal as u32,
                         semantic_key: None,
                     },
-                    origin: Vec2::new(ordinal as f32, 0.0),
-                    advance: Vec2::new(1.0, 0.0),
-                    bounds: Rect::new(
-                        Vec2::new(ordinal as f32, -0.2),
-                        Vec2::new(ordinal as f32 + 0.8, 0.8),
+                    origin: DVec2::new(ordinal as f64, 0.0),
+                    advance: DVec2::new(1.0, 0.0),
+                    bounds: DRect::new(
+                        DVec2::new(ordinal as f64, -0.2),
+                        DVec2::new(ordinal as f64 + 0.8, 0.8),
                     ),
                 }
             })
@@ -442,7 +423,7 @@ mod tests {
             vector_items: Arc::from([]),
             render_items: Arc::from([TextRenderItem::GlyphRun(0)]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::new(0.0, -0.2), Vec2::new(source.len() as f32, 0.8)),
+            bounds: DRect::new(DVec2::new(0.0, -0.2), DVec2::new(source.len() as f64, 0.8)),
             baseline: 0.0,
             layout_artifact: None,
         }
@@ -540,14 +521,13 @@ mod tests {
     #[test]
     fn projected_part_bounds_include_only_selected_vector_resources() {
         let mut geometry = crate::GeometryResourceArena::new();
-        let rule = geometry.insert_path(
-            crate::VectorPath::new()
-                .move_to(Vec2::ZERO)
-                .line_to(Vec2::new(1.0, 0.0))
-                .line_to(Vec2::new(1.0, 0.1))
-                .line_to(Vec2::new(0.0, 0.1))
-                .close(),
-        );
+        let rule = geometry.insert_path(crate::VectorPath::from_manim_corners_f64(&[
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 0.1),
+            (0.0, 0.1),
+            (0.0, 0.0),
+        ]));
         let mut resource = sample_text("ab");
         resource.vector_items = Arc::from(
             [4.0, 100.0]
@@ -567,10 +547,10 @@ mod tests {
             TextRenderItem::Vector(0),
             TextRenderItem::Vector(1),
         ]);
-        resource.bounds = Rect::new(Vec2::ZERO, Vec2::new(101.0, 2.1));
+        resource.bounds = DRect::new(DVec2::ZERO, DVec2::new(101.0, 2.1));
         let part = resource.source_parts_for("a").unwrap().remove(0);
         let projected = resource.projected_part(&part, &geometry).unwrap();
-        assert_eq!(projected.bounds.max, Vec2::new(5.0, 2.1));
+        assert_eq!(projected.bounds.max, DVec2::new(5.0, 2.1));
         assert_eq!(projected.vector_items.len(), 1);
         assert_eq!(projected.vector_items[0].geometry, rule);
         assert_eq!(

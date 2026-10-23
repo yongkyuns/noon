@@ -105,7 +105,7 @@ impl PreparedLine {
             .runs
             .iter()
             .flat_map(|run| run.glyphs.iter())
-            .map(|glyph| f64::from(glyph.advance.x))
+            .map(|glyph| glyph.advance.x)
             .sum::<f64>()
             * self.transform.scale.x
     }
@@ -114,7 +114,7 @@ impl PreparedLine {
         self.resource()
             .runs
             .first()
-            .map_or(0.0, |run| f64::from(run.transform.tx))
+            .map_or(0.0, |run| run.transform.tx)
     }
 
     fn ink_horizontal_bounds(&self) -> (f64, f64) {
@@ -122,9 +122,8 @@ impl PreparedLine {
         let scale = self.transform.scale.x;
         let recenter = self.recenter_x();
         (
-            0.0f64.min((f64::from(resource.bounds.min.x) - recenter) * scale),
-            self.width()
-                .max((f64::from(resource.bounds.max.x) - recenter) * scale),
+            0.0f64.min((resource.bounds.min.x - recenter) * scale),
+            self.width().max((resource.bounds.max.x - recenter) * scale),
         )
     }
 
@@ -132,8 +131,8 @@ impl PreparedLine {
         let resource = self.resource();
         let scale = self.transform.scale.y;
         (
-            f64::from(resource.bounds.min.y - resource.baseline) * scale,
-            f64::from(resource.bounds.max.y - resource.baseline) * scale,
+            (resource.bounds.min.y - resource.baseline) * scale,
+            (resource.bounds.max.y - resource.baseline) * scale,
         )
     }
 
@@ -143,7 +142,7 @@ impl PreparedLine {
         // visible ink, which would erase indentation and leading spaces.
         self.transform.translation.x = logical_x - self.recenter_x() * self.transform.scale.x;
         self.transform.translation.y =
-            baseline_y - f64::from(self.resource().baseline) * self.transform.scale.y;
+            baseline_y - self.resource().baseline * self.transform.scale.y;
     }
 }
 

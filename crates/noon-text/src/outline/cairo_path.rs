@@ -1,5 +1,5 @@
 //! Cairo fixed-path construction in the retained layout coordinate space.
-use noon_core::{Vec2, VectorPath};
+use noon_core::{SemanticVec3, VectorPath};
 use skrifa::outline::pen::PathElement;
 type Point = [i32; 2];
 #[derive(Clone, Copy)]
@@ -104,10 +104,11 @@ fn point(x: f32, y: f32) -> Point {
         (f64::from(y) * 256.0).round() as i32,
     ]
 }
-fn native(p: Point) -> Vec2 {
-    Vec2::new(
-        (f64::from(p[0]) * 3.6 / 256.0) as f32,
-        (-f64::from(p[1]) * 3.6 / 256.0) as f32,
+fn native(p: Point) -> SemanticVec3 {
+    SemanticVec3::new(
+        f64::from(p[0]) * 3.6 / 256.0,
+        -f64::from(p[1]) * 3.6 / 256.0,
+        0.0,
     )
 }
 pub fn native_path(commands: &[PathElement]) -> VectorPath {
@@ -119,6 +120,38 @@ pub fn coretext_path(commands: &[PathElement], scale: f64) -> VectorPath {
 }
 
 fn path_on_grid(commands: &[PathElement], coretext_scale: Option<f64>) -> VectorPath {
+    let commands = fixed_commands(commands, coretext_scale);
+    let mut contours = Vec::new();
+    let mut curves = Vec::new();
+    let mut current = SemanticVec3::ZERO;
+    for command in commands {
+        match command {
+            FixedCommand::Move(point) => {
+                if !curves.is_empty() {
+                    contours.push((std::mem::take(&mut curves), false));
+                }
+                current = native(point);
+            }
+            FixedCommand::Line(point) => {
+                let end = native(point);
+                curves.push(VectorPath::manim_line_controls(current, end));
+                current = end;
+            }
+            FixedCommand::Cubic(a, b, point) => {
+                let end = native(point);
+                curves.push([current, native(a), native(b), end]);
+                current = end;
+            }
+            FixedCommand::Close => contours.push((std::mem::take(&mut curves), true)),
+        }
+    }
+    if !curves.is_empty() {
+        contours.push((curves, false));
+    }
+    VectorPath::from_manim_cubic_contours(contours)
+}
+
+fn fixed_commands(commands: &[PathElement], coretext_scale: Option<f64>) -> Vec<FixedCommand> {
     // Cairo's double-to-24.8 conversion rounds ties to even. Its magic-number
     // conversion also preserves the exact near-tie behavior of native Cairo.
     const FIXED_MAGIC: f64 = (1_u64 << (52 - 8)) as f64 * 1.5;
@@ -191,16 +224,7 @@ fn path_on_grid(commands: &[PathElement], coretext_scale: Option<f64>) -> Vector
             }
         }
     }
-    let mut path = VectorPath::new();
-    for command in b.commands {
-        path = match command {
-            FixedCommand::Move(p) => path.move_to(native(p)),
-            FixedCommand::Line(p) => path.line_to(native(p)),
-            FixedCommand::Cubic(a, b, p) => path.cubic_to(native(a), native(b), native(p)),
-            FixedCommand::Close => path.close(),
-        };
-    }
-    path
+    b.commands
 }
 
 #[cfg(test)]
@@ -208,6 +232,20 @@ mod tests {
     use super::*;
     use noon_core::{Vec2, VectorPath};
     use skrifa::outline::pen::PathElement::{self, Close, CurveTo, LineTo, MoveTo, QuadTo};
+    fn compact_path(commands: &[PathElement]) -> VectorPath {
+        let lower = |point| native(point).lower_xy_f32().unwrap();
+        let mut path = VectorPath::new();
+        for command in fixed_commands(commands, None) {
+            path = match command {
+                FixedCommand::Move(p) => path.move_to(lower(p)),
+                FixedCommand::Line(p) => path.line_to(lower(p)),
+                FixedCommand::Cubic(a, b, p) => path.cubic_to(lower(a), lower(b), lower(p)),
+                FixedCommand::Close => path.close(),
+            };
+        }
+        path
+    }
+
     fn v(x: f32, y: f32) -> Vec2 {
         Vec2::new((f64::from(x) * 3.6) as f32, (-f64::from(y) * 3.6) as f32)
     }
@@ -254,7 +292,7 @@ mod tests {
             ),
         ];
         for (input, expected) in cases {
-            assert_eq!(native_path(&input), expected);
+            assert_eq!(compact_path(&input), expected);
         }
     }
     #[test]
@@ -272,11 +310,11 @@ mod tests {
                 .move_to(v(0., 0.))
                 .cubic_to(v(1., 0.), v(1., 1.), v(0., 1.));
         assert_eq!(
-            native_path(&[MoveTo { x: 0., y: 0. }, curve, LineTo { x: 0., y: 1. }]),
+            compact_path(&[MoveTo { x: 0., y: 0. }, curve, LineTo { x: 0., y: 1. }]),
             expected
         );
         assert_eq!(
-            native_path(&[
+            compact_path(&[
                 MoveTo { x: 0., y: 0. },
                 curve,
                 LineTo { x: 0., y: 0. },
@@ -287,9 +325,9 @@ mod tests {
     }
     #[test]
     fn pending_moves_and_contour_boundaries_are_independent() {
-        assert_eq!(native_path(&[MoveTo { x: 0., y: 0. }]), VectorPath::new());
+        assert_eq!(compact_path(&[MoveTo { x: 0., y: 0. }]), VectorPath::new());
         assert_eq!(
-            native_path(&[
+            compact_path(&[
                 MoveTo { x: 0., y: 0. },
                 MoveTo { x: 1., y: 1. },
                 LineTo { x: 2., y: 2. }
@@ -305,7 +343,7 @@ mod tests {
             Close,
         ];
         assert_eq!(
-            native_path(&input),
+            compact_path(&input),
             VectorPath::new()
                 .move_to(v(0., 0.))
                 .line_to(v(1., 0.))
@@ -336,12 +374,12 @@ mod tests {
                 Vec2::new(0.0140625, -0.0140625),
                 Vec2::new(0.05625, -0.05625),
             );
-        assert_eq!(native_path(&input), expected);
+        assert_eq!(compact_path(&input), expected);
     }
 
     #[test]
     fn valid_fixed_coordinates_can_span_more_than_a_signed_integer() {
-        let path = native_path(&[
+        let path = compact_path(&[
             MoveTo {
                 x: -8_388_607.0,
                 y: 0.0,
@@ -356,5 +394,66 @@ mod tests {
         assert_eq!(path.commands().len(), 2);
         let bounds = path.conservative_bounds().unwrap();
         assert!(bounds.min.x.is_finite() && bounds.max.x.is_finite());
+    }
+    #[test]
+    fn canonical_controls_keep_cairo_precision_and_closed_contours_after_transform() {
+        use noon_core::{PathCommand, SemanticTransform2_5D};
+        let path = native_path(&[
+            MoveTo {
+                x: 1. / 64.,
+                y: 2. / 64.,
+            },
+            LineTo {
+                x: 3. / 64.,
+                y: 4. / 64.,
+            },
+            Close,
+            MoveTo {
+                x: 5. / 64.,
+                y: 6. / 64.,
+            },
+            LineTo {
+                x: 7. / 64.,
+                y: 8. / 64.,
+            },
+            Close,
+        ]);
+        let points = path.manim_points().unwrap();
+        assert_eq!(points.len(), 16);
+        assert_eq!(points[0], SemanticVec3::new(0.05625, -0.1125, 0.0));
+        assert_ne!(points[0].x, f64::from(points[0].x as f32));
+        assert_eq!(points[7], points[0]);
+        assert_eq!(points[15], points[8]);
+        let offset = SemanticVec3::new(1.5, -2.5, 2.375);
+        let moved = path.transformed_semantic(SemanticTransform2_5D {
+            translation: offset,
+            ..Default::default()
+        });
+        for (before, after) in points.iter().zip(moved.manim_points().unwrap()) {
+            assert_eq!(
+                *after,
+                SemanticVec3::new(
+                    before.x + offset.x,
+                    before.y + offset.y,
+                    before.z + offset.z
+                )
+            );
+        }
+        assert_eq!(
+            moved
+                .commands()
+                .iter()
+                .filter(|c| matches!(c, PathCommand::Close))
+                .count(),
+            2
+        );
+        assert_eq!(
+            moved
+                .commands()
+                .iter()
+                .filter(|c| matches!(c, PathCommand::MoveTo { .. }))
+                .count(),
+            2
+        );
     }
 }

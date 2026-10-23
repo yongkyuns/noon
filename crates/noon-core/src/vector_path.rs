@@ -102,14 +102,7 @@ impl VectorPath {
                 .iter()
                 .map(|&point| transform.transform_xyz(point))
                 .collect();
-            let line_segments = !self.commands().iter().any(|command| {
-                matches!(
-                    command,
-                    PathCommand::QuadraticTo { .. } | PathCommand::CubicTo { .. }
-                )
-            });
-            let closed = matches!(self.commands().last(), Some(PathCommand::Close));
-            Self::from_manim_points_drawing(points, line_segments, closed)
+            Self::from_transformed_manim_points(points, self.commands())
         } else {
             self.transformed(Transform2D {
                 translation: Vec2::new(
@@ -287,8 +280,39 @@ impl VectorPath {
         self.morph_target.as_deref()
     }
 
+    /// Owned path payload by logical length, including canonical controls and morphs.
+    /// Allocator capacity and bookkeeping are excluded, as with resource arena stats.
+    pub fn retained_bytes(&self) -> usize {
+        let own = std::mem::size_of::<Self>()
+            + std::mem::size_of_val(self.commands())
+            + self.manim_points().map_or(0, std::mem::size_of_val);
+        own.saturating_add(self.morph_target().map_or(0, Self::retained_bytes))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+    }
+
+    /// High-precision control bounds for semantic layout and retained resources.
+    /// Compact command-only paths contain explicitly authored f32 coordinates.
+    pub fn semantic_control_bounds(&self) -> Option<crate::Bounds2D64> {
+        if let Some(points) = self.manim_points() {
+            let mut bounds: Option<crate::Bounds2D64> = None;
+            for point in points {
+                if let Some(bounds) = &mut bounds {
+                    bounds.include(point.x, point.y);
+                } else {
+                    bounds = Some(crate::Bounds2D64::point(point.x, point.y));
+                }
+            }
+            return bounds;
+        }
+        self.conservative_bounds().map(|bounds| crate::Bounds2D64 {
+            min_x: f64::from(bounds.min.x),
+            min_y: f64::from(bounds.min.y),
+            max_x: f64::from(bounds.max.x),
+            max_y: f64::from(bounds.max.y),
+        })
     }
 
     pub fn conservative_bounds(&self) -> Option<Rect> {

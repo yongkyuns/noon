@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::{Color, GeometryResourceHandle, Rect, StrokeCap, StrokeJoin, Vec2};
+use crate::{Color, DRect, DVec2, GeometryResourceHandle, StrokeCap, StrokeJoin};
 
 static NEXT_TEXT_RESOURCE_ARENA: AtomicU64 = AtomicU64::new(1);
 
@@ -237,12 +237,12 @@ pub struct TextClusterIdentity {
 /// The matrix maps `(x, y)` to `(xx*x + xy*y + tx, yx*x + yy*y + ty)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextAffineTransform {
-    pub xx: f32,
-    pub yx: f32,
-    pub xy: f32,
-    pub yy: f32,
-    pub tx: f32,
-    pub ty: f32,
+    pub xx: f64,
+    pub yx: f64,
+    pub xy: f64,
+    pub yy: f64,
+    pub tx: f64,
+    pub ty: f64,
 }
 
 impl TextAffineTransform {
@@ -255,7 +255,7 @@ impl TextAffineTransform {
         ty: 0.0,
     };
 
-    pub const fn translation(x: f32, y: f32) -> Self {
+    pub const fn translation(x: f64, y: f64) -> Self {
         Self {
             tx: x,
             ty: y,
@@ -263,15 +263,26 @@ impl TextAffineTransform {
         }
     }
 
-    pub fn transform_point(self, point: Vec2) -> Vec2 {
-        Vec2::new(
+    pub fn transform_point(self, point: DVec2) -> DVec2 {
+        DVec2::new(
             self.xx * point.x + self.xy * point.y + self.tx,
             self.yx * point.x + self.yy * point.y + self.ty,
         )
     }
 
-    pub fn transform_vector(self, vector: Vec2) -> Vec2 {
-        Vec2::new(
+    /// Transform canonical text bounds without projecting to renderer precision.
+    pub fn transform_bounds(self, bounds: DRect) -> DRect {
+        DRect::from_points([
+            self.transform_point(bounds.min),
+            self.transform_point(DVec2::new(bounds.min.x, bounds.max.y)),
+            self.transform_point(DVec2::new(bounds.max.x, bounds.min.y)),
+            self.transform_point(bounds.max),
+        ])
+        .expect("a rectangle has four corners")
+    }
+
+    pub fn transform_vector(self, vector: DVec2) -> DVec2 {
+        DVec2::new(
             self.xx * vector.x + self.xy * vector.y,
             self.yx * vector.x + self.yy * vector.y,
         )
@@ -301,9 +312,9 @@ impl Default for TextAffineTransform {
 pub struct PositionedGlyph {
     pub glyph_id: u32,
     pub cluster: TextClusterIdentity,
-    pub origin: Vec2,
-    pub advance: Vec2,
-    pub bounds: Rect,
+    pub origin: DVec2,
+    pub advance: DVec2,
+    pub bounds: DRect,
 }
 
 /// Exact outline-stroke semantics for one shaped glyph run.
@@ -345,7 +356,7 @@ pub struct GlyphRun {
     pub font: FontFaceIdentity,
     /// Exact variable-font design coordinates used by the shaping backend.
     pub variations: Arc<[FontVariationSetting]>,
-    pub font_size: f32,
+    pub font_size: f64,
     pub direction: TextDirection,
     pub fill: Option<Color>,
     /// Exact outline stroke requested by the layout backend. Any `Some` value
@@ -429,8 +440,8 @@ pub struct TextResource {
     /// Backend painter order across shaped runs and non-glyph vector items.
     pub render_items: Arc<[TextRenderItem]>,
     pub parts: Arc<[TextPart]>,
-    pub bounds: Rect,
-    pub baseline: f32,
+    pub bounds: DRect,
+    pub baseline: f64,
     pub layout_artifact: Option<TextLayoutArtifact>,
 }
 
@@ -1314,11 +1325,11 @@ mod tests {
                         cluster_ordinal: index as u32,
                         semantic_key: None,
                     },
-                    origin: Vec2::new(index as f32, 0.0),
-                    advance: Vec2::new(1.0, 0.0),
-                    bounds: Rect::new(
-                        Vec2::new(index as f32, -0.2),
-                        Vec2::new(index as f32 + 0.8, 0.8),
+                    origin: DVec2::new(index as f64, 0.0),
+                    advance: DVec2::new(1.0, 0.0),
+                    bounds: DRect::new(
+                        DVec2::new(index as f64, -0.2),
+                        DVec2::new(index as f64 + 0.8, 0.8),
                     ),
                 }
             })
@@ -1355,7 +1366,7 @@ mod tests {
                 vector_count: 0,
                 semantic_key: None,
             }]),
-            bounds: Rect::new(Vec2::new(0.0, -0.2), Vec2::new(source.len() as f32, 0.8)),
+            bounds: DRect::new(DVec2::new(0.0, -0.2), DVec2::new(source.len() as f64, 0.8)),
             baseline: 0.0,
             layout_artifact: None,
         }
@@ -1600,12 +1611,12 @@ mod tests {
             ty: -2.0,
         };
         assert_eq!(
-            transform.transform_point(Vec2::new(2.0, 4.0)),
-            Vec2::new(3.0, 2.5)
+            transform.transform_point(DVec2::new(2.0, 4.0)),
+            DVec2::new(3.0, 2.5)
         );
         assert_eq!(
-            transform.transform_vector(Vec2::new(2.0, 4.0)),
-            Vec2::new(0.0, 4.5)
+            transform.transform_vector(DVec2::new(2.0, 4.0)),
+            DVec2::new(0.0, 4.5)
         );
     }
 

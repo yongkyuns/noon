@@ -37,12 +37,13 @@ fn plain_text(store: &mut SemanticStore, source: &str) -> noon_core::SemanticNod
                 cluster_ordinal: u32::try_from(index).unwrap(),
                 semantic_key: None,
             },
-            origin: Vec2::new(index as f32, 0.0),
-            advance: Vec2::ONE,
+            origin: Vec2::new(index as f32, 0.0).into(),
+            advance: Vec2::ONE.into(),
             bounds: Rect::new(
                 Vec2::new(index as f32, 0.0),
                 Vec2::new(index as f32 + 1.0, 1.0),
-            ),
+            )
+            .into(),
         })
         .collect::<Vec<_>>();
     let handle = store
@@ -64,7 +65,7 @@ fn plain_text(store: &mut SemanticStore, source: &str) -> noon_core::SemanticNod
                 vector_items: Arc::from([]),
                 render_items: Arc::from([TextRenderItem::GlyphRun(0)]),
                 parts: Arc::from([]),
-                bounds: Rect::new(Vec2::ZERO, Vec2::new(source.len() as f32, 1.0)),
+                bounds: Rect::new(Vec2::ZERO, Vec2::new(source.len() as f32, 1.0)).into(),
                 baseline: 0.0,
                 layout_artifact: None,
             },

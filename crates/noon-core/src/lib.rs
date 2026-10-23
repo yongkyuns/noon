@@ -20,6 +20,8 @@ mod semantic_store;
 mod spatial3d;
 mod vector_path;
 pub use vector_path::VectorPath;
+mod planar_math;
+pub use planar_math::{DRect, DVec2, Rect, Vec2};
 mod point_array_shape;
 pub use point_array_shape::{PointArrayShape, PointArrayShapeError};
 
@@ -36,7 +38,6 @@ pub use semantic_store::*;
 pub use spatial3d::*;
 
 use serde::{Deserialize, Serialize};
-use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 macro_rules! define_id {
     ($name:ident) => {
@@ -61,99 +62,6 @@ define_id!(ObjectId);
 define_id!(GeometryId);
 define_id!(TrackId);
 define_id!(SignalId);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Vec2 {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Vec2 {
-    pub const ZERO: Self = Self::new(0.0, 0.0);
-    pub const ONE: Self = Self::new(1.0, 1.0);
-
-    pub const fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
-    }
-
-    pub fn length(self) -> f32 {
-        self.x.hypot(self.y)
-    }
-
-    pub fn normalized(self) -> Option<Self> {
-        let length = self.length();
-        (length > 0.0 && length.is_finite()).then(|| self / length)
-    }
-
-    pub fn component_mul(self, rhs: Self) -> Self {
-        Self::new(self.x * rhs.x, self.y * rhs.y)
-    }
-
-    pub fn rotate(self, angle: f32) -> Self {
-        let (sin, cos) = angle.sin_cos();
-        Self::new(self.x * cos - self.y * sin, self.x * sin + self.y * cos)
-    }
-}
-
-impl Add for Vec2 {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.x + rhs.x, self.y + rhs.y)
-    }
-}
-
-impl AddAssign for Vec2 {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Sub for Vec2 {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self::new(self.x - rhs.x, self.y - rhs.y)
-    }
-}
-
-impl SubAssign for Vec2 {
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl Neg for Vec2 {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        Self::new(-self.x, -self.y)
-    }
-}
-
-impl Mul<f32> for Vec2 {
-    type Output = Self;
-
-    fn mul(self, rhs: f32) -> Self::Output {
-        Self::new(self.x * rhs, self.y * rhs)
-    }
-}
-
-impl Mul<Vec2> for f32 {
-    type Output = Vec2;
-
-    fn mul(self, rhs: Vec2) -> Self::Output {
-        rhs * self
-    }
-}
-
-impl Div<f32> for Vec2 {
-    type Output = Self;
-
-    fn div(self, rhs: f32) -> Self::Output {
-        Self::new(self.x / rhs, self.y / rhs)
-    }
-}
 
 pub const ORIGIN: Vec2 = Vec2::ZERO;
 pub const UP: Vec2 = Vec2::new(0.0, 1.0);
@@ -407,77 +315,6 @@ pub const PINK: Color = Color::PINK;
 pub const LIGHT_PINK: Color = Color::LIGHT_PINK;
 pub const GRAY: Color = Color::GRAY;
 pub const GREY: Color = Color::GREY;
-
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Rect {
-    pub min: Vec2,
-    pub max: Vec2,
-}
-
-impl Rect {
-    pub const fn new(min: Vec2, max: Vec2) -> Self {
-        Self { min, max }
-    }
-
-    pub fn from_points(points: impl IntoIterator<Item = Vec2>) -> Option<Self> {
-        let mut points = points.into_iter();
-        let first = points.next()?;
-        let mut result = Self::new(first, first);
-        for point in points {
-            result.include(point);
-        }
-        Some(result)
-    }
-
-    pub fn include(&mut self, point: Vec2) {
-        self.min.x = self.min.x.min(point.x);
-        self.min.y = self.min.y.min(point.y);
-        self.max.x = self.max.x.max(point.x);
-        self.max.y = self.max.y.max(point.y);
-    }
-
-    pub fn union(self, other: Self) -> Self {
-        Self::new(
-            Vec2::new(self.min.x.min(other.min.x), self.min.y.min(other.min.y)),
-            Vec2::new(self.max.x.max(other.max.x), self.max.y.max(other.max.y)),
-        )
-    }
-
-    pub fn center(self) -> Vec2 {
-        (self.min + self.max) * 0.5
-    }
-
-    pub fn size(self) -> Vec2 {
-        self.max - self.min
-    }
-
-    pub fn width(self) -> f32 {
-        self.max.x - self.min.x
-    }
-
-    pub fn height(self) -> f32 {
-        self.max.y - self.min.y
-    }
-
-    pub fn critical_point(self, direction: Vec2) -> Vec2 {
-        Vec2::new(
-            if direction.x < 0.0 {
-                self.min.x
-            } else if direction.x > 0.0 {
-                self.max.x
-            } else {
-                self.center().x
-            },
-            if direction.y < 0.0 {
-                self.min.y
-            } else if direction.y > 0.0 {
-                self.max.y
-            } else {
-                self.center().y
-            },
-        )
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
