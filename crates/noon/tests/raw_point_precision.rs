@@ -166,7 +166,7 @@ fn semantic_transform_and_baked_append_keep_raw_tail_and_coordinate_precision() 
         .iter()
         .map(|&(x, y)| transform.transform_xy(x, y))
         .collect::<Vec<_>>();
-    assert_eq!(path.manim_points().unwrap(), expected);
+    assert_eq!(path.manim_points_xy().unwrap(), expected);
     let mut scene = Scene::new();
     let mut object = scene
         .path(
@@ -260,7 +260,7 @@ fn raw_drawable_commands_are_derived_after_semantic_transform_cancellation() {
         scale: SemanticVec3::new(scale, 1.0, 1.0),
         ..Default::default()
     });
-    assert_eq!(transformed.manim_points().unwrap(), [(1.0, 0.0); 4]);
+    assert_eq!(transformed.manim_points_xy().unwrap(), [(1.0, 0.0); 4]);
     assert_eq!(
         transformed.endpoints().unwrap(),
         (

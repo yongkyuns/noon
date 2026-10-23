@@ -8,26 +8,26 @@ use std::{collections::HashMap, fmt, sync::Arc};
 #[cfg(test)]
 use crate::outline::outline_commands_to_path;
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting, GlyphRun,
-    PositionedGlyph, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
-    TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
-    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2,
+    Color, DRect, DVec2, FontFaceIdentity, FontResourceArena, FontResourceError,
+    FontVariationSetting, GlyphRun, PositionedGlyph, TextAffineTransform, TextClusterIdentity,
+    TextDirection, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart,
+    TextRenderItem, TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan,
 };
 #[cfg(test)]
 use swash::{scale::ScaleContext, zeno::PathData};
 use swash::{shape::ShapeContext, text::Script, FontRef, GlyphId};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10/skrifa-0.44.0";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v6";
-const MANIM_DEFAULT_LINE_SPACING: f32 = 0.3;
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v8-f64-lines";
+const MANIM_DEFAULT_LINE_SPACING: f64 = 0.3;
 // `Text` sends its line step through ManimPango after dividing by 4.8. Pango
 // uses 96 device units per inch for its point-sized font metrics, so the SVG
 // coordinate step is three quarters of the equivalent Swash distance.
-const MANIM_PLAIN_LINE_ADVANCE_SCALE: f32 = 0.75;
+const MANIM_PLAIN_LINE_ADVANCE_SCALE: f64 = 0.75;
 // Manim sends native Text/MarkupText point size through ManimPango after dividing by
 // TEXT2SVG_ADJUSTMENT_FACTOR (4.8). Pango/Cairo then converts points at 96 DPI,
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
-const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
+const MANIM_PANGO_LAYOUT_PIXEL: f64 = 3.6;
 
 /// Explicit layout environment for native text; the portable default is stable
 /// across hosts. This changes preparation only, never the presentation clock.
@@ -308,7 +308,7 @@ impl NativeTextCompiler {
                 // natural baseline advance, including for an explicit option.
                 let metrics =
                     font_metrics(&mut self.shape_context, base_font, options, &variations)?;
-                metrics.ascent + metrics.descent + metrics.leading
+                f64::from(metrics.ascent) + f64::from(metrics.descent) + f64::from(metrics.leading)
             }
             TextSourceKind::Plain => configured_line_advance(options),
             _ => unreachable!("native compiler only accepts plain or markup source"),
@@ -316,12 +316,12 @@ impl NativeTextCompiler {
 
         let mut runs = Vec::new();
         let mut render_items = Vec::new();
-        let mut layout_bounds: Option<Rect> = None;
+        let mut layout_bounds: Option<DRect> = None;
         let mut cluster_ordinal = 0_u32;
         let mut used_fonts = Vec::<(FontFaceIdentity, Arc<[u8]>)>::new();
 
         for (line_index, line) in lines.iter().copied().enumerate() {
-            let baseline_y = -(line_index as f32) * line_advance;
+            let baseline_y = -(line_index as f64) * line_advance;
             if line.text.is_empty() {
                 let identity = font_identity(base_font, options);
                 push_run(
@@ -349,7 +349,7 @@ impl NativeTextCompiler {
             let line_span_range = spans_for_line(spans, line.start, line_end);
             debug_assert!(!line_span_range.is_empty());
             let mut group_start = line_span_range.start;
-            let mut line_cursor_x = 0.0_f32;
+            let mut line_cursor_x = 0.0_f64;
             while group_start < line_span_range.end {
                 let font = &spans[group_start].font;
                 let mut group_end = group_start + 1;
@@ -383,9 +383,9 @@ impl NativeTextCompiler {
                 } = shaped;
                 for shaped_run in shaped_runs {
                     if let Some(bounds) = shaped_run.visual_bounds {
-                        let bounds = Rect::new(
-                            Vec2::new(bounds.min.x, bounds.min.y + baseline_y),
-                            Vec2::new(bounds.max.x, bounds.max.y + baseline_y),
+                        let bounds = DRect::new(
+                            DVec2::new(bounds.min.x, bounds.min.y + baseline_y),
+                            DVec2::new(bounds.max.x, bounds.max.y + baseline_y),
                         );
                         layout_bounds =
                             Some(layout_bounds.map_or(bounds, |existing| existing.union(bounds)));
@@ -406,7 +406,7 @@ impl NativeTextCompiler {
             }
         }
 
-        let layout_bounds = layout_bounds.unwrap_or_else(|| Rect::new(Vec2::ZERO, Vec2::ZERO));
+        let layout_bounds = layout_bounds.unwrap_or_else(|| DRect::new(DVec2::ZERO, DVec2::ZERO));
         let center = layout_bounds.center();
         let recenter = TextAffineTransform::translation(-center.x, -center.y);
         for run in &mut runs {
@@ -426,7 +426,7 @@ impl NativeTextCompiler {
                 vector_count: 0,
                 semantic_key: None,
             }]),
-            bounds: Rect::new(layout_bounds.min - center, layout_bounds.max - center),
+            bounds: DRect::new(layout_bounds.min - center, layout_bounds.max - center),
             baseline: -center.y,
             layout_artifact: Some(layout_artifact(source, base_font, options, spans, kind)),
         };
@@ -450,7 +450,7 @@ impl NativeTextCompiler {
         source_start: u32,
         spans: &[NativeTextSpan],
         font: &NativeFontFace,
-        initial_x: f32,
+        initial_x: f64,
         options: &NativeTextOptions,
         variations: &[([u8; 4], f32)],
         cluster_ordinal: &mut u32,
@@ -520,8 +520,8 @@ impl NativeTextCompiler {
             };
             let first_cluster_glyph = run.glyphs.len();
             for glyph in cluster.glyphs {
-                let origin = Vec2::new(cursor_x + glyph.x, glyph.y);
-                let advance = Vec2::new(glyph.advance, 0.0);
+                let origin = DVec2::new(cursor_x + f64::from(glyph.x), f64::from(glyph.y));
+                let advance = DVec2::new(f64::from(glyph.advance), 0.0);
                 run.glyphs.push(PositionedGlyph {
                     glyph_id: u32::from(glyph.id),
                     cluster: TextClusterIdentity {
@@ -532,11 +532,11 @@ impl NativeTextCompiler {
                     origin,
                     advance,
                     // Filled from the exact unhinted glyph outline below.
-                    bounds: Rect::new(origin, origin),
+                    bounds: DRect::new(origin, origin),
                 });
             }
             *cluster_ordinal = cluster_ordinal.saturating_add(1);
-            let raw_advance = cluster.advance();
+            let raw_advance = f64::from(cluster.advance());
             let positioned_advance = (raw_advance / layout_unit).round() * layout_unit;
             if let Some(glyph) = run.glyphs[first_cluster_glyph..].last_mut() {
                 glyph.advance.x += positioned_advance - raw_advance;
@@ -558,7 +558,7 @@ impl NativeTextCompiler {
             )
             .map_err(|_| NativeTextError::InvalidGlyphOutline)?;
         let mut outline_error = false;
-        let mut glyph_bounds = HashMap::<GlyphId, Option<Rect>>::new();
+        let mut glyph_bounds = HashMap::<GlyphId, Option<DRect>>::new();
         let runs = projected
             .into_iter()
             .map(|mut run| {
@@ -570,7 +570,12 @@ impl NativeTextCompiler {
                         let bounds = *glyph_bounds.entry(glyph_id).or_insert_with(|| match scaler
                             .outline(glyph_id)
                         {
-                            Ok(path) => path.conservative_bounds(),
+                            Ok(path) => path.semantic_control_bounds().map(|bounds| {
+                                DRect::new(
+                                    DVec2::new(bounds.min_x, bounds.min_y),
+                                    DVec2::new(bounds.max_x, bounds.max_y),
+                                )
+                            }),
                             Err(_) => {
                                 outline_error = true;
                                 None
@@ -578,7 +583,7 @@ impl NativeTextCompiler {
                         });
                         bounds.map(|bounds| {
                             glyph.bounds =
-                                Rect::new(glyph.origin + bounds.min, glyph.origin + bounds.max);
+                                DRect::new(glyph.origin + bounds.min, glyph.origin + bounds.max);
                             glyph.bounds
                         })
                     })
@@ -613,14 +618,14 @@ struct ProjectedRun {
 }
 struct ShapedGroup {
     outline_profile: noon_core::GlyphOutlineProfile,
-    end_x: f32,
+    end_x: f64,
     runs: Vec<ShapedRun>,
 }
 
 struct ShapedRun {
     fill: Option<Color>,
     glyphs: Vec<PositionedGlyph>,
-    visual_bounds: Option<Rect>,
+    visual_bounds: Option<DRect>,
 }
 
 fn push_run(
@@ -628,7 +633,7 @@ fn push_run(
     render_items: &mut Vec<TextRenderItem>,
     font: FontFaceIdentity,
     options: &NativeTextOptions,
-    baseline_y: f32,
+    baseline_y: f64,
     shaped: ShapedRun,
     outline_profile: noon_core::GlyphOutlineProfile,
 ) {
@@ -637,7 +642,7 @@ fn push_run(
         outline_profile,
         font,
         variations: options.variations.clone(),
-        font_size: options.font_size,
+        font_size: f64::from(options.font_size),
         direction: TextDirection::LeftToRight,
         fill: shaped.fill,
         stroke: None,
@@ -795,13 +800,13 @@ fn validate_line_spacing(options: &NativeTextOptions) -> Result<(), NativeTextEr
     Ok(())
 }
 
-fn configured_line_advance(options: &NativeTextOptions) -> f32 {
+fn configured_line_advance(options: &NativeTextOptions) -> f64 {
     let extra = if options.line_spacing == -1.0 {
         MANIM_DEFAULT_LINE_SPACING
     } else {
-        options.line_spacing
+        f64::from(options.line_spacing)
     };
-    options.font_size * (1.0 + extra) * MANIM_PLAIN_LINE_ADVANCE_SCALE
+    f64::from(options.font_size) * (1.0 + extra) * MANIM_PLAIN_LINE_ADVANCE_SCALE
 }
 
 fn split_source_lines(source: &str) -> Result<Vec<SourceLine<'_>>, NativeTextError> {
@@ -1017,11 +1022,11 @@ mod tests {
                 .iter()
                 .zip([0.0, 11.2041015625, 22.408203125, 33.6123046875, 44.81640625])
         {
-            let relative_x = (f64::from(glyph.origin.x) - f64::from(glyphs[0].origin.x)) / 3.6;
+            let relative_x = (glyph.origin.x - glyphs[0].origin.x) / 3.6;
             assert!((relative_x - expected).abs() < 1e-5);
         }
-        assert!((f64::from(artifact.resource.bounds.width()) / 72.0 - 2.6802734).abs() < 1e-6);
-        assert!((f64::from(artifact.resource.bounds.height()) / 72.0 - 0.69140625).abs() < 1e-6);
+        assert!((artifact.resource.bounds.width() / 72.0 - 2.6802734).abs() < 1e-6);
+        assert!((artifact.resource.bounds.height() / 72.0 - 0.69140625).abs() < 1e-6);
         let markup = compiler
             .compile_styled(
                 "Frame",
@@ -1413,7 +1418,8 @@ mod tests {
             explicit.resource.runs[0].transform.ty - explicit.resource.runs[1].transform.ty;
         let metrics =
             font_metrics(&mut compiler.shape_context, &font, &explicit_options, &[]).unwrap();
-        let natural_advance = metrics.ascent + metrics.descent + metrics.leading;
+        let natural_advance =
+            f64::from(metrics.ascent) + f64::from(metrics.descent) + f64::from(metrics.leading);
 
         assert!((default_delta - natural_advance).abs() < 1e-4);
         assert!((explicit_delta - natural_advance).abs() < 1e-4);
@@ -1459,7 +1465,7 @@ mod tests {
             .reduce(|a, b| a.union(b))
             .unwrap();
         assert!((plain.resource.bounds.height() - glyph_bounds.height()).abs() < 1e-4);
-        assert!(plain.resource.bounds.height() < options.font_size);
+        assert!(plain.resource.bounds.height() < f64::from(options.font_size));
     }
 
     #[test]
@@ -1472,7 +1478,10 @@ mod tests {
             .compile_styled(source, &font, &NativeTextOptions::new(42.0), &style_spans)
             .unwrap();
 
-        assert_eq!(artifact.resource.bounds, Rect::new(Vec2::ZERO, Vec2::ZERO));
+        assert_eq!(
+            artifact.resource.bounds,
+            DRect::new(DVec2::ZERO, DVec2::ZERO)
+        );
         assert_eq!(artifact.resource.glyph_count(), 2);
     }
     #[test]
@@ -1549,7 +1558,7 @@ mod tests {
                     let expected: Vec<_> = outline
                         .points()
                         .iter()
-                        .map(|p| Vec2::new(p.x, p.y))
+                        .map(|p| noon_core::Vec2::new(p.x, p.y))
                         .collect();
                     let outline = shared
                         .font_scaler(font, size, &[])
@@ -1603,12 +1612,13 @@ mod tests {
                 .outline(glyph.glyph_id as GlyphId)
                 .unwrap();
             if let Some(bounds) = path
-                .conservative_bounds()
+                .semantic_control_bounds()
+                .map(|b| DRect::new(DVec2::new(b.min_x, b.min_y), DVec2::new(b.max_x, b.max_y)))
                 .filter(|b| b.min.x < b.max.x && b.min.y < b.max.y)
             {
                 assert_eq!(
                     glyph.bounds,
-                    Rect::new(glyph.origin + bounds.min, glyph.origin + bounds.max)
+                    DRect::new(glyph.origin + bounds.min, glyph.origin + bounds.max)
                 );
             }
         }

@@ -20,8 +20,13 @@ on:
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-stress-edit-smoke.mjs"
+      - "scripts/playground-stress-observation.mjs"
+      - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/ci-install-playwright-browser.sh"
+      - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
@@ -29,6 +34,14 @@ on:
       - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/object-membership-qualification.mjs"
+      - "scripts/point-promotion-qualification.mjs"
+      - "scripts/xyz-queries-qualification.mjs"
+      - "scripts/manim-xyz-queries-reference*"
+      - "scripts/manim_xyz_query_observation.py"
+      - "scripts/manim_depth_affine_observation.py"
+      - "scripts/manim-raster-support.mjs"
+      - "fixtures/manim-v0.21/xyz-queries.json"
       - "scripts/table-*"
       - "scripts/manim-table-*"
       - "fixtures/manim-v0.21/table-*"
@@ -56,8 +69,13 @@ on:
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-stress-edit-smoke.mjs"
+      - "scripts/playground-stress-observation.mjs"
+      - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/ci-install-playwright-browser.sh"
+      - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
@@ -65,6 +83,14 @@ on:
       - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/object-membership-qualification.mjs"
+      - "scripts/point-promotion-qualification.mjs"
+      - "scripts/xyz-queries-qualification.mjs"
+      - "scripts/manim-xyz-queries-reference*"
+      - "scripts/manim_xyz_query_observation.py"
+      - "scripts/manim_depth_affine_observation.py"
+      - "scripts/manim-raster-support.mjs"
+      - "fixtures/manim-v0.21/xyz-queries.json"
       - "scripts/table-*"
       - "scripts/manim-table-*"
       - "fixtures/manim-v0.21/table-*"
@@ -120,8 +146,11 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Verify the complete gallery sharding inventory
-        run: node --test scripts/gallery-shards.test.mjs
+      - name: Verify gallery inventory, dependency setup and edit observations
+        run: |
+          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs
+          python3 -S scripts/test_ci_install_reference_deps.py
+          python3 -S scripts/test_ci_install_playwright_browser.py
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
@@ -181,14 +210,7 @@ jobs:
         run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            python3 -S scripts/test_ci_install_reference_deps.py
-            bash scripts/ci-install-reference-deps.sh --playwright "${{ matrix.browser }}"
-            npx playwright install "${{ matrix.browser }}"
-          else
-            npx playwright install --with-deps "${{ matrix.browser }}"
-          fi
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
       - name: Test examples browser presentation
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
@@ -262,6 +284,48 @@ jobs:
         with:
           name: family-query-browser-qualification
           path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-query
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Qualify XYZ object copies and member queries across Rust and Python
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 10
+        env:
+          NOON_OBJECT_MEMBERSHIP_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/object-xyz-queries
+        run: node scripts/object-membership-qualification.mjs
+      - name: Retain XYZ object-copy paired renders
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: object-xyz-query-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/object-xyz-queries
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Qualify own-point promotion across native Rust semantics and Python
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 15
+        env:
+          NOON_POINT_PROMOTION_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/point-promotion
+        run: node scripts/point-promotion-qualification.mjs
+      - name: Retain own-point promotion observations and paired renders
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: point-promotion-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/point-promotion
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Qualify full XYZ queries through authored, bound, edited and removed states
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 15
+        env:
+          NOON_XYZ_QUERY_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/xyz-queries
+        run: node scripts/xyz-queries-qualification.mjs
+      - name: Retain full XYZ query observations and exact reference comparisons
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: xyz-query-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/xyz-queries
           if-no-files-found: warn
           retention-days: 3
       - name: Test gallery click animation and idle restoration
@@ -366,14 +430,7 @@ jobs:
         run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            python3 -S scripts/test_ci_install_reference_deps.py
-            bash scripts/ci-install-reference-deps.sh --playwright "${{ matrix.browser }}"
-            npx playwright install "${{ matrix.browser }}"
-          else
-            npx playwright install --with-deps "${{ matrix.browser }}"
-          fi
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
       - name: Qualify the full gallery shard, including portable no-JSPI controls
         timeout-minutes: 20
         env:

@@ -15,7 +15,7 @@ class OrdinaryFadePlay(Scene):
         self.play(FadeIn(circle), run_time=1.0, rate_func=linear)
         first_id = circle.id
         assert self.time == 1.0
-        assert tuple(circle.get_center()) == (0.0, 0.0)
+        assert tuple(circle.get_center()) == (0.0, 0.0, 0.0)
 
         self.play(FadeOut(circle), run_time=1.0, rate_func=linear)
         assert self.time == 2.0

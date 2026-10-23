@@ -14,8 +14,8 @@ class LiveBrace(Scene):
         self.add(square)
         self.play(square.animate.shift(RIGHT * 2), run_time=0.1)
         brace = Brace(square, DOWN)
-        assert abs(brace.get_center().x - square.get_center().x) < 1e-6
-        assert brace.get_top().y < square.get_bottom().y
+        assert abs(brace.get_center()[0] - square.get_center()[0]) < 1e-6
+        assert brace.get_top()[1] < square.get_bottom()[1]
         self.add(brace)
         self.wait(0.1)
 `;

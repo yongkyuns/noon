@@ -395,7 +395,16 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     let empty_center = MobjectTarget::from(&empty).center_of_mass().unwrap();
     assert!(empty_center.0.is_nan());
     assert!(empty_center.1.is_nan());
-    assert_eq!(MobjectTarget::from(&empty).length_over_dim(3).unwrap(), 0.);
+    for dimension in 0..3 {
+        assert_eq!(
+            MobjectTarget::from(&empty)
+                .length_over_dim(dimension)
+                .unwrap(),
+            0.
+        );
+    }
+    // CE validates the dimension before observing an empty point array.
+    assert!(MobjectTarget::from(&empty).length_over_dim(3).is_err());
     assert!(MobjectTarget::from(&empty).boundary_point(1., 0.).is_err());
 }
 
@@ -1347,11 +1356,17 @@ fn point_reduction_tree_preserves_nested_order_and_repeated_aliases() {
     assert_eq!(tree.children.len(), 2);
     assert_eq!(tree.children[0].children.len(), 2);
     assert!(tree.children[1].children.is_empty());
-    assert_eq!(tree.children[0].children[0].points[0], (4., 2.));
-    assert_eq!(tree.children[0].children[0].points.last(), Some(&(5., 2.)));
+    assert_eq!(
+        tree.children[0].children[0].points[0],
+        noon::SemanticVec3::new(4., 2., 0.)
+    );
+    assert_eq!(
+        tree.children[0].children[0].points.last(),
+        Some(&noon::SemanticVec3::new(5., 2., 0.))
+    );
     assert_eq!(tree.children[0].children[0].points, tree.children[1].points);
     let mut expected_flattened = tree.children[0].children[0].points.clone();
     expected_flattened.extend(tree.children[0].children[1].points.clone());
     expected_flattened.extend(tree.children[1].points.clone());
-    assert_eq!(tree.flattened_points(), expected_flattened);
+    assert_eq!(tree.flattened_points_3d(), expected_flattened);
 }

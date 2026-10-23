@@ -1783,7 +1783,7 @@ def _canonical_set_x(self: _base.Mobject, x: float, direction: object = _base.OR
     value = _canonical_row(self)
     if value is None:
         return _coordinate_operations()._set_x(self, x, direction)
-    if _base._as_vec2(direction) != _base.ORIGIN:
+    if _base._as_vec2(direction) != _base.Vec2():
         raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(float(x) - row.center().x, 0.0))
@@ -1793,7 +1793,7 @@ def _canonical_set_y(self: _base.Mobject, y: float, direction: object = _base.OR
     value = _canonical_row(self)
     if value is None:
         return _coordinate_operations()._set_y(self, y, direction)
-    if _base._as_vec2(direction) != _base.ORIGIN:
+    if _base._as_vec2(direction) != _base.Vec2():
         raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))

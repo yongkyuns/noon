@@ -78,13 +78,13 @@ fn prepare_display_labels(
         let artifact = text.compile_artifact_with_fill(None)?;
         // Native glyph resources are in font pixels. This is the same point-to-
         // scene scale used by ordinary Text, before any authored transform.
-        let scale = f64::from(NATIVE_POINT_TO_SCENE_SCALE);
+        let scale = NATIVE_POINT_TO_SCENE_SCALE;
         let local = artifact.resource.bounds;
         let bounds = Bounds2D64 {
-            min_x: f64::from(local.min.x) * scale,
-            min_y: f64::from(local.min.y) * scale,
-            max_x: f64::from(local.max.x) * scale,
-            max_y: f64::from(local.max.y) * scale,
+            min_x: local.min.x * scale,
+            min_y: local.min.y * scale,
+            max_x: local.max.x * scale,
+            max_y: local.max.y * scale,
         };
         let (x, y) = RelativePlacement::Next(ManimNextToArgs {
             direction: (dx, dy),

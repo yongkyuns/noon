@@ -54,14 +54,14 @@ def _fade_authoring_options(
         shift_vector = _base._as_vec2(shift)
     elif target_position is not None:
         if isinstance(target_position, (_base.Mobject, _compat.Group)):
-            point = target_position.get_center()
+            point = _base._as_vec2(target_position.get_center())
         else:
             point = _base._as_vec2(target_position)
         # Rust resolves the point against the activation-effective target layout.
-        shift_vector = _base.ORIGIN
+        shift_vector = _base.Vec2()
         point_target = True
     else:
-        shift_vector = _base.ORIGIN
+        shift_vector = _base.Vec2()
 
     return animation_kwargs, shift_vector, scale_factor, point_target, point
 

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::{semantic_mobject::authoring_render_f64, Bounds2D64, LayoutAnchor};
 
-/// Layout dimensions of planar objects. Their depth extent is always zero.
+/// World dimensions accepted by semantic layout and stretch operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutDimension {
     Width,
@@ -74,6 +74,12 @@ pub(crate) fn world_scale_factors(
 impl LayoutAnchor {
     /// Read the same layout extent used by fitting, including resource objects.
     pub fn dimension_length(&self, dimension: LayoutDimension) -> Result<f64, AuthoringError> {
+        if dimension == LayoutDimension::Depth {
+            let root = self.resolve()?;
+            let store = self.integration_store().borrow();
+            let leaves = store.ordered_leaf_nodes(root)?;
+            return depth_length_for_leaves(&store, &leaves);
+        }
         Ok(dimension.length(self.dimension_bounds()?))
     }
 
@@ -88,9 +94,9 @@ impl LayoutAnchor {
             LayoutDimension::Width => (factor, 1.0),
             LayoutDimension::Height => (1.0, factor),
             LayoutDimension::Depth => {
-                self.layout()?;
-                authoring_render_f64("stretch factor", factor)?;
-                return Ok(());
+                return self.apply_affine_without_table_layout(
+                    crate::family_affine::FamilyAffine::StretchDepth(factor, pivot),
+                );
             }
         };
         self.apply_affine_without_table_layout(crate::family_affine::FamilyAffine::Scale(
@@ -122,32 +128,15 @@ impl LayoutAnchor {
         stretch: bool,
         pivot: crate::ManimRotationPivot,
     ) -> Result<(), AuthoringError> {
-        let layout = self.layout()?;
-        let Some((x, y)) = dimension.scale(layout.bounds(), length, stretch)? else {
+        let previous = self.dimension_length(dimension)?;
+        let Some(factor) = fitting_factor(previous, length)? else {
             return Ok(());
         };
-        // Manim's non-stretch fit delegates to `scale`; preserve the direct
-        // Table scale override when this anchor names the table root.  A true
-        // stretch changes only one world dimension and leaves table buffers
-        // authored as-is.
+        let factors = fitting_factors(factor, dimension, stretch);
         let table_layout_scope = (!stretch).then(|| self.resolve()).transpose()?;
-        let prepared = {
-            let store = self.integration_store().borrow();
-            crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare_for_scope(
-                &store,
-                layout.leaves(),
-                layout.boundary_bounds(),
-                table_layout_scope,
-            )?
-        };
-        prepared.publish(
-            &mut self.integration_store().borrow_mut(),
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map(|_| ())
-                    .map_err(AuthoringError::from)
-            },
+        self.apply_affine_with_table_layout(
+            crate::family_affine::FamilyAffine::Scale3d(factors, pivot),
+            table_layout_scope,
         )
     }
 
@@ -177,7 +166,7 @@ impl LayoutAnchor {
         if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
             return Err(AuthoringError::ForeignStore);
         }
-        let length = dimension.length(target.layout()?.bounds());
+        let length = target.dimension_length(dimension)?;
         self.rescale_to_fit_with_pivot(length, dimension, stretch, pivot)
     }
 }
@@ -296,7 +285,7 @@ pub(crate) fn replacement_transaction(
             .as_planar()
             .ok_or(AuthoringError::NonFiniteObjectState)?;
         let Ok((local_x, local_y)) = world_scale_factors(planar.rotation_z, x, y) else {
-            let path = crate::family_affine::world_scaled_path(
+            let (baked, path) = crate::family_affine::world_scaled_replacement(
                 store,
                 previous,
                 x,
@@ -304,7 +293,7 @@ pub(crate) fn replacement_transaction(
                 center,
                 destination,
             )?;
-            replacements.push((leaf, previous.clone(), path));
+            replacements.push((leaf, baked, path));
             continue;
         };
         let old_center = state_center(store, previous)?;
@@ -412,3 +401,60 @@ pub(crate) fn circle_surround_dimension(
         dimension.try_into()
     }
 }
+
+/// The extent is measured before pivot resolution; unfinished arrays still
+/// contribute all their controls, and an empty source remains a no-op.
+pub(crate) fn depth_length_for_leaves(
+    store: &noon_core::SemanticStore,
+    leaves: &[crate::SemanticNodeId],
+) -> Result<f64, AuthoringError> {
+    let mut bounds: Option<(f64, f64)> = None;
+    for &leaf in leaves {
+        let state = store.semantic_object_state_checked(leaf)?;
+        let transform = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        if let Some((min, max)) =
+            crate::semantic_mobject::depth_for_content(store, state.content, transform, true)?
+        {
+            bounds = Some(bounds.map_or((min, max), |(old_min, old_max)| {
+                (old_min.min(min), old_max.max(max))
+            }));
+        }
+    }
+    Ok(bounds.map_or(0.0, |(min, max)| max - min))
+}
+
+pub(crate) fn fitting_factor(previous: f64, length: f64) -> Result<Option<f64>, AuthoringError> {
+    if previous == 0.0 {
+        return Ok(None);
+    }
+    for (name, value) in [("fit length", length), ("fit scale", length / previous)] {
+        if !value.is_finite() {
+            return Err(AuthoringError::InvalidRenderNumber {
+                name: name.into(),
+                value,
+            });
+        }
+    }
+    Ok(Some(length / previous))
+}
+
+pub(crate) fn fitting_factors(
+    factor: f64,
+    dimension: LayoutDimension,
+    stretch: bool,
+) -> crate::SemanticVec3 {
+    if !stretch {
+        return crate::SemanticVec3::new(factor, factor, factor);
+    }
+    match dimension {
+        LayoutDimension::Width => crate::SemanticVec3::new(factor, 1.0, 1.0),
+        LayoutDimension::Height => crate::SemanticVec3::new(1.0, factor, 1.0),
+        LayoutDimension::Depth => crate::SemanticVec3::new(1.0, 1.0, factor),
+    }
+}
+
+#[cfg(test)]
+mod xyz_tests;

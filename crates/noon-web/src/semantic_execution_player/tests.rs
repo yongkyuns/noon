@@ -1282,7 +1282,7 @@ fn live_transform_projection_preserves_atomic_rejection_and_local_retry() {
             SemanticObjectProperty::Translation,
         ),
         (
-            |player, object, value| player.live_shift(object, value, -1.0),
+            |player, object, value| player.live_shift(object, value, -1.0, 0.0),
             SemanticObjectProperty::Translation,
         ),
         (

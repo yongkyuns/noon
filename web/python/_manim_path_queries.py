@@ -4,14 +4,14 @@ import noon as _base
 import _noon_ir as _ir
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _all_points_observation,
+    _point_array_observation,
+    _critical_point_observation,
+    _default_point_query_hooks,
     _boundary_point_observation,
     _center_of_mass_observation,
-    _extremum_along_dim_observation,
     _extremum_from_points_observation,
     _family_point_count_observation,
     _length_over_dim_observation,
-    _merged_points_observation,
     _path_boundary_points_observation,
     _vector_boundary_points_observation,
     _point_reduction_tree_observation,
@@ -292,10 +292,10 @@ def point_count(value):
 
 
 def all_points(value):
-    coordinates = _all_points_observation(value)
-    if coordinates is None:
+    array = _anchor_observation(value, _point_array_observation)
+    if array is None:
         raise NotImplementedError("get_all_points requires a valid shared Rust handle")
-    return _format_points(coordinates)
+    return _format_point_array(array)
 
 
 def merged_array(value, array_attr):
@@ -311,14 +311,19 @@ def merged_array(value, array_attr):
             "merged-array queries are unavailable during staged callbacks"
         )
 
-    coordinates = _merged_points_observation(value)
-    if coordinates is None:
-        query = _query(value)
-        try:
-            coordinates = engine_call(query.points)
-        finally:
-            query.free()
-    return _format_points(coordinates)
+    return all_points(value)
+
+
+def _format_point_array(array):
+    coordinates, dimensions = array[0], array[1]
+    shape = tuple(int(dimensions[index]) for index in range(len(dimensions)))
+    try:
+        import numpy as np
+    except ImportError:
+        return _format_points(coordinates, dimensions=3)
+    # JS typed arrays need scalar indexing; array slices are not required.
+    values = [float(coordinates[index]) for index in range(len(coordinates))]
+    return np.asarray(values, dtype=np.float64).reshape(shape)
 
 
 def reduce_across_dimension(value, reduce_func, dim):
@@ -337,7 +342,7 @@ def reduce_across_dimension(value, reduce_func, dim):
     if tree is None:
         query = _query(value)
         try:
-            tree = (engine_call(query.points), ())
+            tree = (engine_call(query.points3D), ())
         finally:
             query.free()
     return _reduce_point_reduction_tree(tree, reduce_func, dim)
@@ -346,8 +351,8 @@ def reduce_across_dimension(value, reduce_func, dim):
 def _reduce_point_reduction_tree(tree, reduce_func, dim):
     """Invoke arbitrary Python reducers over a Rust-supplied semantic tree."""
     coordinates = [float(value) for value in tree[0]]
-    if len(coordinates) % 2:
-        raise RuntimeError("point reduction tree returned an incomplete planar point")
+    if len(coordinates) % 3:
+        raise RuntimeError("point reduction tree returned an incomplete XYZ point")
 
     try:
         import numpy as np
@@ -359,11 +364,10 @@ def _reduce_point_reduction_tree(tree, reduce_func, dim):
     result = None
     if coordinates:
         if np is not None:
-            points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
-            values = np.zeros(len(points), dtype=points.dtype) if dim == 2 else points[:, dim]
+            points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 3))
+            values = points[:, dim]
         else:
-            points = list(zip(coordinates[::2], coordinates[1::2]))
-            values = [0.0] * len(points) if dim == 2 else [point[dim] for point in points]
+            values = [coordinates[index + dim] for index in range(0, len(coordinates), 3)]
         result = reduce_func(values)
 
     children = tree[1]
@@ -392,6 +396,32 @@ def _default_vector_anchor_hooks(value):
     return type(stride) is int and stride == 4
 
 
+def _anchor_observation(value, observe):
+    from _noon_errors import NoonValueError
+    try:
+        return observe(value)
+    except NoonValueError as error:
+        if error.code not in ("path.unpaired_anchors", "point.array_shape"):
+            raise
+        # Rust owns array admission; Python supplies CE's public class.
+        raise ValueError(str(error)) from error
+
+
+def _boundary_snapshot(value, observe):
+    coordinates = _anchor_observation(value, observe)
+    if coordinates is None:
+        raise NotImplementedError("boundary points require a valid shared Rust handle")
+    result = _format_points(coordinates, 3)
+    return result.reshape((0,)) if len(coordinates) == 0 and hasattr(result, "reshape") else result
+
+
+def _compat_point3(point):
+    if isinstance(point, _base.Vec2):
+        from _manim_compat import _manim_point3
+        return _manim_point3(point)
+    return point
+
+
 def boundary_points(value):
     try:
         integer_stride = operator.index(
@@ -409,42 +439,24 @@ def boundary_points(value):
         if (has_family_handle
                 and getattr_static(value, "get_family", None) is _base.Mobject.get_family
                 and all(_default_vector_anchor_hooks(member) for member in family)):
-            coordinates = _vector_boundary_points_observation(value)
-            if coordinates is None:
-                raise NotImplementedError(
-                    "vector boundary points require a shared Rust family handle"
-                )
-            result = _format_points(coordinates)
-            if len(coordinates) == 0 and hasattr(result, "reshape"):
-                return result.reshape((0,))
-            return result
+            return _boundary_snapshot(value, _vector_boundary_points_observation)
 
         def member_anchors(member):
             get_anchors = getattr(member, "get_anchors", None)
             return () if get_anchors is None else get_anchors()
 
-        anchors = [
-            point
-            for member in family
-            for point in member_anchors(member)
-        ]
+        anchors = [_compat_point3(point)
+                   for member in family
+                   for point in member_anchors(member)]
         try:
             import numpy as np
         except ImportError:
             return anchors
-        result = np.asarray(
-            [[float(point[0]), float(point[1])] for point in anchors],
-            dtype=np.float64,
-        )
+        result = np.asarray(anchors, dtype=np.float64)
         # The pinned VMobject implementation calls np.array(tuple(...))
         # without forcing a second dimension, so an empty VGroup returns (0,).
-        return result if has_family_handle else result.reshape((-1, 2))
-    coordinates = _path_boundary_points_observation(value)
-    if coordinates is None:
-        raise NotImplementedError(
-            "get_points_defining_boundary requires a valid shared Rust handle"
-        )
-    return _format_points(coordinates)
+        return result
+    return _boundary_snapshot(value, _path_boundary_points_observation)
 
 
 def consider_points_equals(value, p0, p1):
@@ -612,12 +624,16 @@ def cubic_bezier_tuples(value):
     return cubic_bezier_tuples_from_points(value, _format_points(coordinates))
 
 
-def _format_points(coordinates):
+def _format_points(coordinates, dimensions=2):
     try:
         import numpy as np
     except ImportError:
-        return _points(coordinates)
-    return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+        if dimensions == 2:
+            return _points(coordinates)
+        # Pyodide typed arrays support scalar indexing but not Python slices.
+        return [tuple(float(coordinates[index + offset]) for offset in range(dimensions))
+                for index in range(0, len(coordinates), dimensions)]
+    return np.asarray(coordinates, dtype=np.float64).reshape((-1, dimensions))
 
 
 def center_of_mass(value):
@@ -665,19 +681,81 @@ def _normalize_point_dimension(dim, point_dimensions):
     return normalized
 
 
+def _plain_direction_keys(direction, np):
+    # Restrict the direct path to scalar containers without caller-defined
+    # indexing/coercion hooks. Other directions retain CE's exact access order.
+    if type(direction) is _base.Vec2:
+        return (*direction, 0.0)
+    if type(direction) is _base._Direction3:
+        return tuple(direction)
+    if np is not None and type(direction) is np.ndarray:
+        if direction.shape == (3,) and direction.dtype.kind in "fiu":
+            return tuple(float(direction[index]) for index in range(3))
+        return None
+    if type(direction) in (tuple, list) and len(direction) == 3:
+        types = (int, float, bool) if np is None else (int, float, bool, np.float64)
+        if all(type(component) in types for component in direction):
+            return tuple(float(component) for component in direction)
+    return None
+
+
+def _default_critical_query(value):
+    if type(value).__getattribute__ is not object.__getattribute__:
+        return False
+    if not _default_point_query_hooks(value):
+        return False
+    from inspect import getattr_static
+    from _manim_compat import VMobject
+    members = value.get_family()
+    if isinstance(value, VMobject):
+        return all(_default_vector_anchor_hooks(member) for member in members)
+    return all(getattr_static(member, "get_all_points", None) is _base.Mobject.get_all_points
+               and type(member).__getattribute__ is object.__getattribute__ for member in members)
+
+
+def _critical_point_result(result, numpy):
+    if numpy is None and len(result) == 3:
+        from _manim_compat import _manim_point3_result
+        return _manim_point3_result(result)
+    return result
+
+
+def critical_point(value, direction):
+    """Use one Rust critical-point query, preserving caller-owned Python hooks."""
+    dimensions = getattr(value, "dim", 3)
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    keys = _plain_direction_keys(direction, np)
+    if type(dimensions) is int and dimensions == 3 and keys is not None and _default_critical_query(value):
+        from _manim_compat import VMobject
+        coordinates = _anchor_observation(
+            value, lambda target: _critical_point_observation(target, keys, isinstance(value, VMobject)))
+        if coordinates is None:
+            raise NotImplementedError("critical points require a valid shared Rust handle")
+        result = [float(coordinates[index]) for index in range(3)]
+        return _critical_point_result(result if np is None else np.asarray(result, dtype=np.float64), np)
+
+    result = [0.0] * dimensions if np is None else np.zeros(dimensions)
+    points = value.get_points_defining_boundary()
+    if len(points) == 0:
+        return _critical_point_result(result, np)
+    keys = (*direction, 0.0) if isinstance(direction, _base.Vec2) else direction
+    for dim in range(dimensions):
+        result[dim] = value.get_extremum_along_dim(points, dim=dim, key=keys[dim])
+    return _critical_point_result(result, np)
+
+
 def extremum_along_dim(value, points=None, dim=0, key=0):
     dim = operator.index(dim)
     key = float(key)
     if points is None:
-        dim = _normalize_point_dimension(dim, 3)
-        result = _extremum_along_dim_observation(value, dim, key)
-        if result is None:
-            raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
-        return float(result)
-
+        points = value.get_points_defining_boundary()
     try:
         import numpy as np
     except ImportError:
+        np = None
         rows = [list(row) for row in points]
         if not rows:
             raise IndexError("too many indices for array: array is 1-dimensional, but 2 were indexed")
@@ -688,23 +766,22 @@ def extremum_along_dim(value, points=None, dim=0, key=0):
         coordinates = [float(coordinate) for row in rows for coordinate in row]
     else:
         array = np.asarray(points)
-        # Indexing only shapes the input like Manim's NumPy path; Rust performs
-        # the min/max/midpoint reduction over the selected coordinate values.
+        # Indexing preserves NumPy's shape/errors. Rust owns every nonempty
+        # min/max/midpoint reduction; no Python bounds state is maintained.
         selected = array[:, dim]
         coordinates = selected.astype(np.float64, copy=False).reshape(-1).tolist()
         point_dimensions = 1
         dim = 0
+        if len(coordinates) == 0:
+            operation = "maximum" if key > 0 else "minimum"
+            raise ValueError(f"zero-size array to reduction operation {operation} which has no identity")
 
     result = _extremum_from_points_observation(
-        value,
-        coordinates,
-        point_dimensions,
-        dim,
-        key,
+        value, coordinates, point_dimensions, dim, key,
     )
     if result is None:
         raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
-    return float(result)
+    return float(result) if np is None else np.float64(result)
 
 
 def has_new_path_started(value):
@@ -1045,23 +1122,24 @@ def path_points(value, method):
     try:
         # Manim returns its single point as an array before inspecting stride.
         if method == "anchors" and query.pointCount == 1:
-            return _points_array(_points(engine_call(query.anchors)))
+            return _boundary_snapshot(query, lambda captured: engine_call(captured.anchors3D))
         stride = getattr(value, "n_points_per_cubic_curve", 4)
         try:
             integer_stride = operator.index(stride)
         except TypeError:
             integer_stride = None
         if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
-            points = _points(engine_call(query.points))
+            points = _format_points(engine_call(query.points3D), 3)
             starts = points[::stride]
             if method == "startAnchors":
-                return _points_array(starts)
+                return starts
             ends = points[stride - 1 :: stride]
             if method == "endAnchors":
-                return _points_array(ends)
-            return _point_rows([point for pair in zip(starts, ends, strict=True) for point in pair])
-        points = _points(engine_call(getattr(query, method)))
-        return _point_rows(points) if method == "anchors" else _points_array(points)
+                return ends
+            return [point for pair in zip(starts, ends, strict=True) for point in pair]
+        if method == "anchors":
+            return list(_boundary_snapshot(query, lambda captured: engine_call(captured.anchors3D)))
+        return _format_points(engine_call(getattr(query, method + "3D")), 3)
     finally:
         query.free()
 
@@ -1075,17 +1153,14 @@ def anchors_and_handles(value):
     if stride != 4:
         query = _query(value)
         try:
-            points = _points(engine_call(query.points))
-            return [
-                _points_array(points[index::stride])
-                for index in range(stride)
-            ]
+            points = _format_points(engine_call(query.points3D), 3)
+            return [points[index::stride] for index in range(stride)]
         finally:
             query.free()
     query = _query(value)
     try:
         return [
-            _points_array(_points(engine_call(getattr(query, method))))
+            _format_points(engine_call(getattr(query, method + "3D")), 3)
             for method in ("startAnchors", "firstHandles", "secondHandles", "endAnchors")
         ]
     finally:

@@ -415,8 +415,8 @@ class NumberPlaneAxisTicks(Scene):
         assert plane.y_axis.exclude_origin_tick is True
         assert plane.x_axis.tick_size == 0.2
         assert plane.y_axis.tick_size == 0.3
-        assert tuple(round(tick.get_center().x) for tick in plane.x_axis.ticks) == (-2, -1, 1, 2)
-        assert tuple(round(tick.get_center().y) for tick in plane.y_axis.ticks) == (-1, 1)
+        assert tuple(round(tick.get_center()[0]) for tick in plane.x_axis.ticks) == (-2, -1, 1, 2)
+        assert tuple(round(tick.get_center()[1]) for tick in plane.y_axis.ticks) == (-1, 1)
         self.add(plane)
         await self.wait(0.05)
 `;
@@ -493,8 +493,8 @@ class AxesLabels(Scene):
         edge_axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
         edge_axes.shift(RIGHT * 6.5 + UP * 3.5)
         edge_label = edge_axes.get_x_axis_label("edge", edge=UR, direction=UR, buff=0.1)
-        assert edge_label.get_right().x <= DEFAULT_FRAME_WIDTH / 2 - MED_SMALL_BUFF + 1e-6
-        assert edge_label.get_top().y <= DEFAULT_FRAME_HEIGHT / 2 - MED_SMALL_BUFF + 1e-6
+        assert edge_label.get_right()[0] <= DEFAULT_FRAME_WIDTH / 2 - MED_SMALL_BUFF + 1e-6
+        assert edge_label.get_top()[1] <= DEFAULT_FRAME_HEIGHT / 2 - MED_SMALL_BUFF + 1e-6
 
         live_label = Text("live x")
         self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels, live_label,
@@ -505,8 +505,8 @@ class AxesLabels(Scene):
         assert axes.get_x_axis_label(live_label, edge=DOWN, direction=DOWN,
                                      buff=0.2) is live_label
         top = live_label.get_top()
-        assert abs(top.x - edge.x) < 1e-4
-        assert abs(top.y - edge.y + 0.2) < 1e-4
+        assert abs(top[0] - edge[0]) < 1e-4
+        assert abs(top[1] - edge[1] + 0.2) < 1e-4
         await self.wait(0.025)
 `;
       const axisLabels = await qualifyPythonPlayback(context, baseUrl, axisLabelsSource, [0, 0.05]);

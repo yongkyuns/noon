@@ -77,4 +77,4 @@ class EffectAuthoringContract(Scene):
         live.set_scale(dot, 1.0, 1.0)
         # An ordinary outline now belongs to the planar capture profile.
         dot.set_glow(intensity=0.5).remove_glow()
-        assert dot.get_center() == (0.0, 0.0)
+        assert tuple(dot.get_center()) == (0.0, 0.0, 0.0)
