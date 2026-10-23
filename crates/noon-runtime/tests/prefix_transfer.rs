@@ -1,4 +1,6 @@
 #![cfg(feature = "prepared-prefix")]
+mod prefix_support;
+
 use noon_compile::{CompiledObject, CompiledScene, ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{
     CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
@@ -41,7 +43,7 @@ fn position(x: f32) -> ExecutionPatch {
 #[test]
 fn multiple_writes_in_one_batch_keep_intermediate_history_and_append_does_not_seek() {
     let mut source = source(4, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let original = reader.seek(0.5).unwrap().clone();
     let _ = reader.take_renderer_publication();
     source.apply_execution_patch(&position(10.0)).unwrap();
@@ -82,7 +84,7 @@ fn multiple_writes_in_one_batch_keep_intermediate_history_and_append_does_not_se
 #[test]
 fn published_frontier_is_half_open_and_same_time_source_edits_become_visible_later() {
     let mut source = source(1, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     assert!(matches!(
         reader.seek(1.0),
         Err(PrefixError::OutsideRange { .. })
@@ -117,7 +119,7 @@ fn published_frontier_is_half_open_and_same_time_source_edits_become_visible_lat
 #[test]
 fn ordinary_added_and_reconciled_position_track_uses_existing_replay_evaluator() {
     let mut source = source(1, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     source
         .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
             id: TrackId::new(1),
@@ -160,7 +162,7 @@ fn ordinary_added_and_reconciled_position_track_uses_existing_replay_evaluator()
 #[test]
 fn quiet_wait_extension_has_no_row_payload_and_preserves_the_playhead() {
     let mut source = source(100, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let frame = reader.frame().clone();
     source.advance_to(100.0).unwrap();
     let batch = source.prepare_prefix_update(&mut publisher).unwrap();
@@ -175,8 +177,8 @@ fn quiet_wait_extension_has_no_row_payload_and_preserves_the_playhead() {
 #[test]
 fn foreign_and_out_of_order_batches_reject_without_mutating_reader() {
     let mut source = source(1, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
-    let (mut other, _) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
+    let (mut other, _) = prefix_support::bootstrap(&source).unwrap();
     source.apply_execution_patch(&position(2.0)).unwrap();
     source.advance_to(2.0).unwrap();
     let first = source.prepare_prefix_update(&mut publisher).unwrap();
@@ -198,7 +200,7 @@ fn foreign_and_out_of_order_batches_reject_without_mutating_reader() {
 #[test]
 fn cloned_source_and_replaced_replay_scope_cannot_continue_the_old_stream() {
     let mut source = source(1, limits());
-    let (mut publisher, _) = source.create_prefix_reader().unwrap();
+    let (mut publisher, _) = prefix_support::bootstrap(&source).unwrap();
     let clone = source.clone();
     assert!(matches!(
         clone.prepare_prefix_update(&mut publisher),
@@ -216,7 +218,7 @@ fn cloned_source_and_replaced_replay_scope_cannot_continue_the_old_stream() {
 #[test]
 fn structural_removal_preserves_delivered_history_and_later_membership() {
     let mut source = source(2, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     source.apply_execution_patch(&position(3.0)).unwrap();
     source
         .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(1)))
@@ -244,7 +246,7 @@ fn retention_failure_keeps_delivered_history_valid() {
             payloads: 2,
         },
     );
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     for x in [1.0, 2.0, 3.0] {
         source.apply_execution_patch(&position(x)).unwrap();
     }
@@ -262,7 +264,7 @@ fn retention_failure_keeps_delivered_history_valid() {
 #[test]
 fn failed_source_transaction_never_enters_transferred_history() {
     let mut source = source(1, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let transaction =
         ExecutionMutationTransaction::from_mutations([position(4.0), position(f32::NAN)]);
     assert!(source.apply_execution_transaction(&transaction).is_err());
@@ -281,7 +283,7 @@ fn transfer_payload_depends_on_new_changes_not_scene_or_old_history_size() {
     let mut observed = Vec::new();
     for count in [10, 10_000] {
         let mut source = source(count, limits());
-        let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+        let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
         for step in 1..=16 {
             source
                 .apply_execution_patch(&position(step as f32))
@@ -312,7 +314,7 @@ fn transfer_payload_depends_on_new_changes_not_scene_or_old_history_size() {
 fn bounded_cross_thread_delivery_keeps_old_samples_stable_during_further_preparation() {
     use std::{sync::mpsc, time::Duration};
     let mut source = source(20, limits());
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let (send, receive) = mpsc::sync_channel(1);
     let (ack, acknowledged) = mpsc::sync_channel(1);
     let handle = std::thread::spawn(move || {
@@ -358,7 +360,7 @@ fn bounded_cross_thread_delivery_keeps_old_samples_stable_during_further_prepara
 #[test]
 fn unavailable_and_invalid_time_do_not_change_the_reader() {
     let source = source(1, limits());
-    let (_, mut reader) = source.create_prefix_reader().unwrap();
+    let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let before = reader.frame().clone();
     for time in [-1.0, 1.0, 2.0, f64::NAN, f64::INFINITY] {
         assert!(matches!(

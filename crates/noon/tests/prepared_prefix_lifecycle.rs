@@ -355,3 +355,128 @@ async fn assert_cold_image_recovery(
         assert_eq!(viewport.last_scene_repacked, 0);
     }
 }
+
+#[test]
+#[ignore = "requires Vulkan; explicitly invoked by focused qualification"]
+fn pointer_driven_prefix_effect_pixels_restore_after_terminal_delivery_and_source_drop() {
+    pollster::block_on(async {
+        use noon::{AnimationOptions, IndicateOptions};
+        use noon_core::{
+            Color, NativeInputModifiers, NativePointerId, NativePointerInput,
+            NativePointerInputKind, Vec2,
+        };
+        let mut scene = Scene::new();
+        let mut target = scene.circle(0.65).unwrap();
+        target.set_fill(0.15, 0.4, 0.9, 1.0).unwrap();
+        scene.add(&target).unwrap();
+        scene
+            .on_click_indicate(
+                &target,
+                IndicateOptions::new(1.4, Color::YELLOW),
+                AnimationOptions::new().run_time(0.5),
+            )
+            .unwrap();
+        let mut source = scene.execution_session().unwrap();
+        source
+            .begin_replay_retention(ReplayLimits {
+                revisions: 128,
+                payloads: 2048,
+            })
+            .unwrap();
+        let boundary = source.wait_segment(1.0).unwrap();
+        source.advance_to(1.0).unwrap();
+        let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+        reader.seek(0.5).unwrap();
+        reader
+            .configure_native_pointer_input(
+                NativePointerId {
+                    source: 1,
+                    pointer: 1,
+                },
+                1,
+            )
+            .unwrap();
+        let mut raster = raster_support::Raster::new().await;
+        let baseline = raster.capture(&reader.take_renderer_publication());
+        for sequence in 0..2 {
+            let view = reader
+                .inspection_pointer_view(1, Vec2::new(256.0, 256.0))
+                .unwrap();
+            let snapshot = reader.capture_pointer_frame(view).unwrap();
+            let token = reader
+                .pointer_input_token_for_frame(&snapshot, view)
+                .unwrap();
+            let position = snapshot.position(Vec2::new(128.0, 128.0)).unwrap();
+            let input = NativePointerInput::new(
+                sequence,
+                token.pointer(),
+                token.context(),
+                NativeInputModifiers::default(),
+                if sequence == 0 {
+                    NativePointerInputKind::Press {
+                        position,
+                        button: 0,
+                    }
+                } else {
+                    NativePointerInputKind::Release {
+                        position,
+                        button: 0,
+                    }
+                },
+            );
+            let receipt = reader.submit_native_pointer_input(&token, input).unwrap();
+            if sequence == 1 {
+                assert_eq!(
+                    receipt.selection_click().unwrap().target(),
+                    Some(target.node_id())
+                );
+            }
+        }
+        assert!(reader.interactions_active());
+        let history = reader.replay_stats();
+        reader.advance_interactions(10.0).unwrap();
+        reader.advance_interactions(10.25).unwrap();
+        let midpoint = raster.capture(&reader.take_renderer_publication());
+        let changed = baseline
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(midpoint.as_chunks::<4>().0.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            changed > 100,
+            "pointer action must visibly change its historical target"
+        );
+        assert_eq!(reader.frame().time, 0.5);
+        assert_eq!(reader.replay_stats(), history);
+        let context = reader.publication_context();
+        source.seal_replay().unwrap();
+        let terminal = source
+            .finish_prepared_prefix(boundary, &mut publisher)
+            .unwrap();
+        reader.append(terminal).unwrap();
+        assert_eq!(reader.publication_context(), context);
+        assert_eq!(
+            raster.capture(&reader.take_renderer_publication()),
+            midpoint
+        );
+        drop(target);
+        drop(scene);
+        drop(source);
+        drop(publisher);
+        reader.advance_interactions(10.5).unwrap();
+        assert_eq!(
+            raster.capture(&reader.take_renderer_publication()),
+            baseline
+        );
+        reader.advance_to(reader.end_time().unwrap()).unwrap();
+        assert_eq!(
+            raster.capture(&reader.take_renderer_publication()),
+            baseline
+        );
+        let mut fresh = raster_support::Raster::new().await;
+        assert_eq!(fresh.capture(&reader.take_renderer_publication()), baseline);
+        eprintln!("PREFIX_POINTER_RASTER: {changed} changed midpoint pixels; exact restoration after terminal adoption, source drop, final advance and renderer recreation");
+    });
+}

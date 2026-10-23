@@ -47,6 +47,8 @@ pub use noon_runtime::SignalTimelineAppendError;
 pub use publication::{
     EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
 };
+#[cfg(feature = "prepared-prefix")]
+pub use replay::PrefixReader;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use noon_runtime::SignalTimelineSchedule;
@@ -1029,10 +1031,37 @@ impl ExecutionSession {
             .max()
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
-        let mut reactive_projection = lowered.reactive().clone();
-        let scalar_timeline = reactive_projection.take_scalar_timeline();
+        let reactive_projection = lowered.reactive().clone();
         let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
-        let mut runtime = SceneInstance::from_semantic_execution(lowered);
+        let runtime = SceneInstance::from_semantic_execution(lowered);
+        Self::from_runtime_projection(
+            store_identity,
+            execution_index,
+            reachability,
+            slots,
+            reactive_projection,
+            runtime,
+            camera_object,
+            next_activation_track_id,
+            callback_schedule,
+        )
+    }
+
+    // Common initialization for authored execution and a read-only historical
+    // projection. The caller moves exactly one runtime; no session is cloned.
+    #[allow(clippy::too_many_arguments)]
+    fn from_runtime_projection(
+        store_identity: noon_core::SemanticStoreIdentity,
+        execution_index: SemanticExecutionIndex,
+        reachability: SemanticExecutionReachability,
+        slots: noon_runtime::ExecutionSlotTable,
+        mut reactive_projection: SemanticReactiveProjection,
+        mut runtime: SceneInstance,
+        camera_object: Option<ObjectId>,
+        next_activation_track_id: Option<u64>,
+        callback_schedule: CallbackSchedule,
+    ) -> Self {
+        let scalar_timeline = reactive_projection.take_scalar_timeline();
         let signal_timeline =
             SignalTimelineSchedule::new(runtime.runtime_identity(), scalar_timeline);
         let mut spatial_index = ExecutionSpatialIndex::default();
@@ -4752,6 +4781,8 @@ impl ExecutionSession {
             }?;
             if requires_seek {
                 self.pointer_selection.reset();
+            } else {
+                self.reconcile_pointer_selection();
             }
             return Ok(self.runtime.frame());
         }
@@ -4771,6 +4802,8 @@ impl ExecutionSession {
         self.signal_timeline.commit(preview);
         if requires_seek {
             self.pointer_selection.reset();
+        } else {
+            self.reconcile_pointer_selection();
         }
         Ok(self.runtime.frame())
     }

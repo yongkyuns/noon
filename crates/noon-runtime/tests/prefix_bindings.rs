@@ -1,5 +1,7 @@
 #![cfg(feature = "prepared-prefix")]
 
+mod prefix_support;
+
 use noon_compile::{
     CompilePatchError, CompiledObject, CompiledScene, ExecutionMutationTransaction, ExecutionPatch,
 };
@@ -51,7 +53,7 @@ fn binding_only_publication_is_sparse_and_does_not_dirty_rendered_rows() {
     for count in [1, 1_001] {
         let mut source = source((0..count).map(|id| object(id, None)).collect());
         source.advance_to(1.0).unwrap();
-        let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+        let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
         reader.seek(0.5).unwrap();
         let displayed = reader.frame().clone();
         let reader_context = reader.take_renderer_publication().context();
@@ -164,7 +166,7 @@ fn input_interest_tracks_binding_revisions_removal_and_reentry_in_both_direction
 fn appended_bound_slot_is_unavailable_until_its_creation_revision_is_displayed() {
     let mut source = source(vec![object(0, None)]);
     source.advance_to(1.0).unwrap();
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     reader.seek(0.5).unwrap();
     reader.reserve_object_capacity(2).unwrap();
     let displayed = reader.frame().clone();
@@ -265,4 +267,31 @@ fn rejected_binding_edits_preserve_history_and_an_active_effect() {
     assert!(publication.changes().is_empty());
     source.advance_interactions(12.0).unwrap();
     assert_eq!(source.frame(), &baseline);
+}
+
+#[test]
+fn prefix_receiver_rejects_cloned_or_discarded_runtime_without_consuming_delivery() {
+    let mut source = source(vec![object(0, None)]);
+    source.advance_to(1.0).unwrap();
+    let (mut publisher, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
+    source.advance_to(2.0).unwrap();
+    let batch = source.prepare_prefix_update(&mut publisher).unwrap();
+    let mut cloned = runtime.clone();
+    let before = cloned.frame().clone();
+    assert_eq!(
+        receiver.preflight_append(&cloned, &batch),
+        Err(PrefixError::ReaderChanged)
+    );
+    assert_eq!(
+        receiver.prepare_seek(&mut cloned, 0.5),
+        Err(PrefixError::ReaderChanged)
+    );
+    assert_eq!(cloned.frame(), &before);
+    receiver.preflight_append(&runtime, &batch).unwrap();
+    receiver.append(&mut runtime, batch).unwrap();
+    runtime.discard_replay_retention();
+    assert_eq!(
+        receiver.prepare_seek(&mut runtime, 0.5),
+        Err(PrefixError::ReaderChanged)
+    );
 }

@@ -123,3 +123,6 @@ impl ExecutionSession {
 
 #[cfg(feature = "prepared-prefix")]
 mod prefix;
+
+#[cfg(feature = "prepared-prefix")]
+pub use prefix::PrefixReader;
