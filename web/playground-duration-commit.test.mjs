@@ -20,8 +20,8 @@ assert.match(
 );
 assert.match(
   runtimeBody,
-  /playbackControls\?\.sync\(\{[\s\S]*?durationSeconds: loopDurationSeconds,/,
-  "cold playback sync must use the startup-local authored duration",
+  /playbackControls\?\.sync\(\{[\s\S]*?durationSeconds: initialState\.hasAudio \? initialState\.durationSeconds : loopDurationSeconds,/,
+  "cold playback sync must use the accepted audio endpoint or startup-local authored duration",
 );
 
 const runStart = main.indexOf("async function runScene()");
