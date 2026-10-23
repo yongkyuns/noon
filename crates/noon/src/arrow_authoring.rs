@@ -133,6 +133,10 @@ impl ManimArrowOptions {
         self.prototype.set_stroke_width(width)
     }
 
+    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
+        self.prototype.set_stroke_opacity(opacity)
+    }
+
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), AuthoringError> {
         self.prototype.set_stroke_width_mode(mode)
     }

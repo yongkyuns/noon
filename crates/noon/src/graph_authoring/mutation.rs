@@ -4,9 +4,11 @@
 //! starts from the semantic declaration and publishes one final replacement
 //! declaration with ordinary family membership changes in the same transaction.
 
+use super::layout_optimizer::{circular_reference_point, minimize_kamada_kawai};
 use super::{
     construction::{arrow_options, line_options, vertex_options, GraphPublication},
-    GraphAuthoringError, GraphEdgeEntry, GraphEdgeMobject, GraphVertexEntry, RetainedGraph,
+    GraphAuthoringError, GraphEdgeEntry, GraphEdgeMobject, GraphOptions, GraphVertexEntry,
+    RetainedGraph,
 };
 use crate::{
     arrow_authoring::{resolve_staged_arrow, stage_prepared_arrow, PreparedArrow, StagedArrow},
@@ -27,24 +29,73 @@ use std::{
 /// A deterministic author-time layout. Layout calculations never run on the
 /// playback path; the resulting positions are persistent object translations.
 ///
-/// `Random` and `Spring` use Noon's seeded solver, not NetworkX-compatible
-/// random streams or force integration. `Spring` is O(iterations * V²) and is
-/// deliberately an author-time convenience rather than a runtime operation.
+/// `Random` uses Noon's seeded stream unless prepared NetworkX positions are
+/// supplied. `Spring` accepts prepared initial positions and performs
+/// NetworkX-compatible force integration here; `Tree` ports Manim's ordered
+/// depth-first placement. `KamadaKawai` ports NetworkX's path-distance cost
+/// and minimizes it in Rust. Layouts are author-time, not playback operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphLayout {
     Circular,
+    Shell,
+    Partite,
+    Spiral,
     Random,
     Spring,
+    KamadaKawai,
+    Spectral,
+    Tree,
 }
 
 #[derive(Clone, Debug)]
 pub struct GraphLayoutOptions {
     pub layout: GraphLayout,
     pub scale: f64,
+    /// Optional independent vertical scale for 2D layouts that support it.
+    /// `None` preserves the scalar `scale` behavior.
+    pub scale_y: Option<f64>,
     pub center: (f64, f64),
     pub seed: u32,
     pub iterations: usize,
     pub threshold: f64,
+    /// Optional NetworkX shell membership, expressed as vertex indices.
+    /// Empty means one shell containing every vertex.
+    pub shells: Vec<Vec<usize>>,
+    /// Angle increment between shells; `None` uses `PI / shell_count`.
+    pub rotate: Option<f64>,
+    /// Angle step used by the NetworkX 2D spiral layout.
+    pub resolution: f64,
+    /// Space spiral points by chord distance instead of angle.
+    pub equidistant: bool,
+    /// Ordered, non-empty multipartite layers expressed as vertex indices.
+    pub partitions: Vec<Vec<usize>>,
+    /// Swap the two rescaled axes for NetworkX's horizontal multipartite view.
+    pub align_horizontal: bool,
+    /// Optional Fruchterman-Reingold optimal distance; `None` uses `1 / sqrt(n)`.
+    pub spring_k: Option<f64>,
+    /// Optional per-edge numeric weights, in the supplied edge order.
+    /// `None` gives each edge the NetworkX default weight of one.
+    pub edge_weights: Option<Vec<f64>>,
+    /// Prepared NumPy-compatible initial positions for NetworkX spring layout.
+    pub spring_positions: Option<Vec<(f64, f64)>>,
+    /// Optional ordered all-pairs distances for Kamada-Kawai layout.
+    pub kamada_kawai_distances: Option<Vec<f64>>,
+    /// Optional initial positions for Kamada-Kawai layout.
+    pub kamada_kawai_positions: Option<Vec<(f64, f64)>>,
+    /// Fixed spring vertices; `Some([])` still disables final rescaling.
+    pub spring_fixed: Option<Vec<usize>>,
+    /// Whether spring positions are rescaled and shifted after integration.
+    pub spring_rescale: bool,
+    /// Preserve directed adjacency in the force calculation.
+    pub directed: bool,
+    /// Prepared NetworkX random-layout positions, including its center offset.
+    pub random_positions: Option<Vec<(f64, f64)>>,
+    /// Root vertex index for Manim's deterministic tree layout.
+    pub tree_root: Option<usize>,
+    /// Place deeper tree levels above the root instead of below it.
+    pub tree_orientation_up: bool,
+    /// Optional horizontal and vertical spacing for the tree layout.
+    pub tree_vertex_spacing: Option<(f64, f64)>,
 }
 
 impl Default for GraphLayoutOptions {
@@ -52,10 +103,29 @@ impl Default for GraphLayoutOptions {
         Self {
             layout: GraphLayout::Spring,
             scale: 2.0,
+            scale_y: None,
             center: (0.0, 0.0),
             seed: 0,
             iterations: 50,
             threshold: 1e-4,
+            shells: Vec::new(),
+            rotate: None,
+            resolution: 0.35,
+            equidistant: false,
+            partitions: Vec::new(),
+            align_horizontal: false,
+            spring_k: None,
+            edge_weights: None,
+            spring_positions: None,
+            kamada_kawai_distances: None,
+            kamada_kawai_positions: None,
+            spring_fixed: None,
+            spring_rescale: true,
+            directed: false,
+            random_positions: None,
+            tree_root: None,
+            tree_orientation_up: false,
+            tree_vertex_spacing: None,
         }
     }
 }
@@ -166,38 +236,57 @@ where
     V: IntoIterator<Item = (K, (f64, f64))>,
     P: GraphPublication,
 {
+    let options = graph.options.clone();
+    add_vertices_with_options(
+        publication,
+        graph,
+        vertices
+            .into_iter()
+            .map(|(key, position)| (key, position, options.clone())),
+    )
+}
+
+pub(super) fn add_vertices_with_options<K, V, P>(
+    publication: &mut P,
+    graph: &mut RetainedGraph<K>,
+    vertices: V,
+) -> Result<GraphMutationResult, GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+    V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    P: GraphPublication,
+{
     require_publication(publication, graph)?;
     let vertices = vertices.into_iter().collect::<Vec<_>>();
     let mut seen = HashSet::new();
-    for (key, position) in &vertices {
+    for (key, position, options) in &vertices {
         if graph.vertex_lookup.contains_key(key) || !seen.insert(key.clone()) {
             return Err(GraphAuthoringError::DuplicateMutationVertexKey);
         }
-        vertex_options(*position, &graph.options)?;
+        vertex_options(*position, options)?;
     }
     if vertices.is_empty() {
         return Ok(GraphMutationResult::default());
     }
     let root = graph.family.node_id();
-    let options = graph.options.clone();
     let declaration = graph.semantic_declaration()?.clone();
     let mut topology = declaration.topology().clone();
     let planned = vertices
         .iter()
-        .map(|(key, position)| {
+        .map(|(key, position, options)| {
             let id = topology.add_vertex();
-            Ok((key.clone(), id, *position))
+            Ok((key.clone(), id, *position, options.clone()))
         })
         .collect::<Result<Vec<_>, GraphAuthoringError>>()?;
     let (result, staged) = publication.with_graph_publication(|store, publish| {
         let prepared = planned
             .iter()
-            .map(|(key, id, position)| {
+            .map(|(key, id, position, options)| {
                 Ok((
                     key.clone(),
                     *id,
                     *position,
-                    vertex_options(*position, &options)?.into_state(store)?,
+                    vertex_options(*position, options)?.into_state(store)?,
                 ))
             })
             .collect::<Result<Vec<_>, AuthoringError>>()?;
@@ -254,25 +343,47 @@ where
     E: IntoIterator<Item = (K, K)>,
     P: GraphPublication,
 {
+    let options = graph.options.clone();
+    add_edges_with_options(
+        publication,
+        graph,
+        edges
+            .into_iter()
+            .map(|(start, end)| (start, end, options.clone())),
+    )
+}
+
+pub(super) fn add_edges_with_options<K, E, P>(
+    publication: &mut P,
+    graph: &mut RetainedGraph<K>,
+    edges: E,
+) -> Result<GraphMutationResult, GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+    E: IntoIterator<Item = (K, K, GraphOptions)>,
+    P: GraphPublication,
+{
     require_publication(publication, graph)?;
     let requested = edges.into_iter().collect::<Vec<_>>();
     if requested.is_empty() {
         return Ok(GraphMutationResult::default());
     }
     let root = graph.family.node_id();
-    let options = graph.options.clone();
     let directed = graph.directed;
     let declaration = graph.semantic_declaration()?.clone();
     let mut topology = declaration.topology().clone();
     let mut seen = HashSet::new();
     let mut planned = Vec::with_capacity(requested.len());
-    for (start_key, end_key) in &requested {
+    for (edge_index, (start_key, end_key, options)) in requested.into_iter().enumerate() {
         let start = graph
-            .vertex_id(start_key)
+            .vertex_id(&start_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
         let end = graph
-            .vertex_id(end_key)
+            .vertex_id(&end_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        if start == end {
+            return Err(GraphAuthoringError::SelfEdgeUnsupported { edge_index });
+        }
         let canonical = if directed || start <= end {
             (start, end)
         } else {
@@ -284,13 +395,13 @@ where
         let edge_id = topology.add_edge(start, end, directed)?;
         let edge = topology.edge(edge_id).expect("new graph edge is present");
         let start_position = graph
-            .vertex(start_key)
+            .vertex(&start_key)
             .expect("validated vertex key")
             .state()?
             .transform
             .translation;
         let end_position = graph
-            .vertex(end_key)
+            .vertex(&end_key)
             .expect("validated vertex key")
             .state()?
             .transform
@@ -299,11 +410,12 @@ where
             edge,
             (start_position.x, start_position.y),
             (end_position.x, end_position.y),
+            options,
         ));
     }
     let (result, staged_edges) = publication.with_graph_publication(|store, publish| {
         let mut prepared = Vec::with_capacity(planned.len());
-        for (edge, start_position, end_position) in planned {
+        for (edge, start_position, end_position, options) in planned {
             let geometry = if directed {
                 PreparedNewEdge::Arrow(
                     arrow_options(start_position, end_position, &options)?.prepare(store)?,
@@ -423,6 +535,268 @@ where
             StagedNewEdge::Arrow { edge, arrow } => {
                 let committed = resolve_staged_arrow(arrow, |token| result.resolve(token))
                     .expect("committed Arrow resolves");
+                (
+                    edge,
+                    GraphEdgeMobject::Arrow(ManimArrow::from_committed(
+                        Rc::clone(graph.family.integration_store()),
+                        committed,
+                    )?),
+                )
+            }
+        };
+        graph.edge_lookup.insert(edge.id, graph.edges.len());
+        graph.edges.push(GraphEdgeEntry {
+            edge,
+            object: object.clone(),
+        });
+        mutation.added_edges.push(object);
+    }
+    Ok(mutation)
+}
+
+pub(super) fn add_vertices_and_edges_with_options<K, V, E, P>(
+    publication: &mut P,
+    graph: &mut RetainedGraph<K>,
+    vertices: V,
+    edges: E,
+) -> Result<GraphMutationResult, GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+    V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    E: IntoIterator<Item = (K, K, GraphOptions)>,
+    P: GraphPublication,
+{
+    require_publication(publication, graph)?;
+    let vertices = vertices.into_iter().collect::<Vec<_>>();
+    let requested_edges = edges.into_iter().collect::<Vec<_>>();
+    if vertices.is_empty() && requested_edges.is_empty() {
+        return Ok(GraphMutationResult::default());
+    }
+
+    let root = graph.family.node_id();
+    let directed = graph.directed;
+    let declaration = graph.semantic_declaration()?.clone();
+    let mut topology = declaration.topology().clone();
+    let mut vertex_ids = HashMap::with_capacity(graph.vertices.len() + vertices.len());
+    let mut positions = HashMap::with_capacity(graph.vertices.len() + vertices.len());
+    for entry in &graph.vertices {
+        let center = entry.object.state()?.transform.translation;
+        vertex_ids.insert(entry.key.clone(), entry.id);
+        positions.insert(entry.key.clone(), (center.x, center.y));
+    }
+
+    let mut seen_vertices = HashSet::new();
+    let mut planned_vertices = Vec::with_capacity(vertices.len());
+    for (key, position, options) in vertices {
+        if vertex_ids.contains_key(&key) || !seen_vertices.insert(key.clone()) {
+            return Err(GraphAuthoringError::DuplicateMutationVertexKey);
+        }
+        vertex_options(position, &options)?;
+        let id = topology.add_vertex();
+        vertex_ids.insert(key.clone(), id);
+        positions.insert(key.clone(), position);
+        planned_vertices.push((key, id, position, options));
+    }
+
+    let mut seen_edges = HashSet::new();
+    let mut planned_edges = Vec::with_capacity(requested_edges.len());
+    for (edge_index, (start_key, end_key, options)) in requested_edges.into_iter().enumerate() {
+        let start = *vertex_ids
+            .get(&start_key)
+            .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        let end = *vertex_ids
+            .get(&end_key)
+            .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        if start == end {
+            return Err(GraphAuthoringError::SelfEdgeUnsupported { edge_index });
+        }
+        let canonical = if directed || start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        if !seen_edges.insert(canonical) {
+            return Err(GraphAuthoringError::DuplicateMutationEdgeKey);
+        }
+        let edge_id = topology.add_edge(start, end, directed)?;
+        let edge = topology.edge(edge_id).expect("new graph edge is present");
+        let start_position = *positions
+            .get(&start_key)
+            .expect("resolved vertex has a position");
+        let end_position = *positions
+            .get(&end_key)
+            .expect("resolved vertex has a position");
+        planned_edges.push((edge, start_position, end_position, options));
+    }
+
+    let (result, staged_vertices, staged_edges) =
+        publication.with_graph_publication(|store, publish| {
+            let prepared_vertices = planned_vertices
+                .into_iter()
+                .map(|(key, id, position, options)| {
+                    Ok((
+                        key,
+                        id,
+                        position,
+                        vertex_options(position, &options)?.into_state(store)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, AuthoringError>>()?;
+            let prepared_edges = planned_edges
+                .into_iter()
+                .map(|(edge, start, end, options)| {
+                    let geometry = if directed {
+                        PreparedNewEdge::Arrow(arrow_options(start, end, &options)?.prepare(store)?)
+                    } else {
+                        PreparedNewEdge::Line(line_options(start, end, &options)?)
+                    };
+                    Ok((edge, geometry))
+                })
+                .collect::<Result<Vec<_>, AuthoringError>>()?;
+            let paths = prepared_edges
+                .iter()
+                .flat_map(|(_, geometry)| match geometry {
+                    PreparedNewEdge::Line(_) => Vec::new(),
+                    PreparedNewEdge::Arrow(arrow) => {
+                        let mut paths = vec![arrow.end_tip.clone()];
+                        if let Some(start_tip) = &arrow.start_tip {
+                            paths.push(start_tip.clone());
+                        }
+                        paths
+                    }
+                })
+                .collect::<Vec<_>>();
+            store.with_geometry_paths(paths, |store, handles| {
+                let mut transaction = SemanticMutationTransaction::new();
+                let staged_vertices = prepared_vertices
+                    .into_iter()
+                    .map(|(key, id, _position, state)| {
+                        let node = transaction.create_node(SemanticNodeCreation::object(state));
+                        transaction.add_member(root, node);
+                        (key, id, node)
+                    })
+                    .collect::<Vec<_>>();
+                let first_vertex = declaration
+                    .vertices()
+                    .next()
+                    .map(|(_, node)| SemanticTransactionNodeRef::from(node))
+                    .or_else(|| {
+                        staged_vertices
+                            .first()
+                            .map(|(_, _, node)| SemanticTransactionNodeRef::from(*node))
+                    })
+                    .expect("new graph edges require an existing or added vertex");
+
+                let mut handle_index = 0;
+                let mut staged_edges = Vec::with_capacity(prepared_edges.len());
+                for (edge, geometry) in prepared_edges {
+                    let staged_edge = match geometry {
+                        PreparedNewEdge::Line(options) => {
+                            let line = transaction.create_node(SemanticNodeCreation::object(
+                                options.into_state(store)?,
+                            ));
+                            let family = transaction.create_node(SemanticNodeCreation::family());
+                            transaction
+                                .add_member(family, line)
+                                .add_member(root, family);
+                            StagedNewEdge::Line { edge, family, line }
+                        }
+                        PreparedNewEdge::Arrow(arrow) => {
+                            let end_tip = handles[handle_index];
+                            handle_index += 1;
+                            let start_tip = arrow.start_tip.is_some().then(|| {
+                                let value = handles[handle_index];
+                                handle_index += 1;
+                                value
+                            });
+                            let arrow =
+                                stage_prepared_arrow(&mut transaction, &arrow, end_tip, start_tip);
+                            transaction.add_member(root, arrow.family);
+                            StagedNewEdge::Arrow { edge, arrow }
+                        }
+                    };
+                    let family: SemanticTransactionNodeRef = match &staged_edge {
+                        StagedNewEdge::Line { family, .. } => (*family).into(),
+                        StagedNewEdge::Arrow { arrow, .. } => arrow.family.into(),
+                    };
+                    transaction.reorder_member_ref(root, family, Some(first_vertex));
+                    staged_edges.push(staged_edge);
+                }
+                debug_assert_eq!(handle_index, handles.len());
+
+                let existing_vertices = declaration.vertices().map(|(id, node)| (id, node.into()));
+                let all_vertices = existing_vertices.chain(
+                    staged_vertices
+                        .iter()
+                        .map(|(_, id, node)| (*id, (*node).into())),
+                );
+                let existing_edges = declaration
+                    .edges()
+                    .map(|(_, binding)| staged_binding(binding));
+                let added_edges = staged_edges.iter().map(|edge| match edge {
+                    StagedNewEdge::Line { edge, family, line } => {
+                        SemanticTransactionGraphEdgeBinding::new(
+                            edge.id,
+                            (*family).into(),
+                            (*line).into(),
+                        )
+                    }
+                    StagedNewEdge::Arrow { edge, arrow } => {
+                        SemanticTransactionGraphEdgeBinding::new_arrow(
+                            edge.id,
+                            arrow.family.into(),
+                            arrow.shaft.into(),
+                            arrow.end_tip.into(),
+                            arrow.start_tip.map(Into::into),
+                            arrow.endpoint_policy,
+                        )
+                    }
+                });
+                replace_declaration(
+                    &mut transaction,
+                    root,
+                    topology,
+                    all_vertices,
+                    existing_edges.chain(added_edges),
+                );
+                Ok((publish(store, transaction)?, staged_vertices, staged_edges))
+            })
+        })?;
+
+    let mut mutation = GraphMutationResult::default();
+    for (key, id, token) in staged_vertices {
+        let node = result
+            .resolve(token)
+            .expect("committed graph vertex resolves");
+        let object = Mobject::from_node(Rc::clone(graph.family.integration_store()), node)?;
+        graph
+            .vertex_lookup
+            .insert(key.clone(), graph.vertices.len());
+        graph.vertices.push(GraphVertexEntry {
+            key,
+            id,
+            object: object.clone(),
+        });
+        mutation.added_vertices.push(object);
+    }
+    for staged in staged_edges {
+        let (edge, object) = match staged {
+            StagedNewEdge::Line { edge, family, line } => {
+                let family = MobjectFamily::from_node(
+                    Rc::clone(graph.family.integration_store()),
+                    result
+                        .resolve(family)
+                        .expect("committed edge family resolves"),
+                )?;
+                let line = Mobject::from_node(
+                    Rc::clone(graph.family.integration_store()),
+                    result.resolve(line).expect("committed edge line resolves"),
+                )?;
+                (edge, GraphEdgeMobject::Line { family, line })
+            }
+            StagedNewEdge::Arrow { edge, arrow } => {
+                let committed = resolve_staged_arrow(arrow, |token| result.resolve(token))
+                    .expect("committed edge arrow resolves");
                 (
                     edge,
                     GraphEdgeMobject::Arrow(ManimArrow::from_committed(
@@ -604,16 +978,20 @@ where
 pub(super) fn change_layout<K, P>(
     publication: &mut P,
     graph: &mut RetainedGraph<K>,
-    options: GraphLayoutOptions,
+    mut options: GraphLayoutOptions,
 ) -> Result<(), GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
     P: GraphPublication,
 {
     require_publication(publication, graph)?;
+    options.directed = graph.directed;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
-    let edges = if options.layout == GraphLayout::Spring {
+    let edges = if matches!(
+        options.layout,
+        GraphLayout::Spring | GraphLayout::KamadaKawai | GraphLayout::Spectral | GraphLayout::Tree
+    ) {
         let indices = declaration
             .topology()
             .vertices()
@@ -684,6 +1062,7 @@ fn graph_layout(
     options: &GraphLayoutOptions,
 ) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
     if !options.scale.is_finite()
+        || options.scale_y.is_some_and(|scale| !scale.is_finite())
         || !options.center.0.is_finite()
         || !options.center.1.is_finite()
         || !options.threshold.is_finite()
@@ -692,6 +1071,30 @@ fn graph_layout(
         return Err(GraphAuthoringError::InvalidLayout(
             "scale, center, and threshold must be finite",
         ));
+    }
+    if options.layout == GraphLayout::Shell {
+        return shell_layout(count, options);
+    }
+    if options.layout == GraphLayout::Spiral {
+        return spiral_layout(count, options);
+    }
+    if options.layout == GraphLayout::Partite {
+        return partite_layout(count, options);
+    }
+    if options.layout == GraphLayout::Spring {
+        return spring_layout(count, edges, options);
+    }
+    if options.layout == GraphLayout::Spectral {
+        return spectral_layout(count, edges, options);
+    }
+    if options.layout == GraphLayout::KamadaKawai {
+        return kamada_kawai_layout(count, edges, options);
+    }
+    if options.layout == GraphLayout::Random && options.random_positions.is_some() {
+        return networkx_random_layout(count, options);
+    }
+    if options.layout == GraphLayout::Tree {
+        return tree_layout(count, edges, options);
     }
     if count == 0 {
         return Ok(Vec::new());
@@ -707,14 +1110,18 @@ fn graph_layout(
                 (angle.cos(), angle.sin())
             })
             .collect::<Vec<_>>(),
-        GraphLayout::Random | GraphLayout::Spring => (0..count)
+        GraphLayout::Shell => unreachable!("shell layout returned above"),
+        GraphLayout::Partite => unreachable!("partite layout returned above"),
+        GraphLayout::Spiral => unreachable!("spiral layout returned above"),
+        GraphLayout::Spring => unreachable!("spring layout returned above"),
+        GraphLayout::Spectral => unreachable!("spectral layout returned above"),
+        GraphLayout::KamadaKawai => unreachable!("Kamada-Kawai layout returned above"),
+        GraphLayout::Random => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
+        GraphLayout::Tree => unreachable!("tree layout returned above"),
     };
-    if options.layout == GraphLayout::Spring {
-        spring(&mut positions, edges, options);
-    }
-    rescale(&mut positions, options.scale, options.center);
+    rescale(&mut positions, layout_scales(options), options.center);
     if positions
         .iter()
         .any(|(x, y)| !x.is_finite() || !y.is_finite())
@@ -726,7 +1133,492 @@ fn graph_layout(
     Ok(positions)
 }
 
-fn rescale(points: &mut [(f64, f64)], scale: f64, center: (f64, f64)) {
+fn spectral_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    if count == 2 {
+        // NetworkX 3.4.2 special-cases two nodes before its scale/center pass.
+        return Ok(vec![
+            (0.0, 0.0),
+            (2.0 * options.center.0, 2.0 * options.center.1),
+        ]);
+    }
+
+    let weights = resolved_edge_weights(options, edges.len())?;
+    let mut adjacency = vec![0.0; count * count];
+    for (edge_index, &(start, end)) in edges.iter().enumerate() {
+        let weight = weights[edge_index];
+        if options.directed {
+            adjacency[start * count + end] += weight;
+        } else {
+            adjacency[start * count + end] += weight;
+            adjacency[end * count + start] += weight;
+        }
+    }
+    if options.directed {
+        let directed_adjacency = adjacency.clone();
+        for row in 0..count {
+            for column in 0..count {
+                let forward = directed_adjacency[row * count + column];
+                let reverse = directed_adjacency[column * count + row];
+                adjacency[row * count + column] = forward + reverse;
+            }
+        }
+    }
+
+    let mut laplacian = vec![vec![0.0; count]; count];
+    for row in 0..count {
+        let degree = (0..count)
+            .map(|column| adjacency[row * count + column])
+            .sum::<f64>();
+        for column in 0..count {
+            laplacian[row][column] = if row == column {
+                degree - adjacency[row * count + column]
+            } else {
+                -adjacency[row * count + column]
+            };
+        }
+    }
+
+    let (eigenvalues, eigenvectors) = symmetric_eigenvectors(laplacian)?;
+    let mut order = (0..count).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| {
+        eigenvalues[left]
+            .total_cmp(&eigenvalues[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let x_axis = eigenvectors[order[1]].as_slice();
+    let y_axis = eigenvectors[order[2]].as_slice();
+    let mut positions = (0..count)
+        .map(|index| (x_axis[index], y_axis[index]))
+        .collect::<Vec<_>>();
+
+    // Eigenvector signs are mathematically arbitrary. Canonicalizing each axis
+    // makes Rust and browser hosts deterministic across eigensolver builds.
+    for axis in 0..2 {
+        let value = positions.iter().find_map(|position| {
+            let coordinate = if axis == 0 { position.0 } else { position.1 };
+            (coordinate.abs() > 1e-12).then_some(coordinate)
+        });
+        let Some(value) = value else { continue };
+        if value < 0.0 {
+            for position in &mut positions {
+                if axis == 0 {
+                    position.0 = -position.0;
+                } else {
+                    position.1 = -position.1;
+                }
+            }
+        }
+    }
+
+    rescale(&mut positions, layout_scales(options), options.center);
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed spectral coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+/// Cyclic Jacobi decomposition for the symmetric, unnormalized graph Laplacian.
+/// It is deterministic and dependency-free, which keeps layout meaning in the
+/// shared Rust graph implementation on native and browser targets.
+// Jacobi rotations update both rows and columns using the same pivot indices.
+#[allow(clippy::needless_range_loop)]
+fn symmetric_eigenvectors(
+    mut matrix: Vec<Vec<f64>>,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), GraphAuthoringError> {
+    let count = matrix.len();
+    let mut vectors = vec![vec![0.0; count]; count];
+    for (index, row) in vectors.iter_mut().enumerate() {
+        row[index] = 1.0;
+    }
+
+    let mut matrix_extent: f64 = 1.0;
+    for row in &matrix {
+        for &value in row {
+            matrix_extent = matrix_extent.max(value.abs());
+        }
+    }
+    let tolerance = 1e-14 * matrix_extent;
+    let mut converged = false;
+    for _ in 0..64 {
+        for left in 0..count {
+            for right in left + 1..count {
+                let cross = matrix[left][right];
+                if cross.abs() <= tolerance {
+                    continue;
+                }
+                let left_value = matrix[left][left];
+                let right_value = matrix[right][right];
+                let tau = (right_value - left_value) / (2.0 * cross);
+                let tangent = if tau >= 0.0 {
+                    1.0 / (tau + tau.hypot(1.0))
+                } else {
+                    -1.0 / (-tau + tau.hypot(1.0))
+                };
+                let cosine = 1.0 / (1.0 + tangent * tangent).sqrt();
+                let sine = tangent * cosine;
+
+                for index in 0..count {
+                    if index == left || index == right {
+                        continue;
+                    }
+                    let left_entry = matrix[index][left];
+                    let right_entry = matrix[index][right];
+                    let new_left = cosine * left_entry - sine * right_entry;
+                    let new_right = sine * left_entry + cosine * right_entry;
+                    matrix[index][left] = new_left;
+                    matrix[left][index] = new_left;
+                    matrix[index][right] = new_right;
+                    matrix[right][index] = new_right;
+                }
+                matrix[left][left] = left_value - tangent * cross;
+                matrix[right][right] = right_value + tangent * cross;
+                matrix[left][right] = 0.0;
+                matrix[right][left] = 0.0;
+
+                for row in &mut vectors {
+                    let left_entry = row[left];
+                    let right_entry = row[right];
+                    row[left] = cosine * left_entry - sine * right_entry;
+                    row[right] = sine * left_entry + cosine * right_entry;
+                }
+            }
+        }
+        let mut largest_off_diagonal: f64 = 0.0;
+        for (left, row) in matrix.iter().enumerate() {
+            for &value in row.iter().skip(left + 1) {
+                largest_off_diagonal = largest_off_diagonal.max(value.abs());
+            }
+        }
+        if largest_off_diagonal <= tolerance {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spectral eigensolver did not converge",
+        ));
+    }
+
+    let eigenvalues = (0..count).map(|index| matrix[index][index]).collect();
+    let eigenvectors = (0..count)
+        .map(|column| vectors.iter().map(|row| row[column]).collect())
+        .collect();
+    Ok((eigenvalues, eigenvectors))
+}
+
+fn kamada_kawai_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+
+    let distances = if let Some(distances) = &options.kamada_kawai_distances {
+        if distances.len() != count * count
+            || distances
+                .iter()
+                .any(|distance| !distance.is_finite() || *distance < 0.0)
+        {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai distances must be a finite non-negative square matrix",
+            ));
+        }
+        if (0..count).any(|row| {
+            (0..count).any(|column| row != column && distances[row * count + column] == 0.0)
+        }) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai distances between distinct vertices must be positive",
+            ));
+        }
+        distances.clone()
+    } else {
+        let mut distances = vec![1e6; count * count];
+        for index in 0..count {
+            distances[index * count + index] = 0.0;
+        }
+        let weights = resolved_edge_weights(options, edges.len())?;
+        if weights.iter().any(|weight| *weight <= 0.0) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai edge weights must be positive",
+            ));
+        }
+        for (edge_index, &(start, end)) in edges.iter().enumerate() {
+            let weight = weights[edge_index];
+            distances[start * count + end] = weight;
+            if !options.directed {
+                distances[end * count + start] = weight;
+            }
+        }
+        for via in 0..count {
+            for start in 0..count {
+                let start_via = distances[start * count + via];
+                for end in 0..count {
+                    let candidate = start_via + distances[via * count + end];
+                    let current = &mut distances[start * count + end];
+                    if candidate < *current {
+                        *current = candidate;
+                    }
+                }
+            }
+        }
+        distances
+    };
+
+    let mut positions = if let Some(positions) = &options.kamada_kawai_positions {
+        if positions.len() != count
+            || positions
+                .iter()
+                .any(|(x, y)| !x.is_finite() || !y.is_finite())
+        {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai positions must provide one finite 2D point per vertex",
+            ));
+        }
+        if (0..count).any(|left| {
+            (left + 1..count).any(|right| {
+                positions[left].0 == positions[right].0 && positions[left].1 == positions[right].1
+            })
+        }) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai initial positions must be distinct",
+            ));
+        }
+        positions.clone()
+    } else {
+        let mut positions = (0..count)
+            .map(|index| {
+                let angle = ((std::f64::consts::TAU * index as f64 / count as f64) as f32) as f64;
+                circular_reference_point(angle as f32)
+            })
+            .collect::<Vec<_>>();
+        rescale(&mut positions, (1.0, 1.0), (0.0, 0.0));
+        positions
+    };
+
+    let optimized = minimize_kamada_kawai(&positions, &distances, count);
+    positions = optimized
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|point| (point[0], point[1]))
+        .collect();
+    rescale(&mut positions, layout_scales(options), options.center);
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed Kamada-Kawai coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn partite_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if options.partitions.is_empty() || options.partitions.iter().any(Vec::is_empty) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "partite layout requires non-empty partition layers",
+        ));
+    }
+    let mut seen = vec![false; count];
+    for &vertex in options.partitions.iter().flatten() {
+        let Some(assigned) = seen.get_mut(vertex) else {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "partite partition references an unknown vertex",
+            ));
+        };
+        if std::mem::replace(assigned, true) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "partite layers must assign every vertex exactly once",
+            ));
+        }
+    }
+    if seen.iter().any(|assigned| !assigned) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "partite layers must assign every vertex exactly once",
+        ));
+    }
+
+    let width = options.partitions.len();
+    let mut positions = vec![(0.0, 0.0); count];
+    for (layer_index, layer) in options.partitions.iter().enumerate() {
+        let layer_height = layer.len();
+        for (row, &vertex) in layer.iter().enumerate() {
+            positions[vertex] = (
+                layer_index as f64 - (width - 1) as f64 / 2.0,
+                row as f64 - (layer_height - 1) as f64 / 2.0,
+            );
+        }
+    }
+    rescale(&mut positions, layout_scales(options), options.center);
+    if options.align_horizontal {
+        for (x, y) in &mut positions {
+            std::mem::swap(x, y);
+        }
+    }
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed partite coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn spiral_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    if !options.resolution.is_finite() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spiral resolution must be finite",
+        ));
+    }
+    if options.equidistant && options.resolution == 0.0 {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "equidistant spiral resolution must be nonzero",
+        ));
+    }
+    let mut positions = Vec::with_capacity(count);
+    if options.equidistant {
+        let mut theta = options.resolution;
+        theta += 1.0 / (0.5 * theta);
+        for _ in 0..count {
+            let radius = 0.5 * theta;
+            theta += 1.0 / radius;
+            positions.push((theta.cos() * radius, theta.sin() * radius));
+        }
+    } else {
+        for index in 0..count {
+            let distance = index as f64;
+            let angle = options.resolution * distance;
+            positions.push((distance * angle.cos(), distance * angle.sin()));
+        }
+    }
+    rescale(&mut positions, layout_scales(options), options.center);
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed spiral coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn shell_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let shells = if options.shells.is_empty() {
+        vec![(0..count).collect::<Vec<_>>()]
+    } else {
+        options.shells.clone()
+    };
+    let mut seen = vec![false; count];
+    for shell in &shells {
+        for &vertex in shell {
+            if vertex >= count || seen[vertex] {
+                return Err(GraphAuthoringError::InvalidLayout(
+                    "shell layout must assign each graph vertex exactly once",
+                ));
+            }
+            seen[vertex] = true;
+        }
+    }
+    if seen.iter().any(|assigned| !assigned) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "shell layout must assign each graph vertex exactly once",
+        ));
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    let rotate = options
+        .rotate
+        .unwrap_or(std::f64::consts::PI / shells.len() as f64);
+    if !rotate.is_finite() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "shell rotation must be finite",
+        ));
+    }
+    let radius_bump = options.scale / shells.len() as f64;
+    let mut radius = if shells[0].len() == 1 {
+        0.0
+    } else {
+        radius_bump
+    };
+    let mut first_theta = rotate;
+    let mut positions = vec![(0.0, 0.0); count];
+    for shell in &shells {
+        for (index, &vertex) in shell.iter().enumerate() {
+            // NetworkX 3.4.2 creates the linspace angles as float32 before
+            // adding the (float64) starting rotation.
+            let theta = ((index as f64 * std::f64::consts::TAU / shell.len() as f64) as f32) as f64
+                + first_theta;
+            positions[vertex] = (
+                radius * theta.cos() + options.center.0,
+                radius * theta.sin() + options.center.1,
+            );
+        }
+        radius += radius_bump;
+        first_theta += rotate;
+    }
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed shell coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn layout_scales(options: &GraphLayoutOptions) -> (f64, f64) {
+    (options.scale, options.scale_y.unwrap_or(options.scale))
+}
+
+fn rescale(points: &mut [(f64, f64)], scale: (f64, f64), center: (f64, f64)) {
     let (sum_x, sum_y) = points
         .iter()
         .fold((0.0, 0.0), |(x, y), point| (x + point.0, y + point.1));
@@ -737,53 +1629,388 @@ fn rescale(points: &mut [(f64, f64)], scale: f64, center: (f64, f64)) {
         point.1 -= mean.1;
         extent = extent.max(point.0.abs()).max(point.1.abs());
     }
-    let factor = if extent > 0.0 { scale / extent } else { 1.0 };
+    let factor_x = if extent > 0.0 { scale.0 / extent } else { 1.0 };
+    let factor_y = if extent > 0.0 { scale.1 / extent } else { 1.0 };
     for point in points {
-        point.0 = point.0 * factor + center.0;
-        point.1 = point.1 * factor + center.1;
+        point.0 = point.0 * factor_x + center.0;
+        point.1 = point.1 * factor_y + center.1;
     }
 }
 
-fn spring(points: &mut [(f64, f64)], edges: &[(usize, usize)], options: &GraphLayoutOptions) {
-    let count = points.len();
-    let k = (1.0 / count as f64).sqrt();
-    let mut temperature = 0.1;
+fn spring_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    let mut random = DeterministicRandom::new(options.seed);
+    let mut points = options.spring_positions.clone().unwrap_or_else(|| {
+        (0..count)
+            .map(|_| (random.unit(), random.unit()))
+            .collect::<Vec<_>>()
+    });
+    if points.len() != count || points.iter().any(|(x, y)| !x.is_finite() || !y.is_finite()) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spring positions must provide one finite 2D point per vertex",
+        ));
+    }
+    if options.spring_fixed.is_some() && options.spring_positions.is_none() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spring fixed vertices require initial positions",
+        ));
+    }
+    let mut fixed = vec![false; count];
+    if let Some(indices) = &options.spring_fixed {
+        for &index in indices {
+            let Some(value) = fixed.get_mut(index) else {
+                return Err(GraphAuthoringError::InvalidLayout(
+                    "spring fixed vertex references an unknown vertex",
+                ));
+            };
+            *value = true;
+        }
+    }
+
+    let k = options
+        .spring_k
+        .unwrap_or_else(|| (1.0 / count as f64).sqrt());
+    if !k.is_finite() || k == 0.0 {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spring k must be finite and non-zero",
+        ));
+    }
+    let weights = resolved_edge_weights(options, edges.len())?;
+    let mut adjacency = vec![0.0; count * count];
+    for (edge_index, &(start, end)) in edges.iter().enumerate() {
+        if start >= count || end >= count {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "layout edge endpoints must reference existing vertices",
+            ));
+        }
+        adjacency[start * count + end] = weights[edge_index];
+        if !options.directed {
+            adjacency[end * count + start] = weights[edge_index];
+        }
+    }
+
+    let min_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut temperature = 0.1 * (max_x - min_x).max(max_y - min_y);
     let cooling = temperature / (options.iterations as f64 + 1.0);
     let mut displacement = vec![(0.0, 0.0); count];
     for _ in 0..options.iterations {
         displacement.fill((0.0, 0.0));
         for i in 0..count {
-            for j in (i + 1)..count {
-                let (dx, dy) = (points[i].0 - points[j].0, points[i].1 - points[j].1);
-                let distance = dx.hypot(dy).max(0.01);
-                let force = k * k / (distance * distance);
+            for j in 0..count {
+                if i == j {
+                    continue;
+                }
+                let dx = points[i].0 - points[j].0;
+                let dy = points[i].1 - points[j].1;
+                let distance = (dx * dx + dy * dy).sqrt().max(0.01);
+                let force = k * k / (distance * distance) - adjacency[i * count + j] * distance / k;
                 displacement[i].0 += dx * force;
                 displacement[i].1 += dy * force;
-                displacement[j].0 -= dx * force;
-                displacement[j].1 -= dy * force;
             }
         }
-        for &(a, b) in edges {
-            let (dx, dy) = (points[a].0 - points[b].0, points[a].1 - points[b].1);
-            let force = dx.hypot(dy).max(0.01) / k;
-            displacement[a].0 -= dx * force;
-            displacement[a].1 -= dy * force;
-            displacement[b].0 += dx * force;
-            displacement[b].1 += dy * force;
-        }
-        let mut norm = 0.0;
-        for (point, &(dx, dy)) in points.iter_mut().zip(&displacement) {
-            let factor = temperature / dx.hypot(dy).max(0.01);
-            let (x, y) = (dx * factor, dy * factor);
-            point.0 += x;
-            point.1 += y;
-            norm += x * x + y * y;
+        let mut squared_delta_norm = 0.0;
+        for index in 0..count {
+            let (dx, dy) = displacement[index];
+            let displacement_length = (dx * dx + dy * dy).sqrt();
+            let displacement_length = if displacement_length < 0.01 {
+                0.1
+            } else {
+                displacement_length
+            };
+            let factor = temperature / displacement_length;
+            let (mut delta_x, mut delta_y) = (dx * factor, dy * factor);
+            if fixed[index] {
+                delta_x = 0.0;
+                delta_y = 0.0;
+            }
+            points[index].0 += delta_x;
+            points[index].1 += delta_y;
+            squared_delta_norm += delta_x * delta_x + delta_y * delta_y;
         }
         temperature -= cooling;
-        if norm.sqrt() / (count as f64) < options.threshold {
+        if squared_delta_norm.sqrt() / (count as f64) < options.threshold {
             break;
         }
     }
+    if options.spring_rescale && options.spring_fixed.is_none() {
+        rescale(&mut points, layout_scales(options), options.center);
+    }
+    if points.iter().any(|(x, y)| !x.is_finite() || !y.is_finite()) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed coordinates are not finite",
+        ));
+    }
+    Ok(points)
+}
+
+fn resolved_edge_weights(
+    options: &GraphLayoutOptions,
+    edge_count: usize,
+) -> Result<Vec<f64>, GraphAuthoringError> {
+    let weights = options
+        .edge_weights
+        .clone()
+        .unwrap_or_else(|| vec![1.0; edge_count]);
+    if weights.len() != edge_count || weights.iter().any(|weight| !weight.is_finite()) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "edge weights must be finite and match the graph edge count",
+        ));
+    }
+    Ok(weights)
+}
+
+fn networkx_random_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    let positions = options
+        .random_positions
+        .as_ref()
+        .expect("NetworkX random positions are checked by the caller");
+    if positions.len() != count
+        || positions
+            .iter()
+            .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "random positions must provide one finite 2D point per vertex",
+        ));
+    }
+    // ManimCE's `_random_layout` wraps NetworkX's [0, 1) coordinates with
+    // `2 * scale * (position - 0.5)`. Python provides the float32 NetworkX
+    // samples (with its center already added); shared Rust owns this transform.
+    let (scale_x, scale_y) = layout_scales(options);
+    let positions = positions
+        .iter()
+        .map(|&(x, y)| (2.0 * scale_x * (x - 0.5), 2.0 * scale_y * (y - 0.5)))
+        .collect::<Vec<_>>();
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn tree_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if options.directed {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires an undirected graph",
+        ));
+    }
+    if count == 0 {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires a non-empty graph",
+        ));
+    }
+    let root = options.tree_root.ok_or(GraphAuthoringError::InvalidLayout(
+        "tree layout requires a root vertex",
+    ))?;
+    if root >= count {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree root references an unknown vertex",
+        ));
+    }
+    if edges.len() != count - 1 || edges.iter().any(|&(start, end)| start == end) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires a connected acyclic graph",
+        ));
+    }
+
+    let mut neighbors = vec![Vec::new(); count];
+    for &(start, end) in edges {
+        neighbors[start].push(end);
+        neighbors[end].push(start);
+    }
+    let mut visited = vec![false; count];
+    let mut pending = vec![root];
+    visited[root] = true;
+    while let Some(vertex) = pending.pop() {
+        for &neighbor in &neighbors[vertex] {
+            if !visited[neighbor] {
+                visited[neighbor] = true;
+                pending.push(neighbor);
+            }
+        }
+    }
+    if visited.iter().any(|&is_visited| !is_visited) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires a connected acyclic graph",
+        ));
+    }
+
+    let mut children = HashMap::<usize, Vec<usize>>::with_capacity(count);
+    children.insert(root, neighbors[root].clone());
+    let mut levels = vec![neighbors[root].clone()];
+    let mut path = vec![root];
+    let mut positions: Vec<Option<(f64, f64)>> = vec![None; count];
+    let mut obstruction = vec![0.0_f64; count];
+    let orientation = if options.tree_orientation_up {
+        1_isize
+    } else {
+        -1
+    };
+
+    while !levels.is_empty() {
+        let next_vertex = levels.last_mut().and_then(Vec::pop);
+        if let Some(vertex) = next_vertex {
+            let parent = *path.last().expect("tree traversal always has a root");
+            let descendants = neighbors[vertex]
+                .iter()
+                .copied()
+                .filter(|&neighbor| neighbor != parent)
+                .collect::<Vec<_>>();
+            children.insert(vertex, descendants.clone());
+            levels.push(descendants);
+            path.push(vertex);
+            continue;
+        }
+
+        levels.pop();
+        let vertex = path.pop().expect("tree traversal always has a root");
+        let depth = levels.len() as isize;
+        let y = orientation * depth;
+        // The pinned Manim implementation uses Python list indexing with
+        // negative y coordinates, so map them from the end of the buffer.
+        let row = if y < 0 {
+            (count as isize + y) as usize
+        } else {
+            y as usize
+        };
+        let descendants = children.entry(vertex).or_default();
+        let x = if descendants.is_empty() {
+            obstruction[row]
+        } else {
+            descendants
+                .iter()
+                .map(|&child| {
+                    positions[child]
+                        .expect("tree children are laid out first")
+                        .0
+                })
+                .sum::<f64>()
+                / descendants.len() as f64
+        };
+        positions[vertex] = Some((x, y as f64));
+        let mut x = x;
+        let occupied = obstruction[row];
+        if x < occupied {
+            let shift = occupied - x;
+            let mut subtree = vec![vertex];
+            while let Some(current) = subtree.pop() {
+                let (current_x, current_y) =
+                    positions[current].expect("tree node position was prepared");
+                let shifted_x = current_x + shift;
+                positions[current] = Some((shifted_x, current_y));
+                let current_row = if current_y < 0.0 {
+                    (count as isize + current_y as isize) as usize
+                } else {
+                    current_y as usize
+                };
+                obstruction[current_row] = obstruction[current_row].max(shifted_x + 1.0);
+                subtree.extend(children[&current].iter().copied());
+            }
+            x = occupied;
+        }
+        obstruction[row] = x + 1.0;
+    }
+
+    let mut positions = positions
+        .into_iter()
+        .map(|position| position.expect("tree traversal lays out every vertex"))
+        .collect::<Vec<_>>();
+    let x_min = positions
+        .iter()
+        .map(|&(x, _)| x)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = positions
+        .iter()
+        .map(|&(x, _)| x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let y_min = positions
+        .iter()
+        .map(|&(_, y)| y)
+        .fold(f64::INFINITY, f64::min);
+    let y_max = positions
+        .iter()
+        .map(|&(_, y)| y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let width = x_max - x_min;
+    let height = y_max - y_min;
+    let center = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0);
+    let (scale_x, scale_y) = match options.tree_vertex_spacing {
+        Some((spacing_x, spacing_y)) => {
+            if !spacing_x.is_finite() || !spacing_y.is_finite() {
+                return Err(GraphAuthoringError::InvalidLayout(
+                    "tree vertex spacing must be finite",
+                ));
+            }
+            // Manim's vertex_spacing is a direct per-axis scale, not a target
+            // half-extent. It also overrides layout_scale entirely.
+            (spacing_x, spacing_y)
+        }
+        None if options.scale_y.is_some() => (
+            if width > 0.0 {
+                2.0 * options.scale / width
+            } else {
+                1.0
+            },
+            if height > 0.0 {
+                2.0 * options.scale_y.expect("checked above") / height
+            } else {
+                1.0
+            },
+        ),
+        None if width > 0.0 || height > 0.0 => {
+            let scale = 2.0 * options.scale / width.max(height);
+            (scale, scale)
+        }
+        None => (1.0, 1.0),
+    };
+    for (x, y) in &mut positions {
+        *x = (*x - center.0) * scale_x;
+        *y = (*y - center.1) * scale_y;
+    }
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
 }
 
 struct DeterministicRandom {
@@ -816,6 +2043,12 @@ mod layout_preparation_tests {
         assert!(options.positions(2, &[(0, 2)]).is_err());
         assert!(GraphLayoutOptions {
             scale: f64::NAN,
+            ..options.clone()
+        }
+        .positions(0, &[])
+        .is_err());
+        assert!(GraphLayoutOptions {
+            scale_y: Some(f64::INFINITY),
             ..options.clone()
         }
         .positions(0, &[])
