@@ -1,0 +1,24 @@
+name: Diagnostic browser prefix
+on:
+  push:
+    branches: [diagnostic/noon-browser-prefix-20261023]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Retain immutable tracked source only
+        run: |
+          mkdir -p /tmp/noon-browser-prefix-source
+          git rev-parse HEAD > /tmp/noon-browser-prefix-source/diagnostic-commit.txt
+          git archive --format=tar.gz HEAD > /tmp/noon-browser-prefix-source/source.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: browser-prefix-source
+          path: /tmp/noon-browser-prefix-source
+          retention-days: 3
