@@ -115,6 +115,11 @@ mod plot_error;
 ))]
 mod pointer_selection_smoke;
 #[cfg(all(
+    feature = "prepared-prefix",
+    any(all(feature = "renderer", target_arch = "wasm32"), test)
+))]
+mod prepared_canvas_playback;
+#[cfg(all(
     feature = "renderer",
     target_arch = "wasm32",
     any(debug_assertions, feature = "renderer-smoke")
@@ -250,3 +255,18 @@ pub use text_parts::*;
     )
 ))]
 mod glow_worker_smoke;
+
+#[cfg(all(
+    feature = "prepared-prefix",
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod prepared_canvas_smoke;
+#[cfg(all(
+    feature = "prepared-prefix",
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use prepared_canvas_smoke::*;

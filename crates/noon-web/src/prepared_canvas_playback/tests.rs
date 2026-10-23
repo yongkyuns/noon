@@ -1,0 +1,222 @@
+use super::*;
+use crate::{BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake};
+use noon::{AnimationOptions, ExecutionSession, IndicateOptions, PrefixPublisher, Scene};
+use noon_core::ObjectId;
+use noon_runtime::{ReplayLimits, TimelineWakeState};
+
+fn fixture() -> (
+    ExecutionSession,
+    PrefixPublisher,
+    PreparedCanvasPlayback,
+    ObjectId,
+) {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.65).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    circle.set_stroke_width(0.0).unwrap();
+    scene.add(&circle).unwrap();
+    scene
+        .on_click_indicate(
+            &circle,
+            IndicateOptions::default(),
+            AnimationOptions::new().run_time(0.5),
+        )
+        .unwrap();
+    let mut source = scene.execution_session().unwrap();
+    let object = source.execution_object_id(circle.node_id()).unwrap();
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 128,
+            payloads: 2048,
+        })
+        .unwrap();
+    let segment = source.wait_segment(1.0).unwrap();
+    source.advance_to(1.0).unwrap();
+    let (publisher, mut reader) = source.create_prepared_prefix(segment).unwrap();
+    reader.seek(0.5).unwrap();
+    (
+        source,
+        publisher,
+        PreparedCanvasPlayback::new(reader),
+        object,
+    )
+}
+
+fn next(
+    source: &mut ExecutionSession,
+    publisher: &mut PrefixPublisher,
+    terminal: bool,
+) -> PrefixBatch {
+    let segment = source.wait_segment(1.0).unwrap();
+    source.advance_to(segment.end_time()).unwrap();
+    if terminal {
+        source.seal_replay().unwrap();
+        source.finish_prepared_prefix(segment, publisher).unwrap()
+    } else {
+        source.publish_prepared_prefix(segment, publisher).unwrap()
+    }
+}
+
+#[test]
+fn prepared_canvas_frontier_buffers_without_speculative_frame_or_busy_wake() {
+    let (_, _, mut playback, _) = fixture();
+    playback.reader.take_renderer_publication();
+    assert_eq!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Deadline(1.0)
+    );
+    let before = playback.reader.frame().clone();
+    let publication = playback.reader.publication_context();
+    playback.advance(1.0).unwrap();
+    assert!(playback.buffering());
+    assert_eq!(playback.reader.frame(), &before);
+    assert_eq!(playback.reader.publication_context(), publication);
+    assert!(playback.wake_state().is_quiescent());
+    playback.advance(9999.0).unwrap();
+    assert_eq!(playback.reader.frame(), &before);
+}
+
+#[test]
+fn prepared_canvas_delivery_reanchors_without_charging_buffered_wall_time() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.reader.take_renderer_publication();
+    let mut clock = BrowserExecutionWakeClock::default();
+    let plan = BrowserExecutionWakePlan::from_runtime(playback.wake_state());
+    assert_eq!(
+        clock.directive(plan, 1000.0, 0.5).unwrap().wake(),
+        BrowserHostWake::TimerAfterMilliseconds(500.0)
+    );
+    playback.advance(1.0).unwrap();
+    let idle = BrowserExecutionWakePlan::from_runtime(playback.wake_state());
+    assert_eq!(
+        clock.directive(idle, 1500.0, 0.5).unwrap().wake(),
+        BrowserHostWake::Idle
+    );
+    assert!(clock.scene_time_at(1500.0).is_none());
+    let before = playback.reader.publication_context();
+    playback
+        .append(next(&mut source, &mut publisher, false))
+        .unwrap();
+    assert!(!playback.buffering());
+    assert_eq!(playback.reader.publication_context(), before);
+    let plan = BrowserExecutionWakePlan::from_runtime(playback.wake_state());
+    clock
+        .directive(plan, 999_000.0, playback.reader.frame().time)
+        .unwrap();
+    assert_eq!(clock.scene_time_at(999_000.0), Some(0.5));
+    playback.advance(0.75).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.75);
+}
+
+#[test]
+fn prepared_canvas_terminal_clamps_and_then_settles_at_exact_endpoint() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    drop(source);
+    drop(publisher);
+    playback.advance(200.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 2.0);
+    assert_eq!(playback.reader.end_time(), Some(2.0));
+    playback.reader.take_renderer_publication();
+    assert!(playback.wake_state().is_quiescent());
+    playback.seek(0.5).unwrap();
+    playback.reader.take_renderer_publication();
+    assert!(!matches!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    ));
+}
+
+#[test]
+fn prepared_canvas_invalid_time_and_delivery_preserve_buffered_state() {
+    let (_, _, mut playback, _) = fixture();
+    playback.reader.take_renderer_publication();
+    playback.advance(1.0).unwrap();
+    let before = playback.reader.publication_context();
+    for time in [f64::NAN, f64::INFINITY, -1.0, 0.25] {
+        assert!(playback.advance(time).is_err());
+        assert_eq!(playback.reader.publication_context(), before);
+        assert!(playback.buffering());
+    }
+    assert!(playback.seek(1.0).is_err());
+    assert!(playback.buffering());
+    let (mut foreign, mut publisher, _, _) = fixture();
+    assert!(playback
+        .append(next(&mut foreign, &mut publisher, true))
+        .is_err());
+    assert_eq!(playback.reader.publication_context(), before);
+    assert!(playback.buffering());
+    playback.seek(0.5).unwrap();
+    assert!(!playback.buffering());
+}
+
+#[test]
+fn prepared_canvas_paused_and_buffered_effects_keep_independent_time() {
+    let (_, _, mut playback, object) = fixture();
+    assert!(playback.set_playing(false));
+    assert!(!playback.set_playing(false));
+    assert!(!playback.playing());
+    let baseline = playback.reader.frame().clone();
+    let prepared = playback
+        .reader
+        .prepare_bound_click_indicate(object)
+        .unwrap()
+        .unwrap();
+    playback.reader.start_transient_animation(prepared).unwrap();
+    playback.reader.advance_interactions(10.0).unwrap();
+    playback.advance(50.0).unwrap();
+    playback.reader.advance_interactions(10.25).unwrap();
+    assert_ne!(playback.reader.frame(), &baseline);
+    assert_eq!(playback.reader.frame().time, 0.5);
+    playback.reader.advance_interactions(10.5).unwrap();
+    assert_eq!(playback.reader.frame(), &baseline);
+    playback.set_playing(true);
+    playback.advance(1.0).unwrap();
+    let prepared = playback
+        .reader
+        .prepare_bound_click_indicate(object)
+        .unwrap()
+        .unwrap();
+    playback.reader.start_transient_animation(prepared).unwrap();
+    playback.reader.advance_interactions(20.0).unwrap();
+    playback.reader.advance_interactions(20.25).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.5);
+    assert!(playback.buffering());
+    playback.reader.advance_interactions(20.5).unwrap();
+    assert_eq!(playback.reader.frame(), &baseline);
+}
+
+#[test]
+fn prepared_canvas_append_does_not_resume_user_pause_or_dirty_the_frame() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.set_playing(false);
+    playback.reader.take_renderer_publication();
+    let before = playback.reader.publication_context();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    assert!(!playback.playing());
+    assert!(playback.wake_state().is_quiescent());
+    assert_eq!(playback.reader.publication_context(), before);
+    playback.advance(2.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.5);
+}
+
+#[test]
+fn prepared_canvas_renderer_query_uses_its_own_frame_without_consuming_dirtiness() {
+    let (_, _, mut playback, _) = fixture();
+    let before = playback.reader.publication_context();
+    let dirty = playback.reader.wake_state().frame_pending();
+    let query = playback
+        .reader
+        .query_renderer_viewports(&[noon_core::Rect::new(
+            noon_core::Vec2::new(-2.0, -2.0),
+            noon_core::Vec2::new(2.0, 2.0),
+        )]);
+    assert!(playback.reader.viewport_query_is_current(&query));
+    assert!(!query.object_indices().is_empty());
+    assert_eq!(playback.reader.publication_context(), before);
+    assert_eq!(playback.reader.wake_state().frame_pending(), dirty);
+}
