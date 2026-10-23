@@ -42,7 +42,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         except ModuleNotFoundError as error:
             if error.name != "numpy":
                 raise
-            self.assertIsInstance(result, list)
+            self.assertIsInstance(result, noon._Direction3)
         else:
             self.assertIsInstance(result, np.ndarray)
             self.assertEqual(result.shape, (3,))
@@ -123,6 +123,18 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
             with self.assertRaisesRegex(NotImplementedError, "active callback phase"):
                 shared._content_critical_point_3d(value, noon.RIGHT)
         create.assert_not_called()
+
+    def test_cold_retained_point_results_support_unchanged_vector_arithmetic(self):
+        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(7., -3., 2.375)), free=Mock())
+        value = self.wrapper(SimpleNamespace(requiresContentBoundary=Mock(return_value=True),
+                                             layoutAnchor=Mock(return_value=anchor)))
+        with patch.dict("sys.modules", {"numpy": None}):
+            first, second = value.get_center(), value.get_center()
+            delta = second - first
+            self.assertEqual(list(delta), [0., 0., 0.])
+            self.assertEqual(delta.length(), 0.)
+            self.assertEqual(list(first + noon.OUT), [7., -3., 3.375])
+            self.assertEqual((first.x, first.y, first.z), (7., -3., 2.375))
 
     def test_generic_retained_leaf_selects_authored_content_layout_in_rust(self):
         anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(7., -3., 1.125)), free=Mock())

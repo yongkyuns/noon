@@ -713,6 +713,13 @@ def _default_critical_query(value):
                and type(member).__getattribute__ is object.__getattribute__ for member in members)
 
 
+def _critical_point_result(result, numpy):
+    if numpy is None and len(result) == 3:
+        from _manim_compat import _manim_point3_result
+        return _manim_point3_result(result)
+    return result
+
+
 def critical_point(value, direction):
     """Use one Rust critical-point query, preserving caller-owned Python hooks."""
     dimensions = getattr(value, "dim", 3)
@@ -728,16 +735,16 @@ def critical_point(value, direction):
         if coordinates is None:
             raise NotImplementedError("critical points require a valid shared Rust handle")
         result = [float(coordinates[index]) for index in range(3)]
-        return result if np is None else np.asarray(result, dtype=np.float64)
+        return _critical_point_result(result if np is None else np.asarray(result, dtype=np.float64), np)
 
     result = [0.0] * dimensions if np is None else np.zeros(dimensions)
     points = value.get_points_defining_boundary()
     if len(points) == 0:
-        return result
+        return _critical_point_result(result, np)
     keys = (*direction, 0.0) if isinstance(direction, _base.Vec2) else direction
     for dim in range(dimensions):
         result[dim] = value.get_extremum_along_dim(points, dim=dim, key=keys[dim])
-    return result
+    return _critical_point_result(result, np)
 
 
 def extremum_along_dim(value, points=None, dim=0, key=0):

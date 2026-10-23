@@ -846,7 +846,7 @@ def _content_critical_point_3d(value: _base.Mobject, direction):
     try:
         result = (engine_call(anchor.contentCriticalPoint3D, *coordinates) if context is None
                   else engine_call(context.queryLayoutContentCriticalPoint3D, anchor, *coordinates))
-        return _compat._manim_point3(result)
+        return _compat._manim_point3_result(result)
     finally:
         anchor.free()
 

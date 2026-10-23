@@ -22,6 +22,16 @@ def _path_observation(query):
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_cold_critical_point_result_keeps_xyz_arithmetic(self):
+        import noon
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.dict("sys.modules", {"numpy": None}), \
+             patch.object(queries, "_default_critical_query", return_value=True), \
+             patch.object(queries, "_critical_point_observation", return_value=(1.25, -2., 3.125)):
+            point = queries.critical_point(value, (0., 0., 0.))
+            self.assertEqual(list(point - noon.OUT), [1.25, -2., 2.125])
+            self.assertEqual((point - point).length(), 0.)
+
     def test_xyz_snapshots_without_numpy_support_index_only_typed_arrays(self):
         class IndexOnlyArray:
             def __init__(self, values):

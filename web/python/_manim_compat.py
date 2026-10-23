@@ -105,6 +105,12 @@ def _manim_point3(point):
     return np.asarray(values, dtype=np.float64)
 
 
+def _manim_point3_result(point):
+    """Keep arithmetic on XYZ query values when the optional array host is absent."""
+    result = _manim_point3(point)
+    return _Direction3(*result) if isinstance(result, list) else result
+
+
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 

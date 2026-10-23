@@ -140,7 +140,7 @@ def _as_vec2(value: object) -> Vec2:
 
 
 class _Direction3(tuple):
-    """Immutable three-component arithmetic for the Manim coordinate directions."""
+    """Immutable three-component arithmetic for Manim coordinates and directions."""
 
     __slots__ = ()
 
