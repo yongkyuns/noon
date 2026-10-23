@@ -17,11 +17,12 @@ if mode=='apply':
   for start,end,text in reversed(e['edits']):lines[start:end]=text.splitlines(keepends=True)
   result=''.join(lines).encode();assert hashlib.sha256(result).hexdigest()==e['result'],p
   p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(result)
- fixes=Path('.github/diagnostics/prepared-source-fixes.json')
- if fixes.exists():
-  for e in json.loads(fixes.read_text()):
-   assert e['path'] in paths
-   p=Path(e['path']);s=p.read_text();assert s.count(e['old'])==1,p;p.write_text(s.replace(e['old'],e['new']))
+ for name in ['prepared-source-fixes.json','prepared-source-extra.json']:
+  fixes=Path('.github/diagnostics')/name
+  if fixes.exists():
+   for e in json.loads(fixes.read_text()):
+    assert e['path'] in paths
+    p=Path(e['path']);s=p.read_text();assert s.count(e['old'])==1,p;p.write_text(s.replace(e['old'],e['new']))
  (out/'product-base.txt').write_text(recipe['product_base']+'\n')
  (out/'diagnostic-head.txt').write_bytes(subprocess.check_output(['git','rev-parse','HEAD']))
  (out/'paths.json').write_text(json.dumps(paths,indent=2))
