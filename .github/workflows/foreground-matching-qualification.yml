@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/ci/manim-reference-constraints.txt"
+      - 'scripts/ci-install-reference-deps.sh'
+      - 'scripts/ci_reference_apt_sources.py'
+      - 'scripts/test_ci_install_reference_deps.py'
       - 'crates/noon*/**'
       - 'web/python/**'
       - 'web/*semantic*'
@@ -59,9 +62,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install pinned Cairo reference and browser dependencies
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python3 -S scripts/test_ci_install_reference_deps.py
+          bash scripts/ci-install-reference-deps.sh ffmpeg libcairo2-dev libpango1.0-dev pkg-config
           python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt 'manim==0.21.0'
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
