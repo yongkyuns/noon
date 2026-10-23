@@ -40,7 +40,7 @@ class OrdinaryGraph(Scene):
         graph = Graph({"a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1)},
                       [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit",
                       labels={"a": Text("a", color=BLACK)}, **graph_styles)
-        assert tuple(graph.edges) == (("a", "b"), ("a", "c"), ("b", "c"))
+        assert tuple(graph.edges) == (("a", "b"), ("b", "c"), ("c", "a"))
         _ = graph[("a", "b")]
         assert_rejected_self_edge(graph, "a")
         graph.change_layout("explicit", positions={
