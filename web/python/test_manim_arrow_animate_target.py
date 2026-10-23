@@ -62,8 +62,8 @@ class ManimArrowAnimateTargetTests(unittest.TestCase):
                 def layout(self):
                     return self
 
-                def shiftBy(self, x, y):
-                    self.calls.append(("shiftBy", float(x), float(y)))
+                def shift(self, x, y, z=0.0):
+                    self.calls.append(("shift", float(x), float(y), float(z)))
 
                 def copyFamily(self, references):
                     self.calls.append("copyFamily")
@@ -252,7 +252,7 @@ class ManimArrowAnimateTargetTests(unittest.TestCase):
 
             builder.shift((0.25, -0.5))
             assert source_family.calls == ["copyFamily"]
-            assert target._semantic_family_handle.calls == [("shiftBy", 0.25, -0.5)]
+            assert target._semantic_family_handle.calls == [("shift", 0.25, -0.5, 0.0)]
 
             field_vector = object.__new__(arrows.Vector)
             field_vector._shaft = source._shaft

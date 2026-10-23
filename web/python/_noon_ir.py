@@ -24,9 +24,11 @@ def _finite_number(name: str, value: Any) -> float:
 
 
 
-def _vec2(name: str, value: tuple[float, float]) -> dict[str, float]:
-    if not isinstance(value, (tuple, list)) or len(value) != 2:
-        raise ValueError(f"{name} must contain two values")
+def _vec2(name: str, value: tuple[float, ...]) -> dict[str, float]:
+    if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+        raise ValueError(f"{name} must contain two values or three with zero depth")
+    if len(value) == 3 and _finite_number(f"{name}.z", value[2]) != 0.0:
+        raise ValueError(f"{name} must have zero depth for a planar path")
     return {
         "x": _finite_number(f"{name}.x", value[0]),
         "y": _finite_number(f"{name}.y", value[1]),

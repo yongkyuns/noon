@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/ci/manim-reference-constraints.txt"
+      - "scripts/ci-install-reference-deps.sh"
+      - "scripts/ci_reference_apt_sources.py"
+      - "scripts/test_ci_install_reference_deps.py"
       - "crates/noon/src/code_display/highlight.rs"
       - "fixtures/code/pygments-2.19.2-code-colors.json"
       - "scripts/test_code_pygments_parity.py"
@@ -88,6 +91,9 @@ on:
       - "scripts/manim-raster-*.mjs"
       - "scripts/manim-raster-*.py"
       - "scripts/test_manim_raster_manifest.py"
+      - "scripts/manim-reference-run.py"
+      - "scripts/manim_reference_fonts.py"
+      - "scripts/test_manim_reference_run.py"
       - "scripts/browser-test-server.mjs"
       - "scripts/shared-playback-raster*.mjs"
       - ".github/workflows/manim-raster-differential.yml"
@@ -123,6 +129,7 @@ jobs:
           python3 -m json.tool parity/manim-v0.21/manifest.json > /dev/null
           python3 -m py_compile scripts/test_manim_raster_manifest.py
           python3 -m unittest scripts.test_manim_reference_run
+          python3 -S scripts/test_ci_install_reference_deps.py
           python3 scripts/test_manim_differential.py
       - name: Validate preview capture and camera negative controls
         run: |
@@ -161,9 +168,10 @@ jobs:
       - name: Validate camera qualification negative controls
         run: node --test scripts/special-camera-qualification.test.mjs
       - name: Install Manim system dependencies
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          python3 -S scripts/test_ci_install_reference_deps.py
+          bash scripts/ci-install-reference-deps.sh \
             ffmpeg \
             libcairo2-dev \
             libpango1.0-dev \

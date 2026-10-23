@@ -37,10 +37,10 @@ class PathEditingTests(unittest.TestCase):
                         self.assertIs(family.reset_points(), family)
                         leaf.assert_not_called()
                     if live:
-                        context.liveSetFamilyPoints.assert_called_once_with(handle, [0, 0, 1, 2])
+                        context.liveSetFamilyPoints3D.assert_called_once_with(handle, [0, 0, 0.0, 1, 2, 0.0])
                         context.liveClearFamilyPoints.assert_called_once_with(handle)
                     else:
-                        handle.setPoints.assert_called_once_with([0, 0, 1, 2])
+                        handle.setPoints3D.assert_called_once_with([0, 0, 0.0, 1, 2, 0.0])
                         handle.clearPoints.assert_called_once_with()
 
     def test_repeat_points_dispatches_family_and_leaf_operations(self):
@@ -137,10 +137,10 @@ class PathEditingTests(unittest.TestCase):
                 self.assertIs(value.set_points_as_corners([(1, 2, 0), (3, 4, 0)]), value)
                 self.assertIs(value.clear_points(), value)
                 if context is None:
-                    handle.setPointsAsCorners.assert_called_once_with([1., 2., 3., 4.])
+                    handle.setPointsAsCorners.assert_called_once_with([1.0, 2.0, 0.0, 3.0, 4.0, 0.0])
                     handle.clearPoints.assert_called_once_with()
                 else:
-                    context.liveSetPointsAsCorners.assert_called_once_with(handle, [1., 2., 3., 4.])
+                    context.liveSetPointsAsCorners.assert_called_once_with(handle, [1.0, 2.0, 0.0, 3.0, 4.0, 0.0])
                     context.liveClearPoints.assert_called_once_with(handle)
 
     def test_set_points_as_corners_rejects_unstable_custom_stride_before_bridge(self):
@@ -174,7 +174,7 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_live_constructor_context', return_value=None):
             self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
         handle.setPointsAsCornersWithSamples.assert_called_once_with(
-            [0.0, 0.0, 2.0, 0.0], [0.0, 0.25, 0.75, 1.0]
+            [0.0, 0.0, 0.0, 2.0, 0.0, 0.0], [0.0, 0.25, 0.75, 1.0]
         )
 
         context = Mock()
@@ -184,7 +184,7 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_live_constructor_context', return_value=None):
             self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
         context.liveSetPointsAsCornersWithSamples.assert_called_once_with(
-            handle, [0.0, 0.0, 2.0, 0.0], [0.0, 0.25, 0.75, 1.0]
+            handle, [0.0, 0.0, 0.0, 2.0, 0.0, 0.0], [0.0, 0.25, 0.75, 1.0]
         )
 
     def test_set_points_smoothly_uses_corner_set_then_rust_anchor_rewrite(self):
@@ -219,6 +219,7 @@ class PathEditingTests(unittest.TestCase):
                 value.set_points_smoothly([(0, 0), (1, 1)])
             make_smooth.assert_not_called()
 
+    @unittest.skipIf(numpy is None, "NumPy coercion runs in the pinned qualification lane")
     def test_raw_point_set_and_append_use_authored_or_live_rust_publication(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
@@ -229,16 +230,17 @@ class PathEditingTests(unittest.TestCase):
                 with patch.object(editing, '_handle_for', return_value=handle), \
                      patch.object(editing, '_live_mutation_context', return_value=context), \
                      patch.object(editing, '_live_constructor_context', return_value=None):
-                    self.assertIs(value.set_points([(0, 1), (2, 3, 0)]), value)
-                    self.assertIs(value.append_points([(4, 5)]), value)
+                    self.assertIs(value.set_points([(0, 1), (2, 3, .625)]), value)
+                    self.assertIs(value.append_points([(4, 5, -.375)]), value)
                 if context is None:
-                    handle.setPoints.assert_called_once_with([0., 1., 2., 3.])
-                    handle.appendPoints.assert_called_once_with([4., 5.])
+                    handle.setPoints3D.assert_called_once_with([0.0, 1.0, 0.0, 2.0, 3.0, .625])
+                    handle.appendPoints3D.assert_called_once_with([4.0, 5.0, -.375])
                 else:
-                    context.liveSetPoints.assert_called_once_with(handle, [0., 1., 2., 3.])
-                    context.liveAppendPoints.assert_called_once_with(handle, [4., 5.])
+                    context.liveSetPoints3D.assert_called_once_with(handle, [0.0, 1.0, 0.0, 2.0, 3.0, .625])
+                    context.liveAppendPoints3D.assert_called_once_with(handle, [4.0, 5.0, -.375])
                 handle.reset_mock()
 
+    @unittest.skipIf(numpy is None, "NumPy coercion runs in the pinned qualification lane")
     def test_raw_point_mutations_are_stride_independent(self):
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 5
@@ -250,9 +252,9 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_live_mutation_context', return_value=None), \
              patch.object(editing, '_live_constructor_context', return_value=None):
             self.assertIs(value.set_points([(0, 1), (2, 3), (4, 5)]), value)
-            self.assertIs(value.append_points([(6, 7)]), value)
-        handle.setPoints.assert_called_once_with([0., 1., 2., 3., 4., 5.])
-        handle.appendPoints.assert_called_once_with([6., 7.])
+            self.assertIs(value.append_points([(6, 7, 0)]), value)
+        handle.setPoints3D.assert_called_once_with([0.0, 1.0, 0.0, 2.0, 3.0, 0.0, 4.0, 5.0, 0.0])
+        handle.appendPoints3D.assert_called_once_with([6.0, 7.0, 0.0])
 
     def test_start_new_path_routes_the_mutable_stride_to_shared_rust(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -267,10 +269,10 @@ class PathEditingTests(unittest.TestCase):
                  patch.object(editing, '_live_constructor_context', return_value=None):
                 self.assertIs(value.start_new_path((1, 2, 0)), value)
             if context is None:
-                handle.startNewPathWithStride.assert_called_once_with(1., 2., 5)
+                handle.startNewPathWithStride.assert_called_once_with(1., 2., 0.0, 5)
             else:
                 context.liveStartNewPathWithStride.assert_called_once_with(
-                    handle, 1., 2., 5
+                    handle, 1., 2., 0.0, 5
                 )
             handle.reset_mock()
 
@@ -287,20 +289,20 @@ class PathEditingTests(unittest.TestCase):
         ffi = types.ModuleType('pyodide.ffi')
         ffi.to_js = lambda values: values
         cases = [
-            (value.add_line_to, ((1, 2, 0),), 'addLineTo', 'liveAddLineTo', [1., 2., 5]),
+            (value.add_line_to, ((1, 2, 0),), 'addLineTo', 'liveAddLineTo', [1., 2., 0., 5]),
             (
                 value.add_quadratic_bezier_curve_to,
                 ((1, 2, 0), (3, 4, 0)),
                 'addQuadraticBezierCurveTo',
                 'liveAddQuadraticBezierCurveTo',
-                [1., 2., 3., 4., 5],
+                [1., 2., 0., 3., 4., 0., 5],
             ),
             (
                 value.add_cubic_bezier_curve_to,
                 ((1, 2, 0), (3, 4, 0), (5, 6, 0)),
                 'addCubicBezierCurveTo',
                 'liveAddCubicBezierCurveTo',
-                [1., 2., 3., 4., 5., 6., 5],
+                [1., 2., 0., 3., 4., 0., 5., 6., 0., 5],
             ),
             (
                 value.add_smooth_curve_to,
@@ -345,11 +347,11 @@ class PathEditingTests(unittest.TestCase):
                 self.assertIs(value.add_line_to((9, -1, 0)), value)
             if context is None:
                 handle.addLineToWithSamples.assert_called_once_with(
-                    9.0, -1.0, 4, [0.0, 0.25, 0.75, 1.0]
+                    9.0, -1.0, 0.0, 4, [0.0, 0.25, 0.75, 1.0]
                 )
             else:
                 context.liveAddLineToWithSamples.assert_called_once_with(
-                    handle, 9.0, -1.0, 4, [0.0, 0.25, 0.75, 1.0]
+                    handle, 9.0, -1.0, 0.0, 4, [0.0, 0.25, 0.75, 1.0]
                 )
             handle.reset_mock()
 
@@ -374,7 +376,7 @@ class PathEditingTests(unittest.TestCase):
         ffi = types.ModuleType('pyodide.ffi')
         ffi.to_js = lambda values: values
         corners = [(1, 2, 0), (3, 4, 0)]
-        expected_points = [1., 2., 3., 4.]
+        expected_points = [1., 2., 0., 3., 4., 0.]
         expected_samples = [0., 1 / 3, 2 / 3, 1.]
         value.throw_error_if_no_points = Mock()
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}):
@@ -419,7 +421,7 @@ class PathEditingTests(unittest.TestCase):
         handle = Mock()
         query = Mock()
         query.pointCount = 2
-        query.points.return_value = [1., 2., 3., 4.]
+        query.points3D.return_value = [1., 2., .25, 3., 4., .75]
         ffi = types.ModuleType('pyodide.ffi')
         ffi.to_js = lambda values: values
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
@@ -428,7 +430,7 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_live_mutation_context', return_value=None), \
              patch.object(editing, '_live_constructor_context', return_value=None):
             self.assertIs(value.resize_points(3), value)
-        handle.setPoints.assert_called_once_with([1., 2., 3., 4., 1., 2.])
+        handle.setPoints3D.assert_called_once_with([1.0, 2.0, .25, 3.0, 4.0, .75, 1.0, 2.0, .25])
         query.free.assert_called_once_with()
 
         query.reset_mock()
@@ -446,7 +448,7 @@ class PathEditingTests(unittest.TestCase):
         handle = Mock()
         query = Mock()
         query.pointCount = 2
-        query.points.return_value = [1., 2., 3., 4.]
+        query.points3D.return_value = [1., 2., .25, 3., 4., .75]
         ffi = types.ModuleType('pyodide.ffi')
         ffi.to_js = lambda values: values
         resize_call = Mock(side_effect=lambda points, _length: points[::-1][:1])
@@ -459,9 +461,9 @@ class PathEditingTests(unittest.TestCase):
         points, length = resize_call.call_args.args
         self.assertIsInstance(points, numpy.ndarray)
         self.assertEqual(points.shape, (2, 3))
-        self.assertEqual(points[:, 2].tolist(), [0., 0.])
+        self.assertEqual(points[:, 2].tolist(), [.25, .75])
         self.assertEqual(length, 1)
-        handle.setPoints.assert_called_once_with([3., 4.])
+        handle.setPoints3D.assert_called_once_with([3.0, 4.0, .75])
 
     def test_cubic_curve_dispatch_is_one_authored_or_live_edit(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -476,11 +478,11 @@ class PathEditingTests(unittest.TestCase):
                 )
             if context is None:
                 handle.addCubicBezierCurve.assert_called_once_with(
-                    0., 1., 2., 3., 4., 5., 6., 7.
+                    0., 1., 0.0, 2., 3., 0.0, 4., 5., 0.0, 6., 7., 0.0
                 )
             else:
                 context.liveAddCubicBezierCurve.assert_called_once_with(
-                    handle, 0., 1., 2., 3., 4., 5., 6., 7.
+                    handle, 0., 1., 0.0, 2., 3., 0.0, 4., 5., 0.0, 6., 7., 0.0
                 )
 
     def test_smooth_curve_dispatch_accepts_anchor_or_handle_and_anchor(self):
@@ -556,41 +558,27 @@ class PathEditingTests(unittest.TestCase):
                 value.scale_handle_to_anchor_distances(0.5)
             resolve.assert_not_called()
 
-    def test_cubic_curve_batches_flatten_to_one_authored_or_live_edit(self):
+    @unittest.skipIf(numpy is None, "NumPy coercion runs in the pinned qualification lane")
+    def test_cubic_batches_use_public_append_and_ignore_its_return(self):
         value = identity_only_wrapper(compat.VMobject)
-        handle = Mock()
-        ffi = types.ModuleType('pyodide.ffi')
-        ffi.to_js = lambda values: values
-        curves = [
-            [(0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0)],
-            [(2, 1, 0), (3, 1, 0), (3, 2, 0), (4, 2, 0)],
-        ]
-        expected = [0., 0., 1., 0., 1., 1., 2., 1., 2., 1., 3., 1., 3., 2., 4., 2.]
-        for context in (None, Mock()):
-            with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
-                 patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
-                self.assertIs(value.add_cubic_bezier_curves(curves), value)
-            if context is None:
-                handle.addCubicBezierCurves.assert_called_once_with(expected)
-            else:
-                context.liveAddCubicBezierCurves.assert_called_once_with(handle, expected)
+        curves = numpy.array([[[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [2., 1., 0.]]])
+        captured = []
+        value.append_points = lambda points: captured.append(points) or object()
+        self.assertIs(value.add_cubic_bezier_curves(curves), value)
+        self.assertEqual(len(captured), 1)
+        numpy.testing.assert_array_equal(captured[0], curves.flatten())
+        self.assertEqual(captured[0].shape, (12,))
 
-    def test_cubic_curve_batch_accepts_one_four_point_curve(self):
+    @unittest.skipIf(numpy is None, "NumPy coercion runs in the pinned qualification lane")
+    def test_cubic_batches_preserve_pinned_flatten_and_broadcast_errors(self):
         value = identity_only_wrapper(compat.VMobject)
-        handle = Mock()
-        ffi = types.ModuleType('pyodide.ffi')
-        ffi.to_js = lambda values: values
         curve = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0)]
-        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
-             patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
-            self.assertIs(value.add_cubic_bezier_curves(curve), value)
-        handle.addCubicBezierCurves.assert_called_once_with(
-            [0., 0., 1., 0., 1., 1., 2., 1.]
-        )
+        with patch.object(editing, "_handle_for") as resolve:
+            with self.assertRaisesRegex(AttributeError, "flatten"):
+                value.add_cubic_bezier_curves(curve)
+            with self.assertRaisesRegex(ValueError, "broadcast"):
+                value.add_cubic_bezier_curves(numpy.array(curve))
+            resolve.assert_not_called()
 
     def test_add_points_as_corners_dispatches_one_authored_or_live_edit(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -605,12 +593,13 @@ class PathEditingTests(unittest.TestCase):
                  patch.object(editing, '_live_constructor_context', return_value=None):
                 self.assertIs(value.add_points_as_corners(points), value)
             if context is None:
-                handle.addPointsAsCorners.assert_called_once_with([1., 0., 2., 1.])
+                handle.addPointsAsCorners.assert_called_once_with([1.0, 0.0, 0.0, 2.0, 1.0, 0.0])
             else:
                 context.liveAddPointsAsCorners.assert_called_once_with(
-                    handle, [1., 0., 2., 1.]
+                    handle, [1.0, 0.0, 0.0, 2.0, 1.0, 0.0]
                 )
 
+    @unittest.skipIf(numpy is None, "NumPy coercion runs in the pinned qualification lane")
     def test_add_subpath_groups_four_points_and_keeps_manims_assertion(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
@@ -625,8 +614,8 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_live_mutation_context', return_value=None), \
              patch.object(editing, '_live_constructor_context', return_value=None):
             self.assertIs(value.add_subpath(points), value)
-            handle.addCubicBezierCurves.assert_called_once_with(
-                [0., 0., 1., 0., 1., 1., 2., 1., 2., 1., 3., 1., 3., 2., 4., 2.]
+            handle.appendPoints3D.assert_called_once_with(
+                [0., 0., 0., 1., 0., 0., 1., 1., 0., 2., 1., 0., 2., 1., 0., 3., 1., 0., 3., 2., 0., 4., 2., 0.]
             )
 
         with patch.object(editing, '_handle_for') as resolve:
@@ -645,7 +634,7 @@ class PathEditingTests(unittest.TestCase):
             [(1, 1, 0), (3, 2, 0)],
             [(2, 1, 0), (4, 2, 0)],
         )
-        expected = [0., 0., 1., 0., 1., 1., 2., 1., 2., 1., 3., 1., 3., 2., 4., 2.]
+        expected = [0., 0., 0., 1., 0., 0., 1., 1., 0., 2., 1., 0., 2., 1., 0., 3., 1., 0., 3., 2., 0., 4., 2., 0.]
         for context in (None, Mock()):
             with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                  patch.object(editing, '_handle_for', return_value=handle), \
@@ -791,6 +780,22 @@ class PathEditingTests(unittest.TestCase):
             resolve.assert_not_called()
 
 
+    def test_close_path_projects_the_typed_empty_subpath_error_to_ce_index_error(self):
+        from _noon_errors import NoonErrorCause, NoonIndexError
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        typed = NoonIndexError(NoonErrorCause("index_error", "path.close_without_subpath", "no complete subpath"), object(), "close")
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = lambda values: values
+        with patch.dict(sys.modules, {"pyodide.ffi": ffi}), \
+             patch("_manim_path_queries.is_closed", return_value=False), \
+             patch.object(editing, "edit_points", side_effect=typed):
+            with self.assertRaises(IndexError) as raised:
+                value.close_path()
+        self.assertIs(type(raised.exception), IndexError)
+        self.assertEqual(str(raised.exception), "list index out of range")
+        self.assertIs(raised.exception.__cause__, typed)
+
     def test_scalar_point_commands_dispatch_to_shared_operations(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
@@ -807,11 +812,11 @@ class PathEditingTests(unittest.TestCase):
             value.add_cubic_bezier_curve_to((1, 2), (3, 4), (5, 6))
             value.add_cubic_bezier_curve((0, 1), (2, 3), (4, 5), (6, 7))
             value.close_path()
-        handle.startNewPath.assert_called_once_with(1., 2.)
-        handle.addLineTo.assert_called_once_with(3., 4.)
-        handle.addQuadraticBezierCurveTo.assert_called_once_with(5., 6., 7., 8.)
-        handle.addCubicBezierCurveTo.assert_called_once_with(1., 2., 3., 4., 5., 6.)
-        handle.addCubicBezierCurve.assert_called_once_with(0., 1., 2., 3., 4., 5., 6., 7.)
+        handle.startNewPath.assert_called_once_with(1., 2., 0.0)
+        handle.addLineTo.assert_called_once_with(3., 4., 0.0)
+        handle.addQuadraticBezierCurveTo.assert_called_once_with(5., 6., 0.0, 7., 8., 0.0)
+        handle.addCubicBezierCurveTo.assert_called_once_with(1., 2., 0.0, 3., 4., 0.0, 5., 6., 0.0)
+        handle.addCubicBezierCurve.assert_called_once_with(0., 1., 0.0, 2., 3., 0.0, 4., 5., 0.0, 6., 7., 0.0)
         close_args = handle.closePathWithStride.call_args.args
         self.assertEqual(close_args[:2], (4, 1e-6))
         self.assertEqual(len(close_args[2]), 4)

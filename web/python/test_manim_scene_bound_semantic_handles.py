@@ -153,6 +153,15 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     t["x"] += float(x)
                     t["y"] += float(y)
 
+                def layoutAnchor(self, index):
+                    assert index is None
+                    return self
+
+                def scale3d(self, x, y, z, px, py, pz, about_point):
+                    assert (px, py, pz, about_point) == (0.0, 0.0, 0.0, False)
+                    assert z == x == y
+                    self.scale(x, y)
+
                 def scale(self, x, y):
                     self.calls.append(("scale", float(x), float(y)))
                     scale = self.snapshot["transform"]["scale"]

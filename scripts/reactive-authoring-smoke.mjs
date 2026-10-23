@@ -63,7 +63,7 @@ class NativeTrackers(Scene):
         )
         assert abs(progress.get_value() - 2.0) < 1e-9
         center = mover.get_center()
-        assert abs(center.y - 1.0) < 1e-9
+        assert abs(center[1] - 1.0) < 1e-9
 `;
 
 await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });

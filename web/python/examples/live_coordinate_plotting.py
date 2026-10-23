@@ -22,4 +22,4 @@ class LiveCoordinatePlotting(Scene):
         graph = axes.plot(lambda x: 0.5 * x, (-2, 2, 0.5), use_smoothing=False, color=BLUE, stroke_width=4)
         self.play(Create(graph), run_time=0.5, rate_func=linear)
         self.wait(0.25)
-        assert abs(sentinel.get_center().x + 5) < 2e-5
+        assert abs(sentinel.get_center()[0] + 5) < 2e-5

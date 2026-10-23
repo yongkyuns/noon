@@ -16,10 +16,10 @@ class _Member:
         self.points = points
 
     def apply_over_attr_arrays(self, func):
-        from _manim_path_editing import _mapped_planar_points
-        mapped = _mapped_planar_points(func(self.points))
+        from _manim_path_editing import _mapped_points
+        mapped = _mapped_points(func(self.points))
         self.points = [
-            [float(point[0]), float(point[1]), 0.0]
+            [float(component) for component in point]
             for point in mapped
         ]
         return self
@@ -127,20 +127,14 @@ class ManimPointFunctionTransformsTests(unittest.TestCase):
 
         self.assertEqual(member.points, [[1.0, 2.0, 0.0]])
 
-    def test_apply_matrix_rejects_spatial_results_before_mutation(self):
+    def test_apply_matrix_preserves_spatial_results(self):
         member = _Member([[1.0, 2.0, 0.0]])
         root = _Root([member])
-        original = [point[:] for point in member.points]
-
         with self._python_array_mode(), \
              patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
-            with self.assertRaisesRegex(NotImplementedError, "nonzero-z"):
-                apply_matrix(
-                    root,
-                    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 1.0]],
-                )
-
-        self.assertEqual(member.points, original)
+            apply_matrix(root,
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 1.0]])
+        self.assertEqual(member.points, [[1.0, 2.0, 1.0]])
 
     def test_staged_callback_rejects_before_critical_or_family_queries(self):
         root = _Root([])

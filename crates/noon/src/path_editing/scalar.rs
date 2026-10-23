@@ -6,31 +6,31 @@ pub(crate) const LINE_SAMPLES: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
 
 /// Transient preparation inputs, never retained scene or runtime state.
 #[derive(Clone, Copy)]
-pub(crate) enum ScalarPathEdit<'a> {
+pub(crate) enum ScalarPathEdit<'a, P = Point> {
     Start {
-        point: Point,
+        point: P,
         stride: i32,
     },
     Line {
-        point: Point,
+        point: P,
         stride: i32,
         samples: &'a [f64],
     },
     CubicTo {
-        controls: [Point; 3],
+        controls: [P; 3],
         stride: i32,
     },
-    Cubic([Point; 4]),
+    Cubic([P; 4]),
     Cubics {
-        curves: &'a [[Point; 4]],
+        curves: &'a [[P; 4]],
         replace: bool,
     },
     Corners {
-        points: &'a [Point],
+        points: &'a [P],
         samples: &'a [f64],
     },
     AppendCorners {
-        points: &'a [Point],
+        points: &'a [P],
         stride: i32,
         samples: &'a [f64],
     },
@@ -41,41 +41,63 @@ pub(crate) enum ScalarPathEdit<'a> {
     },
 }
 
-pub(super) fn prepare(
+/// Coordinate promotion at the typed convenience boundary, never a stored projection.
+pub(crate) trait ScalarPoint: Copy {
+    fn into_xyz(self) -> SemanticVec3;
+}
+impl ScalarPoint for Point {
+    fn into_xyz(self) -> SemanticVec3 {
+        SemanticVec3::new(self.0, self.1, 0.0)
+    }
+}
+impl ScalarPoint for SemanticVec3 {
+    fn into_xyz(self) -> SemanticVec3 {
+        self
+    }
+}
+
+pub(super) fn prepare<P: ScalarPoint>(
     path: VectorPath,
-    edit: ScalarPathEdit<'_>,
+    edit: ScalarPathEdit<'_, P>,
 ) -> Result<Option<VectorPath>, AuthoringError> {
     use ScalarPathEdit::*;
     let result = match edit {
-        Start { point, stride } => start(path, point, stride)?,
+        Start { point, stride } => start(path, point.into_xyz(), stride)?,
         Line {
             point,
             stride,
             samples,
-        } => line(path, point, stride, samples)?,
+        } => line(path, point.into_xyz(), stride, samples)?,
         CubicTo { controls, stride } => {
-            validate_raw_points(&controls)?;
+            let controls = controls.map(ScalarPoint::into_xyz);
+            point_arrays::validate(&controls)?;
             return append_manim_cubic_points_with_stride(
-                manim_points_f64_for_path(&path)?,
+                point_arrays::points(&path)?,
                 controls,
                 stride,
-                VectorPath::from_manim_points_f64,
+                VectorPath::from_manim_points_3d,
             )
             .map(Some);
         }
         Cubic(controls) => {
-            validate_raw_points(&controls)?;
+            let controls = controls.map(ScalarPoint::into_xyz);
+            point_arrays::validate(&controls)?;
             let target = path.morph_target().cloned();
-            let mut points = manim_points_f64_for_path(&path)?;
+            let mut points = point_arrays::points(&path)?;
             points.extend(controls);
-            let mut result = VectorPath::from_manim_points_f64(points);
+            let mut result = VectorPath::from_manim_points_3d(points);
             if let Some(target) = target {
                 result = result.with_morph_target(target);
             }
             result
         }
         Cubics { curves, replace } => {
-            validate_raw_points(curves.as_flattened())?;
+            let flattened = curves
+                .iter()
+                .flat_map(|curve| curve.iter().copied())
+                .map(ScalarPoint::into_xyz)
+                .collect::<Vec<_>>();
+            point_arrays::validate(&flattened)?;
             if !replace && curves.is_empty() {
                 return Ok(None);
             }
@@ -87,21 +109,43 @@ pub(super) fn prepare(
             let mut points = if replace {
                 Vec::new()
             } else {
-                manim_points_f64_for_path(&path)?
+                point_arrays::points(&path)?
             };
-            points.extend_from_slice(curves.as_flattened());
-            let mut result = VectorPath::from_manim_points_f64(points);
+            points.extend(flattened);
+            let mut result = VectorPath::from_manim_points_3d(points);
             if let Some(target) = target {
                 result = result.with_morph_target(target);
             }
             result
         }
-        Corners { points, samples } => corners(points, samples)?,
+        Corners { points, samples } => corners(
+            &points
+                .iter()
+                .copied()
+                .map(ScalarPoint::into_xyz)
+                .collect::<Vec<_>>(),
+            samples,
+        )?,
         AppendCorners {
             points,
             stride,
             samples,
-        } => append_corners(path, points, stride, samples)?,
+        } => {
+            if points.is_empty() {
+                point_arrays::points(&path)?.last().ok_or_else(empty_path)?;
+                return Ok(None);
+            }
+            append_corners(
+                path,
+                &points
+                    .iter()
+                    .copied()
+                    .map(ScalarPoint::into_xyz)
+                    .collect::<Vec<_>>(),
+                stride,
+                samples,
+            )?
+        }
         Close {
             stride,
             tolerance,
@@ -126,10 +170,11 @@ fn validate_samples(samples: &[f64]) -> Result<(), AuthoringError> {
 }
 
 // CE's interpolate uses two weighted terms, not a renderer-precision delta.
-fn interpolate(start: Point, end: Point, t: f64) -> Point {
-    (
-        (1.0 - t) * start.0 + t * end.0,
-        (1.0 - t) * start.1 + t * end.1,
+fn interpolate(start: SemanticVec3, end: SemanticVec3, t: f64) -> SemanticVec3 {
+    SemanticVec3::new(
+        (1.0 - t) * start.x + t * end.x,
+        (1.0 - t) * start.y + t * end.y,
+        (1.0 - t) * start.z + t * end.z,
     )
 }
 
@@ -137,15 +182,15 @@ fn empty_path() -> AuthoringError {
     AuthoringError::PathQuery(noon_geometry::PathProportionError::EmptyPath)
 }
 
-fn start(path: VectorPath, point: Point, stride: i32) -> Result<VectorPath, AuthoringError> {
-    validate_raw_points(&[point])?;
+fn start(path: VectorPath, point: SemanticVec3, stride: i32) -> Result<VectorPath, AuthoringError> {
+    point_arrays::validate(&[point])?;
     if stride == 0 {
         return Err(AuthoringError::NonPositiveNumber {
             name: "n_points_per_cubic_curve".to_owned(),
             value: 0.0,
         });
     }
-    let mut points = manim_points_f64_for_path(&path)?;
+    let mut points = point_arrays::points(&path)?;
     if stride > 0 {
         let stride = stride as usize;
         let remainder = points.len() % stride;
@@ -155,19 +200,19 @@ fn start(path: VectorPath, point: Point, stride: i32) -> Result<VectorPath, Auth
         }
     }
     points.push(point);
-    finish(VectorPath::from_manim_points_f64(points))
+    finish(VectorPath::from_manim_points_3d(points))
 }
 
 fn line(
     path: VectorPath,
-    point: Point,
+    point: SemanticVec3,
     stride: i32,
     samples: &[f64],
 ) -> Result<VectorPath, AuthoringError> {
-    validate_raw_points(&[point])?;
+    point_arrays::validate(&[point])?;
     validate_samples(samples)?;
     let target = path.morph_target().cloned();
-    let mut points = manim_points_f64_for_path(&path)?;
+    let mut points = point_arrays::points(&path)?;
     let start = points.last().copied().ok_or_else(empty_path)?;
     if !manim_remainder_is_one(points.len(), stride) {
         points.push(start);
@@ -178,18 +223,18 @@ fn line(
             .skip(1)
             .map(|&t| interpolate(start, point, t)),
     );
-    let mut result = VectorPath::from_manim_points_f64(points);
+    let mut result = VectorPath::from_manim_points_3d(points);
     if let Some(target) = target {
         result = result.with_morph_target(line(target, point, stride, samples)?);
     }
     finish(result)
 }
 
-fn corners(points: &[Point], samples: &[f64]) -> Result<VectorPath, AuthoringError> {
-    validate_raw_points(points)?;
+fn corners(points: &[SemanticVec3], samples: &[f64]) -> Result<VectorPath, AuthoringError> {
+    point_arrays::validate(points)?;
     validate_samples(samples)?;
     if samples == LINE_SAMPLES {
-        return finish(VectorPath::from_manim_corners_f64(points));
+        return finish(VectorPath::from_manim_corners_3d(points));
     }
     let raw = points
         .windows(2)
@@ -199,21 +244,21 @@ fn corners(points: &[Point], samples: &[f64]) -> Result<VectorPath, AuthoringErr
                 .map(move |&t| interpolate(pair[0], pair[1], t))
         })
         .collect();
-    finish(VectorPath::from_manim_points_f64(raw))
+    finish(VectorPath::from_manim_points_3d(raw))
 }
 
 fn append_corners(
     path: VectorPath,
-    corners: &[Point],
+    corners: &[SemanticVec3],
     stride: i32,
     samples: &[f64],
 ) -> Result<VectorPath, AuthoringError> {
-    let mut points = manim_points_f64_for_path(&path)?;
+    let mut points = point_arrays::points(&path)?;
     let mut start = points.last().copied().ok_or_else(empty_path)?;
     if corners.is_empty() {
         return Ok(path);
     }
-    validate_raw_points(corners)?;
+    point_arrays::validate(corners)?;
     validate_samples(samples)?;
     if stride <= 0 {
         return Err(AuthoringError::NonPositiveNumber {
@@ -236,7 +281,7 @@ fn append_corners(
         }
         start = end;
     }
-    let mut result = VectorPath::from_manim_points_f64(points);
+    let mut result = VectorPath::from_manim_points_3d(points);
     if let Some(target) = path.morph_target().cloned() {
         result = result.with_morph_target(target);
     }
@@ -250,31 +295,40 @@ fn close(
     samples: &[f64],
 ) -> Result<Option<VectorPath>, AuthoringError> {
     let target = path.morph_target().cloned();
-    let points = manim_points_f64_for_path(&path)?;
+    let points = point_arrays::points(&path)?;
     let first = points.first().copied().ok_or_else(empty_path)?;
     let last = *points.last().expect("the nonempty raw array was checked");
-    if crate::path_queries::manim_points_2d_close([first.0, first.1], [last.0, last.1], tolerance) {
+    if crate::path_queries::manim_points_allclose(
+        &[first.x, first.y, first.z],
+        &[last.x, last.y, last.z],
+        tolerance,
+    ) {
         return Ok(None);
     }
-    let coordinates = points.iter().flat_map(|&(x, y)| [x, y]).collect::<Vec<_>>();
+    let coordinates = points
+        .iter()
+        .flat_map(|p| [p.x, p.y, p.z])
+        .collect::<Vec<_>>();
     let ranges = crate::path_queries::manim_subpath_ranges(
         &coordinates,
         points.len(),
-        2,
-        2,
+        3,
+        3,
         f64::from(stride),
         tolerance,
         true,
     )?;
-    let start_index = ranges
-        .get(ranges.len().saturating_sub(2))
-        .copied()
-        .ok_or_else(empty_path)?;
+    let start_index = ranges.get(ranges.len().saturating_sub(2)).copied().ok_or(
+        AuthoringError::NoSubpathForClose {
+            point_count: points.len(),
+            stride,
+        },
+    )?;
     // The ordinary line operation shares interpolation, prefix handling and
     // validation. Closing each morph target uses its own last subpath anchor.
     let anchor = points[start_index];
     let mut result = line(
-        VectorPath::from_manim_points_f64(points),
+        VectorPath::from_manim_points_3d(points),
         anchor,
         stride,
         samples,
@@ -289,3 +343,6 @@ fn close(
 
 #[cfg(all(test, feature = "diagnostics"))]
 mod tests;
+
+#[cfg(test)]
+mod xyz_tests;

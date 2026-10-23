@@ -141,7 +141,7 @@ class FocusOn:
                 "FocusOn(Group/VGroup) requires retained family center semantics and is not yet supported"
             )
         if isinstance(focus_point, _base.Mobject):
-            point = focus_point.get_center()
+            point = _base._as_vec2(focus_point.get_center())
             self.focus_mobject: _base.Mobject | None = focus_point
         else:
             point = _base._as_vec2(focus_point)
@@ -191,4 +191,5 @@ def _axis_sign(axis: object) -> float:
 
 
 def _points_close(left: object, right: object) -> bool:
+    left, right = _base._as_vec2(left), _base._as_vec2(right)
     return all(math.isclose(float(a), float(b), abs_tol=1e-9) for a, b in zip(left, right))

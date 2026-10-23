@@ -205,20 +205,19 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
+def _bound_query_context(value: _base.Mobject):
+    if not _is_bound(value) or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    if getattr(value, "_semantic_handle", None) is None:
+        return None
+    return getattr(value._scene, "_canonical_authoring_context", None)
+
+
 def _bound_layout_observation(value: _base.Mobject, method="queryMobjectLayout", *arguments):
     """Ask the owning Rust context for one coherent ordinary live observation."""
-
-    if (
-        not _is_bound(value)
-        or not bool(getattr(value, "_semantic_handle_fresh", False))
-    ):
-        return None
-    handle = getattr(value, "_semantic_handle", None)
-    if handle is None:
-        return None
-    context = getattr(value._scene, "_canonical_authoring_context", None)
+    context = _bound_query_context(value)
     query = getattr(context, method, None)
-    return None if query is None else engine_call(query, handle, *arguments)
+    return None if query is None else engine_call(query, value._semantic_handle, *arguments)
 
 
 _CONSTRUCTOR_MISSING = object()
@@ -440,6 +439,8 @@ def _empty_path_init(
     _apply_shared_constructor_options(
         options, kwargs, allow_sheen_direction=(kind == "VMobject")
     )
+    if kind == "Mobject":
+        engine_call(options.setDrawEnabled, False)
     _attach_geometry_options(self, options, kind)
 
 
@@ -714,12 +715,69 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     return _clone_mobject(self, target_state=True)
 
 
-def _get_center(self: _base.Mobject) -> _base.Vec2:
-    if (
-        isinstance(self, _compat.VMobject)
-        and _vmobject_path_boundary_queries_available(self)
-    ):
-        return _get_critical_point(self, _base.ORIGIN)
+def _uses_content_layout(value: _base.Mobject) -> bool:
+    # Class dispatch only: Rust owns both retained-content bounds and points.
+    for module_name, type_name in (("_manim_typst", "_RetainedTextMobject"),
+                                   ("_noon_spatial", "_WorldMobject")):
+        content_type = getattr(sys.modules.get(module_name), type_name, ())
+        if isinstance(value, content_type):
+            return True
+    return False
+
+
+def _default_point_query_hooks(value: _base.Mobject) -> bool:
+    from inspect import getattr_static
+    boundary = (_compat.VMobject.get_points_defining_boundary
+                if isinstance(value, _compat.VMobject)
+                else _base.Mobject.get_points_defining_boundary)
+    return (
+        getattr_static(value, "get_family", None) is _base.Mobject.get_family
+        and getattr_static(value, "get_all_points", None) is _base.Mobject.get_all_points
+        and getattr_static(value, "get_points_defining_boundary", None) is boundary
+        and getattr_static(value, "get_extremum_along_dim", None) is _base.Mobject.get_extremum_along_dim
+    )
+
+
+def _point_boundary_query_kind(value: _base.Mobject):
+    if _uses_content_layout(value):
+        return "content"
+    if _is_shared_family(value):
+        from _manim_updaters import canonical_callback_phase_active
+        if canonical_callback_phase_active():
+            # Keep family layout reads behind their existing staged guard;
+            # selecting a point route must not inspect callback membership.
+            return None
+        handle = value._semantic_family_handle
+        available = hasattr(handle, "requiresContentBoundary")
+    else:
+        handle = _handle_for(value)
+        if _is_bound(value):
+            context = getattr(value._scene, "_canonical_authoring_context", None)
+            available = getattr(context, "queryMobjectRequiresContentBoundary", None) is not None
+        else:
+            available = handle is not None and hasattr(handle, "requiresContentBoundary")
+    if not available:
+        return None
+    if _default_point_query_hooks(value) and handle is not None:
+        # Wrapper subclasses do not identify retained content reliably (for
+        # example generic Table entries). Rust selects from current semantic
+        # content; no geometry or membership snapshot crosses this boundary.
+        return ("content" if bool(_point_query_observation(value, "RequiresContentBoundary"))
+                else "points")
+    return "points"
+
+
+def _point_boundary_queries_available(value: _base.Mobject) -> bool:
+    return _point_boundary_query_kind(value) == "points"
+
+
+def _get_center(self: _base.Mobject) -> Any:
+    kind = _point_boundary_query_kind(self)
+    if kind == "points":
+        from _manim_path_queries import critical_point
+        return critical_point(self, (0.0, 0.0, 0.0))
+    if kind == "content":
+        return _content_critical_point_3d(self, (0.0, 0.0, 0.0))
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
@@ -732,8 +790,16 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
 
-def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
-    """Read a leaf critical point from the authoritative semantic layout."""
+def _get_critical_point(self: _base.Mobject, direction: object) -> Any:
+    """Read full-coordinate point or retained-content bounds through Rust."""
+    kind = _point_boundary_query_kind(self)
+    if kind == "points":
+        from _manim_path_queries import critical_point
+        return critical_point(self, direction)
+    if kind == "content" or (
+        not isinstance(direction, _base.Vec2) and len(direction) == 3 and direction[2] != 0
+    ):
+        return _content_critical_point_3d(self, direction)
     axis = _base._as_vec2(direction)
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
@@ -755,6 +821,36 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     return _critical(self, axis)
 
 
+def _content_critical_point_3d(value: _base.Mobject, direction):
+    """Forward opaque-content XYZ queries without constructing point geometry."""
+    coordinates = _compat._manim_point3(direction)
+    family = _is_shared_family(value)
+    # Resolve the callback/live guard before creating an owned observation.
+    if family:
+        context = _group_live_layout_context(value)
+    else:
+        context = _bound_query_context(value)
+        if context is None:
+            context = _live_mutation_context(value)
+        elif not engine_call(context.requiresLiveMutationRouting):
+            # Scene.add may bind this identity before the first execution exists.
+            # Rust owns that lifecycle; the authored anchor is current until then.
+            context = None
+    if family:
+        handle = value._semantic_family_handle
+        anchor = engine_call(handle.layoutAnchor, _semantic_member_index(None))
+    else:
+        anchor = _layout_anchor(value)
+    if anchor is None:
+        raise RuntimeError("content critical points require a current shared Rust layout handle")
+    try:
+        result = (engine_call(anchor.contentCriticalPoint3D, *coordinates) if context is None
+                  else engine_call(context.queryLayoutContentCriticalPoint3D, anchor, *coordinates))
+        return _compat._manim_point3_result(result)
+    finally:
+        anchor.free()
+
+
 def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
     """Read Rust content extents without asking for vector boundary anchors."""
     if _is_shared_family(self):
@@ -767,6 +863,8 @@ def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
         return float(observed)
     handle = _handle_for(self)
     if handle is not None:
+        if dimension == 2:
+            return float(engine_call(engine_call(handle.layoutAnchor, None).dimensionLength, dimension))
         return float(handle.width if dimension == 0 else handle.height)
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
@@ -791,15 +889,17 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
-    offset = _base._as_vec2(direction)
+    from _manim_path_editing import _raw_point3
+    offset = _raw_point3(direction)
+    arguments = offset if offset[2] != 0.0 else offset[:2]
     context = _live_mutation_context(self)
     if context is not None:
         try:
-            engine_call(context.liveShift, handle, offset.x, offset.y)
+            engine_call(context.liveShift, handle, *arguments)
         except Exception as error:
             raise_engine_error(error)
         return self
-    engine_call(handle.shift, offset.x, offset.y)
+    engine_call(handle.shift, *arguments)
     return self
 
 
@@ -843,7 +943,7 @@ def _move_to(
 
 def _dimension_fit_source(self, dim, *, planar_depth=False):
     if dim not in ((0, 1, 2) if planar_depth else (0, 1)):
-        raise NotImplementedError("Noon currently exposes width/height fitting only")
+        raise NotImplementedError("dimension fitting requires X, Y or Z")
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("dimension fitting requires a shared Rust layout handle")
@@ -853,10 +953,13 @@ def _dimension_fit_source(self, dim, *, planar_depth=False):
 
 
 def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
-    _dimension_fit_source(self, dim)
-    factor = float(factor)
-    factors = (factor, 1.0) if dim == 0 else (1.0, factor)
-    return _planar_affine(self, "scale", factors, about_point, about_edge)
+    anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
+    arguments = (float(factor), dim, *_pivot_arguments_3d(about_point, about_edge))
+    if context is None:
+        engine_call(anchor.stretch, *arguments)
+    else:
+        engine_call(context.liveStretchLayout, anchor, *arguments)
+    return self
 
 
 def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
@@ -866,8 +969,8 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
     # zero. Avoid coercing them, but still let Rust validate the anchor and own
     # the no-op decision from its coherent fitting snapshot.
     zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
-    pivot = ((0., 0., False) if zero_extent
-             else _pivot_arguments(about_point, about_edge))
+    pivot = ((0., 0., 0., False) if zero_extent
+             else _pivot_arguments_3d(about_point, about_edge))
     length = 0.0 if zero_extent else float(length)
     try:
         if context is None:
@@ -875,7 +978,7 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
         else:
             engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch), *pivot)
     except Exception as error:
-        raise_engine_error(error)
+        _raise_boundary_error(error)
     return self
 
 
@@ -885,8 +988,8 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
     dim = _fitting_dimension_index(dim)
     anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
     zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
-    pivot = ((0., 0., False) if zero_extent
-             else _pivot_arguments(about_point, about_edge))
+    pivot = ((0., 0., 0., False) if zero_extent
+             else _pivot_arguments_3d(about_point, about_edge))
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("dimension matching requires a shared Rust target")
@@ -896,8 +999,18 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
         else:
             engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch), *pivot)
     except Exception as error:
-        raise_engine_error(error)
+        _raise_boundary_error(error)
     return self
+
+
+def _raise_boundary_error(error):
+    diagnostic = error
+    while diagnostic is not None:
+        if getattr(diagnostic, "code", None) == "path.unpaired_anchors":
+            raise ValueError("zip() argument 2 is shorter than argument 1") from error
+        diagnostic = (getattr(error, "rust_cause", None) if diagnostic is error
+                      else diagnostic.cause)
+    raise_engine_error(error)
 
 
 def _dimension_fit_extent(anchor, context, dim):
@@ -918,24 +1031,44 @@ def _fitting_dimension_index(dim):
 
 
 def _scale(self: _base.Mobject, factor: object, *, about_point=None, about_edge=None) -> _base.Mobject:
-    handle = _handle_for(self)
-    if handle is None:
+    if _handle_for(self) is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
-    if isinstance(factor, (tuple, list, _base.Vec2)):
-        value = _base._as_vec2(factor)
-    else:
+    return _scale_xyz(self, factor, about_point, about_edge)
+
+
+def _scale_factors_xyz(factor):
+    # Preserve Vec2/two-component authoring ergonomics; scalar and three-axis
+    # factors use the complete Manim coordinates. This is argument adaptation,
+    # never a frontend transform or family/bounds calculation.
+    if isinstance(factor, _base.Vec2):
+        return float(factor.x), float(factor.y), 1.0
+    try:
+        count = len(factor)
+    except (TypeError, AttributeError):
         scalar = float(factor)
-        value = _base.Vec2(scalar, scalar)
-    if about_point is not None or about_edge is not None:
-        return _planar_affine(self, "scale", (value.x, value.y), about_point, about_edge)
-    context = _live_mutation_context(self)
-    if context is not None:
-        try:
-            engine_call(context.liveScale, handle, value.x, value.y)
-        except Exception as error:
-            raise_engine_error(error)
-        return self
-    engine_call(handle.scale, value.x, value.y)
+        return scalar, scalar, scalar
+    if count == 1:
+        scalar = float(factor[0])
+        return scalar, scalar, scalar
+    if count in (2, 3):
+        return float(factor[0]), float(factor[1]), float(factor[2]) if count == 3 else 1.0
+    raise ValueError("scale factor must be scalar or have one, two or three components")
+
+
+def _scale_xyz(self, factor, about_point, about_edge):
+    anchor = _layout_anchor(self)
+    if anchor is None:
+        raise RuntimeError("scale requires the shared Rust authoring host")
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
+               else _live_mutation_context(self))
+    arguments = (*_scale_factors_xyz(factor), *_pivot_arguments_3d(about_point, about_edge))
+    try:
+        if context is None:
+            engine_call(anchor.scale3d, *arguments)
+        else:
+            engine_call(context.liveScaleLayout3d, anchor, *arguments)
+    except Exception as error:
+        _raise_boundary_error(error)
     return self
 
 
@@ -967,6 +1100,12 @@ def _rotate(
     if kwargs:
         raise NotImplementedError(f"unsupported Manim rotate option(s): {', '.join(sorted(kwargs))}")
     return _planar_affine(self, "rotate", (_compat._rotation_angle_2d(angle, axis),), about_point, about_edge)
+
+
+def _pivot_arguments_3d(about_point, about_edge):
+    from _manim_path_editing import _raw_point3
+    value = about_point if about_point is not None else (_base.ORIGIN if about_edge is None else about_edge)
+    return (*_raw_point3(value), about_point is not None)
 
 
 def _pivot_arguments(about_point, about_edge):
@@ -1456,8 +1595,8 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
     outer = _compat._as_color("outer gradient color", outer_color)
     radius = _compat._ir._finite_number("radius", radius)
     if center is None:
-        center = (*self.get_center(), 0.0)
-    elif isinstance(center, _base.Vec2):
+        center = self.get_center()
+    if isinstance(center, _base.Vec2):
         center = (center.x, center.y, 0.0)
     else:
         try:
@@ -2421,22 +2560,7 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
 
 
 def _group_scale(self: _compat.Group, factor: object, *, about_point=None, about_edge=None) -> _compat.Group:
-    scale = (_base._as_vec2(factor) if isinstance(factor, (tuple, list, _base.Vec2))
-             else _base.Vec2(float(factor), float(factor)))
-    if about_point is not None or about_edge is not None:
-        return _planar_affine(self, "scale", (scale.x, scale.y), about_point, about_edge)
-    handle = getattr(self, "_semantic_family_handle", None)
-    if handle is None:
-        raise RuntimeError("Group scale requires the shared Rust authoring host")
-    context = _group_live_layout_context(self)
-    try:
-        if context is not None:
-            engine_call(context.liveScaleFamily, handle, scale.x, scale.y)
-        else:
-            engine_call(handle.scale, scale.x, scale.y)
-    except Exception as error:
-        raise_engine_error(error)
-    return self
+    return _scale_xyz(self, factor, about_point, about_edge)
 
 
 def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
@@ -2455,20 +2579,20 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
             raise RuntimeError("Group shift requires the shared Rust authoring host")
         phase.shift_family(handle, _base._as_vec2(direction))
         return self
+    from _manim_path_editing import _raw_point3
+    offset = _raw_point3(direction)
+    arguments = offset if offset[2] != 0.0 else offset[:2]
     context = _group_target_context(self)
     if context is not None:
-        offset = _base._as_vec2(direction)
         try:
-            engine_call(context.liveShiftFamily, self._semantic_family_handle, offset.x, offset.y)
+            engine_call(context.liveShiftFamily, self._semantic_family_handle, *arguments)
         except Exception as error:
             raise_engine_error(error)
         return self
-    shared = _shared_family_layout(self, mutation=True)
-    if shared is None:
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
         raise RuntimeError("Group shift requires the shared Rust authoring host")
-    session = shared
-    offset = _base._as_vec2(direction)
-    engine_call(session.shiftBy, offset.x, offset.y)
+    engine_call(handle.shift, *arguments)
     return self
 
 
@@ -2647,13 +2771,18 @@ def _all_points_observation(value: _base.Mobject):
         family = value._semantic_family_handle
         context = _group_live_layout_context(value)
         if context is not None:
-            return engine_call(context.queryFamilyAllPoints, family)
-        return engine_call(family.allPoints)
+            return engine_call(context.queryFamilyAllPoints3D, family)
+        return engine_call(family.allPoints3D)
     return _typed_manim_observation(
         value,
-        "allPoints",
-        "queryMobjectAllPoints",
+        "allPoints3D",
+        "queryMobjectAllPoints3D",
     )
+
+
+def _point_array_observation(value: _base.Mobject):
+    """Return shared coordinates and dimensions from one Rust observation."""
+    return _point_query_observation(value, "PointArray")
 
 
 def _point_reduction_tree_observation(value: _base.Mobject):
@@ -2669,17 +2798,6 @@ def _point_reduction_tree_observation(value: _base.Mobject):
     if context is not None:
         return engine_call(context.queryFamilyPointReductionTree, family)
     return engine_call(family.pointReductionTree)
-
-
-def _merged_points_observation(value: _base.Mobject):
-    """Return Rust-flattened recursive points for one object or family."""
-    if not _is_shared_family(value):
-        return _all_points_observation(value)
-    family = value._semantic_family_handle
-    context = _group_live_layout_context(value)
-    if context is not None:
-        return engine_call(context.queryFamilyMergedPoints, family)
-    return engine_call(family.mergedPoints)
 
 
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
@@ -2835,12 +2953,16 @@ def _boundary_point_observation(
     )
 
 
+def _critical_point_observation(value: _base.Mobject, direction, vector_boundary):
+    return _point_query_observation(value, "CriticalPoint3D", *direction, vector_boundary)
+
+
 def _vector_boundary_points_observation(value: _base.Mobject):
-    return _point_query_observation(value, "VectorBoundaryPoints")
+    return _point_query_observation(value, "VectorBoundaryPoints3D")
 
 
 def _path_boundary_points_observation(value: _base.Mobject):
-    return _point_query_observation(value, "PathBoundaryPoints")
+    return _point_query_observation(value, "PathBoundaryPoints3D")
 
 
 def _path_boundary_extremum_along_dim_observation(
@@ -3512,7 +3634,9 @@ def _group_target_context(value: object) -> object | None:
     return context
 
 
-def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _compat.Group:
+def _group_copy_operation(
+    self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False
+) -> _base.Mobject:
     context = _group_target_context(self)
 
     def excluded_fields(value):
@@ -3537,7 +3661,12 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
 
     clone, pairs, family_members = _compat.prepare_family_wrapper_copy(self, excluded_fields)
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
-    if cyclic_replace:
+    if promote_own_points:
+        copied = _membership_call(
+            self, context, "livePromoteFamilyOwnPoints", "livePromoteMobjectOwnPoints",
+            "promoteOwnPoints", references,
+        )
+    elif cyclic_replace:
         copied = (
             engine_call(context.liveCyclicReplaceTarget, self._semantic_family_handle, references)
             if context is not None
@@ -3561,7 +3690,12 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             if owner is not None:
                 target._canonical_live_target_context = owner
     for target, members in family_members:
+        if promote_own_points and target is clone:
+            members = ()
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
+    if promote_own_points:
+        _fork_group_wrapper_references(self)
+        self._semantic_member_wrappers[_family_wrapper_key(clone)] = clone
     for source, target in pairs:
         latex = getattr(source, "_semantic_latex_handle", None)
         if latex is not None:

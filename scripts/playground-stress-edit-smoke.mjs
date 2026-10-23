@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import playwright from "playwright";
+import { installStressObservation } from "./playground-stress-observation.mjs";
 
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_STRESS_EDIT_PORT ?? "4191");
@@ -44,39 +45,7 @@ async function waitForServer() {
 }
 
 async function snapshot(page, { reset = false } = {}) {
-  return page.evaluate((reset) => {
-    // Observe the reset handler before its asynchronous cancellation/rebuild
-    // can replace the transient restart status between Playwright commands.
-    if (reset) document.querySelector(".reset-example").click();
-    const status = document.querySelector("#status");
-    const patch = document.querySelector("#patch-status");
-    const pane = document.querySelector(".editor-pane");
-    const scroller = document.querySelector("#scene-editor-panel .cm-scroller");
-    return {
-      runtimeState: status?.dataset.state ?? "",
-      runtimeStartup: status?.dataset.runtimeStartup ?? "",
-      liveAuthoring: status?.dataset.liveAuthoring ?? "",
-      rendererBackend: status?.dataset.rendererBackend ?? "",
-      executionMode: status?.dataset.executionMode ?? "",
-      presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
-      patchState: patch?.dataset.state ?? "",
-      patchText: patch?.value ?? patch?.textContent ?? "",
-      patchOperation: patch?.dataset.operation ?? "",
-      patchSequence: patch?.dataset.sequence ?? "",
-      patchRunGeneration: patch?.dataset.runGeneration ?? "",
-      exampleId: patch?.dataset.exampleId ?? "",
-      objectCount: document.querySelector("#metric-objects")?.value ?? "",
-      runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
-      runGeneration: window.__noonExampleGallery?.generationDiagnostics.runGeneration ?? null,
-      runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
-      editorHeight: pane?.getBoundingClientRect().height ?? 0,
-      bodyHeight: document.body.scrollHeight,
-      editorScrollHeight: scroller?.scrollHeight ?? 0,
-      editorClientHeight: scroller?.clientHeight ?? 0,
-      enhanced: document.querySelector("#scene-editor-panel .python-code-editor[data-editor-ready='true']") !== null,
-      textareaHidden: document.querySelector("#python-scene-source")?.hidden ?? false,
-    };
-  }, reset);
+  return page.evaluate((reset) => window.__noonStressObservation.snapshot({ reset }), reset);
 }
 
 async function waitForPreloadedRuntime(page) {
@@ -175,6 +144,7 @@ async function waitForSupersedingRun(page, previousGeneration) {
 }
 
 async function replaceSource(editor, page, nextSource) {
+  await page.evaluate((source) => window.__noonStressObservation.expectSourceEdit(source), nextSource);
   await editor.click();
   await page.keyboard.press(selectAllShortcut);
   await page.keyboard.insertText(nextSource);
@@ -183,6 +153,7 @@ async function replaceSource(editor, page, nextSource) {
     nextSource,
     { timeout: 15_000 },
   );
+  return page.evaluate(() => window.__noonStressObservation.editedSnapshot());
 }
 
 const diagnostics = {
@@ -220,6 +191,7 @@ try {
   });
   diagnostics.browser = await browser.version();
 
+  await page.addInitScript(installStressObservation);
   await page.addInitScript(() => {
     window.addEventListener("DOMContentLoaded", () => {
       const status = document.querySelector("#status");
@@ -303,8 +275,7 @@ try {
   const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
   const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
-  await replaceSource(editor, page, rows5Source);
-  diagnostics.snapshots.rows5Edited = await snapshot(page);
+  diagnostics.snapshots.rows5Edited = await replaceSource(editor, page, rows5Source);
   assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/i);
   assert.equal(diagnostics.snapshots.rows5Edited.objectCount, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows5Edited.runInFlight, false);
@@ -323,8 +294,7 @@ try {
   assert.ok(diagnostics.snapshots.resetDuringRows5.runGeneration > sourceOwnedGeneration);
   assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/i);
 
-  await replaceSource(editor, page, rows7Source);
-  diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
+  diagnostics.snapshots.rows7EditedDuringRows5 = await replaceSource(editor, page, rows7Source);
   assert.ok(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration > sourceOwnedGeneration);
   assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/i);
 
@@ -343,8 +313,7 @@ try {
   );
 
   const rows7ObjectCount = diagnostics.snapshots.rows7Rerun.objectCount;
-  await replaceSource(editor, page, rows20Source);
-  diagnostics.snapshots.rows20Edited = await snapshot(page);
+  diagnostics.snapshots.rows20Edited = await replaceSource(editor, page, rows20Source);
   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
   assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/i);
   await page.keyboard.press(runShortcut);

@@ -27,10 +27,10 @@ class LiveAffineCallbacks(Scene):
 
         def lift(mobject, _dt):
             center = mobject.get_center()
-            mobject.move_to((center.x, 1.0, 0.0))
+            mobject.move_to((center[0], 1.0, 0.0))
 
         def style_after_lift(mobject, _dt):
-            assert mobject.get_center().y == 1.0
+            assert mobject.get_center()[1] == 1.0
             mobject.set_object_opacity(0.5)
 
         def accumulate_drift(mobject, dt):
