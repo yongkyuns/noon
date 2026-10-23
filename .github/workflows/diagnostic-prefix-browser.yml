@@ -1,0 +1,26 @@
+name: Diagnostic prefix browser
+on:
+  push:
+    branches: [diagnostic/noon-prefix-browser-20261023]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Retain exact public product source
+        run: |
+          mkdir -p /tmp/noon-prefix-browser
+          git archive --format=tar.gz a83e4ee62932cc062d41c6d2d5fe5fc38fef29e5 > /tmp/noon-prefix-browser/source.tar.gz
+          printf '%s\n' a83e4ee62932cc062d41c6d2d5fe5fc38fef29e5 > /tmp/noon-prefix-browser/base.txt
+          sha256sum /tmp/noon-prefix-browser/source.tar.gz > /tmp/noon-prefix-browser/sha256.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prefix-browser-source
+          path: /tmp/noon-prefix-browser
+          retention-days: 3
