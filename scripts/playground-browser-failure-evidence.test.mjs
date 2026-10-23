@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { captureAttemptedPage, captureChildProcessDiagnostics, captureNativeProcessLog, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses } from "./playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, captureChildProcessDiagnostics, captureNativeProcessLog, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses, readNativeProcessLog } from "./playground-browser-failure-evidence.mjs";
 import { collectWebKitCrashReports } from "./playground-browser-support.mjs";
 
 async function nativeArtifactFixture(t) {
@@ -30,6 +30,72 @@ test("missing IPS evidence retains native output for known PIDs and the actual q
   assert.deepEqual([result.startedAtMs, result.endedAtMs], [1101, 2501]);
   assert.deepEqual([result.queriedStartAtMs, result.queriedEndAtMs], [1000, 3000]);
   assert.deepEqual(await readFile(path.join(options.artifacts, result.file)), bytes);
+  assert.equal(result.truncated, false);
+  assert.equal(result.retained, "tail");
+  assert.equal(result.observedBytes, bytes.length);
+});
+
+test("verbose native logging preserves the final event without stopping the query at capacity", async t => {
+  const options = await nativeArtifactFixture(t);
+  const finalEvent = '{"processIdentifier":222,"eventMessage":"WebContent terminated"}\n';
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, { launch: () => spawn(process.execPath, ["-e", `
+      process.stdout.write(Buffer.alloc(2 * 1024 * 1024, 120));
+      process.stdout.write(${JSON.stringify(finalEvent)});
+    `], { stdio: ["ignore", "pipe", "pipe"] }) }),
+  });
+  const bytes = await readFile(path.join(options.artifacts, result.file));
+  assert.equal(result.error, undefined);
+  assert.equal(bytes.length, 128 * 1024);
+  assert.equal(result.observedBytes, 2 * 1024 * 1024 + Buffer.byteLength(finalEvent));
+  assert.equal(result.truncated, true);
+  assert.equal(result.retained, "tail");
+  assert.ok(bytes.toString().endsWith(finalEvent));
+});
+
+test("native query failures retain the bounded tail and final stderr", async t => {
+  const options = await nativeArtifactFixture(t);
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, { launch: () => spawn(process.execPath, ["-e", `
+      process.stdout.write(Buffer.alloc(200_000, 120));
+      process.stdout.write("last native event\\n");
+      process.stderr.write("native log service failed");
+      process.exitCode = 3;
+    `], { stdio: ["ignore", "pipe", "pipe"] }) }),
+  });
+  const bytes = await readFile(path.join(options.artifacts, result.file));
+  assert.equal(bytes.length, 128 * 1024);
+  assert.ok(bytes.toString().endsWith("last native event\n"));
+  assert.equal(result.truncated, true);
+  assert.match(result.error, /code 3/);
+  assert.equal(result.stderr, "native log service failed");
+});
+
+test("a stalled native query is killed at its fixed deadline with partial evidence", async t => {
+  const options = await nativeArtifactFixture(t);
+  let child;
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, { timeoutMs: 500,
+      launch: () => (child = spawn(process.execPath, ["-e", `
+        process.stdout.write("last observed native event\\n");
+        setInterval(() => {}, 1000);
+      `], { stdio: ["ignore", "pipe", "pipe"] })),
+    }),
+  });
+  assert.match(result.error, /timed out after 500 ms/);
+  assert.equal(child.signalCode, "SIGKILL");
+  assert.equal(await readFile(path.join(options.artifacts, result.file), "utf8"), "last observed native event\n");
+});
+
+test("an unavailable native log executable reports its failure without hanging", async t => {
+  const options = await nativeArtifactFixture(t);
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, {
+      launch: () => spawn(path.join(options.artifacts, "missing-native-log"), [], { stdio: ["ignore", "pipe", "pipe"] }),
+    }),
+  });
+  assert.match(result.error, /ENOENT/);
+  assert.equal(result.bytes, 0);
   assert.equal(result.truncated, false);
 });
 
@@ -64,12 +130,12 @@ test("native log collection preserves existing PID-qualified IPS bytes", async t
 test("native log errors retain bounded partial output and never become crash evidence", async t => {
   const options = await nativeArtifactFixture(t);
   const error = Object.assign(new Error("native log output exceeded capacity"), {
-    code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stdout: Buffer.alloc(150_000, 120), stderr: "log collector diagnostic",
+    code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stdout: Buffer.concat([Buffer.alloc(150_000, 120), Buffer.from("end")]), stderr: "log collector diagnostic",
   });
   const result = await captureNativeProcessLog({ ...options, readNativeLog: async () => { throw error; } });
   const saved = await readFile(path.join(options.artifacts, result.file));
   assert.equal(saved.length, 128 * 1024);
-  assert.ok(saved.equals(error.stdout.subarray(0, saved.length)));
+  assert.ok(saved.equals(error.stdout.subarray(error.stdout.length - saved.length)));
   assert.equal(result.truncated, true);
   assert.match(result.error, /exceeded capacity/);
   assert.equal(result.stderr, "log collector diagnostic");

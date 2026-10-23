@@ -125,6 +125,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/pyodide-resource-cache.test.mjs
   node --test scripts/direct-program-sample.test.mjs
   node --test scripts/playground-cold-start-memory.test.mjs
+  node --test scripts/playground-browser-failure-evidence.test.mjs
   node --test scripts/webgpu-device-capture.test.mjs
   node --test scripts/manim-raster-support.test.mjs
   node --test scripts/live-coordinate-checks.test.mjs

@@ -51,12 +51,24 @@ Note tails and reflections wrap into the beginning of the buffer. Loop the
 complete WAV/PCM without dropping a frame or fading each cycle. The first and
 last samples are consecutive waveform samples, not duplicate endpoints.
 
-The loop begins with existing tails already sounding. Apply a short gain ramp
-at an actual playback start, stop, or discontinuous seek to avoid a transient:
-roughly 50–100 ms in and 150–250 ms out are starting points. This is output
-transition handling, separate from authored timeline fades. Compressed listening
-previews may include intro/outro fades and encoder padding; use the full WAV/PCM
-as the canonical loop.
+The loop begins with existing tails already sounding. The direct browser adapter
+uses a 40 ms output entrance and a release of up to 60 ms for ordinary pause or
+seek, separately from the authored timeline fades. Viewer mute and volume use
+20 ms ramps. These values smooth control changes without changing the source
+offset, authored duration, or the loop boundary. Human listening review remains
+open; numerical and browser checks do not establish final musical quality.
+
+A new source starts at its exact playback anchor and advances silently while the
+previous source releases; its output entrance follows that release. Rapid seeks
+replace the still-muted source, so at most one current graph and one releasing
+graph are retained. The native source-ended event cleans up the release, without
+a polling timer or another scene clock. Pausing freezes picture time immediately
+while the old device output finishes its bounded release. Hidden-page,
+interruption, failure, retirement, and exact finite-completion cancellation
+remain immediate.
+
+Compressed listening previews may include intro/outro fades and encoder padding;
+use the full WAV/PCM as the canonical loop.
 
 ## Declare audio in a Rust scene
 

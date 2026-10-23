@@ -1081,9 +1081,10 @@ mod wasm {
             self.pending_scene_control = None;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
-            self.stop_audio();
+            self.release_audio()?;
             let camera_result = camera.and_then(|camera| self.sync_camera(camera));
             if let Err(error) = camera_result {
+                self.stop_audio();
                 if self.source.session().has_audio() {
                     self.direct_paused = true;
                 }
@@ -1091,6 +1092,7 @@ mod wasm {
             }
             if let Some(output) = &mut self.audio_output {
                 if let Err(error) = output.preload(self.source.session()) {
+                    self.stop_audio();
                     self.direct_paused = true;
                     return Err(error);
                 }
@@ -1135,25 +1137,32 @@ mod wasm {
                 .then(|| self.direct_wake_clock.scene_time_at(wall_time_ms))
                 .flatten();
             self.pending_scene_control = None;
-            // Silence immediately even if a pending presentation prevents a
-            // newer observation. Its committed frame remains the resume point.
+            // Freeze authored time now and release ordinary playback briefly.
+            // Hidden-page and failure cancellation still silence immediately.
             self.direct_paused = true;
-            self.stop_audio();
+            self.release_audio()?;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
-            if let Some(target) = target {
-                if !self.source.session().wake_state().frame_pending() {
-                    let target = self.bound_transport_target(
-                        self.source.session().bounded_realtime_target(target),
-                    );
-                    self.source.drive_to(target)?;
-                    let camera = self
-                        .source
-                        .session()
-                        .inspection_camera()
-                        .map_err(js_error)?;
-                    self.sync_camera(camera)?;
+            let observation: Result<(), JsValue> = (|| {
+                if let Some(target) = target {
+                    if !self.source.session().wake_state().frame_pending() {
+                        let target = self.bound_transport_target(
+                            self.source.session().bounded_realtime_target(target),
+                        );
+                        self.source.drive_to(target)?;
+                        let camera = self
+                            .source
+                            .session()
+                            .inspection_camera()
+                            .map_err(js_error)?;
+                        self.sync_camera(camera)?;
+                    }
                 }
+                Ok(())
+            })();
+            if let Err(error) = observation {
+                self.stop_audio();
+                return Err(error);
             }
             Ok(self.source.session().wake_state().frame_pending())
         }
@@ -1177,7 +1186,8 @@ mod wasm {
                     "enable audio from a user gesture before resuming playback",
                 ));
             }
-            self.stop_audio();
+            // A preceding pause may still own one device-only release. The
+            // next anchor starts at its exact source offset behind that bus.
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
             self.direct_paused = false;
@@ -1199,7 +1209,10 @@ mod wasm {
         pub fn set_audio_volume(&mut self, volume: f64) -> Result<(), JsValue> {
             self.audio_controls.set_volume(volume).map_err(js_error)?;
             if let Some(output) = &mut self.audio_output {
-                output.set_controls(self.audio_controls);
+                if let Err(error) = output.set_controls(self.audio_controls) {
+                    self.pause_audio_for_host_failure();
+                    return Err(error);
+                }
             }
             Ok(())
         }
@@ -1210,11 +1223,15 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = setAudioMuted)]
-        pub fn set_audio_muted(&mut self, muted: bool) {
+        pub fn set_audio_muted(&mut self, muted: bool) -> Result<(), JsValue> {
             self.audio_controls.set_muted(muted);
             if let Some(output) = &mut self.audio_output {
-                output.set_controls(self.audio_controls);
+                if let Err(error) = output.set_controls(self.audio_controls) {
+                    self.pause_audio_for_host_failure();
+                    return Err(error);
+                }
             }
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = audioMuted)]
@@ -1229,8 +1246,8 @@ mod wasm {
                 .is_some_and(WebAudioOutput::is_ready)
         }
 
-        /// Count retained device voices, including scheduled future voices. This
-        /// read-only diagnostic never determines authored playback behavior.
+        /// Count retained device voices, including future voices and the one
+        /// bounded release graph. This diagnostic never drives authored time.
         #[wasm_bindgen(js_name = audioVoiceCount)]
         pub fn audio_voice_count(&self) -> usize {
             self.audio_output
@@ -1878,7 +1895,7 @@ mod wasm {
                 PlaybackControl::NextSection => {
                     self.seek_section(false, wall_time)?;
                 }
-                PlaybackControl::ToggleAudioMuted => self.set_audio_muted(!self.audio_muted()),
+                PlaybackControl::ToggleAudioMuted => self.set_audio_muted(!self.audio_muted())?,
             }
             Ok(())
         }
@@ -1931,6 +1948,23 @@ mod wasm {
             if let Some(output) = &mut self.audio_output {
                 output.stop();
             }
+        }
+
+        fn release_audio(&mut self) -> Result<(), JsValue> {
+            if web_sys::window()
+                .and_then(|window| window.document())
+                .is_some_and(|document| document.hidden())
+            {
+                self.stop_audio();
+                return Ok(());
+            }
+            if let Some(output) = &mut self.audio_output {
+                if let Err(error) = output.release() {
+                    self.pause_audio_for_host_failure();
+                    return Err(error);
+                }
+            }
+            Ok(())
         }
 
         fn pause_audio_for_host_failure(&mut self) {
