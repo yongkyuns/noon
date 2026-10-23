@@ -1,4 +1,6 @@
 #[cfg(any(target_arch = "wasm32", test))]
+mod audio;
+#[cfg(any(target_arch = "wasm32", test))]
 mod effects;
 mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
@@ -750,6 +752,7 @@ impl CanonicalAuthoringScene {
             duration,
             transport_session,
         )?;
+        player.set_section_navigation(self.scene.section_navigation());
         // Do not change pre-existing input/callback admission for scenes with
         // no drag declaration. A nonempty source declaration alone enables
         // the drag policy on a freshly lowered player.
@@ -1906,6 +1909,24 @@ impl CanonicalAuthoringScene {
         self.require_pre_execution_signal_authoring()?;
         self.scene.wait(duration)?;
         Ok(self.scene.time())
+    }
+
+    /// Explicit scalar declaration on Scene's existing authored cursor, with
+    /// no execution bootstrap or speculative host-language continuation.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn declare_value(
+        &mut self,
+        tracker: &noon::ValueTracker,
+        target: f64,
+        run_time: f64,
+        rate_function: noon_core::RateFunction,
+    ) -> Result<(), AuthoringFailure> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene
+            .play_value(tracker, target)
+            .rate_func(rate_function)
+            .run_time(run_time)
+            .map_err(Into::into)
     }
 
     /// Complete one canonical continuation wait in the retained live session.
@@ -4043,6 +4064,7 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod audio;
     mod camera_profile;
     mod matrix_family;
     mod numbers;

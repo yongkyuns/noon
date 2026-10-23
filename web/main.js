@@ -659,9 +659,11 @@ async function ensureRuntimeReady({
 
       patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
       playbackControls?.sync({
+        ...initialState,
+        hasAudio: initialState.hasAudio ?? false,
         time: initialState.time,
         playing: initialState.playing,
-        durationSeconds: loopDurationSeconds,
+        durationSeconds: initialState.hasAudio ? initialState.durationSeconds : loopDurationSeconds,
         canUndoTranslationDrag: initialState.canUndoTranslationDrag ?? false,
       });
       startMetricsPolling();
@@ -708,9 +710,11 @@ async function ensureExecutionReady() {
   status.dataset.executionMode = player.mode;
   const playbackState = await player.state();
   playbackControls?.sync({
+    ...playbackState,
+    hasAudio: playbackState.hasAudio ?? false,
     time: playbackState.time,
     playing: playbackState.playing,
-    durationSeconds: playbackDurationSeconds,
+    durationSeconds: playbackState.hasAudio ? playbackState.durationSeconds : playbackDurationSeconds,
     canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
   });
 }
@@ -1197,9 +1201,11 @@ async function runScene() {
         playbackDurationSeconds = authored.duration;
       }
       playbackControls?.sync({
+        ...result,
+        hasAudio: result.hasAudio ?? false,
         time: result.time,
         playing: result.playing,
-        durationSeconds: playbackDurationSeconds,
+        durationSeconds: result.hasAudio ? result.durationSeconds : playbackDurationSeconds,
         canUndoTranslationDrag: result.canUndoTranslationDrag ?? false,
       });
 

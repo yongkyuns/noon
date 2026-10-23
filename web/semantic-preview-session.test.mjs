@@ -189,13 +189,96 @@ test("static source attaches its completed context paused and samples only time 
   assert.deepEqual(calls, ["prepare", "static:start", 0, 0]);
 });
 
-test("completed timed source cannot bypass the live continuation contract", async (t) => {
+test("completed continuation cannot bypass its original forward execution", async (t) => {
   const { session, calls } = fixture(t, { authoring: {
     run: async () => ({ kind: "semantic_scene", duration: 1,
-      semanticExecution: { contextId: "finished", continuationGeneration: null } }),
+      semanticExecution: { contextId: "finished", continuationGeneration: 1 } }),
   } });
   await assert.rejects(session.open("timed scene"), /no semantic continuation/);
   assert.deepEqual(calls, ["authoring:terminate"]);
+});
+
+test("finite time-zero source requires Rust admission and keeps authoring completion distinct from playback", async (t) => {
+  const descriptor = { contextId: "finite-context", continuationGeneration: null };
+  const { session, calls } = fixture(t, {
+    authoring: { run: async () => ({ kind: "semantic_scene", duration: 30, semanticExecution: descriptor }) },
+    execution: {
+      startSemanticExecution: async (actual, options) => {
+        assert.deepEqual(actual, descriptor);
+        assert.equal(options.initiallyPaused, true);
+        assert.equal(options.pacing, undefined);
+        assert.equal(options.loopDurationSeconds, 30);
+        calls.push("finite:start");
+        return { render: { time: 0 }, engine: { finiteSourceDuration: 30 } };
+      },
+      advanceTo: async (time, options) => {
+        calls.push({ time, options });
+        return options.stopAtSourceCompletion
+          ? { time: 30, sourceCompleted: true } : { time };
+      },
+      sampleToAuthoredTime: async () => { throw new Error("finite source has no continuation"); },
+    },
+  });
+  const ready = await session.open("finite declarations");
+  assert.equal(ready.sourceState, "completed");
+  assert.equal(ready.authoredDuration, 30);
+  assert.equal(ready.frame.publishedTime, 0);
+  assert.equal(ready.frame.sourceCompleted, undefined);
+  const middle = await session.sample(8);
+  assert.equal(middle.frame.publishedTime, 8);
+  assert.equal(middle.frame.sourceCompleted, undefined);
+  const requested = 30 + 1e-9;
+  const completed = await session.sample(requested, { stopAtSourceCompletion: true });
+  assert.deepEqual(calls.slice(-1), [{ time: requested, options: { stopAtSourceCompletion: true } }]);
+  assert.equal(completed.frame.requestedTime, requested);
+  assert.equal(completed.frame.publishedTime, 30);
+  assert.equal(completed.frame.sourceCompleted, true);
+});
+
+test("positive duration and a completed descriptor cannot invent finite source admission", async (t) => {
+  for (const finiteSourceDuration of [undefined, null, 0, 2, NaN]) {
+    const { session, calls } = fixture(t, {
+      authoring: { run: async () => ({ kind: "semantic_scene", duration: 1,
+        semanticExecution: { contextId: "finished", continuationGeneration: null } }) },
+      execution: { startSemanticExecution: async () => {
+        calls.push("candidate:start");
+        return { render: { time: 0 }, engine: { finiteSourceDuration } };
+      } },
+    });
+    await assert.rejects(session.open("unadmitted timed context"), /Rust finite time-zero admission/);
+    assert.equal(session.snapshot.frame, null);
+    assert.deepEqual(calls, ["prepare", "candidate:start", "execution:terminate", "authoring:terminate"]);
+  }
+});
+
+test("an authored trailing wait cannot extend the Rust-retained finite timeline", async (t) => {
+  const { session, calls } = fixture(t, {
+    authoring: { run: async () => ({ kind: "semantic_scene", duration: 2,
+      semanticExecution: { contextId: "finite-with-wait-tail", continuationGeneration: null } }) },
+    execution: { startSemanticExecution: async (_descriptor, options) => {
+      assert.equal(options.loopDurationSeconds, 2);
+      calls.push("candidate:start");
+      return { render: { time: 0 }, engine: { finiteSourceDuration: 1 } };
+    } },
+  });
+  await assert.rejects(session.open("retained animation followed by authored wait"),
+    /Rust finite time-zero admission/);
+  assert.equal(session.snapshot.frame, null);
+  assert.deepEqual(calls, ["prepare", "candidate:start", "execution:terminate", "authoring:terminate"]);
+});
+
+test("a completed timed context cannot reuse an endpoint as its initial frame", async (t) => {
+  const { session, calls } = fixture(t, {
+    authoring: { run: async () => ({ kind: "semantic_scene", duration: 1,
+      semanticExecution: { contextId: "finite-endpoint", continuationGeneration: null } }) },
+    execution: { startSemanticExecution: async () => {
+      calls.push("candidate:start");
+      return { render: { time: 1 }, engine: { finiteSourceDuration: 1 } };
+    } },
+  });
+  await assert.rejects(session.open("finished timed context"), /original authored time-zero/);
+  assert.equal(session.snapshot.frame, null);
+  assert.deepEqual(calls, ["prepare", "candidate:start", "execution:terminate", "authoring:terminate"]);
 });
 
 test("a completed static context cannot publish a nonzero initial time", async (t) => {
@@ -207,7 +290,7 @@ test("a completed static context cannot publish a nonzero initial time", async (
       return { render: { time: 1.2 } };
     } },
   });
-  await assert.rejects(session.open("static scene"), /only its authored time-zero/);
+  await assert.rejects(session.open("static scene"), /original authored time-zero/);
   assert.equal(session.snapshot.frame, null);
   assert.deepEqual(calls, ["prepare", "static:start", "execution:terminate", "authoring:terminate"]);
 });

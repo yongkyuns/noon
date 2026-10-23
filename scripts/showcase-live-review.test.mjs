@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
+import { runInNewContext } from "node:vm";
+import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, assertNaturalFirstPassPublication, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -173,6 +174,158 @@ test("ordinary Run helper applies the same deadline and state snapshot to each e
   let stateCalls = 0;
   assert.deepEqual(await readLiveState({ evaluate: async () => { stateCalls += 1; return state; } }), state);
   assert.equal(stateCalls, 1);
+});
+
+function preparedAudioPage({ run, observations = [] } = {}) {
+  const calls = [], ready = [];
+  let observationIndex = 0;
+  let current = {};
+  const gallery = {
+    selectedExampleId: "showcase-example",
+    async run() {
+      calls.push("run");
+      return run ?? { stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8 } };
+    },
+    get runInFlight() { return current.runInFlight ?? false; },
+    async executionMetrics() { return { metrics: { time: current.publishedTime, objectCount: 55 } }; },
+  };
+  const browser = {
+    window: { __noonExampleGallery: gallery },
+    document: { querySelector(selector) {
+      if (selector === "#patch-status") return {
+        dataset: { state: current.patchState ?? "applied" }, value: current.patchError,
+      };
+      if (selector === "#status") return { dataset: { rendererBackend: "WebGL2" } };
+      if ([".playback-toggle", ".playback-restart", ".playback-scrubber"].includes(selector)) {
+        return { disabled: false };
+      }
+      assert.equal(selector, ".playback-controls");
+      return { dataset: { controllable: "true", busy: "false", playing: "false",
+        elapsedSeconds: String(current.elapsed), ...current.controls } };
+    } },
+  };
+  const evaluate = async (fn, argument) => {
+    if (argument !== undefined) {
+      if (observationIndex === 0) calls.push("published endpoint");
+      current = observations[observationIndex++] ?? {};
+    }
+    const value = await runInNewContext(`(${fn.toString()})(argument)`, { ...browser, argument });
+    if (argument !== undefined) ready.push(value);
+    return value;
+  };
+  return {
+    calls, ready,
+    page: {
+      evaluate,
+      getByRole(role, options) {
+        assert.equal(role, "button");
+        assert.deepEqual(options, { name: "Play animation", exact: true });
+        return { async click() { calls.push("trusted Play"); } };
+      },
+      async waitForTimeout(milliseconds) {
+        assert.equal(milliseconds, 25);
+        if (observationIndex >= observations.length) throw new Error("no completed published endpoint");
+      },
+      waitForFunction() { throw new Error("async worker observations must poll their resolved value"); },
+    },
+  };
+}
+
+test("finite audio first pass uses trusted Play and waits for the unseeked published endpoint", async () => {
+  const { page, calls, ready } = preparedAudioPage({ observations: [
+    { elapsed: 0, publishedTime: 0 },
+    { elapsed: 4, publishedTime: 4, controls: { playing: "true" } },
+    { elapsed: 8, publishedTime: 8, controls: { busy: "true" } },
+    { elapsed: 8, publishedTime: 8, runInFlight: true },
+    { elapsed: 8, publishedTime: 8, controls: { controllable: "false" } },
+    { elapsed: 7.999, publishedTime: 8 },
+    { elapsed: 8, publishedTime: 7.999 },
+    { elapsed: 8 },
+    { elapsed: 8, publishedTime: 8 },
+  ] });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
+  assert.deepEqual(ready, [false, false, false, false, false, false, true, true, true]);
+});
+
+test("natural finite playback accepts a declared terminal hold and retains its real publication", async () => {
+  const publication = 29.012699999999256; // Observed settled WebGL frame with the Rust/UI clock at 30.
+  const lesson = { id: "showcase-background-music", duration: 30, still_intervals: [[29, 30]] };
+  const { page, calls, ready } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 30 } },
+    observations: [
+      { elapsed: 29, publishedTime: publication },
+      { elapsed: 30, publishedTime: 28.99 },
+      { elapsed: 30, publishedTime: 30.01 },
+      { elapsed: 30, publishedTime: publication },
+    ],
+  });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100, lesson)));
+  assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
+  assert.deepEqual(ready, [false, true, true, true]);
+  const observed = await readLiveState(page);
+  assert.equal(observed.controls.elapsedSeconds, "30");
+  assert.equal(observed.publishedTime, publication);
+});
+
+test("natural first-pass publication rejects stale-before-hold and future frames", () => {
+  const lesson = { id: "terminal-hold", duration: 30, still_intervals: [[29, 30]] };
+  for (const time of [29, 29.012699999999256, 30]) {
+    assertNaturalFirstPassPublication(lesson, 30, time);
+  }
+  for (const time of [28.99, 30.01, 30 + 1e-8, undefined, null, NaN, "30"]) {
+    assert.throws(() => assertNaturalFirstPassPublication(lesson, 30, time));
+  }
+  assert.throws(() => assertNaturalFirstPassPublication(lesson, 29, 29));
+});
+
+test("moving natural endpoints retain exact publication even inside capture rounding tolerance", () => {
+  const lesson = { id: "moving-endpoint", duration: 23.4, still_intervals: [[10, 11]] };
+  const actual = 23.400000000000002;
+  assertNaturalFirstPassPublication(lesson, actual, actual);
+  assertNaturalFirstPassPublication(lesson, actual, 23.4);
+  for (const time of [11, actual - 0.001, actual - 1e-8, actual + 1e-8]) {
+    assert.throws(() => assertNaturalFirstPassPublication(lesson, actual, time));
+  }
+});
+
+test("ordinary Scene.construct completion does not add Play or change its first pass", async () => {
+  const { page, calls } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, time: 8, playing: false } },
+  });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.deepEqual(calls, ["run"]);
+});
+
+test("finite audio preparation must be current, paused at zero, and have a real duration", async () => {
+  for (const change of [{ time: 1 }, { playing: true }, { durationSeconds: 0 },
+    { durationSeconds: NaN }, { durationSeconds: Infinity }, { durationSeconds: "8" }]) {
+    const { page, calls } = preparedAudioPage({ run: {
+      stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8, ...change },
+    } });
+    await assert.rejects(runOrdinaryGallery(page, 100), /finite audio Run/);
+    assert.deepEqual(calls, ["run"]);
+  }
+  const { page, calls } = preparedAudioPage({ run: {
+    stale: true, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8 },
+  } });
+  await assert.rejects(runOrdinaryGallery(page, 100), /superseded/);
+  assert.deepEqual(calls, ["run"]);
+});
+
+test("finite playback errors fail and the ordinary Run deadline includes Play and endpoint publication", async () => {
+  const failed = preparedAudioPage({ observations: [{ patchState: "error", patchError: "audio playback failed" }] });
+  await assert.rejects(runOrdinaryGallery(failed.page, 100), /audio playback failed/);
+  for (const stage of ["click", "endpoint"]) {
+    const { page } = preparedAudioPage();
+    if (stage === "click") page.getByRole = () => ({ click: () => new Promise(() => {}) });
+    else {
+      const evaluate = page.evaluate;
+      page.evaluate = (predicate, argument) => argument === undefined
+        ? evaluate(predicate, argument) : new Promise(() => {});
+    }
+    await assert.rejects(runOrdinaryGallery(page, 5), /review deadline/);
+  }
 });
 
 test("first-pass errors and incomplete execution fail before replay is attempted", () => {

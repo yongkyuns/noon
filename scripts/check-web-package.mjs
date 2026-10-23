@@ -14,6 +14,23 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
 ]);
 
 const expectedJavascriptSurface = [
+  "export class WasmAudioSource",
+  "export class WasmAudioClipOptions",
+  "export class WasmAudioClipHandle",
+  "export class WasmWorkerAudioOutput",
+  "audioResourceBundleBytes(",
+  "audioAnchorJson(",
+  "finiteAudioDuration(",
+  "freshFiniteSourceDuration(",
+  "finiteSourceProbeJson(",
+  "seekSectionDeltaJson(",
+  "declareValue(",
+  "beginFiniteExportJson(",
+  "finiteExportStatusJson(",
+  "observeFiniteExportJson(",
+  "acknowledgeFiniteExportJson(",
+  "mixFiniteExportAudioBlock(",
+  "cancelFiniteExport(",
   "requiresContentBoundary(",
   "queryFamilyRequiresContentBoundary(",
   "queryMobjectRequiresContentBoundary(",

@@ -224,6 +224,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+      - name: Check Python gallery background audio
+        env:
+          NOON_PYTHON_AUDIO_ARTIFACTS: ${{ runner.temp }}/python-background-audio
+        run: timeout --signal=TERM 240s node scripts/python-background-audio-smoke.mjs
+
+      - name: Retain Python background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-background-audio-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/python-background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Check Manim-style authoring
         id: manim-authoring
         run: |

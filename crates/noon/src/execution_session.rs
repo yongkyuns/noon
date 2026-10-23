@@ -1105,20 +1105,24 @@ impl ExecutionSession {
     }
 
     /// Finite endpoint of the current immutable timeline, when the whole
-    /// session admits that observation. Source continuations, scalar schedules,
-    /// and required callbacks need their own completion protocol.
+    /// session admits that observation. Immutable scalar tracks participate via
+    /// their existing event schedule. Source continuations and required
+    /// callbacks retain their explicit completion protocol.
     ///
     /// Hosts query this at admission, not on each frame. The answer comes from
     /// the existing scheduler and does not create another duration authority.
     pub fn finite_timeline_end_time(&self) -> Option<f64> {
         if self.has_required_callbacks()
             || self.pending_segment_completion.is_some()
-            || !self.signal_timeline.is_empty()
             || self.derived_display_plan.is_some()
         {
             return None;
         }
-        self.runtime.finite_timeline_end_time()
+        Some(
+            self.runtime
+                .finite_timeline_end_time()?
+                .max(self.signal_timeline.finite_end_time()?),
+        )
     }
 
     /// Device-neutral output instructions at the current committed scene time.
@@ -1134,6 +1138,18 @@ impl ExecutionSession {
         noon_runtime::AudioPlaybackError,
     > {
         self.runtime.audio_playback()
+    }
+
+    /// Read-only audio projection for one accepted authored-time sample or
+    /// immutable resource preparation across a real host boundary.
+    pub fn audio_playback_at(
+        &self,
+        time: f64,
+    ) -> Result<
+        impl Iterator<Item = noon_runtime::AudioPlaybackClip<'_>>,
+        noon_runtime::AudioPlaybackError,
+    > {
+        self.runtime.audio_playback_at(time)
     }
 
     /// Mix a bounded block from the immutable authored PCM and clip definitions.

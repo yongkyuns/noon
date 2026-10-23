@@ -107,9 +107,164 @@ An interval shorter than one audio sample can contain no presented audio frames.
 
 PNG sequences are explicitly visual-only and omit authored audio. The existing
 `export_file` live-program MP4 path still rejects audio until live execution is
-qualified. Native Python and browser file-export bindings, live/history audio
-export and narration remain work tracked by #2263; this native finite API does
-not imply those profiles are available.
+qualified. Finite Python scenes can use the browser capture and native media
+import described below. In-process native CPython bindings, live/history audio
+export and narration remain separate work tracked by #1874 and #2263.
+
+## Finite Python scenes and prepared media import
+
+The complete finite Python profile runs the normal Pyodide authoring worker,
+shared Rust execution session and browser retained renderer. The worker owns
+the only runtime. Shared `ExportFramePolicy` selects each source sample; the host
+waits for that publication's renderer completion before copying its canvas
+pixels and acknowledging it. The shared Rust mixer supplies the soundtrack on
+the same absolute cropped grid. JavaScript copies media and transports receipts;
+it does not plan animation frames or reconstruct a scene.
+
+Install the browser-test Playwright dependency and Chromium. Build the browser
+package and export from the repository root:
+
+```sh
+bash scripts/build-web-demo.sh
+node scripts/export-python-scene.mjs \
+  web/python/examples/background_music_lesson.py /tmp/noon-python-capture \
+  --mp4 scene-with-music.mp4
+```
+
+The default is 640x360 at 30 FPS, WebGPU and transferable worker transport. The
+30-second example is paired with `noon::example_scenes::background_music_lesson`.
+`--fps 30000/1001`, `--start-frame N`, `--frames N`, `--end-time T` and `--hold T`
+map to the existing shared frame options. `--frames` and `--end-time` are mutually
+exclusive; omitting both uses the finite source end. `--max-frames` defaults to
+18,000 and bounds the full source grid, including discarded prefix work.
+`--backend webgl` and `--transport shared` select the existing browser paths.
+Run `--help` for all options.
+
+The source must produce a complete finite immutable `result = Scene()` at time
+zero. Callbacks, live source continuations and retained source history are
+rejected before export. Completion must be retained by a visual/scalar track or
+audio clip. A trailing authored wait beyond those retained endpoints is rejected
+explicitly instead of silently shortening the movie; a general completed
+authoring horizon remains outside this finite profile. The script compares the
+canonical authoring duration with the shared runtime's admitted endpoint without
+overriding either. Scene playback controls cannot mutate an active export.
+The browser is the pixel producer; this path makes no claim that native WGPU
+rendered Python's frames or that a native CPython binding exists.
+
+Omit `--mp4` to retain only the prepared capture, or supply `--encoder PATH` to use
+an already built `encode_prepared_capture` executable. Without that option, the
+script invokes the native example through Cargo. The same completed media can
+be encoded separately, without Python, WASM or a browser in the native process:
+
+```sh
+cargo run --release --locked -p noon-export --example encode_prepared_capture -- \
+  /tmp/noon-python-capture scene-with-music.mp4
+```
+
+The library entry point is `output::export_prepared_capture(directory,
+output_options, limits, cancellation)`. It returns `PreparedCaptureSummary`,
+which certifies native encoding and destination publication. It accepts MP4 only
+and uses the existing `FileSink`, encoder process and exact terminal-duration
+finalization. It does not instantiate an execution session or remix received
+PCM. Both commands require a new MP4 destination unless `--overwrite` is
+explicit. The capture directory must always be new.
+
+### Capture format and timing
+
+A completed `noon-prepared-capture-v1` directory contains:
+
+| File | Contents |
+| --- | --- |
+| `capture.json` | Dimensions, exact rational frame options, admitted finite source end, audio presence and every policy observation. |
+| `frames.rgba` | Tightly packed, top-down, opaque RGBA8 frames in rebased output PTS order. No header or per-row padding. |
+| `audio.f32le` | When audio is present, interleaved 48 kHz stereo little-endian float32 samples from the shared mixer. |
+
+The JSON shape is explicit and rejects unknown fields:
+
+```json
+{
+  "format": "noon-prepared-capture-v1",
+  "width": 640,
+  "height": 360,
+  "source_end": 30.0,
+  "frame_options": {
+    "frame_rate": { "numerator": 30, "denominator": 1 },
+    "start_frame": 0,
+    "stop": { "kind": "frame_count", "frames": 2 },
+    "max_frames": 18000,
+    "max_transitions_per_sample": 64,
+    "final_hold_seconds": 0.0
+  },
+  "audio": true,
+  "samples": [
+    {
+      "requested_time": 0.0,
+      "published_time": 0.0,
+      "publication": {
+        "scene_revision": "1", "execution_revision": "1", "frame_epoch": "0"
+      }
+    },
+    {
+      "requested_time": 0.03333333333333333,
+      "published_time": 0.03333333333333333,
+      "publication": {
+        "scene_revision": "1", "execution_revision": "1", "frame_epoch": "1"
+      }
+    },
+    {
+      "requested_time": 0.06666666666666667,
+      "published_time": 0.06666666666666667,
+      "publication": {
+        "scene_revision": "1", "execution_revision": "1", "frame_epoch": "2"
+      }
+    }
+  ]
+}
+```
+
+`stop` can instead be `{ "kind": "source_end" }` or
+`{ "kind": "end_time", "time": T }`. Revision and epoch values are canonical
+unsigned decimal strings so all 64 bits survive JavaScript transport. The
+values above illustrate the format; producers record the runtime's actual
+publication identities.
+
+Every prefix, output and completion observation is required in policy order.
+Only output observations have RGBA bytes. Thus this two-frame example contains
+three observations, two images and 3,200 stereo audio frames. The importer
+replays the shared policy, requires the exact requested and published times,
+rejects missing or extra receipts, and freezes publication identity during
+terminal holds. Scene and execution revisions stay fixed; a changed published
+time requires a newer frame epoch. Receipt validation checks the media contract,
+but cannot prove that an arbitrary producer actually rendered those pixels.
+
+For `F` output video frames at rational rate `N/D`, the PCM file contains exactly
+`ceil(F * D * 48000 / N)` audio frames, or eight times that many bytes. Shared
+`ExportAudioGrid` computes this with integer arithmetic. Audio frame `k` samples
+absolute scene time `start_time + k / 48000`; cropping does not restart clips or
+fades. Samples at or after the policy's exclusive end are zero. The native sink
+applies the same natural-end versus explicit-stop/hold timing rules described
+above, including exact final partial video duration and AAC presentation bounds.
+The importer requires finite PCM in `[-1, 1]`, correct silent padding, exact file
+lengths and opaque frames. With `audio: false`, an `audio.f32le` file is rejected.
+
+### Bounds, completion and cleanup
+
+Default `PreparedCaptureLimits` admit at most a 16 MiB manifest, 1,000,000
+observations, 256 MiB per RGBA frame and 64 GiB of total raw media. The browser
+script also limits Python input to 8 MiB. The native importer retains one input
+frame, the existing two encoder-pipe buffers and one block of at most 16,384 PCM
+frames; it does not load the whole movie into memory. Raw RGBA capture still
+requires `4 * width * height * F` bytes on disk, plus the PCM file.
+
+The producer closes its media files and writes `capture.json` last, then leaves
+the directory immutable while importing. It removes its own incomplete capture
+on ordinary failure or cancellation. A completed capture remains available if
+native encoding fails. Native encoding stages PCM and the movie under the
+existing destination transaction, preserving an existing output on failure and
+checking cancellation between media blocks and frames. No success is reported
+until encoder flush, timing finalization and destination publication complete.
+These files are an explicit export/import boundary containing media and sample
+metadata; they are not a persisted scene or an alternate runtime authority.
 
 ## Publication and failures
 
@@ -230,7 +385,7 @@ source continuation. Repeated captures of a settled state are just repeated
 images, not animation playback. A consumer must copy borrowed pixels to retain
 them beyond the next capture.
 
-This API is a prerequisite for native language-binding integration, not a claim
-that native Python or Pyodide can already export video. Those bindings still need
-the shared rational sample/completion contract and file-sink integration; a
-Python-side sampling loop or browser fallback is not supplied here.
+This typed API remains a prerequisite for in-process native language-binding
+integration. The finite Pyodide path described above captures through the normal
+browser renderer and imports finished media into the native sink; it does not
+use `SessionCapture` or replace a native CPython binding.

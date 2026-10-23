@@ -3,7 +3,9 @@
 //! This module owns output indices and acknowledgements, not scene time,
 //! animation evaluation, source continuation, rendering, or encoder completion.
 
+mod audio_grid;
 mod policy;
+pub use audio_grid::{ExportAudioGrid, ExportAudioGridError};
 pub use policy::{ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus};
 
 use std::{error::Error, fmt};

@@ -109,6 +109,81 @@ fn arena_budget_is_atomic_and_reclamation_releases_capacity() {
 }
 
 #[test]
+fn shared_admission_reuses_one_budget_charge_but_explicit_insert_remains_fresh() {
+    let resource = pcm(8_000, 1, 4);
+    let budget = resource.retained_bytes() * 2;
+    let mut arena = AudioResourceArena::with_byte_budget(budget);
+    let (shared, fresh) = arena.admit_shared(resource.clone()).unwrap();
+    assert!(fresh);
+    let before = arena.stats();
+    assert_eq!(
+        arena.admit_shared(resource.clone()).unwrap(),
+        (shared, false)
+    );
+    assert_eq!(arena.stats(), before);
+
+    let explicit = arena.insert(resource.clone()).unwrap();
+    assert_ne!(explicit, shared);
+    assert_eq!(arena.stats().live_resources, 2);
+    assert_eq!(arena.stats().retained_bytes, budget);
+    assert!(matches!(
+        arena.insert(resource.clone()),
+        Err(AudioResourceError::ByteBudgetExceeded { .. })
+    ));
+    assert_eq!(
+        arena.admit_shared(resource.clone()).unwrap(),
+        (shared, false)
+    );
+    arena.remove(explicit).unwrap();
+    assert_eq!(arena.admit_shared(resource).unwrap(), (shared, false));
+    assert_eq!(arena.stats(), before);
+}
+
+#[test]
+fn shared_admission_distinguishes_format_and_allocations_and_retires_its_index() {
+    let samples: Arc<[f32]> = vec![0.25; 8].into();
+    let resource = AudioResource::from_interleaved(8_000, 1, samples.clone(), 64).unwrap();
+    let mut arena = AudioResourceArena::new();
+    let (first, _) = arena.admit_shared(resource.clone()).unwrap();
+    for alternate in [
+        AudioResource::from_interleaved(16_000, 1, samples.clone(), 64).unwrap(),
+        AudioResource::from_interleaved(8_000, 2, samples, 64).unwrap(),
+        pcm(8_000, 1, 8),
+    ] {
+        let (handle, fresh) = arena.admit_shared(alternate).unwrap();
+        assert!(fresh);
+        assert_ne!(handle, first);
+    }
+    arena.remove(first).unwrap();
+    assert!(arena.get(first).is_none());
+    let (next, fresh) = arena.admit_shared(resource.clone()).unwrap();
+    assert!(fresh);
+    assert_ne!(next, first);
+    assert_eq!(arena.admit_shared(resource).unwrap(), (next, false));
+    assert_eq!(arena.len(), 4);
+}
+
+#[test]
+fn cloned_arena_reuses_payload_with_its_own_resource_provenance() {
+    let resource = pcm(8_000, 1, 4);
+    let mut original = AudioResourceArena::new();
+    let (handle, _) = original.admit_shared(resource.clone()).unwrap();
+    let mut cloned = original.clone();
+    let (remapped, fresh) = cloned.admit_shared(resource.clone()).unwrap();
+    assert!(!fresh);
+    assert_ne!(handle.arena, remapped.arena);
+    assert_eq!(handle.id, remapped.id);
+    assert!(cloned.get(handle).is_none());
+    assert!(Arc::ptr_eq(
+        &original.get_shared(handle).unwrap(),
+        &cloned.get_shared(remapped).unwrap(),
+    ));
+    original.remove(handle).unwrap();
+    assert_eq!(cloned.admit_shared(resource).unwrap(), (remapped, false));
+    assert_eq!(cloned.len(), 1);
+}
+
+#[test]
 fn foreign_wrong_version_and_zero_handles_do_not_resolve_or_remove() {
     let mut arena = AudioResourceArena::new();
     let handle = arena.insert(pcm(8_000, 1, 1)).unwrap();

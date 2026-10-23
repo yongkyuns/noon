@@ -28,9 +28,10 @@ mod path_edits;
 mod pixel_readback;
 
 pub use export_frames::{
-    ExportEndReason, ExportFrame, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
-    ExportFramePolicyStatus, ExportFrameSummary, ExportFrames, ExportFramesError,
-    ExportFramesStatus, ExportSample, ExportSampleKind, ExportStop,
+    ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
+    ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus, ExportFrameSummary,
+    ExportFrames, ExportFramesError, ExportFramesStatus, ExportSample, ExportSampleKind,
+    ExportStop,
 };
 pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,

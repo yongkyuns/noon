@@ -15,6 +15,10 @@ mod authoring_arc;
 mod authoring_arrow;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow_endpoints;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_audio;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_audio::*;
 #[cfg(target_arch = "wasm32")]
 mod authoring_bar_chart;
 #[cfg(target_arch = "wasm32")]
@@ -80,8 +84,12 @@ mod background_audio_example;
 mod browser_pointer_input;
 mod canonical_authoring_scene;
 mod clock;
+#[cfg(any(target_arch = "wasm32", test))]
+mod worker_audio;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use background_audio_example::*;
+#[cfg(all(target_arch = "wasm32", feature = "renderer"))]
+pub use worker_audio::*;
 mod determinism;
 #[cfg(all(
     feature = "renderer",

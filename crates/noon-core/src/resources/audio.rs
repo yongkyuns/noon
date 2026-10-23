@@ -143,10 +143,32 @@ pub struct AudioResourceStats {
     pub pcm_bytes: usize,
 }
 
+/// Storage identity for already prepared immutable PCM, not a content hash.
+/// The indexed arena entry pins the allocation until this key is removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SharedAudioPayload {
+    samples_address: usize,
+    samples: usize,
+    sample_rate: u32,
+    channels: u16,
+}
+
+impl SharedAudioPayload {
+    fn of(resource: &AudioResource) -> Self {
+        Self {
+            samples_address: resource.samples.as_ptr() as usize,
+            samples: resource.samples.len(),
+            sample_rate: resource.sample_rate,
+            channels: resource.channels,
+        }
+    }
+}
+
 /// Bounded arena of immutable audio resources.
 ///
-/// Admission does not deduplicate or hash a PCM buffer. Reusing a handle reuses
-/// its resource; inserting another resource intentionally allocates another ID.
+/// Explicit insertion always allocates a new identity. Atomic Scene admission
+/// can reuse a previously admitted clone of the same immutable PCM allocation
+/// and format; this does not compare, hash, or scan sample contents.
 /// Get, shared retention and individual removal are expected O(1) and never scan
 /// PCM. The byte budget counts resource headers and PCM retained by this arena,
 /// excluding map bookkeeping and immutable snapshots held by other owners.
@@ -154,6 +176,7 @@ pub struct AudioResourceStats {
 pub struct AudioResourceArena {
     namespace: u64,
     entries: HashMap<AudioResourceId, Arc<AudioResource>>,
+    shared_payloads: HashMap<SharedAudioPayload, AudioResourceId>,
     next_id: u64,
     byte_budget: usize,
     retained_bytes: usize,
@@ -171,6 +194,7 @@ impl Clone for AudioResourceArena {
         Self {
             namespace: next_audio_resource_arena(),
             entries: self.entries.clone(),
+            shared_payloads: self.shared_payloads.clone(),
             next_id: self.next_id,
             byte_budget: self.byte_budget,
             retained_bytes: self.retained_bytes,
@@ -188,6 +212,7 @@ impl AudioResourceArena {
         Self {
             namespace: next_audio_resource_arena(),
             entries: HashMap::new(),
+            shared_payloads: HashMap::new(),
             next_id: 0,
             byte_budget,
             retained_bytes: 0,
@@ -225,6 +250,28 @@ impl AudioResourceArena {
         self.retained_bytes = retained_bytes;
         self.next_id = next_id;
         Ok(handle)
+    }
+
+    /// Reuse one prepared payload at the Scene's atomic publication boundary.
+    /// The boolean records whether rollback owns a newly inserted resource.
+    pub(crate) fn admit_shared(
+        &mut self,
+        resource: AudioResource,
+    ) -> Result<(AudioResourceHandle, bool), AudioResourceError> {
+        let key = SharedAudioPayload::of(&resource);
+        if let Some(&id) = self.shared_payloads.get(&key) {
+            return Ok((
+                AudioResourceHandle {
+                    arena: self.namespace,
+                    id,
+                    version: 0,
+                },
+                false,
+            ));
+        }
+        let handle = self.insert(resource)?;
+        self.shared_payloads.insert(key, handle.id);
+        Ok((handle, true))
     }
 
     /// Validate and admit a payload atomically. Decode/preparation allocations
@@ -271,6 +318,10 @@ impl AudioResourceArena {
             return None;
         }
         let resource = self.entries.remove(&handle.id)?;
+        let key = SharedAudioPayload::of(&resource);
+        if self.shared_payloads.get(&key) == Some(&handle.id) {
+            self.shared_payloads.remove(&key);
+        }
         self.retained_bytes -= resource.retained_bytes();
         self.pcm_bytes -= resource.pcm_bytes();
         Some(resource)

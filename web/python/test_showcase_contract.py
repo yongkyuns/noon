@@ -19,6 +19,19 @@ class ShowcaseSourceContract(unittest.TestCase):
                 tree = ast.parse(source, filename=entry["path"])
                 compile(tree, entry["path"], "exec")
                 self.assertFalse(any(isinstance(node, ast.Assert) for node in ast.walk(tree)))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        self.assertEqual(node.level, 0, "examples must not depend on a surrounding package")
+                        modules = {node.module}
+                    elif isinstance(node, ast.Import):
+                        modules = {alias.name for alias in node.names}
+                    else:
+                        continue
+                    self.assertLessEqual(modules, QUALIFIED_BROWSER_MODULES,
+                                         "new package dependencies require explicit browser qualification")
+                if entry["id"] == "showcase-background-music":
+                    self._assert_finite_audio_lesson(entry, tree)
+                    continue
                 scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
@@ -75,16 +88,37 @@ class ShowcaseSourceContract(unittest.TestCase):
                     self.assertTrue(any(isinstance(node.func, ast.Name)
                                         and node.func.id in {"FadeIn", "Write", "Create"} for node in calls))
                 self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait" for node in calls), "hold a readable state")
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.ImportFrom):
-                        self.assertEqual(node.level, 0, "examples must not depend on a surrounding package")
-                        modules = {node.module}
-                    elif isinstance(node, ast.Import):
-                        modules = {alias.name for alias in node.names}
-                    else:
-                        continue
-                    self.assertLessEqual(modules, QUALIFIED_BROWSER_MODULES,
-                                         "new package dependencies require explicit browser qualification")
+    def _assert_finite_audio_lesson(self, entry, tree):
+        """The explicit result profile is separate from ordinary continuation lessons."""
+        self.assertEqual(entry["path"], "python/examples/background_music_lesson.py")
+        self.assertFalse(any(isinstance(node, ast.ClassDef) for node in ast.walk(tree)))
+        results = [node for node in tree.body if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "result" for target in node.targets)]
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0].value, ast.Call)
+        self.assertEqual(results[0].value.func.id, "Scene")
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                 and node.func.value.id == "result"]
+        named = lambda name: [call for call in calls if call.func.attr == name]
+        self.assertFalse(any(named(name) for name in ("play", "wait", "add_updater", "on_click")))
+        self.assertEqual(len(named("bind_position")), 2)
+        self.assertEqual(len(named("value_tracker")), 1)
+        self.assertEqual([ast.literal_eval(call.args[0]) for call in named("next_section")],
+                         ["Double a positive input", "Keep the sign", "Return to zero"])
+        declarations = named("declare_value")
+        self.assertEqual([ast.literal_eval(call.args[1]) for call in declarations], [2, -2, 0])
+        durations = [ast.literal_eval(next(keyword.value for keyword in call.keywords if keyword.arg == "run_time"))
+                     for call in declarations]
+        holds = [ast.literal_eval(call.args[0]) for call in named("declare_wait")]
+        self.assertEqual(durations, [8, 8, 8])
+        self.assertEqual(holds, [1, 1, 1, 1, 1, 1])
+        self.assertEqual(sum(durations) + sum(holds), entry["duration"])
+        self.assertEqual(len(named("audio")), 1)
+        audio = named("audio")[0]
+        self.assertEqual(ast.unparse(audio.args[0]), "AudioSource.small_discovery()")
+        self.assertEqual({keyword.arg: ast.literal_eval(keyword.value) for keyword in audio.keywords},
+                         {"duration": 30, "gain": 0.5, "fade_in": 1.5, "fade_out": 2.5})
 
     def test_dynamic_scene_is_not_the_unchanged_regression_workload(self):
         entry = next(item for item in MANIFEST["entries"] if item.get("performance"))

@@ -1371,6 +1371,26 @@ def _declare_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
     return scene
 
 
+def _declare_value(
+    scene: _base.Scene, tracker: _reactive.ValueTracker, target: float, *,
+    run_time: float = 1.0, rate_func: object = "smooth",
+) -> _base.Scene:
+    """Declare one scalar interval through Scene's shared Rust authoring cursor."""
+    if not isinstance(tracker, _reactive.ValueTracker):
+        raise TypeError("declare_value requires a Scene ValueTracker")
+    context = _context(scene)
+    binding = tracker._canonical_context_handle()
+    if binding is None or binding[0] is not context:
+        raise ValueError("declare_value requires a ValueTracker associated with this Scene")
+    target = _ir._finite_number("target", target)
+    run_time = _ir._finite_number("run_time", run_time)
+    engine_call(
+        context.declareValue, binding[1], target, run_time,
+        _live_rate_function_id(rate_func), operation="Scene.declare_value",
+    )
+    return scene
+
+
 def _canonical_affine_animation(
     scene: _base.Scene, animation: object
 ) -> tuple[_base.Mobject, _base.Mobject, object] | None:

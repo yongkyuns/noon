@@ -33,7 +33,11 @@ on:
       - "fixtures/manim-v0.21/family-*"
       - "scripts/painter-order-browser-smoke.mjs"
       - "scripts/background-audio-smoke.mjs"
+      - "scripts/browser-audio-observation.mjs"
+      - "scripts/python-background-audio-smoke.mjs"
+      - "scripts/export-python-scene.mjs"
       - "web/background-audio*"
+      - "web/worker-audio-device.js"
       - "scripts/manim-shape-matcher-current-bounds.mjs"
       - "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs"
       - "web/python/**"
@@ -351,6 +355,18 @@ jobs:
         with:
           name: background-audio-full-ci
           path: browser-smoke-artifacts/background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Test Python gallery background audio
+        env:
+          NOON_PYTHON_AUDIO_ARTIFACTS: ${{ runner.temp }}/python-background-audio
+        run: timeout --signal=TERM 240s node scripts/python-background-audio-smoke.mjs
+      - name: Retain Python background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-background-audio-full-ci
+          path: ${{ runner.temp }}/python-background-audio/
           if-no-files-found: ignore
           retention-days: 3
       - name: Test Python updater callback bridge

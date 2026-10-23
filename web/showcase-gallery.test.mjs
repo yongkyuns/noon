@@ -119,6 +119,23 @@ test("invalid or misleading publication metadata is rejected", () => {
   assert.throws(() => normalizeShowcaseManifest(legacyInteraction), /interactive scenes must disclose/);
 });
 
+test("background music routes to its finite paired lesson and exact authored duration", async () => {
+  const gallery = normalizeShowcaseManifest(manifest);
+  const entry = gallery.examples.find(entry => entry.id === "showcase-background-music");
+  const declared = manifest.entries.find(candidate => candidate.id === entry.id);
+  assert.equal(entry.path, "./python/examples/background_music_lesson.py");
+  assert.equal(entry.category, "Audio and timing");
+  assert.equal(entry.playbackCapability, "deterministic-retained-replay");
+  assert.equal(declared.duration, 30);
+  assert.deepEqual(declared.beats.map(beat => beat.label), ["Double a positive input", "Keep the sign", "Return to zero"]);
+  const source = await readFile(new URL(entry.path, import.meta.url), "utf8");
+  assert.match(source, /result = Scene\(\)/);
+  assert.match(source, /AudioSource\.small_discovery\(\)/);
+  const wrongSource = copy();
+  wrongSource.entries.find(entry => entry.id === "showcase-background-music").path = "python/examples/unqualified_audio.py";
+  assert.throws(() => normalizeShowcaseManifest(wrongSource), /unique local showcase source/);
+});
+
 test("playback capability is finite and all nonreplayable capabilities require an explanation", () => {
   const unsupported = copy();
   unsupported.entries[0].playback_capability = "best-effort-replay";

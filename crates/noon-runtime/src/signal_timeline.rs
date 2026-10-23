@@ -190,6 +190,15 @@ impl SignalTimelineSchedule {
         self.groups.is_empty()
     }
 
+    /// Finite endpoint of the existing immutable scalar schedule. Hosts query
+    /// this at admission; ordinary progression still uses its event index.
+    pub fn finite_end_time(&self) -> Option<f64> {
+        if self.events.iter().any(|event| !event.time.is_finite()) {
+            return None;
+        }
+        Some(self.events.last().map_or(0.0, |event| event.time.max(0.0)))
+    }
+
     pub fn is_coherent_at(&self, current: f64, requested: f64) -> bool {
         self.initialized && current == requested
     }

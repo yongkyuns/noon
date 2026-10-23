@@ -169,7 +169,8 @@ mod wasm {
         },
         resolve_renderer_observation_target,
         webgl_context_lifecycle::{
-            ensure_webgl_context_available, webgl_context_is_lost, WebGlContextLifecycle,
+            ensure_webgl_context_available, prepare_main_thread_webgl_context,
+            webgl_context_is_lost, WebGlContextLifecycle,
         },
         InstalledRetainedExecutionMirror, RendererObservationOutcome, RendererObservationRequest,
         RetainedFamilyExecutionDeltaEnvelope, RetainedTransportApplyOutcome,
@@ -1329,18 +1330,18 @@ mod wasm {
         height: u32,
         force_webgl: bool,
     ) -> Result<InitializedGpu, JsValue> {
+        let use_webgpu = !force_webgl && wgpu::util::is_browser_webgpu_supported().await;
+        if !use_webgpu {
+            prepare_main_thread_webgl_context(canvas)?;
+        }
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_descriptor.backends = if force_webgl {
-            wgpu::Backends::GL
-        } else {
+        instance_descriptor.backends = if use_webgpu {
             wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
+        } else {
+            wgpu::Backends::GL
         };
         instance_descriptor.display = Some(Box::new(WebDisplaySource));
-        let instance = if force_webgl {
-            wgpu::Instance::new(instance_descriptor)
-        } else {
-            wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await
-        };
+        let instance = wgpu::Instance::new(instance_descriptor);
         let surface = create_surface(&instance, canvas)?;
         // `create_surface` has selected/claimed the browser context at this
         // point, so this check does not alter WebGPU selection. It must happen

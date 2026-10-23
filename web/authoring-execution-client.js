@@ -270,7 +270,9 @@ export class AuthoringExecutionClient {
   }
 
   async resume() {
-    return this.#withStablePlayer((player) => player.resume());
+    // Device activation belongs to this gesture and owner. A replacement
+    // scene must receive its own explicit Play, never a retried unlock.
+    return this.#withInputPlayer((player) => player.resume());
   }
 
   async seek(timeSeconds) {
@@ -315,6 +317,38 @@ export class AuthoringExecutionClient {
 
   async restartPlayback() {
     return this.#withStablePlayer((player) => player.restartPlayback());
+  }
+
+  async seekSection(previous = false) {
+    return this.#withStablePlayer((player) => player.seekSection(previous));
+  }
+
+  setAudioVolume(volume) {
+    return this.#withInputPlayer((player) => player.setAudioVolume(volume));
+  }
+
+  setAudioMuted(muted) {
+    return this.#withInputPlayer((player) => player.setAudioMuted(muted));
+  }
+
+  beginFiniteExport(frameOptions) {
+    return this.#withInputPlayer(player => player.beginFiniteExport(frameOptions));
+  }
+
+  sampleFiniteExport() {
+    return this.#withInputPlayer(player => player.sampleFiniteExport());
+  }
+
+  acknowledgeFiniteExport(observation) {
+    return this.#withInputPlayer(player => player.acknowledgeFiniteExport(observation));
+  }
+
+  finiteExportAudioBlock(firstFrame, frameCount) {
+    return this.#withInputPlayer(player => player.finiteExportAudioBlock(firstFrame, frameCount));
+  }
+
+  cancelFiniteExport() {
+    return this.#withInputPlayer(player => player.cancelFiniteExport());
   }
 
   async undoTranslationDrag() {
