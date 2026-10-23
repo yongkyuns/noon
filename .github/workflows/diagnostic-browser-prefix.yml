@@ -3,22 +3,107 @@ on:
   push:
     branches: [diagnostic/noon-browser-prefix-20261023]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  source:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Retain immutable tracked source only
+      - name: Apply exact-baseline candidate
+        run: python3 .github/diagnostics/browser-prefix.py apply
+      - name: Install repository-pinned Rust
         run: |
-          mkdir -p /tmp/noon-browser-prefix-source
-          git rev-parse HEAD > /tmp/noon-browser-prefix-source/diagnostic-commit.txt
-          git archive --format=tar.gz HEAD > /tmp/noon-browser-prefix-source/source.tar.gz
-      - uses: actions/upload-artifact@v7
+          rustup install
+          rustc --version --verbose | tee /tmp/noon-browser-prefix/rustc.txt
+      - uses: actions/cache@v6
         with:
-          name: browser-prefix-source
-          path: /tmp/noon-browser-prefix-source
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and retain exact candidate
+        run: |
+          cargo fmt --all
+          python3 .github/diagnostics/browser-prefix.py save
+      - name: Test prefix DOM admission and existing presentation behavior
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked -p noon-web --all-features --lib browser_pointer_input::prefix::tests -- --nocapture 2>&1 | tee /tmp/noon-browser-prefix/prefix-input-tests.log
+          cargo test --locked -p noon-web --all-features --lib direct_pointer_presentation::tests -- --nocapture 2>&1 | tee /tmp/noon-browser-prefix/direct-presentation-tests.log
+      - name: Check renderer-less Rust WASM feature isolation
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --locked -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-browser-prefix/wasm-no-renderer.log
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build opt-in direct WASM renderer
+        shell: bash
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_WASM_PROFILE: dev
+          NOON_SKIP_WEB_PREFLIGHT: "1"
+          NOON_RENDERER_SMOKE: "1"
+          NOON_PREPARED_PREFIX: "1"
+        run: |
+          set -o pipefail
+          bash scripts/build-web-demo.sh 2>&1 | tee /tmp/noon-browser-prefix/browser-build.log
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install Chromium and image comparison dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Actual DOM and GPU prefix qualification
+        shell: bash
+        env:
+          NOON_PREFIX_BROWSER_ARTIFACTS: /tmp/noon-browser-prefix/browser
+        run: |
+          set -o pipefail
+          node scripts/prepared-prefix-browser-qualification.mjs 2>&1 | tee /tmp/noon-browser-prefix/browser.log
+      - name: Existing direct session and continuation presentation regression
+        shell: bash
+        env:
+          NOON_POINTER_PRESENTATION_ARTIFACTS: /tmp/noon-browser-prefix/existing-direct
+        run: |
+          set -o pipefail
+          node scripts/direct-pointer-presentation-qualification.mjs 2>&1 | tee /tmp/noon-browser-prefix/existing-direct.log
+      - name: Repository fast gate on the exact candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast HEAD 2>&1 | tee /tmp/noon-browser-prefix/fast-gate.log
+      - name: Store tested file blobs without moving refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo fmt --all -- --check
+          python3 .github/diagnostics/browser-prefix.py save
+          python3 .github/diagnostics/browser-prefix.py store
+      - name: Retain exact candidate and execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-prefix-qualification
+          path: /tmp/noon-browser-prefix
           retention-days: 3
