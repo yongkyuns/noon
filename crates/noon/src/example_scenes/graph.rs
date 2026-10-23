@@ -119,9 +119,8 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
             ..Default::default()
         },
     )?;
-    let mut added_vertex_options = options.clone();
-    added_vertex_options.vertex_fill = YELLOW;
-    added_vertex_options.vertex_stroke = YELLOW;
+    // Explicit graph fill/stroke channels win over the keyed `color` alias.
+    let added_vertex_options = options.clone();
     let mut added_edge_options = options.clone();
     added_edge_options.edge_color = PURPLE;
     added_edge_options.edge_stroke_width = 0.03;
@@ -132,8 +131,6 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     )?;
     let mut standalone_vertex_options = options.clone();
     standalone_vertex_options.vertex_radius = 0.16;
-    standalone_vertex_options.vertex_fill = YELLOW;
-    standalone_vertex_options.vertex_stroke = YELLOW;
     digraph
         .add_vertices_with_options(&mut scene, [("y", (2.0, -2.3), standalone_vertex_options)])?;
 
@@ -418,6 +415,39 @@ pub fn session() -> Result<ExecutionSession, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyed_color_additions_keep_explicit_graph_fill_and_stroke() {
+        let scene = scene().unwrap();
+        let store = scene.integration_store().borrow();
+        let leaves = store.ordered_leaf_nodes(scene.root()).unwrap();
+        // Pinned ManimCE's x/y additions specify `color=YELLOW`, but the
+        // inherited explicit RED fill and BLUE stroke take precedence.
+        for (position, radius) in [((5.0, -2.3), 0.21), ((2.0, -2.3), 0.16)] {
+            let state = leaves
+                .iter()
+                .filter_map(|id| store.semantic_object_state_checked(*id).ok())
+                .find(|state| {
+                    matches!(
+                        state.content.geometry(),
+                        Some(crate::StoredGeometry::Circle { .. })
+                    ) && (state.transform.translation.x - position.0).abs() < 1e-6
+                        && (state.transform.translation.y - position.1).abs() < 1e-6
+                })
+                .expect("the production graph retains the added vertex");
+            assert!(matches!(state.content.geometry(),
+                Some(crate::StoredGeometry::Circle { radius: actual })
+                    if (f64::from(*actual) - radius).abs() < 1e-6));
+            assert_eq!(state.style.fill, Some(noon_core::SemanticPaint::Solid(RED)));
+            assert_eq!(
+                state.style.stroke,
+                Some(noon_core::SemanticPaint::Solid(BLUE))
+            );
+            assert_eq!(state.style.fill_opacity, 0.35);
+            assert_eq!(state.style.stroke_opacity, 0.45);
+            assert_eq!(state.style.stroke_width, 0.03);
+        }
+    }
 
     #[test]
     fn explicit_graph_gallery_uses_only_ordinary_retained_leaves() {

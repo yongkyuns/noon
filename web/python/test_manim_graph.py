@@ -1125,6 +1125,22 @@ class GraphFacadeTests(unittest.TestCase):
                 self.assertTrue(math.isnan(self.context.add_vertex_calls[-1][3][0]))
                 self.assertIn(("radius", (0.21,)), self.context.add_vertex_calls[-1][4].calls)
 
+    def test_added_color_alias_keeps_inherited_explicit_fill_and_stroke(self):
+        for constructor in (graph.Graph, graph.DiGraph):
+            with self.subTest(constructor=constructor.__name__):
+                value = constructor({"a": (0, 0)}, [], vertex_config={
+                    "radius": 0.21, "fill_color": "#FC6255", "fill_opacity": 0.35,
+                    "stroke_color": "#58C4DD", "stroke_width": 3, "stroke_opacity": 0.45,
+                })
+                value.add_vertices("b", positions={"b": (1, 0)},
+                                   vertex_config={"b": {"color": "#F7D96F"}})
+                row = self.context.add_vertex_calls[-1][3]
+                self.assertEqual(row[0], 0.21)
+                self.assertEqual(row[1:5], [252 / 255, 98 / 255, 85 / 255, 1.0])
+                self.assertEqual(row[5], 0.35)
+                self.assertEqual(row[6:10], [88 / 255, 196 / 255, 221 / 255, 1.0])
+                self.assertEqual(row[10:], [3.0, 0.45])
+
     def test_add_vertex_config_validation_precedes_publication(self):
         value = graph.Graph({"a": (0, 0)}, [])
         for config, error in (
