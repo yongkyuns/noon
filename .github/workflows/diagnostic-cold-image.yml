@@ -1,0 +1,76 @@
+name: Diagnostic cold image publication
+on:
+  push:
+    branches: [diagnostic/noon-cold-image-20261022]
+# One-shot #2211 tooling branch; never merge this workflow into the product.
+# Write scope creates only content-addressed blobs after tests. No ref, PR,
+# release, deployment, or repository-setting mutation is performed by this job.
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Apply exact-baseline candidate
+        run: |
+          mkdir -p cold-image-proof
+          git rev-parse HEAD > cold-image-proof/diagnostic-commit.txt
+          python3 .github/diagnostics/cold_image_patch.py
+      - name: Use repository-pinned Rust and software Vulkan
+        run: |
+          rustup install
+          rustc --version --verbose > cold-image-proof/rust-version.txt
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cold-image-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-capture-cargo-sources-
+      - name: Format candidate and retain exact patch
+        run: |
+          cargo fmt --all
+          git diff --check
+          git diff --binary > cold-image-proof/candidate.patch
+      - name: Execute runtime and Vulkan prefix regressions
+        run: |
+          set -euo pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test --locked -p noon-runtime --features prepared-prefix \
+            --test prefix_interactions --test prefix_bindings \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee cold-image-proof/tests.log
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test --locked -p noon --no-default-features --features prepared-prefix \
+            --test prepared_prefix_identity --test prepared_prefix_lifecycle \
+            --test prepared_prefix_interactions --test prepared_prefix_incremental \
+            --test prepared_prefix_bindings --test prepared_prefix_raster \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee -a cold-image-proof/tests.log
+      - name: Lint changed test targets and renderer dependencies
+        run: |
+          set -o pipefail
+          cargo clippy --locked -p noon --no-default-features --features prepared-prefix \
+            --test prepared_prefix_lifecycle --test prepared_prefix_identity -- -D warnings \
+            2>&1 | tee cold-image-proof/clippy.log
+          cargo fmt --all -- --check
+      - name: Store tested blobs without updating any branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/diagnostics/cold_image_patch.py publish
+      - name: Retain exact candidate and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cold-image-publication-fix
+          path: cold-image-proof/
+          retention-days: 3
