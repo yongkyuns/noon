@@ -1,0 +1,14 @@
+[
+  {"path":"crates/noon/src/live_program/preparation.rs","old":"    Bootstrap(PrefixReader),","new":"    Bootstrap(Box<PrefixReader>),"},
+  {"path":"crates/noon/src/live_program/preparation.rs","old":"    Batch(PrefixBatch),","new":"    Batch(Box<PrefixBatch>),"},
+  {"path":"crates/noon/src/live_program/preparation.rs","old":"Some(publisher) => PrefixPreparation::Batch(program.session().publish_prepared_prefix(segment, publisher)\n                            .map_err(PreparedSourceError::Prefix)?),","new":"Some(publisher) => PrefixPreparation::Batch(Box::new(program.session().publish_prepared_prefix(segment, publisher)\n                            .map_err(PreparedSourceError::Prefix)?)),"},
+  {"path":"crates/noon/src/live_program/preparation.rs","old":"PrefixPreparation::Bootstrap(reader)","new":"PrefixPreparation::Bootstrap(Box::new(reader))"},
+  {"path":"crates/noon/src/live_program/preparation.rs","old":"Ok(PrefixPreparation::Batch(batch))","new":"Ok(PrefixPreparation::Batch(Box::new(batch)))"},
+  {"path":"crates/noon/src/live_program/preparation.rs","old":"/// batch loses that stream's suffix. There is no implicit queue or transport.","new":"/// batch loses that stream's suffix. There is no implicit queue or transport.\n/// Owned deliveries are boxed to keep this control result constant-size; moving\n/// a delivery never clones the reader, history, or source scene."},
+  {"path":"crates/noon/src/live_program/preparation/tests.rs","old":"PrefixPreparation::Bootstrap(reader) => return reader,","new":"PrefixPreparation::Bootstrap(reader) => return *reader,"},
+  {"path":"crates/noon/src/live_program/preparation/tests.rs","old":"PrefixPreparation::Batch(batch) => batch,","new":"PrefixPreparation::Batch(batch) => *batch,"},
+  {"path":"crates/noon/src/live_program/preparation/tests.rs","old":"PrefixPreparation::Bootstrap(r) => r,","new":"PrefixPreparation::Bootstrap(r) => *r,"},
+  {"path":"crates/noon/src/live_program/preparation/tests.rs","old":"PrefixPreparation::Batch(b)=>b,","new":"PrefixPreparation::Batch(b)=>*b,"},
+  {"path":"crates/noon-web/src/prepared_canvas_smoke/automatic.rs","old":"PrefixPreparation::Bootstrap(reader)=>reader,","new":"PrefixPreparation::Bootstrap(reader)=>*reader,"},
+  {"path":"crates/noon-web/src/prepared_canvas_smoke/automatic.rs","old":"canvas.append_prepared_prefix(batch)?;","new":"canvas.append_prepared_prefix(*batch)?;"}
+]
