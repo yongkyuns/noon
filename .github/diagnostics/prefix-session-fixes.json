@@ -1,8 +1,37 @@
 [
-  {"path":"crates/noon/src/execution_session/replay/prefix.rs","old":"Result<(PrefixPublisher), PrefixError>","new":"Result<(PrefixPublisher, PrefixReader), PrefixError>"},
-  {"path":"crates/noon-runtime/tests/prefix_interactions.rs","old":"reader: &mut wall_time: f64","new":"reader: &mut prefix_support::PrefixHarness, wall_time: f64"},
-  {"path":"crates/noon-runtime/tests/prefix_lifecycle.rs","old":"reader: &mut time: f64","new":"reader: &mut prefix_support::PrefixHarness, time: f64"},
-  {"path":"crates/noon/src/execution_session/replay/prefix/reader/input.rs","old":"    pub fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {","new":"    /// Candidate membership is qualified by both reader incarnation and frame.\n    pub fn viewport_query_is_current(&self, query: &ExecutionViewportQuery) -> bool {\n        query.is_current_for(&self.session)\n    }\n    pub fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {"},
-  {"path":"crates/noon/tests/prepared_prefix_identity/pointer.rs","old":"    let frame = right.frame().clone();","new":"    let query = left.query_viewport(noon_core::Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0)));\n    assert!(left.viewport_query_is_current(&query));\n    assert!(!right.viewport_query_is_current(&query));\n    let frame = right.frame().clone();"},
-  {"path":"crates/noon/tests/prepared_prefix_identity/pointer.rs","old":"#[test]\nfn prefix_pointer_future_delivery_preserves_press_and_uses_displayed_generation() {","new":"#[test]\nfn prefix_pointer_bootstrap_recovers_identity_deleted_before_reader_creation() {\n    let mut source = Producer::new();\n    let node = source.original;\n    let object = source.object;\n    let first = source.session.wait_segment(0.5).unwrap();\n    source.session.advance_to(first.end_time()).unwrap();\n    source.delete();\n    let second = source.session.wait_segment(0.5).unwrap();\n    source.session.advance_to(second.end_time()).unwrap();\n    assert_eq!(source.session.execution_object_id(node), None);\n    let (_, mut reader) = source.session.create_prepared_prefix(second).unwrap();\n    drop(source);\n    reader.seek(0.25).unwrap();\n    configure(&mut reader, true);\n    assert_eq!(click(&mut reader, 0).selection_click().unwrap().target(), Some(node));\n    finish_effect(&mut reader, object, A, 10.0);\n    reader.advance_to(0.75).unwrap();\n    assert_eq!(reader.selected_pointer_target(), None);\n    assert_eq!(click(&mut reader, 2).selection_click().unwrap().target(), None);\n}\n\n#[test]\nfn prefix_pointer_future_delivery_preserves_press_and_uses_displayed_generation() {"}
+  {
+    "path": "crates/noon/src/execution_session/replay/prefix.rs",
+    "old": "Result<(PrefixPublisher), PrefixError>",
+    "new": "Result<(PrefixPublisher, PrefixReader), PrefixError>"
+  },
+  {
+    "path": "crates/noon-runtime/tests/prefix_interactions.rs",
+    "old": "reader: &mut wall_time: f64",
+    "new": "reader: &mut prefix_support::PrefixHarness, wall_time: f64"
+  },
+  {
+    "path": "crates/noon-runtime/tests/prefix_lifecycle.rs",
+    "old": "reader: &mut time: f64",
+    "new": "reader: &mut prefix_support::PrefixHarness, time: f64"
+  },
+  {
+    "path": "crates/noon/src/execution_session/replay/prefix/reader/input.rs",
+    "old": "    pub fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {",
+    "new": "    /// Candidate membership is qualified by both reader incarnation and frame.\n    pub fn viewport_query_is_current(&self, query: &ExecutionViewportQuery) -> bool {\n        query.is_current_for(&self.session)\n    }\n    pub fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {"
+  },
+  {
+    "path": "crates/noon/tests/prepared_prefix_identity/pointer.rs",
+    "old": "    let frame = right.frame().clone();",
+    "new": "    let query = left.query_viewport(noon_core::Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0)));\n    assert!(left.viewport_query_is_current(&query));\n    assert!(!right.viewport_query_is_current(&query));\n    let frame = right.frame().clone();"
+  },
+  {
+    "path": "crates/noon/tests/prepared_prefix_identity/pointer.rs",
+    "old": "#[test]\nfn prefix_pointer_future_delivery_preserves_press_and_uses_displayed_generation() {",
+    "new": "#[test]\nfn prefix_pointer_bootstrap_recovers_identity_deleted_before_reader_creation() {\n    let mut source = Producer::new();\n    let node = source.original;\n    let object = source.object;\n    let first = source.session.wait_segment(0.5).unwrap();\n    source.session.advance_to(first.end_time()).unwrap();\n    source.delete();\n    let second = source.session.wait_segment(0.5).unwrap();\n    source.session.advance_to(second.end_time()).unwrap();\n    assert_eq!(source.session.execution_object_id(node), None);\n    let (_, mut reader) = source.session.create_prepared_prefix(second).unwrap();\n    drop(source);\n    reader.seek(0.25).unwrap();\n    configure(&mut reader, true);\n    assert_eq!(click(&mut reader, 0).selection_click().unwrap().target(), Some(node));\n    finish_effect(&mut reader, object, A, 10.0);\n    reader.advance_to(0.75).unwrap();\n    assert_eq!(reader.selected_pointer_target(), None);\n    assert_eq!(click(&mut reader, 2).selection_click().unwrap().target(), None);\n}\n\n#[test]\nfn prefix_pointer_future_delivery_preserves_press_and_uses_displayed_generation() {"
+  },
+  {
+    "path": "crates/noon/tests/prepared_prefix_lifecycle.rs",
+    "old": "let changed = baseline.chunks_exact(4).zip(midpoint.chunks_exact(4)).filter(|(a,b)| a != b).count();",
+    "new": "let changed = baseline.as_chunks::<4>().0.iter().zip(midpoint.as_chunks::<4>().0.iter()).filter(|(a, b)| a != b).count();"
+  }
 ]
