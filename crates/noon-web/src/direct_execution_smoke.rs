@@ -1117,6 +1117,14 @@ pub async fn create_direct_object_membership_queries_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+#[wasm_bindgen(js_name = createDirectPointPromotionRenderer)]
+pub async fn create_direct_point_promotion_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::point_promotion::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Shared authored/live membership ordering reaches the normal direct renderer.
 #[wasm_bindgen(js_name = createDirectFamilyMembershipOrderSmokeRenderer)]
 pub async fn create_direct_family_membership_order_smoke_renderer(

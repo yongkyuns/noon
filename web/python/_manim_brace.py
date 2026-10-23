@@ -151,7 +151,7 @@ class Brace(_compat.VMobject):
         _finish_candidate(self, candidate, "Brace", options)
         self.buff = buff_value
         self.sharpness = sharpness_value
-        self.direction = direction_value
+        self.direction = _base._Direction3(direction_value.x, direction_value.y, 0.0)
 
     def get_tip(self) -> _base.Vec2:
         """Return the pinned ManimCE v0.21 brace-tip anchor."""
@@ -163,9 +163,11 @@ class Brace(_compat.VMobject):
             raise RuntimeError("Brace path does not contain the canonical tip anchor")
         return anchors[_BRACE_TIP_ANCHOR_INDEX]
 
-    def get_direction(self) -> _base.Vec2:
+    def get_direction(self) -> _base._Direction3:
         """Return the normalized direction from brace center to brace tip."""
-        vector = self.get_tip() - self.get_center()
+        tip = _base._Direction3(*_base._Direction3._components(self.get_tip()))
+        center = _base._Direction3(*_base._Direction3._components(self.get_center()))
+        vector = tip - center
         return vector.normalized()
 
     def put_at_tip(
@@ -179,7 +181,7 @@ class Brace(_compat.VMobject):
             raise TypeError("Brace.put_at_tip expects a Mobject")
         if use_next_to:
             direction = self.get_direction()
-            rounded = _base.Vec2(round(direction.x), round(direction.y))
+            rounded = _base._Direction3(*(round(component) for component in direction))
             mob.next_to(self.get_tip(), rounded, **kwargs)
         else:
             mob.move_to(self.get_tip())
@@ -252,7 +254,7 @@ class BraceBetweenPoints(Brace):
         _finish_candidate(self, candidate, "BraceBetweenPoints", options)
         self.buff = buff_value
         self.sharpness = sharpness_value
-        self.direction = direction_value
+        self.direction = _base._Direction3(direction_value.x, direction_value.y, 0.0)
 
 
 class BraceLabel(_compat.VGroup):
@@ -286,7 +288,8 @@ class BraceLabel(_compat.VGroup):
             raise TypeError("brace_config must be a dict or None")
 
         self.label_constructor = constructor
-        self.brace_direction = _base._as_vec2(brace_direction)
+        planar = _base._as_vec2(brace_direction)
+        self.brace_direction = _base._Direction3(planar.x, planar.y, 0.0)
         self._brace_buff = _shared._ir._finite_number("buff", buff)
         self._brace_sharpness = _shared._ir._finite_number("sharpness", brace_options.pop("sharpness", 2.0))
         if brace_options:

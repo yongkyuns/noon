@@ -45,9 +45,9 @@ class ManimRotateSemanticsTests(unittest.TestCase):
                     self.assertIs(value.scale(.5, about_edge=noon.RIGHT), value)
                 owner = context if live else anchor
                 prefix = (anchor,) if live else ()
-                self.assertEqual(getattr(owner, "liveScaleLayout" if live else "scale").call_args_list, [
-                    unittest.mock.call(*prefix, 2., 2., 1., 3., True),
-                    unittest.mock.call(*prefix, .5, .5, 1., 0., False)])
+                self.assertEqual(getattr(owner, "liveScaleLayout3d" if live else "scale3d").call_args_list, [
+                    unittest.mock.call(*prefix, 2., 2., 2., 1., 3., 0., True),
+                    unittest.mock.call(*prefix, .5, .5, .5, 1., 0., 0., False)])
 
     def test_unknown_options_and_invalid_vector_shapes_do_not_dispatch(self):
         value = identity_only_wrapper(compat.VMobject)

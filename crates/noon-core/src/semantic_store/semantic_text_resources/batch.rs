@@ -694,9 +694,9 @@ mod tests {
                 cluster_ordinal: 0,
                 semantic_key: None,
             },
-            origin: Vec2::ZERO,
-            advance: Vec2::new(1.0, 0.0),
-            bounds: Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+            origin: Vec2::ZERO.into(),
+            advance: Vec2::new(1.0, 0.0).into(),
+            bounds: Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)).into(),
         };
         (
             TextResource {
@@ -723,7 +723,7 @@ mod tests {
                     vector_count: 0,
                     semantic_key: None,
                 }]),
-                bounds: Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+                bounds: Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)).into(),
                 baseline: 0.0,
                 layout_artifact: None,
             },

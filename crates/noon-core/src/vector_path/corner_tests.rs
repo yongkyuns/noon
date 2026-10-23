@@ -16,13 +16,18 @@ fn canonical_corners_keep_f64_semantics_and_drawable_line_segments() {
             PathCommand::LineTo { .. }
         ]
     ));
-    let points = path.manim_points().unwrap();
+    let points = path.manim_points_xy().unwrap();
     assert_eq!(points.len(), 8);
     assert_eq!(points[0], corners[0]);
     assert_eq!(points[3], corners[1]);
     assert_eq!(points[4], corners[1]);
     assert_eq!(points[7], corners[2]);
     assert_ne!(points[0].0, f64::from(points[0].0 as f32));
+    assert!(path
+        .manim_points()
+        .unwrap()
+        .iter()
+        .all(|point| point.z == 0.0));
 }
 
 #[test]
@@ -63,7 +68,7 @@ fn affine_baking_preserves_line_topology_and_exact_transformed_controls() {
         .manim_points()
         .unwrap()
         .iter()
-        .map(|&(x, y)| transform.transform_xy(x, y))
+        .map(|&point| transform.transform_xyz(point))
         .collect::<Vec<_>>();
     let baked = path.transformed_semantic(transform);
     assert_eq!(baked.manim_points().unwrap(), expected);

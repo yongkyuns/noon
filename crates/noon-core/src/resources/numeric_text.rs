@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use crate::{
-    format_decimal, DecimalFormat, GlyphRun, NumericFormatError, Rect, TextAffineTransform,
+    format_decimal, DRect, DecimalFormat, GlyphRun, NumericFormatError, TextAffineTransform,
     TextPart, TextRenderItem, TextResource, TextResourceValidationError, TextSourceKind,
-    TextSourceSpan, Vec2,
+    TextSourceSpan,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,8 +44,9 @@ impl NumericTextLayoutToken {
 pub enum NumericTextResourceError {
     Format(NumericFormatError),
     InvalidSourceSpan,
-    InvalidFontSize { bits: u32 },
+    InvalidFontSize { bits: u64 },
     TokenCountMismatch,
+    UnrepresentableBounds,
     InvalidResource(TextResourceValidationError),
 }
 
@@ -57,8 +58,10 @@ impl std::fmt::Display for NumericTextResourceError {
             Self::InvalidFontSize { bits } => write!(
                 formatter,
                 "invalid numeric text font size {}",
-                f32::from_bits(*bits)
+                f64::from_bits(*bits)
             ),
+            Self::UnrepresentableBounds => formatter
+                .write_str("numeric text bounds cannot be lowered to the execution representation"),
             Self::TokenCountMismatch => {
                 formatter.write_str("numeric token resources do not match the formatted value")
             }
@@ -138,8 +141,8 @@ pub fn compose_numeric_text_resource(
     source: Arc<str>,
     tokens: &[NumericTextLayoutToken],
     children: &[&TextResource],
-    font_size: f32,
-    point_to_scene_scale: f32,
+    font_size: f64,
+    point_to_scene_scale: f64,
 ) -> Result<TextResource, NumericTextResourceError> {
     if tokens.len() != children.len() || tokens.is_empty() {
         return Err(NumericTextResourceError::TokenCountMismatch);
@@ -160,9 +163,9 @@ pub fn compose_numeric_text_resource(
     let mut transforms = Vec::with_capacity(children.len());
     let mut cursor = 0.0;
     for (index, child) in children.iter().enumerate() {
-        let scaled = transform_rect(child.bounds, scale_transform);
+        let scaled = scale_transform.transform_bounds(child.bounds);
         let placement = TextAffineTransform::translation(cursor - scaled.min.x, -scaled.min.y);
-        let placed = transform_rect(scaled, placement);
+        let placed = placement.transform_bounds(scaled);
         transforms.push(placement);
         bounds.push(placed);
         // Manim's default unit buffer is zero: the same one-digit buffer
@@ -182,25 +185,25 @@ pub fn compose_numeric_text_resource(
         if offset != 0.0 {
             transforms[index].ty += offset;
             bounds[index] =
-                transform_rect(bounds[index], TextAffineTransform::translation(0.0, offset));
+                TextAffineTransform::translation(0.0, offset).transform_bounds(bounds[index]);
         }
     }
     let overall_top = bounds
         .iter()
         .map(|bound| bound.max.y)
-        .fold(f32::NEG_INFINITY, f32::max);
+        .fold(f64::NEG_INFINITY, f64::max);
     for (index, token) in tokens.iter().enumerate() {
         if matches!(token.part, NumericTextPart::Unit { superscript: true }) {
             let offset = overall_top - bounds[index].max.y;
             transforms[index].ty += offset;
             bounds[index] =
-                transform_rect(bounds[index], TextAffineTransform::translation(0.0, offset));
+                TextAffineTransform::translation(0.0, offset).transform_bounds(bounds[index]);
         }
     }
     let overall = bounds
         .iter()
         .copied()
-        .reduce(Rect::union)
+        .reduce(DRect::union)
         .ok_or(NumericTextResourceError::TokenCountMismatch)?;
     let recenter = TextAffineTransform::translation(-overall.center().x, -overall.center().y);
     let mut runs = Vec::<GlyphRun>::new();
@@ -262,7 +265,7 @@ pub fn compose_numeric_text_resource(
         vector_items: vectors.into(),
         render_items: render_items.into(),
         parts: parts.into(),
-        bounds: Rect::new(
+        bounds: DRect::new(
             overall.min - overall.center(),
             overall.max - overall.center(),
         ),
@@ -280,14 +283,4 @@ fn text_span(start: usize, end: usize) -> Result<TextSourceSpan, NumericTextReso
         u32::try_from(start).map_err(|_| NumericTextResourceError::InvalidSourceSpan)?,
         u32::try_from(end).map_err(|_| NumericTextResourceError::InvalidSourceSpan)?,
     ))
-}
-
-fn transform_rect(rect: Rect, transform: TextAffineTransform) -> Rect {
-    Rect::from_points([
-        transform.transform_point(rect.min),
-        transform.transform_point(Vec2::new(rect.min.x, rect.max.y)),
-        transform.transform_point(Vec2::new(rect.max.x, rect.min.y)),
-        transform.transform_point(rect.max),
-    ])
-    .expect("a rectangle has four corners")
 }

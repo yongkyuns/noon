@@ -65,6 +65,14 @@ MUTABLE_STRIDE_CLOSING_CASES = json.loads(${JSON.stringify(JSON.stringify(scalar
 ${await readFile(path.join(repoRoot, "scripts/manim_scalar_path_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "scripts/manim_mutable_stride_closing_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_scalar_path_precision.py"), "utf8")}`;
+const pointAppendFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/point-append.json"), "utf8"));
+const pointAppendSource = `import json
+POINT_APPEND_CASES = json.loads(${JSON.stringify(JSON.stringify(pointAppendFixture.cases))})
+POINT_APPEND_FAMILY_CASES = json.loads(${JSON.stringify(JSON.stringify(pointAppendFixture.familyCases))})
+POINT_APPEND_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(pointAppendFixture.hookCases))})
+${await readFile(path.join(repoRoot, "scripts/manim_point_append_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_point_append_coercion.py"), "utf8")}`;
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_query_hooks.py"), "utf8")}`;
 const uncreateSource = await readFile(
@@ -289,12 +297,12 @@ class CrossAdapterSmoke(Scene):
         assert isinstance(cross, VGroup) and len(cross) == 2
         assert all(isinstance(member, Line) for member in cross)
         assert cross[0] is not cross[1]
-        assert abs(cross[0].get_start().x + 1.5) < 1e-6
-        assert abs(cross[0].get_start().y - 0.75) < 1e-6
-        assert abs(cross[0].get_end().x - 1.5) < 1e-6
-        assert abs(cross[0].get_end().y + 0.75) < 1e-6
-        assert abs(cross[1].get_start().x - 1.5) < 1e-6
-        assert abs(cross[1].get_end().x + 1.5) < 1e-6
+        assert abs(cross[0].get_start()[0] + 1.5) < 1e-6
+        assert abs(cross[0].get_start()[1] - 0.75) < 1e-6
+        assert abs(cross[0].get_end()[0] - 1.5) < 1e-6
+        assert abs(cross[0].get_end()[1] + 0.75) < 1e-6
+        assert abs(cross[1].get_start()[0] - 1.5) < 1e-6
+        assert abs(cross[1].get_end()[0] + 1.5) < 1e-6
         assert all(abs(member.style["stroke_width"] - 0.06) < 1e-6 for member in cross)
         copied = cross.copy()
         assert isinstance(copied, VGroup) and len(copied) == 2
@@ -475,14 +483,14 @@ from noon import *
 class SharedQueryTransforms(Scene):
     def construct(self):
         box = Rectangle(width=2.0, height=1.0).shift(RIGHT * 0.7 + UP * 0.3)
-        assert abs(box.get_left().x + 0.3) < 1e-9
-        assert abs(box.get_right().x - 1.7) < 1e-9
-        assert abs(box.get_top().y - 0.8) < 1e-9
+        assert abs(box.get_left()[0] + 0.3) < 1e-9
+        assert abs(box.get_right()[0] - 1.7) < 1e-9
+        assert abs(box.get_top()[1] - 0.8) < 1e-9
         assert abs(box.get_x(LEFT) + 0.3) < 1e-9
 
         box.set_coord(-1.5, 0, LEFT).set_coord(1.25, 1, UP)
-        assert abs(box.get_left().x + 1.5) < 1e-9
-        assert abs(box.get_top().y - 1.25) < 1e-9
+        assert abs(box.get_left()[0] + 1.5) < 1e-9
+        assert abs(box.get_top()[1] - 1.25) < 1e-9
         box.width = 3.0
         box.stretch_to_fit_height(2.0)
         assert abs(box.width - 3.0) < 1e-9
@@ -766,12 +774,12 @@ result = Scene()
 from noon import Angle, Scene
 angle = Angle.from_three_points((1, 0, 0), (0, 0, 0), (0, 1, 0))
 assert isinstance(angle, Angle)
-assert angle.lines[0].get_start().x == 0
-assert angle.lines[0].get_start().y == 0
-assert angle.lines[0].get_end().x == 1
-assert angle.lines[0].get_end().y == 0
-assert angle.lines[1].get_end().x == 0
-assert angle.lines[1].get_end().y == 1
+assert angle.lines[0].get_start()[0] == 0
+assert angle.lines[0].get_start()[1] == 0
+assert angle.lines[0].get_end()[0] == 1
+assert angle.lines[0].get_end()[1] == 0
+assert angle.lines[1].get_end()[0] == 0
+assert angle.lines[1].get_end()[1] == 1
 assert abs(angle.get_value(degrees=True) - 90) < 1e-9
 result = Scene()
 `);
@@ -1078,6 +1086,7 @@ result = Scene()
     queryHooksSource,
     pointListSource,
     scalarPathSource,
+    pointAppendSource,
   ];
   const sharedText = await page.evaluate(
     (sources) => window.noonManimCompat.runLiveSources(sources),
@@ -1095,14 +1104,15 @@ result = Scene()
   console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${reportFor(pathKeywordSource).metrics.backend}.`);
   console.log(`Pinned point-list insertion controls passed: ${pointListFixture.cases.length} same-platform cases in authored/live phases; backend ${reportFor(pointListSource).metrics.backend}.`);
   console.log(`Pinned scalar path precision controls passed: ${scalarPathFixture.cases.length} scalar and ${scalarPathFixture.mutableStrideClosingCases.length} mutable-stride closing cases in authored/live phases; backend ${reportFor(scalarPathSource).metrics.backend}.`);
+  console.log(`Pinned point append controls passed: ${pointAppendFixture.cases.length} caller and ${pointAppendFixture.hookCases.length} hook cases in authored/live phases; backend ${reportFor(pointAppendSource).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0, 0, 0],
+    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0, 0, 0, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

@@ -17,10 +17,10 @@ class ManimFrameMethodTests(unittest.TestCase):
     def test_shift_onto_screen_checks_edges_in_pinned_order(self):
         value = SimpleNamespace()
         value.get_edge_center = Mock(side_effect=[
-            noon.Vec2(0.0, 5.0),
-            noon.Vec2(0.0, 0.0),
-            noon.Vec2(0.0, 0.0),
-            noon.Vec2(0.0, 0.0),
+            (0.0, 5.0, 7.125),
+            (0.0, 0.0, 7.125),
+            (0.0, 0.0, 7.125),
+            (0.0, 0.0, 7.125),
         ])
         value.to_edge = Mock(return_value=value)
         with patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
@@ -33,7 +33,7 @@ class ManimFrameMethodTests(unittest.TestCase):
 
     def test_is_off_screen_uses_default_frame_bounds_and_short_circuits(self):
         value = SimpleNamespace()
-        value.get_left = Mock(return_value=noon.Vec2(noon.DEFAULT_FRAME_WIDTH / 2 + 0.1, 0.0))
+        value.get_left = Mock(return_value=(noon.DEFAULT_FRAME_WIDTH / 2 + 0.1, 0.0, 7.125))
         value.get_right = Mock(side_effect=AssertionError("right edge should not be read"))
         self.assertTrue(noon.Mobject.is_off_screen(value))
         value.get_left.assert_called_once_with()

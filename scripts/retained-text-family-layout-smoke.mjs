@@ -17,10 +17,10 @@ def close(actual, expected, label, tolerance=1e-5):
 
 def union_bounds(*members):
     return (
-        min(member.get_critical_point(LEFT).x for member in members),
-        min(member.get_critical_point(DOWN).y for member in members),
-        max(member.get_critical_point(RIGHT).x for member in members),
-        max(member.get_critical_point(UP).y for member in members),
+        min(member.get_critical_point(LEFT)[0] for member in members),
+        min(member.get_critical_point(DOWN)[1] for member in members),
+        max(member.get_critical_point(RIGHT)[0] for member in members),
+        max(member.get_critical_point(UP)[1] for member in members),
     )
 
 
@@ -34,32 +34,32 @@ class RetainedFamilyLayout(Scene):
         close(family.width, max_x - min_x, "nested retained family width")
         close(family.height, max_y - min_y, "nested retained family height")
         center = family.get_center()
-        close(center.x, (min_x + max_x) * 0.5, "nested retained family center x")
-        close(center.y, (min_y + max_y) * 0.5, "nested retained family center y")
+        close(center[0], (min_x + max_x) * 0.5, "nested retained family center x")
+        close(center[1], (min_y + max_y) * 0.5, "nested retained family center y")
 
         first_before = first.get_center()
         second_before = second.get_center()
         delta = RIGHT * 0.75 + UP * 0.55
         family.shift(delta)
-        close(first.get_center().x, first_before.x + delta.x, "family shift first x")
-        close(first.get_center().y, first_before.y + delta.y, "family shift first y")
-        close(second.get_center().x, second_before.x + delta.x, "family shift second x")
-        close(second.get_center().y, second_before.y + delta.y, "family shift second y")
+        close(first.get_center()[0], first_before[0] + delta.x, "family shift first x")
+        close(first.get_center()[1], first_before[1] + delta.y, "family shift first y")
+        close(second.get_center()[0], second_before[0] + delta.x, "family shift second x")
+        close(second.get_center()[1], second_before[1] + delta.y, "family shift second y")
 
         family.center()
         centered = family.get_center()
-        close(centered.x, 0.0, "family center x")
-        close(centered.y, 0.0, "family center y")
+        close(centered[0], 0.0, "family center x")
+        close(centered[1], 0.0, "family center y")
 
         arranged_a = Text("A", font_size=36)
         arranged_b = Text("BBBB", font_size=36)
         arranged = VGroup(arranged_a, VGroup(arranged_b))
         arranged.arrange(RIGHT, buff=0.375, center=True)
-        gap = arranged_b.get_critical_point(LEFT).x - arranged_a.get_critical_point(RIGHT).x
+        gap = arranged_b.get_critical_point(LEFT)[0] - arranged_a.get_critical_point(RIGHT)[0]
         close(gap, 0.375, "nested retained arrange gap")
         arranged_center = arranged.get_center()
-        close(arranged_center.x, 0.0, "arranged family center x")
-        close(arranged_center.y, 0.0, "arranged family center y")
+        close(arranged_center[0], 0.0, "arranged family center x")
+        close(arranged_center[1], 0.0, "arranged family center y")
 
         square = Square(side_length=1.25).shift(LEFT * 0.9)
         mixed_text = Text("Mixed", font_size=30).shift(RIGHT * 0.8)
@@ -68,31 +68,31 @@ class RetainedFamilyLayout(Scene):
         close(mixed.width, max_x - min_x, "mixed family width")
         close(mixed.height, max_y - min_y, "mixed family height")
         mixed_center = mixed.get_center()
-        close(mixed_center.x, (min_x + max_x) * 0.5, "mixed family center x")
-        close(mixed_center.y, (min_y + max_y) * 0.5, "mixed family center y")
+        close(mixed_center[0], (min_x + max_x) * 0.5, "mixed family center x")
+        close(mixed_center[1], (min_y + max_y) * 0.5, "mixed family center y")
 
         square_before = square.get_center()
         mixed_text_before = mixed_text.get_center()
         mixed.shift(DOWN * 0.6)
-        close(square.get_center().y, square_before.y - 0.6, "mixed family square shift")
-        close(mixed_text.get_center().y, mixed_text_before.y - 0.6, "mixed family text shift")
+        close(square.get_center()[1], square_before[1] - 0.6, "mixed family square shift")
+        close(mixed_text.get_center()[1], mixed_text_before[1] - 0.6, "mixed family text shift")
 
         placement_target = Text("Target", font_size=34).shift(RIGHT * 2.5 + UP * 0.8)
         placement_a = Text("P", font_size=30)
         placement_b = Text("QQ", font_size=30).shift(RIGHT * 0.8)
         placement = VGroup(placement_a, placement_b)
         placement.move_to(placement_target)
-        close(placement.get_center().x, placement_target.get_center().x, "move_to retained target x")
-        close(placement.get_center().y, placement_target.get_center().y, "move_to retained target y")
+        close(placement.get_center()[0], placement_target.get_center()[0], "move_to retained target x")
+        close(placement.get_center()[1], placement_target.get_center()[1], "move_to retained target y")
         placement.next_to(placement_target, RIGHT, buff=0.25)
-        placement_left = placement.get_center().x - placement.width * 0.5
-        gap = placement_left - placement_target.get_critical_point(RIGHT).x
+        placement_left = placement.get_center()[0] - placement.width * 0.5
+        gap = placement_left - placement_target.get_critical_point(RIGHT)[0]
         close(gap, 0.25, "next_to retained target gap")
         placement.align_to(placement_target, UP)
-        placement_top = placement.get_center().y + placement.height * 0.5
+        placement_top = placement.get_center()[1] + placement.height * 0.5
         close(
             placement_top,
-            placement_target.get_critical_point(UP).y,
+            placement_target.get_critical_point(UP)[1],
             "align_to retained target top",
         )
 
@@ -103,11 +103,11 @@ class RetainedFamilyLayout(Scene):
         close(typst_family.width, max_x - min_x, "Typst family width")
         close(typst_family.height, max_y - min_y, "Typst family height")
         typst_family.next_to(placement_target, DOWN, buff=0.2)
-        gap = placement_target.get_critical_point(DOWN).y - typst_family.get_critical_point(UP).y
+        gap = placement_target.get_critical_point(DOWN)[1] - typst_family.get_critical_point(UP)[1]
         close(gap, 0.2, "Typst family next_to gap")
         close(
-            typst_family.get_center().x,
-            placement_target.get_center().x,
+            typst_family.get_center()[0],
+            placement_target.get_center()[0],
             "Typst family next_to alignment",
         )
 

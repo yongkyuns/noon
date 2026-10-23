@@ -38,5 +38,5 @@ class OrdinaryLivePrimitiveConstruction(Scene):
             Square.set_default()
         self.add(circle, square)
 
-        assert circle.get_center() == (2.0, -1.0)
-        assert square.get_center() == (-2.0, 1.0)
+        assert tuple(circle.get_center()) == (2.0, -1.0, 0.0)
+        assert tuple(square.get_center()) == (-2.0, 1.0, 0.0)

@@ -13,7 +13,7 @@ class HostUpdaterPerfScene(Scene):
             # Read the Rust-published target row, then emit both transform and
             # style work. The unrelated anchor must never enter the sparse phase.
             center = mobject.get_center()
-            mobject.move_to((center.x, dt, 0.0))
+            mobject.move_to((center[0], dt, 0.0))
             mobject.set_object_opacity(0.5 + dt)
 
         follower.add_updater(removed)

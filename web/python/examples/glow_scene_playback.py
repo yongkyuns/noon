@@ -16,7 +16,7 @@ class GlowScenePlayback(Scene):
                 color=BLUE, radius=Pixels(6.5), intensity=1.4),
             run_time=1.0, rate_func=linear,
         )
-        assert dot.get_center() == (2.0, 0.0)
+        assert tuple(dot.get_center()) == (2.0, 0.0, 0.0)
         assert original.authored_definition.intensity == 1.4
         assert original.authored_definition.radius == Pixels(6.5)
         path = VMobject(stroke_color=BLUE, stroke_width=5, fill_opacity=0)
@@ -47,4 +47,4 @@ class GlowScenePlayback(Scene):
         else:
             raise AssertionError("removed attachment handle must stay retired")
         self.wait(0.25)
-        assert dot.get_center() == (2.0, 0.0)
+        assert tuple(dot.get_center()) == (2.0, 0.0, 0.0)

@@ -75,6 +75,8 @@ runs:
           /home/runner/.cache/noon-sccache-wasm
           ~/.cache/.wasm-pack
         key: ${{ steps.identity.outputs.key }}
+        # Prefer exact configuration, then a same-platform compiler seed.
+        # Every fallback still builds and verifies the current source artifact.
         restore-keys: |
           ${{ steps.identity.outputs.restore-0 }}
           ${{ steps.identity.outputs.restore-1 }}

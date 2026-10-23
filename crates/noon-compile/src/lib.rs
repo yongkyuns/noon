@@ -231,7 +231,7 @@ pub struct CompiledNumericTextDriver {
     pub object_index: u32,
     pub format: noon_core::DecimalFormat,
     pub font_size: f32,
-    pub point_to_scene_scale: f32,
+    pub point_to_scene_scale: f64,
     pub token_resources: Arc<[(Arc<str>, noon_core::TextResourceHandle)]>,
 }
 
@@ -321,6 +321,7 @@ pub enum CompiledResourceError {
     ImageDimensionsMismatch(RasterImageResourceHandle),
     ConflictingImage(RasterImageResourceHandle),
     MissingText(TextResourceHandle),
+    UnrepresentableTextBounds(TextResourceHandle),
     MissingFont(FontResourceKey),
     MissingGeometry(GeometryResourceHandle),
     ConflictingText(TextResourceHandle),
@@ -356,6 +357,12 @@ impl std::fmt::Display for CompiledResourceError {
                 handle.id.get(),
                 handle.version
             ),
+            Self::UnrepresentableTextBounds(handle) => write!(
+                formatter,
+                "text resource {}@{} bounds cannot be lowered to compact execution coordinates",
+                handle.id.get(),
+                handle.version
+            ),
             Self::MissingFont(key) => write!(
                 formatter,
                 "missing font resource {}#{}",
@@ -384,6 +391,17 @@ impl std::fmt::Display for CompiledResourceError {
 }
 
 impl std::error::Error for CompiledResourceError {}
+
+/// Canonical resource bounds remain f64; execution rows carry checked compact data.
+fn compact_text_bounds(
+    handle: TextResourceHandle,
+    resource: &TextResource,
+) -> Result<Rect, CompiledResourceError> {
+    resource
+        .bounds
+        .lower_f32()
+        .map_err(|_| CompiledResourceError::UnrepresentableTextBounds(handle))
+}
 
 fn geometry_resources_equal(left: &GeometryResource, right: &GeometryResource) -> bool {
     match (left, right) {
@@ -614,7 +632,7 @@ impl CompiledResources {
         handle: TextResourceHandle,
     ) -> Result<Rect, CompiledResourceError> {
         if let Some(resource) = self.texts.get(&handle) {
-            return Ok(resource.bounds);
+            return compact_text_bounds(handle, resource);
         }
         let resource = store
             .text_resources()
@@ -661,7 +679,7 @@ impl CompiledResources {
             if !Arc::ptr_eq(existing, &resource) && existing.as_ref() != resource.as_ref() {
                 return Err(CompiledResourceError::ConflictingText(handle));
             }
-            return Ok(existing.bounds);
+            return compact_text_bounds(handle, existing);
         }
 
         let mut additions = Self::default();
@@ -689,7 +707,7 @@ impl CompiledResources {
                 .geometries
                 .insert(item.geometry, geometry_resource);
         }
-        let bounds = resource.bounds;
+        let bounds = compact_text_bounds(handle, &resource)?;
         additions.texts.insert(handle, resource);
         self.preflight_merge(&additions)?;
         self.merge(additions);
@@ -2801,7 +2819,9 @@ fn validate_execution_content_resource(
         .ok_or(CompilePatchError::Resource(
             CompiledResourceError::MissingText(*handle),
         ))?;
-    if text_bounds != Some(resource.bounds) {
+    if text_bounds
+        != Some(compact_text_bounds(*handle, resource).map_err(CompilePatchError::Resource)?)
+    {
         return Err(CompilePatchError::TextBoundsMismatch {
             object,
             resource: *handle,
@@ -3180,6 +3200,50 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn text_bounds_lowering_preserves_canonical_precision_and_rejects_overflow_atomically() {
+        use noon_core::{DRect, DVec2, TextResourceArena, TextSourceKind};
+        let mut texts = TextResourceArena::new();
+        let mut compiled = CompiledResources::default();
+        let resource = |max_x| TextResource {
+            source: Arc::from(""),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([]),
+            vector_items: Arc::from([]),
+            render_items: Arc::from([]),
+            parts: Arc::from([]),
+            bounds: DRect::new(DVec2::new(1.0, 0.0), DVec2::new(max_x, 1.0)),
+            baseline: 0.0,
+            layout_artifact: None,
+        };
+        let fine = texts.insert(resource(1.0 + 1e-10)).unwrap();
+        let compact = compiled
+            .capture_text_from_arenas(
+                &texts,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+                fine,
+            )
+            .unwrap();
+        assert_eq!(compact.width(), 0.0);
+        assert!(compiled.texts[&fine].bounds.width() > 0.0);
+        for max_x in [1e100, f64::INFINITY, f64::NAN] {
+            let invalid = texts.insert(resource(max_x)).unwrap();
+            assert_eq!(
+                compiled.capture_text_from_arenas(
+                    &texts,
+                    &FontResourceArena::new(),
+                    &GeometryResourceArena::new(),
+                    invalid
+                ),
+                Err(CompiledResourceError::UnrepresentableTextBounds(invalid))
+            );
+            assert_eq!(compiled.texts.len(), 1);
+            assert!(compiled.fonts.is_empty());
+            assert!(compiled.geometries.is_empty());
+        }
+    }
 
     fn filled_loop() -> noon_core::VectorPath {
         noon_core::VectorPath::new()

@@ -16,7 +16,7 @@ class OrdinaryAffineFade(Scene):
             run_time=1.0,
             rate_func=linear,
         )
-        assert tuple(circle.get_center()) == (0.0, 0.0)
+        assert tuple(circle.get_center()) == (0.0, 0.0, 0.0)
 
         self.play(
             FadeOut(circle, target_position=2 * RIGHT, scale=0.15),

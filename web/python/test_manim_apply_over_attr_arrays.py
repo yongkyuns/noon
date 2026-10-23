@@ -11,16 +11,16 @@ class ManimApplyOverAttrArraysTests(unittest.TestCase):
         value.get_array_attrs.return_value = list(attrs)
         return value
 
-    def test_maps_three_column_snapshot_then_publishes_planar_points(self):
+    def test_maps_full_xyz_snapshot_and_preserves_all_coordinates(self):
         value = self._value()
         query = Mock()
-        query.points.return_value = [1.0, 2.0, 3.0, 4.0]
+        query.points3D.return_value = [1.0, 2.0, .25, 3.0, 4.0, .75]
         edit = Mock(return_value=value)
 
         def translate(points):
             rows = [[float(component) for component in point] for point in points]
-            self.assertEqual(rows, [[1.0, 2.0, 0.0], [3.0, 4.0, 0.0]])
-            return [[x + 5.0, y - 2.0, z] for x, y, z in rows]
+            self.assertEqual(rows, [[1.0, 2.0, .25], [3.0, 4.0, .75]])
+            return [[x + 5.0, y - 2.0, z + 1.] for x, y, z in rows]
 
         with patch("_manim_path_queries._query", return_value=query), \
              patch("_manim_path_editing.edit_points", edit), \
@@ -29,8 +29,8 @@ class ManimApplyOverAttrArraysTests(unittest.TestCase):
 
         mapped = edit.call_args.args[3]
         self.assertEqual(
-            [[float(point[0]), float(point[1])] for point in mapped],
-            [[6.0, 0.0], [8.0, 2.0]],
+            [[float(component) for component in point] for point in mapped],
+            [[6.0, 0.0, 1.25], [8.0, 2.0, 1.75]],
         )
         edit.assert_called_once_with(
             value, "setPoints", "liveSetPoints", mapped, array=True
@@ -64,29 +64,10 @@ class ManimApplyOverAttrArraysTests(unittest.TestCase):
         query.assert_not_called()
         func.assert_not_called()
 
-    def test_rejects_nonzero_z_before_shared_mutation(self):
-        value = self._value()
-        query = Mock()
-        query.points.return_value = [1.0, 2.0]
-        edit = Mock()
-        with patch("_manim_path_queries._query", return_value=query), \
-             patch("_manim_path_editing.edit_points", edit), \
-             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
-            with self.assertRaisesRegex(NotImplementedError, "nonzero-z"):
-                apply_over_attr_arrays(
-                    value,
-                    lambda points: [
-                        [float(point[0]), float(point[1]), 1.0]
-                        for point in points
-                    ],
-                )
-        query.free.assert_called_once_with()
-        edit.assert_not_called()
-
     def test_callback_failure_releases_the_snapshot_without_publishing(self):
         value = self._value()
         query = Mock()
-        query.points.return_value = [1.0, 2.0]
+        query.points3D.return_value = [1.0, 2.0, .25]
         edit = Mock()
 
         def fail(_points):

@@ -72,30 +72,30 @@ class CurrentShapeMatcherSmoke(Scene):
         self.add(target)
         self.bind_position(target, tracker, direction=RIGHT, offset=(0, 2))
         self.wait(0.1)
-        assert abs(target.get_center().x - 3) < 1e-6
-        assert abs(target.get_center().y - 2) < 1e-6
+        assert abs(target.get_center()[0] - 3) < 1e-6
+        assert abs(target.get_center()[1] - 2) < 1e-6
         cross = Cross(target, scale_factor=1.5)
         assert isinstance(cross, VGroup) and len(cross) == 2
         expected = [((1.5, 2.75), (4.5, 1.25)), ((4.5, 2.75), (1.5, 1.25))]
         for member, (start, end) in zip(cross, expected):
             assert isinstance(member, Line)
-            assert abs(member.get_start().x - start[0]) < 1e-6
-            assert abs(member.get_start().y - start[1]) < 1e-6
-            assert abs(member.get_end().x - end[0]) < 1e-6
-            assert abs(member.get_end().y - end[1]) < 1e-6
+            assert abs(member.get_start()[0] - start[0]) < 1e-6
+            assert abs(member.get_start()[1] - start[1]) < 1e-6
+            assert abs(member.get_end()[0] - end[0]) < 1e-6
+            assert abs(member.get_end()[1] - end[1]) < 1e-6
         surround = SurroundingRectangle(target, buff=0)
         background = BackgroundRectangle(target, buff=0)
         for matcher in (surround, background):
-            assert abs(matcher.get_center().x - 3) < 1e-6
-            assert abs(matcher.get_center().y - 2) < 1e-6
+            assert abs(matcher.get_center()[0] - 3) < 1e-6
+            assert abs(matcher.get_center()[1] - 2) < 1e-6
             assert abs(matcher.width - 2) < 1e-6
             assert abs(matcher.height - 1) < 1e-6
         family = VGroup(target)
         family_cross = Cross(family)
-        assert abs(family_cross[0].get_start().x - 2) < 1e-6
-        assert abs(family_cross[0].get_start().y - 2.5) < 1e-6
-        assert abs(family_cross[0].get_end().x - 4) < 1e-6
-        assert abs(family_cross[0].get_end().y - 1.5) < 1e-6
+        assert abs(family_cross[0].get_start()[0] - 2) < 1e-6
+        assert abs(family_cross[0].get_start()[1] - 2.5) < 1e-6
+        assert abs(family_cross[0].get_end()[0] - 4) < 1e-6
+        assert abs(family_cross[0].get_end()[1] - 1.5) < 1e-6
         self.add(cross, surround, background, family_cross)
 
         # After a completed authored animation, construction must observe the
@@ -106,10 +106,10 @@ class CurrentShapeMatcherSmoke(Scene):
         animated_cross = Cross(animated, scale_factor=1.5)
         for member, (start, end) in zip(animated_cross, expected):
             assert isinstance(member, Line)
-            assert abs(member.get_start().x - start[0]) < 1e-6
-            assert abs(member.get_start().y - start[1]) < 1e-6
-            assert abs(member.get_end().x - end[0]) < 1e-6
-            assert abs(member.get_end().y - end[1]) < 1e-6
+            assert abs(member.get_start()[0] - start[0]) < 1e-6
+            assert abs(member.get_start()[1] - start[1]) < 1e-6
+            assert abs(member.get_end()[0] - end[0]) < 1e-6
+            assert abs(member.get_end()[1] - end[1]) < 1e-6
         self.add(animated_cross)
         self.wait(0.1)
 `;

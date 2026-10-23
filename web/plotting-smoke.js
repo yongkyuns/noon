@@ -489,7 +489,7 @@ class PlottingQualification(Scene):
         self.play(axes.animate.shift(RIGHT), run_time=0.2, rate_func=linear)
         near(axes.c2p(0, 0), origin + RIGHT)
         near(axes.p2c(axes.c2p(0.75, 0.25)), (0.75, 0.25))
-        near(sentinel.get_center(), (4, 2))
+        near(sentinel.get_center(), (4, 2, 0))
         assert len(calls) == 5, "static curve was reevaluated during playback"
 
         # Resumed authoring must sample against the completed effective axes and
@@ -497,7 +497,7 @@ class PlottingQualification(Scene):
         later = axes.plot(lambda x: -x / 2, [-1, 1, 0.5], color=RED)
         near(later.get_start(), axes.c2p(-1, 0.5))
         self.play(Create(later), run_time=0.2, rate_func=linear)
-        near(sentinel.get_center(), (4, 2))
+        near(sentinel.get_center(), (4, 2, 0))
         assert len(calls) == 5
         area = axes.get_area(later, [-0.75, 0.75], color=GREEN, opacity=0.4)
         rectangles = axes.get_riemann_rectangles(later, [-1, 1], dx=0.5, input_sample_type="center", fill_opacity=0.6)
@@ -526,14 +526,14 @@ class PlottingQualification(Scene):
             else:
                 raise AssertionError("unsupported detached live query was silently accepted")
         self.add(fresh, line)
-        near(fresh.c2p(0, 0), LEFT)
+        near(fresh.c2p(0, 0), (-1, 0))
         near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))
         assert abs(line.p2n(line.n2p(1)) - 1) < 2e-5
         near(line.n2p(100), (1, -1))
         self.play(fresh.animate.shift(UP), run_time=0.2, rate_func=linear)
-        near(fresh.c2p(0, 0), LEFT + UP)
+        near(fresh.c2p(0, 0), (-1, 1))
         self.remove(fresh, line)
-        near(sentinel.get_center(), (4, 2))
+        near(sentinel.get_center(), (4, 2, 0))
         assert all(len(visited) == 2 for visited in endpoint_visits)
         assert all(visits[0] == count for visits, count in implicit_counts), "implicit callback escaped preparation"
 `;

@@ -281,7 +281,8 @@ class SampleSpace(_compat.Group):
             raise TypeError("labels must be a list of strings or Mobjects")
         if isinstance(min_num_quads, bool) or min_num_quads != 1:
             raise NotImplementedError("SampleSpace subdivision braces support min_num_quads=1")
-        direction_value = _base._as_vec2(direction)
+        planar = _base._as_vec2(direction)
+        direction_value = _base._Direction3(planar.x, planar.y, 0.0)
         buff_value = _shared._ir._finite_number("buff", buff)
 
         braces = []

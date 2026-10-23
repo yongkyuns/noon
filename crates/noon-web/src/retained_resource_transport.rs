@@ -9,14 +9,14 @@ use std::{
 };
 
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, FontResourceLookup, FontVariationSetting,
-    GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
-    GeometryResourceLookup, GlyphOutlineProfile, GlyphRun, MeshResource, PositionedGlyph, Rect,
-    StrokeCap, StrokeJoin, Style, TextAffineTransform, TextClusterIdentity, TextDirection,
-    TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart,
-    TextRenderItem, TextResource, TextResourceArena, TextResourceHandle, TextResourceLookup,
-    TextResourceReplacementStaging, TextSourceKind, TextSourceSpan, TextVectorItem,
-    TextVectorStyle, Transform2D, Vec2, VectorPath,
+    Color, DRect, DVec2, FontFaceIdentity, FontResourceArena, FontResourceLookup,
+    FontVariationSetting, GeometryRef, GeometryResource, GeometryResourceArena,
+    GeometryResourceHandle, GeometryResourceLookup, GlyphOutlineProfile, GlyphRun, MeshResource,
+    PositionedGlyph, StrokeCap, StrokeJoin, Style, TextAffineTransform, TextClusterIdentity,
+    TextDirection, TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind,
+    TextPart, TextRenderItem, TextResource, TextResourceArena, TextResourceHandle,
+    TextResourceLookup, TextResourceReplacementStaging, TextSourceKind, TextSourceSpan,
+    TextVectorItem, TextVectorStyle, Transform2D, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ pub(crate) mod incremental_render;
 /// vector-decoration geometry, typed spatial meshes, and exact OpenType buffers
 /// across the Python-worker boundary when a retained scene is installed.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 13;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 14;
 const MAX_SHARED_RENDER_GEOMETRIES: usize = 16;
 const MAX_TRANSPORT_MESH_VERTICES: usize = 500_000;
 const MAX_TRANSPORT_MESH_INDICES: usize = 3_000_000;
@@ -1953,8 +1953,8 @@ struct TransportTextResource {
     vector_items: Vec<TransportTextVectorItem>,
     render_items: Vec<TransportTextRenderItem>,
     parts: Vec<TransportTextPart>,
-    bounds: Rect,
-    baseline: f32,
+    bounds: DRect,
+    baseline: f64,
     layout_artifact: Option<TransportTextLayoutArtifact>,
 }
 
@@ -2075,7 +2075,7 @@ struct TransportGlyphRun {
     font: TransportFontFaceIdentity,
     outline_profile: TransportGlyphOutlineProfile,
     variations: Vec<TransportFontVariationSetting>,
-    font_size: f32,
+    font_size: f64,
     direction: TransportTextDirection,
     fill: Option<Color>,
     stroke: Option<TransportTextGlyphStroke>,
@@ -2276,12 +2276,12 @@ impl TransportTextGlyphStroke {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 struct TransportTextAffineTransform {
-    xx: f32,
-    yx: f32,
-    xy: f32,
-    yy: f32,
-    tx: f32,
-    ty: f32,
+    xx: f64,
+    yx: f64,
+    xy: f64,
+    yy: f64,
+    tx: f64,
+    ty: f64,
 }
 
 impl From<TextAffineTransform> for TransportTextAffineTransform {
@@ -2314,9 +2314,9 @@ impl From<TransportTextAffineTransform> for TextAffineTransform {
 struct TransportPositionedGlyph {
     glyph_id: u32,
     cluster: TransportTextClusterIdentity,
-    origin: Vec2,
-    advance: Vec2,
-    bounds: Rect,
+    origin: DVec2,
+    advance: DVec2,
+    bounds: DRect,
 }
 
 impl TransportPositionedGlyph {
@@ -2599,7 +2599,67 @@ impl TransportTextLayoutBackendKind {
 mod tests {
     use super::*;
     use noon::{MathTypst, Scene, Typst};
-    use noon_core::TextSourceKind;
+    use noon_core::{Rect, TextSourceKind, Vec2};
+
+    #[test]
+    fn retained_text_metrics_round_trip_without_narrowing_and_reject_old_protocol() {
+        let mut scene = Scene::new();
+        let object = scene.typst(Typst::new("A")).unwrap();
+        let source = scene.integration_store().borrow();
+        let mut resource = source
+            .text_resources()
+            .get(object.state().unwrap().content.text().unwrap())
+            .unwrap()
+            .clone();
+        let precise = 1.23456789012345;
+        resource.bounds = DRect::new(DVec2::new(-precise, -precise), DVec2::new(precise, precise));
+        resource.baseline = precise;
+        let run = &mut Arc::make_mut(&mut resource.runs)[0];
+        run.font_size = 20.0 + precise;
+        run.transform = TextAffineTransform {
+            xx: precise,
+            yx: -precise,
+            xy: precise / 3.0,
+            yy: precise,
+            tx: precise,
+            ty: -precise,
+        };
+        let glyph = &mut Arc::make_mut(&mut run.glyphs)[0];
+        glyph.origin = DVec2::new(precise, -precise);
+        glyph.advance = DVec2::new(precise / 3.0, precise / 7.0);
+        glyph.bounds = resource.bounds;
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(resource.clone()).unwrap();
+        let bundle = RetainedResourceBundle::capture(
+            [handle],
+            &texts,
+            source.geometry_resources(),
+            source.font_resources(),
+        )
+        .unwrap();
+        for decoded in [
+            RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap()).unwrap(),
+            serde_json::from_slice::<RetainedResourceBundle>(&serde_json::to_vec(&bundle).unwrap())
+                .unwrap(),
+        ] {
+            let installed = decoded.install().unwrap();
+            let local = installed
+                .resolve_text_handle(TransportTextResourceHandle::from_source_handle(handle))
+                .unwrap();
+            assert_eq!(
+                TextResourceLookup::get(&installed, local).unwrap(),
+                &resource
+            );
+        }
+        let mut old = bundle;
+        old.protocol_version = 13;
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&old, &mut bytes).unwrap();
+        assert!(matches!(
+            RetainedResourceBundle::decode_binary(&bytes),
+            Err(RetainedResourceTransportError::UnsupportedVersion(13))
+        ));
+    }
 
     #[test]
     fn mesh_resource_payload_round_trips_as_one_generation_qualified_resource() {
@@ -3007,7 +3067,7 @@ mod tests {
                 vector_items: Arc::from([]),
                 render_items: Arc::from([]),
                 parts: Arc::from([]),
-                bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
                 baseline: 0.0,
                 layout_artifact: None,
             }
@@ -3070,7 +3130,7 @@ mod tests {
                 vector_items: Arc::from([]),
                 render_items: Arc::from([]),
                 parts: Arc::from([]),
-                bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
                 baseline: 0.0,
                 layout_artifact: None,
             }
@@ -3149,7 +3209,7 @@ mod tests {
                 vector_items: Arc::from([]),
                 render_items: Arc::from([]),
                 parts: Arc::from([]),
-                bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
                 baseline: 0.0,
                 layout_artifact: None,
             }

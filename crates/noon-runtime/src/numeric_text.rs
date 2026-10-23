@@ -370,7 +370,11 @@ impl SceneInstance {
     ) {
         for update in updates {
             let object_index = update.object_index;
-            let bounds = update.resource.bounds;
+            let bounds = update
+                .resource
+                .bounds
+                .lower_f32()
+                .expect("prepared numeric bounds were validated");
             let handle = self.numeric_text.commit(update);
             if !self.object_slot_is_live(object_index) {
                 continue;
@@ -404,7 +408,9 @@ impl SceneInstance {
                 .resources()
                 .get(handle)
                 .expect("current numeric resource handle resolves")
-                .bounds;
+                .bounds
+                .lower_f32()
+                .expect("prepared numeric bounds were validated");
             self.frame.objects[object_index].content = handle.into();
             self.frame.objects[object_index].text_bounds = Some(bounds);
             self.effective_driver_rows.insert(object_index);
@@ -424,7 +430,9 @@ impl SceneInstance {
             .resources()
             .get(handle)
             .expect("current numeric resource handle resolves")
-            .bounds;
+            .bounds
+            .lower_f32()
+            .expect("prepared numeric bounds were validated");
         self.frame.objects[object_index].content = handle.into();
         self.frame.objects[object_index].text_bounds = Some(bounds);
         self.effective_driver_rows.insert(object_index);
@@ -476,11 +484,16 @@ fn prepare_driver_resource(
                 .ok_or(NumericTextResourceError::TokenCountMismatch)?,
         );
     }
-    compose_numeric_text_resource(
+    let resource = compose_numeric_text_resource(
         source,
         &layout,
         &children,
-        driver.declaration.font_size,
+        f64::from(driver.declaration.font_size),
         driver.declaration.point_to_scene_scale,
-    )
+    )?;
+    resource
+        .bounds
+        .lower_f32()
+        .map_err(|_| NumericTextResourceError::UnrepresentableBounds)?;
+    Ok(resource)
 }

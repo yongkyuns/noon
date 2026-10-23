@@ -1,7 +1,9 @@
 //! Immutable authored family observations and atomic relative placement.
 
 mod placement;
+mod point_queries;
 use crate::AuthoringError;
+pub(crate) use point_queries::effective_layout_critical_point_3d;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
@@ -231,8 +233,12 @@ impl MobjectFamily {
 
     /// Shift each semantic leaf once without querying its geometry.
     pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.shift_3d(noon_core::SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_3d(&self, delta: noon_core::SemanticVec3) -> Result<(), AuthoringError> {
         let translation =
-            FamilyTranslation::begin(&self.integration_store().borrow(), self.node_id(), x, y)?;
+            FamilyTranslation::begin_3d(&self.integration_store().borrow(), self.node_id(), delta)?;
         translation.apply(&mut self.integration_store().borrow_mut())
     }
 }
@@ -304,7 +310,11 @@ impl FamilyLayout {
     }
 
     pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
-        FamilyTranslation::from_members(self.leaves.clone(), x, y)?
+        self.shift_3d(noon_core::SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_3d(&self, delta: noon_core::SemanticVec3) -> Result<(), AuthoringError> {
+        FamilyTranslation::from_members_3d(self.leaves.clone(), delta)?
             .apply(&mut self.store.borrow_mut())
     }
 
@@ -930,14 +940,13 @@ pub(crate) fn publish_shift_family(
     root: SemanticNodeId,
     execution: &mut ExecutionSession,
     family: &MobjectFamily,
-    x: f64,
-    y: f64,
+    delta: noon_core::SemanticVec3,
 ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
     if !Rc::ptr_eq(store, family.integration_store()) {
         return Err(AuthoringError::ForeignStore);
     }
     family.validate()?;
-    publish_shift_root(store, root, execution, family.node_id(), x, y)
+    publish_shift_root(store, root, execution, family.node_id(), delta)
 }
 
 /// Translate the validated typed root through the existing publication boundary.
@@ -946,14 +955,13 @@ pub(crate) fn publish_shift_root(
     root: SemanticNodeId,
     execution: &mut ExecutionSession,
     source: SemanticNodeId,
-    x: f64,
-    y: f64,
+    delta: noon_core::SemanticVec3,
 ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
-    let transaction =
-        FamilyTranslation::begin(&store.borrow(), source, x, y)?.transaction(&store.borrow())?;
+    let transaction = FamilyTranslation::begin_3d(&store.borrow(), source, delta)?
+        .transaction(&store.borrow())?;
     crate::Scene::publish_running_transaction(store, root, execution, transaction)
         .map_err(AuthoringError::from)
 }

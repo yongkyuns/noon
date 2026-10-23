@@ -800,7 +800,7 @@ pub(crate) fn prepare_become_states(
             x,
             y,
         ) else {
-            let path = crate::family_affine::world_scaled_path(
+            let (target, path) = crate::family_affine::world_scaled_replacement(
                 store,
                 &target,
                 x,

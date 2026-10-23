@@ -137,3 +137,13 @@ class PaintQueriesGradientsTests(unittest.TestCase):
             self.assertEqual(len(components.call_args.args[0]), 2)
             self.assertEqual(components.call_args.args[0][0].red, 1.0)
             self.assertEqual(components.call_args.args[0][1].blue, 1.0)
+
+    def test_default_radial_gradient_forwards_the_actual_three_axis_center(self):
+        family = identity_only_wrapper(compat.VGroup)
+        family.get_center = Mock(return_value=(1., -2., 7.125))
+        handle = Mock()
+        argument = object()
+        with patch.object(handles, '_style_target', return_value=(handle, None, 'Family')), \
+             patch.object(handles, '_gradient_components', return_value=argument):
+            self.assertIs(family.set_colors_by_radial_gradient(), family)
+        handle.setRadialColorGradient.assert_called_once_with(1., -2., 7.125, 1., argument)
