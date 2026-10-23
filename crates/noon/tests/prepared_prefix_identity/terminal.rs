@@ -53,7 +53,10 @@ fn terminal_requires_sealed_source_and_explicit_reader_adoption() {
     assert_eq!(reader.end_time(), None);
     reader.preflight_append(&terminal).unwrap();
     assert_eq!(reader.end_time(), None);
-    assert!(matches!(reader.seek(1.0), Err(PrefixError::OutsideRange { .. })));
+    assert!(matches!(
+        reader.seek(1.0),
+        Err(PrefixError::OutsideRange { .. })
+    ));
     assert_eq!(reader.frame(), &displayed);
     assert_eq!(reader.replay_stats(), history);
     assert_eq!(reader.take_renderer_publication().context(), context);
@@ -184,7 +187,10 @@ fn terminal_out_of_order_delivery_does_not_advertise_completion() {
     reader.append(preceding).unwrap();
     assert_eq!(reader.frontier(), 2.0);
     assert_eq!(reader.end_time(), None);
-    assert!(matches!(reader.seek(2.0), Err(PrefixError::OutsideRange { .. })));
+    assert!(matches!(
+        reader.seek(2.0),
+        Err(PrefixError::OutsideRange { .. })
+    ));
     reader.preflight_append(&terminal).unwrap();
     reader.append(terminal).unwrap();
     assert_eq!(reader.end_time(), Some(2.0));
@@ -215,7 +221,10 @@ fn terminal_foreign_stream_cannot_close_another_reader() {
     assert_eq!(right_reader.end_time(), Some(1.0));
     assert_eq!(left_reader.end_time(), None);
     right_reader.seek(1.0).unwrap();
-    assert!(matches!(left_reader.seek(1.0), Err(PrefixError::OutsideRange { .. })));
+    assert!(matches!(
+        left_reader.seek(1.0),
+        Err(PrefixError::OutsideRange { .. })
+    ));
 }
 
 #[test]
@@ -249,7 +258,10 @@ fn terminal_invalid_time_preserves_endpoint_effect_and_finished_metadata() {
     reader.append(terminal).unwrap();
     reader.seek(1.0).unwrap();
     let baseline = reader.frame().clone();
-    let prepared = reader.prepare_bound_click_indicate(object).unwrap().unwrap();
+    let prepared = reader
+        .prepare_bound_click_indicate(object)
+        .unwrap()
+        .unwrap();
     reader.start_transient_animation(prepared).unwrap();
     reader.advance_interactions(10.0).unwrap();
     reader.advance_interactions(10.125).unwrap();
@@ -301,5 +313,8 @@ fn terminal_replaced_source_scope_does_not_close_the_delivered_prefix() {
     assert_eq!(reader.end_time(), None);
     assert_eq!(reader.frontier(), 1.0);
     reader.seek(0.5).unwrap();
-    assert!(matches!(reader.seek(1.0), Err(PrefixError::OutsideRange { .. })));
+    assert!(matches!(
+        reader.seek(1.0),
+        Err(PrefixError::OutsideRange { .. })
+    ));
 }
