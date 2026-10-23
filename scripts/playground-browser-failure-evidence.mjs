@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -6,9 +6,46 @@ import { promisify } from "node:util";
 
 const short = (value, limit = 300) => typeof value === "string" ? value.slice(0, limit) : null;
 const nativeLogCapacity = 128 * 1024;
-const readNativeProcessLog = args => promisify(execFile)("/usr/bin/log", args, {
-  encoding: "buffer", timeout: 5000, killSignal: "SIGKILL", maxBuffer: nativeLogCapacity,
-});
+// A verbose startup can fill 128 KiB before the failing event. Drain the finite
+// PID/time-qualified query and keep its tail instead of killing `log` on overflow.
+// This retains the same bounded amount of evidence without losing later events.
+export function readNativeProcessLog(args, {
+  launch = request => spawn("/usr/bin/log", request, { stdio: ["ignore", "pipe", "pipe"] }),
+  timeoutMs = 5000,
+} = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000) {
+    throw new RangeError("invalid native log deadline");
+  }
+  return new Promise((resolve, reject) => {
+    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), observedBytes = 0;
+    let failure = null;
+    const tail = (previous, chunk, capacity) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (bytes.length >= capacity) return Buffer.from(bytes.subarray(bytes.length - capacity));
+      return Buffer.concat([previous.subarray(Math.max(0, previous.length + bytes.length - capacity)), bytes]);
+    };
+    const child = launch(args);
+    child.stdout.on("data", chunk => {
+      observedBytes += chunk.length;
+      stdout = tail(stdout, chunk, nativeLogCapacity);
+    });
+    child.stderr.on("data", chunk => { stderr = tail(stderr, chunk, 4096); });
+    child.on("error", error => { failure ??= error; });
+    const timer = setTimeout(() => {
+      failure ??= Object.assign(new Error(`native log query timed out after ${timeoutMs} ms`), { code: "ETIMEDOUT" });
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      const result = { stdout, stderr, observedBytes, truncated: observedBytes > stdout.length };
+      if (code !== 0 || signal !== null) {
+        failure ??= new Error(`native log query exited with code ${code}, signal ${signal}`);
+      }
+      if (failure) reject(Object.assign(failure, result));
+      else resolve(result);
+    });
+  });
+}
 
 /** Bounded evidence from the test-owned file server; never restart or retry it. */
 export function captureChildProcessDiagnostics(child, { maxOutputChars = 16_000 } = {}) {
@@ -234,18 +271,22 @@ export async function captureNativeProcessLog({ pids, startedAtMs, endedAtMs, ar
   try {
     const response = await readNativeLog(args);
     stdout = response.stdout;
+    result.observedBytes = response.observedBytes ?? stdout.length;
+    result.truncated = response.truncated === true;
     if (response.stderr?.length) result.stderr = short(String(response.stderr));
   }
   catch (error) {
     stdout = error.stdout ?? stdout;
     result.error = short(String(error));
     result.stderr = short(String(error.stderr ?? ""));
-    result.truncated = error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+    result.observedBytes = error.observedBytes ?? stdout.length;
+    result.truncated = error.truncated === true || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
   }
   try {
     const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? "");
-    const kept = bytes.subarray(0, nativeLogCapacity);
+    const kept = bytes.subarray(Math.max(0, bytes.length - nativeLogCapacity));
     result.truncated ||= bytes.length > kept.length;
+    result.retained = "tail";
     const file = `${prefix}-native.log`;
     await writeFile(path.join(artifacts, file), kept);
     result.file = file;

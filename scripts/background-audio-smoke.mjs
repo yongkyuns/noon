@@ -200,7 +200,7 @@ async function record(name, action) {
   const result = { name, status: "running" };
   report.cases.push(result);
   try {
-    Object.assign(result, await action(), { status: "passed" });
+    Object.assign(result, await action(result), { status: "passed" });
     console.log(`[PASS] background audio: ${name}`);
   } catch (error) {
     Object.assign(result, { status: "failed", error: String(error.stack ?? error) });
@@ -627,7 +627,7 @@ try {
     assert.ok(settled.disconnects.some(event => event.node === oldSource.node));
     return { ...transition, release, attack };
   });
-  await record("rapid viewer-gain changes retarget continuously without changing clip phase", async () => {
+  await record("rapid viewer-gain changes retarget continuously without changing clip phase", async evidence => {
     const result = await page.evaluate(async () => {
       const qualification = audioQualification;
       const renderer = qualification.renderer;
@@ -640,7 +640,10 @@ try {
       renderer.setAudioVolume(0.4);
       const second = qualification.snapshot();
       await new Promise(resolve => setTimeout(resolve, 8));
-      renderer.setAudioVolume(0.7);
+      // Device time can stay unchanged across the wall-time delay above. Keep
+      // this target above the initial 0.7 and both earlier targets so the third
+      // ramp still traverses native values when all retargets share one quantum.
+      renderer.setAudioVolume(0.9);
       const third = qualification.snapshot();
       const observations = [];
       for (let index = 0; index < 12; index++) {
@@ -651,18 +654,22 @@ try {
       return { parameter, firstIndex, before, first, second, third, observations,
         settled: qualification.snapshot() };
     });
+    // Keep the actual device observations even when a qualification assertion
+    // fails; a later failure snapshot cannot reconstruct this short interval.
+    Object.assign(evidence, result);
     const first = rampTo(result.first, result.parameter, 0.1, viewerRampSeconds, "first viewer retarget");
     const second = rampTo(result.second, result.parameter, 0.4, viewerRampSeconds, "second viewer retarget");
-    const third = rampTo(result.third, result.parameter, 0.7, viewerRampSeconds, "third viewer retarget");
+    const third = rampTo(result.third, result.parameter, 0.9, viewerRampSeconds, "third viewer retarget");
     near(second.hold.args[0], valueOnRamp(first, second.hold.args[1]), "second ramp holds the prior curve");
     near(third.hold.args[0], valueOnRamp(second, third.hold.args[1]), "third ramp holds the prior curve");
     const changed = result.settled.parameters[result.parameter].events.slice(result.firstIndex);
     assert.ok(changed.filter(event => event.method === "cancelScheduledValues").length >= 3,
       "each viewer retarget cancels superseded native automation");
     assert.ok(changed.every(event => event.method !== "value"), "viewer changes must not step the native gain");
+    assert.ok(third.hold.args[0] < 0.899, "third viewer target must differ from its held value");
     assert.ok(result.observations.some(sample => sample.value > third.hold.args[0] + 0.001
-      && sample.value < 0.699), "native master gain traverses its new ramp");
-    near(result.settled.parameters[result.parameter].value, 0.7, "settled native viewer gain");
+      && sample.value < 0.899), "native master gain traverses its new ramp");
+    near(result.settled.parameters[result.parameter].value, 0.9, "settled native viewer gain");
     assert.equal(result.settled.starts.length, result.before.starts.length);
     assert.equal(result.settled.transport.sceneRevision, result.before.transport.sceneRevision);
     assert.ok(result.settled.transport.time > result.before.transport.time);
