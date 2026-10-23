@@ -92,7 +92,8 @@ class ManimMobjectBasePathMethodTests(unittest.TestCase):
             np.testing.assert_array_equal(result, [3., 2., 11.125])
             self.assertEqual(result.dtype, np.dtype("float64"))
         else:
-            self.assertIs(type(result), list)
+            self.assertIs(type(result), noon._Direction3)
+            self.assertEqual((result - result).length(), 0.)
         mobject.get_points_defining_boundary.assert_called_once_with()
         calls = mobject.get_extremum_along_dim.call_args_list
         self.assertEqual([(call.kwargs["dim"], call.kwargs["key"]) for call in calls],
@@ -115,7 +116,8 @@ class ManimMobjectBasePathMethodTests(unittest.TestCase):
             np.testing.assert_array_equal(result, [0., 0., 0.])
             self.assertEqual(result.dtype, np.dtype("float64"))
         else:
-            self.assertIs(type(result), list)
+            self.assertIs(type(result), noon._Direction3)
+            self.assertEqual((result - result).length(), 0.)
         mobject.get_extremum_along_dim.assert_not_called()
 
     def test_z_coordinate_and_zenith_nadir_keep_the_requested_direction(self):
