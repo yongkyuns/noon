@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, assertNaturalFirstPassPublication, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
 function observed() {
@@ -181,12 +181,13 @@ function preparedAudioPage({ run, observations = [] } = {}) {
   let observationIndex = 0;
   let current = {};
   const gallery = {
+    selectedExampleId: "showcase-example",
     async run() {
       calls.push("run");
       return run ?? { stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8 } };
     },
     get runInFlight() { return current.runInFlight ?? false; },
-    async executionMetrics() { return { metrics: { time: current.publishedTime } }; },
+    async executionMetrics() { return { metrics: { time: current.publishedTime, objectCount: 55 } }; },
   };
   const browser = {
     window: { __noonExampleGallery: gallery },
@@ -194,6 +195,10 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       if (selector === "#patch-status") return {
         dataset: { state: current.patchState ?? "applied" }, value: current.patchError,
       };
+      if (selector === "#status") return { dataset: { rendererBackend: "WebGL2" } };
+      if ([".playback-toggle", ".playback-restart", ".playback-scrubber"].includes(selector)) {
+        return { disabled: false };
+      }
       assert.equal(selector, ".playback-controls");
       return { dataset: { controllable: "true", busy: "false", playing: "false",
         elapsedSeconds: String(current.elapsed), ...current.controls } };
@@ -240,7 +245,48 @@ test("finite audio first pass uses trusted Play and waits for the unseeked publi
   ] });
   assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
   assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
-  assert.deepEqual(ready, [false, false, false, false, false, false, false, false, true]);
+  assert.deepEqual(ready, [false, false, false, false, false, false, true, true, true]);
+});
+
+test("natural finite playback accepts a declared terminal hold and retains its real publication", async () => {
+  const publication = 29.012699999999256; // Observed settled WebGL frame with the Rust/UI clock at 30.
+  const lesson = { id: "showcase-background-music", duration: 30, still_intervals: [[29, 30]] };
+  const { page, calls, ready } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 30 } },
+    observations: [
+      { elapsed: 29, publishedTime: publication },
+      { elapsed: 30, publishedTime: 28.99 },
+      { elapsed: 30, publishedTime: 30.01 },
+      { elapsed: 30, publishedTime: publication },
+    ],
+  });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100, lesson)));
+  assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
+  assert.deepEqual(ready, [false, true, true, true]);
+  const observed = await readLiveState(page);
+  assert.equal(observed.controls.elapsedSeconds, "30");
+  assert.equal(observed.publishedTime, publication);
+});
+
+test("natural first-pass publication rejects stale-before-hold and future frames", () => {
+  const lesson = { id: "terminal-hold", duration: 30, still_intervals: [[29, 30]] };
+  for (const time of [29, 29.012699999999256, 30]) {
+    assertNaturalFirstPassPublication(lesson, 30, time);
+  }
+  for (const time of [28.99, 30.01, 30 + 1e-8, undefined, null, NaN, "30"]) {
+    assert.throws(() => assertNaturalFirstPassPublication(lesson, 30, time));
+  }
+  assert.throws(() => assertNaturalFirstPassPublication(lesson, 29, 29));
+});
+
+test("moving natural endpoints retain exact publication even inside capture rounding tolerance", () => {
+  const lesson = { id: "moving-endpoint", duration: 23.4, still_intervals: [[10, 11]] };
+  const actual = 23.400000000000002;
+  assertNaturalFirstPassPublication(lesson, actual, actual);
+  assertNaturalFirstPassPublication(lesson, actual, 23.4);
+  for (const time of [11, actual - 0.001, actual - 1e-8, actual + 1e-8]) {
+    assert.throws(() => assertNaturalFirstPassPublication(lesson, actual, time));
+  }
 });
 
 test("ordinary Scene.construct completion does not add Play or change its first pass", async () => {
