@@ -220,3 +220,21 @@ fn prepared_canvas_renderer_query_uses_its_own_frame_without_consuming_dirtiness
     assert_eq!(playback.reader.publication_context(), before);
     assert_eq!(playback.reader.wake_state().frame_pending(), dirty);
 }
+
+#[test]
+fn prepared_canvas_demand_is_reader_local_validated_and_read_only() {
+    let (_, _, mut playback, _) = fixture();
+    playback.set_playing(false);
+    playback.reader.take_renderer_publication();
+    let before = playback.reader.frame().clone();
+    let publication = playback.reader.publication_context();
+    assert_eq!(playback.preparation_target(1.0).unwrap(), 1.5);
+    for ahead in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(playback.preparation_target(ahead).is_err());
+    }
+    assert_eq!(playback.reader.frame(), &before);
+    assert_eq!(playback.reader.publication_context(), publication);
+    assert!(!playback.playing());
+    playback.seek(0.25).unwrap();
+    assert_eq!(playback.preparation_target(1.0).unwrap(), 1.25);
+}

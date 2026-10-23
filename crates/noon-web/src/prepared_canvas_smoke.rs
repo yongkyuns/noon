@@ -151,6 +151,7 @@ struct CooperativeScene {
     dropped: Rc<Cell<bool>>,
     steps: u32,
     fail_at: u32,
+    animated: bool,
 }
 impl Drop for CooperativeScene {
     fn drop(&mut self) {
@@ -171,7 +172,21 @@ impl LiveContinuation for CooperativeScene {
         if stage > self.steps {
             return Ok(ContinuationStep::Finished);
         }
-        live.set_translation(&self.marker, -2.0 + f64::from(stage % 8) * 0.25, 2.0)?;
+        let x = -2.0 + f64::from(stage % 8) * 0.25;
+        if self.animated {
+            let target = live.target_editor(&self.marker)?;
+            live.set_translation(&target, x, 2.0)?;
+            return Ok(ContinuationStep::Await(
+                live.declare_and_activate_transform_to(
+                    &self.marker,
+                    &target,
+                    AnimationOptions::new()
+                        .run_time(0.25)
+                        .rate_func(noon_core::RateFunction::Linear),
+                )?,
+            ));
+        }
+        live.set_translation(&self.marker, x, 2.0)?;
         Ok(ContinuationStep::Await(live.wait_segment(0.25)?))
     }
 }
@@ -184,7 +199,7 @@ pub struct CooperativeCanvasFixture {
 #[wasm_bindgen]
 impl CooperativeCanvasFixture {
     #[wasm_bindgen(constructor)]
-    pub fn new(steps: u32, fail_at: u32) -> Result<Self, JsValue> {
+    pub fn new(steps: u32, fail_at: u32, animated: bool) -> Result<Self, JsValue> {
         if steps == 0 || steps > 256 {
             return Err(js_error("fixture steps must be 1..256"));
         }
@@ -214,6 +229,7 @@ impl CooperativeCanvasFixture {
                     dropped: dropped.clone(),
                     steps,
                     fail_at,
+                    animated,
                 },
                 ReplayLimits {
                     revisions: 2048,
@@ -244,9 +260,15 @@ impl CooperativeCanvasFixture {
     pub fn prepare_next(
         &mut self,
         canvas: &mut WasmExecutionCanvasRenderer,
-    ) -> Result<bool, JsValue> {
-        let status = canvas.prepare_source_step(&mut self.source)?;
-        Ok(status == PreparedSourceStatus::Ready)
+        lookahead_seconds: f64,
+    ) -> Result<String, JsValue> {
+        let status = canvas.prepare_source_step(&mut self.source, lookahead_seconds)?;
+        Ok(match status {
+            None => "waiting",
+            Some(PreparedSourceStatus::Ready) => "continue",
+            Some(_) => "finished",
+        }
+        .into())
     }
     pub fn cancel(&mut self) {
         self.source.cancel();

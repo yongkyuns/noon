@@ -18,7 +18,7 @@ try {
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
   for (const backend of ["webgpu", "webgl"]) {
     browser = await playwright.chromium.launch({ headless: true, args: browserArgs(backend), channel: "chromium" });
-    for (const scenario of ["complete", "failure", "cancel"]) {
+    for (const scenario of ["complete", "failure", "cancel", "bounded", "starved"]) {
       const result = { backend, scenario, status: "running", checks: [] }; report.cases.push(result);
       const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
       page.setDefaultTimeout(60_000);
@@ -38,23 +38,97 @@ try {
           const { attachNativeInputs } = await import("./native-inputs.js");
           const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
           const { createCooperativePreparationDriver } = await import("./cooperative-preparation-driver.js");
-          const source = new CooperativeCanvasFixture(128, scenario === "failure" ? 5 : 0xffffffff);
+          const source = new CooperativeCanvasFixture(scenario === "bounded" ? 12 : scenario === "starved" ? 4 : 128, scenario === "failure" ? 5 : 0xffffffff, scenario === "bounded");
           const canvas = document.querySelector("#scene");
           const renderer = await source.createCanvas(canvas.transferControlToOffscreen());
           renderer.setPreparedPlaying(false);
           const errors = [];
-          const direct = createDirectExecutionWakeDriver(renderer);
+          let pump = null;
+          const samples = [];
+          let bufferedWakes = 0;
+          const direct = createDirectExecutionWakeDriver(renderer, { onDemand() {
+            if (JSON.parse(renderer.debugPreparedPlaybackJson()).buffering) bufferedWakes++;
+            pump?.wake();
+          } });
           const detach = attachNativeInputs(renderer, canvas, { inspectionZoom: true, onInput: () => direct.wake(), onError: error => errors.push(String(error)) });
           // Registering a logical view can require a fresh receipt.
           direct.wake();
-          globalThis.autoCanvas = { source, renderer, errors, direct, detach, pump: null,
-            start() { this.pump = createCooperativePreparationDriver(() => source.prepareNext(renderer), { onProgress: () => direct.wake(), onError: error => errors.push(String(error)) }); } };
+          globalThis.autoCanvas = { source, renderer, errors, direct, detach, pump: null, samples,
+            bufferedWakes: () => bufferedWakes,
+            start() {
+              const ahead = scenario === "bounded" ? 1 : scenario === "starved" ? 0.125 : 60;
+              pump = this.pump = createCooperativePreparationDriver(() => source.prepareNext(renderer, ahead), {
+                onProgress() {
+                  const state = JSON.parse(renderer.debugPreparedPlaybackJson());
+                  samples.push({ time: state.time, frontier: state.frontier, calls: source.calls() });
+                  direct.wake();
+                },
+                onError: error => errors.push(String(error)),
+              });
+            } };
         }, scenario);
         assert.equal(await page.evaluate(() => autoCanvas.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
         const baseline = await capture("baseline");
         assert.equal((await state()).calls, 1);
         await page.evaluate(() => autoCanvas.start());
-        if (scenario === "complete") {
+        if (scenario === "bounded" || scenario === "starved") {
+          await page.waitForFunction(() => autoCanvas.pump.stats().waiting && autoCanvas.direct.stats().idle);
+          const capped = await state();
+          assert.equal(capped.calls, scenario === "bounded" ? 3 : 1);
+          assert.equal(capped.playback.frontier, scenario === "bounded" ? 1.5 : 1);
+          assert.equal(capped.playback.time, 0.5); assert.equal(capped.playback.end, null);
+          assert.equal(capped.dropped, false); assert.equal(capped.pump.active, true);
+          const turns = capped.pump.turns;
+          const frames = await page.evaluate(() => autoCanvas.direct.stats().presentedFrames);
+          await page.waitForTimeout(160);
+          assert.equal((await state()).pump.turns, turns, "look-ahead waiting must not poll");
+          assert.equal((await state()).calls, capped.calls);
+          assert.equal(await page.evaluate(() => autoCanvas.direct.stats().presentedFrames), frames);
+          result.checks.push("bounded-ahead-while-paused", "no-preparation-or-frame-polling", "not-falsely-finished");
+          if (scenario === "bounded") {
+            const rect = await page.locator("#scene").boundingBox();
+            await page.mouse.click(rect.x + 320, rect.y + 180);
+            await page.waitForFunction(() => JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions);
+            await page.waitForTimeout(100);
+            assert.ok(!equalPixels(baseline, await capture("capped-highlight")));
+            assert.equal((await state()).calls, capped.calls);
+            await page.waitForFunction(() => !JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions && autoCanvas.direct.stats().idle && autoCanvas.pump.stats().waiting);
+            assert.ok(equalPixels(baseline, await capture("capped-restored")));
+            await page.evaluate(() => { autoCanvas.renderer.seekDirect(0.75); autoCanvas.direct.wake(); });
+            await page.waitForFunction(() => autoCanvas.source.calls() === 4 && autoCanvas.pump.stats().waiting);
+            assert.equal((await state()).playback.time, 0.75);
+            assert.equal((await state()).playback.frontier, 1.75);
+            await page.evaluate(() => { autoCanvas.renderer.seekDirect(0.5); autoCanvas.direct.wake(); });
+            await page.waitForFunction(() => autoCanvas.pump.stats().waiting);
+            assert.equal((await state()).calls, 4, "rewind must not rewind or re-execute source");
+            result.checks.push("paused-highlight-while-producer-sleeps", "seek-refills-demand", "rewind-does-not-reexecute-source");
+          }
+          await page.evaluate(() => { autoCanvas.renderer.setPreparedPlaying(true); autoCanvas.direct.wake(); });
+          if (scenario === "bounded") {
+            await page.waitForFunction(() => JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).time > 1.05 && autoCanvas.source.calls() < 14);
+            assert.ok(!equalPixels(baseline, await capture("playing-during-preparation")), "continuous marker animation must be visible");
+            result.checks.push("continuous-playback-with-ongoing-preparation");
+          }
+          const endTime = scenario === "bounded" ? 4 : 2;
+          await page.waitForFunction(endTime => !autoCanvas.pump.stats().active && JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).time === endTime && autoCanvas.direct.stats().idle, endTime);
+          const end = await state();
+          assert.equal(end.playback.end, endTime); assert.equal(end.dropped, true);
+          assert.equal(end.calls, scenario === "bounded" ? 14 : 6);
+          assert.equal(end.pump.failed, false); assert.deepEqual(end.errors, []);
+          const samples = await page.evaluate(() => autoCanvas.samples);
+          assert.ok(samples.some(sample => sample.time > 1 && sample.calls < end.calls));
+          if (scenario === "bounded") {
+            result.maximumPreparedLead = Math.max(...samples.map(sample => sample.frontier - sample.time));
+            assert.ok(result.maximumPreparedLead <= 1.25 + 1e-9, "ahead limit plus one unknown segment");
+          } else {
+            assert.ok(await page.evaluate(() => autoCanvas.bufferedWakes() > 0));
+            result.checks.push("long-static-wait-frontier-refill-does-not-deadlock");
+          }
+          await page.evaluate(() => { autoCanvas.renderer.setPreparedPlaying(false); autoCanvas.renderer.seekDirect(0.5); autoCanvas.direct.wake(); });
+          assert.ok(equalPixels(baseline, await capture("bounded-rewind")));
+          assert.equal((await state()).calls, end.calls);
+          result.checks.push("terminal-clamp-and-release", "pixel-exact-rewind-after-completion");
+        } else if (scenario === "complete") {
           await page.waitForFunction(() => autoCanvas.source.calls() >= 3 && autoCanvas.pump.stats().active);
           const rect = await page.locator("#scene").boundingBox();
           await page.mouse.move(rect.x + 320, rect.y + 180); await page.mouse.down();

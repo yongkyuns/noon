@@ -24,6 +24,8 @@ pub enum PreparedSourceError<E> {
     Program(LiveProgramError<E>),
     /// This slice needs a nonzero readable prefix; do not invent source time.
     NoPreparedInterval,
+    /// Invalid demand is rejected before invoking source code or changing state.
+    InvalidPreparationTarget(f64),
 }
 impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,6 +34,7 @@ impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
             Self::Replay(e) => e.fmt(f),
             Self::Prefix(e) => e.fmt(f),
             Self::Program(e) => e.fmt(f),
+            Self::InvalidPreparationTarget(time) => write!(f, "invalid preparation target {time}"),
             Self::NoPreparedInterval => {
                 f.write_str("prepared source finished without a readable interval")
             }
@@ -145,6 +148,36 @@ impl<C: LiveContinuation> PreparedSource<C> {
             self.pending = None;
             self.phase = PreparedSourceStatus::Cancelled;
         }
+    }
+
+    /// Prepare only while the published frontier is below an absolute demand.
+    ///
+    /// `None` means demand is satisfied: the host should sleep until playback or
+    /// explicit navigation changes demand. No continuation, retention operation,
+    /// frame evaluation or allocation is performed in that case. Pending output
+    /// and terminal lifecycle states are still returned for delivery/cleanup.
+    /// Bootstrap always admits one step because it has no readable prefix yet.
+    ///
+    /// The next segment's duration is unknown until user code returns. It may
+    /// overshoot the target by that one segment; this is neither a hard memory
+    /// budget nor preemption. Retention limits still apply and rewind never
+    /// discards history or reruns a completed source. A host blocked on an open
+    /// frontier may explicitly request one `prepare_next` step to close it.
+    pub fn prepare_until(
+        &mut self,
+        target: f64,
+    ) -> Result<Option<PreparedSourceStatus>, PreparedSourceError<C::Error>> {
+        if !target.is_finite() || target < 0.0 {
+            return Err(PreparedSourceError::InvalidPreparationTarget(target));
+        }
+        if self.pending.is_none()
+            && self.phase == PreparedSourceStatus::Ready
+            && self.publisher.is_some()
+            && self.published_until >= target
+        {
+            return Ok(None);
+        }
+        self.prepare_next().map(Some)
     }
 
     /// Invoke at most one continuation, complete its actual segment, and publish

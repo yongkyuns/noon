@@ -1628,24 +1628,41 @@ mod wasm {
         /// The source stays outside the canvas. Borrowed admission retains a
         /// rejected suffix for retry and prevents invoking the continuation twice.
         /// Hosts must yield between calls; one segment is not a wall-time bound.
+        /// `None` means look-ahead demand is satisfied. Sleep until the ordinary
+        /// playback driver or navigation wakes preparation, rather than polling.
+        /// A buffered open frontier admits one refill even when the last evaluated
+        /// sample predates a long wait; otherwise throttling could deadlock playback.
         #[cfg(feature = "prepared-prefix")]
         pub fn prepare_source_step<C: noon::LiveContinuation>(
             &mut self,
             source: &mut noon::PreparedSource<C>,
-        ) -> Result<noon::PreparedSourceStatus, JsValue>
+            lookahead_seconds: f64,
+        ) -> Result<Option<noon::PreparedSourceStatus>, JsValue>
         where
             C::Error: std::fmt::Display,
         {
             // Check host ownership before calling any user code.
-            if !matches!(self.source.authority, DirectSourceAuthority::Prepared(_)) {
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
                 return Err(js_message("canvas does not own a prepared reader"));
-            }
+            };
+            let target = playback
+                .preparation_target(lookahead_seconds)
+                .map_err(js_message)?;
+            let buffering = playback.buffering();
             if source.status() == noon::PreparedSourceStatus::ReaderReady {
                 return Err(js_message(
                     "take the source reader before preparing its canvas",
                 ));
             }
-            source.prepare_next().map_err(js_error)?;
+            let progress = if buffering {
+                source.prepare_next().map(Some)
+            } else {
+                source.prepare_until(target)
+            }
+            .map_err(js_error)?;
+            if progress.is_none() {
+                return Ok(None);
+            }
             if let Some(batch) = source.pending_batch() {
                 let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
                     unreachable!()
@@ -1667,7 +1684,7 @@ mod wasm {
                     source.take_batch().expect("borrowed batch was admitted"),
                 )?;
             }
-            Ok(source.status())
+            Ok(Some(source.status()))
         }
 
         /// Build the browser canvas host directly from the typed in-process execution session.
