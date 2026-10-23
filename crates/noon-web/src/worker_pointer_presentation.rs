@@ -80,7 +80,6 @@ mod admission {
         BrowserPointerKind, BrowserPointerTarget,
     };
     use noon::integration::PointerFrameSnapshot;
-    use noon::ExecutionSession;
     use noon_core::Vec2;
 
     #[derive(Clone, Copy, Debug)]
@@ -173,22 +172,22 @@ mod admission {
 
         pub(crate) fn capture(
             &self,
-            session: &noon::ExecutionSession,
+            target: &(impl BrowserPointerTarget + ?Sized),
         ) -> Result<Option<PointerFrameSnapshot>, String> {
             self.view
                 .filter(|view| view.drawable())
                 .map(|view| {
-                    let view = session
+                    let view = target
                         .inspection_pointer_view(view.revision, Vec2::new(view.width, view.height))
                         .map_err(|e| e.to_string())?;
-                    session
+                    target
                         .capture_pointer_frame(view)
                         .map_err(|e| e.to_string())
                 })
                 .transpose()
         }
 
-        pub(crate) fn needs_delta(&self, session: &ExecutionSession) -> bool {
+        pub(crate) fn needs_delta(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
             // A registered DOM view is not semantic input interest. Ordinary
             // scenes must retain their quiet-wait presentation without emitting
             // receipt-only deltas on every external authored-time sample.
@@ -196,11 +195,14 @@ mod admission {
             // through this same session-owned query. Admission still validates
             // every collected receipt; no stale frame is relabelled as current.
             self.refresh_pending
-                || (session.has_native_pointer_subscribers()
+                || (target.has_native_pointer_subscribers()
                     && self.issued.as_ref().is_some_and(|issued| {
-                        issued
-                            .frame
-                            .validate_current(session, issued.frame.view())
+                        target
+                            .validate_pointer_frame(
+                                &issued.frame,
+                                issued.frame.view(),
+                                crate::browser_pointer_input::PointerFrameValidation::Input,
+                            )
                             .is_err_and(|e| browser_pointer_input::recoverable_frame_error(&e))
                     }))
         }
@@ -223,7 +225,7 @@ mod admission {
 
         pub(crate) fn note_presented(
             &mut self,
-            session: &mut noon::ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
@@ -243,17 +245,20 @@ mod admission {
             // A delayed renderer receipt may still describe the held contact's
             // visible mapping. Refresh hover only if that frame is current;
             // observing an older frame must not retarget the current session.
-            if issued
-                .frame
-                .validate_presentation(session, issued.frame.view())
+            if target
+                .validate_pointer_frame(
+                    &issued.frame,
+                    issued.frame.view(),
+                    crate::browser_pointer_input::PointerFrameValidation::Presentation,
+                )
                 .is_ok()
             {
-                session
-                    .refresh_pointer_hover(&issued.frame, issued.frame.view())
+                target
+                    .observe_pointer_frame(&issued.frame)
                     .map_err(|error| error.to_string())?;
             }
             self.presented = Some(receipt);
-            if !session.translation_drag_active() {
+            if !target.translation_drag_active() {
                 self.presented_frame = Some(PresentedFrame {
                     receipt,
                     frame: issued.frame.clone(),
@@ -312,7 +317,6 @@ mod admission {
                 receipt.validate()?;
             }
             let view = target
-                .session()
                 .inspection_pointer_view(
                     input.view_revision,
                     Vec2::new(input.viewport_width, input.viewport_height),
@@ -327,7 +331,11 @@ mod admission {
             };
             // Request a fresh coherent view only when the issued frame itself
             // is obsolete. A stale packet must not trigger an endless repaint.
-            match issued.frame.validate_current(target.session(), view) {
+            match target.validate_pointer_frame(
+                &issued.frame,
+                view,
+                crate::browser_pointer_input::PointerFrameValidation::Input,
+            ) {
                 Ok(()) => {}
                 Err(error) if browser_pointer_input::recoverable_frame_error(&error) => {
                     self.refresh_pending = true;
@@ -409,7 +417,7 @@ mod admission {
             sequence
                 .checked_add(1)
                 .ok_or("native input event sequence exhausted")?;
-            if target.session().translation_drag_active()
+            if target.translation_drag_active()
                 && binding.as_ref().is_some_and(|contact| {
                     contact.changes_captured_contact(pointer, input.view_revision, coordinates)
                 })
@@ -436,7 +444,7 @@ mod admission {
                 self.presented_frame = None;
                 return Ok(true);
             }
-            let drag_active = target.session().translation_drag_active();
+            let drag_active = target.translation_drag_active();
             let captured_continuation = !needs_binding
                 && drag_active
                 && matches!(
@@ -457,7 +465,7 @@ mod admission {
                     ) {
                         Ok(()) => {
                             self.rejected = None;
-                            if !target.session().translation_drag_active() {
+                            if !target.translation_drag_active() {
                                 self.presented_frame = None;
                             }
                             return Ok(true);
@@ -474,7 +482,7 @@ mod admission {
             // callback-only scenes. Keep callback admission strict for actual
             // subscribers and retire uninterested sources through the same
             // bounded rejection path (including their asynchronous packet tail).
-            let interested = binding.is_some() || target.session().has_native_pointer_subscribers();
+            let interested = binding.is_some() || target.has_native_pointer_subscribers();
             if let (true, false, Some(receipt), Some(issued)) = (
                 interested,
                 captured_continuation,
@@ -494,7 +502,7 @@ mod admission {
                     ) {
                         Ok(()) => {
                             self.rejected = None;
-                            if !drag_active && target.session().translation_drag_active() {
+                            if !drag_active && target.translation_drag_active() {
                                 // Acquisition alone pins a mapping. Later receipt
                                 // IDs never authorize a new hit or replace it.
                                 self.presented_frame = Some(PresentedFrame {
