@@ -98,8 +98,9 @@ pub use noon_core::{
     NativePointerInput, NativePointerInputKind, NativePointerPosition,
 };
 pub use noon_runtime::{
-    EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState, RendererPublication,
-    RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
+    AudioMixError, AudioMixFormat, EffectiveObjectProperties, FrameChanges, FrameObjectState,
+    FrameState, RendererPublication, RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
+    MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
 /// Construct one detached family through an explicitly supplied live execution

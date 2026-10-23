@@ -3,9 +3,13 @@
 //! Both profiles use a trusted installed FFmpeg executable, never a browser or
 //! shell. PNG bundles are lossless diagnostics; MP4 is SDR H.264/YUV420p. No output
 //! is reported successful before EOF, encoder exit and destination publication.
+mod audio;
 mod destination;
 mod process;
+mod session;
 mod terminal_duration;
+
+pub use session::{export_session_file, SessionFileExportError};
 
 use std::error::Error;
 use std::fmt;
@@ -129,12 +133,12 @@ pub fn export_file<C: LiveContinuation>(
     capture_options: CaptureOptions,
     output: OutputOptions,
 ) -> Result<FileExportSummary, FileExportError<C::Error>> {
-    // MP4 currently has only a video track. Preserve frame-only capture, but
-    // never report a complete movie export after silently dropping scene audio.
+    // Live continuation audio needs its own qualified source/history contract.
+    // Finite immutable plans use export_session_file; never silently drop audio.
     if output.format == OutputFormat::Mp4 && program.session().has_audio() {
         return Err(FileExportError::Output(io::Error::new(
             io::ErrorKind::Unsupported,
-            "MP4 audio mixing and muxing are not available yet (#2263)",
+            "live-program MP4 audio is not supported; use a finite immutable session (#2263)",
         )));
     }
     capture_options
@@ -221,17 +225,36 @@ struct FileSink {
     frames: u64,
     failed: bool,
     cancellation: CaptureCancellation,
+    audio_frames: Option<u64>,
 }
 
 impl FileSink {
     fn new(
-        mut options: OutputOptions,
+        options: OutputOptions,
         rate: FrameRate,
         width: u32,
         height: u32,
         cancellation: CaptureCancellation,
     ) -> io::Result<Self> {
+        Self::with_soundtrack(options, rate, width, height, cancellation, None)
+    }
+
+    fn with_soundtrack(
+        mut options: OutputOptions,
+        rate: FrameRate,
+        width: u32,
+        height: u32,
+        cancellation: CaptureCancellation,
+        soundtrack: Option<audio::Soundtrack<'_>>,
+    ) -> io::Result<Self> {
         options.validate(rate, width, height)?;
+        check_publication_cancellation(&cancellation)?;
+        if soundtrack.is_some() && options.format != OutputFormat::Mp4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "soundtrack output requires MP4",
+            ));
+        }
         if options.ffmpeg.components().count() > 1 && !options.ffmpeg.is_absolute() {
             options.ffmpeg = std::env::current_dir()?.join(&options.ffmpeg);
         }
@@ -246,11 +269,18 @@ impl FileSink {
         // required options. Its image is discarded; it is never an authored frame.
         let probe = destination.work.join("probe");
         fs::create_dir(&probe)?;
-        let mut command = encoder_command(&options, rate, 2, 2, &probe);
+        if soundtrack.is_some() {
+            audio::stage_probe(&probe)?;
+        }
+        let mut command = encoder_command(&options, rate, 2, 2, &probe, soundtrack.is_some());
         let mut encoder = Encoder::new(&mut command, 16, cancellation.clone(), options.io_timeout)?;
         encoder.write(&[0, 0, 0, 255].repeat(4))?;
         encoder.finish()?;
         fs::remove_dir_all(probe)?;
+        let audio_frames = soundtrack.as_ref().map(|audio| audio.frames);
+        if let Some(audio) = soundtrack {
+            audio.stage(&destination.work, &cancellation)?;
+        }
         let directory = if options.format == OutputFormat::PngSequence {
             destination.work.join("frames")
         } else {
@@ -275,7 +305,14 @@ impl FileSink {
             None
         };
         let encoder = Encoder::new(
-            &mut encoder_command(&options, rate, width, height, &directory),
+            &mut encoder_command(
+                &options,
+                rate,
+                width,
+                height,
+                &directory,
+                audio_frames.is_some(),
+            ),
             bytes,
             cancellation.clone(),
             options.io_timeout,
@@ -292,6 +329,7 @@ impl FileSink {
             frames: 0,
             failed: false,
             cancellation,
+            audio_frames,
         })
     }
 
@@ -366,14 +404,24 @@ impl FileSink {
             .ok_or_else(|| io::Error::other("encoder is inactive"))?
             .finish()?;
         check_publication_cancellation(&self.cancellation)?;
-        if self.options.format == OutputFormat::Mp4 {
-            if let Some(end) = source_end {
-                let staged = self
-                    .destination
-                    .as_ref()
-                    .ok_or_else(|| io::Error::other("output destination is missing"))?
-                    .work
-                    .join("video.mp4");
+        if self.options.format == OutputFormat::Mp4
+            && (self.audio_frames.is_some() || source_end.is_some())
+        {
+            let staged = self
+                .destination
+                .as_ref()
+                .ok_or_else(|| io::Error::other("output destination is missing"))?
+                .work
+                .join("video.mp4");
+            if let Some(pcm_frames) = self.audio_frames {
+                terminal_duration::finish_mp4_soundtrack(
+                    &staged,
+                    self.rate,
+                    self.frames,
+                    source_end,
+                    pcm_frames,
+                )?;
+            } else if let Some(end) = source_end {
                 terminal_duration::finish_mp4_source_end(&staged, self.rate, self.frames, end)?;
             }
         }
@@ -411,6 +459,7 @@ fn encoder_command(
     width: u32,
     height: u32,
     directory: &std::path::Path,
+    soundtrack: bool,
 ) -> Command {
     let mut command = Command::new(&options.ffmpeg);
     command
@@ -431,20 +480,33 @@ fn encoder_command(
         .arg(format!("{width}x{height}"))
         .arg("-framerate")
         .arg(format!("{}/{}", rate.numerator(), rate.denominator()))
-        .args([
-            "-i",
-            "pipe:0",
-            "-an",
-            "-sn",
-            "-dn",
-            "-fps_mode",
-            "passthrough",
-        ]);
+        .args(["-i", "pipe:0"]);
+    if soundtrack {
+        command
+            .args(["-f", "f32le", "-ar"])
+            .arg(audio::SAMPLE_RATE.to_string())
+            .args([
+                "-ac",
+                "2",
+                "-i",
+                audio::PCM_FILENAME,
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+            ])
+            .args([
+                "-c:a", "aac", "-b:a", "192k", "-ar:a", "48000", "-ac:a", "2",
+            ]);
+    } else {
+        command.arg("-an");
+    }
+    command.args(["-sn", "-dn", "-fps_mode:v", "passthrough"]);
     match options.format {
         OutputFormat::Mp4 => {
             command.args(["-vf", "scale=in_range=full:out_range=limited:out_color_matrix=bt709,format=yuv420p,setparams=range=limited:color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf"])
-                .arg(options.crf.to_string()).args(["-bf", "0", "-enc_time_base"])
+                .arg(options.crf.to_string()).args(["-bf", "0", "-enc_time_base:v"])
                 .arg(format!("{}:{}", rate.denominator(), rate.numerator()))
                 .arg("-video_track_timescale").arg(rate.numerator().to_string())
                 .args(["-movflags", "+faststart", "-f", "mp4", "video.mp4"]);

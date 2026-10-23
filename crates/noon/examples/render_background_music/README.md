@@ -10,8 +10,9 @@ existing melody.
 This command prepares a WAV asset from the same shared score used by the
 finite direct Rust/WASM background-audio example. The command itself opens no
 audio device. Prepare the asset once and reuse it; do not run this generator on
-every scene update or seek. Native device output, Python worker playback, and
-synchronized export remain tracked in the issue.
+every scene update or seek. Finite native scenes can also render this score
+directly into an MP4 through `noon-export`; native device output, Python worker
+playback and broader live export remain tracked in the issue.
 
 ## Render and test
 
@@ -105,10 +106,20 @@ root scope.
 
 The full `background_audio::scene()` builder returns a Scene and its declared
 animation root. Its sections at 0, 10 and 20 seconds align with the moving point’s
-three vertices. Native Rust can lower and inspect the same animation and audio;
-the direct Rust/WASM example supplies browser audio output. Live clip edits,
-Python worker output, native device output and movie audio muxing are explicitly
-outside this initial execution profile.
+three vertices. Native Rust can export the same animation and audio; the direct
+Rust/WASM example supplies browser audio output. To create the 30-second movie
+with its soundtrack in one encode:
+
+```sh
+cargo run --release -p noon-export --example render_audio_video -- scene-with-music.mp4
+```
+
+The finite native export uses the shared clip evaluator and mixer, preserving
+authored gain/fades and crop phase. Viewer mute/volume and output transition
+ramps do not change the soundtrack. See the [native export guide](../../../noon-export/README.md)
+for admission, encoding and failure behavior. Live clip edits, Python worker
+output, native device output and live/history movie audio remain outside this
+finite execution profile.
 
 ## Put playback buttons in the scene
 

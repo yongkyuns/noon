@@ -8,7 +8,8 @@ language binding task, not another exporter.
 ## Video and PNG output
 
 A trusted installed FFmpeg build with `libx264`, PNG, MP4 and image2 support is
-required for these file adapters. Capture-only use does not invoke FFmpeg.
+required for these file adapters. MP4 soundtrack export also requires its AAC
+encoder and raw `f32le` input support. Capture-only use does not invoke FFmpeg.
 
 ```sh
 cargo run --release -p noon-export --example render_video -- scene.mp4
@@ -30,6 +31,86 @@ configurable from 0 through 51. Even dimensions are required; odd dimensions are
 rejected instead of being resized. PNG preserves every captured RGBA byte and
 supports odd dimensions. The file adapters currently accept opaque input only.
 
+## Finite scenes with a soundtrack
+
+The native `output::export_session_file` entry point exports an existing finite,
+immutable `ExecutionSession`, including its authored audio, to one MP4. It uses
+the same `ExportFrameOptions`, `CaptureOptions`, `OutputOptions` and
+`FileExportSummary` as the live-program entry point:
+
+```rust
+export_session_file(&mut session, frame_options, capture_options, output_options)
+```
+
+Its error type is `SessionFileExportError`. Admission requires a session at time
+zero with a known finite immutable timeline and no required callbacks, pending
+segment completion or retained source history. Lower an authored scene with `Scene::execution_session()`
+or `Scene::execution_session_with_animation_root(...)` before calling it. The
+exporter borrows that session; it advances the existing runtime, consumes its
+publications through `SessionCapture`, and follows `ExportFramePolicy` for the
+same prefix, output and completion samples used by other export hosts. A finite
+range preflight determines staging size without running the scene a second time;
+the completed sampling summary must match that plan before publication.
+
+The executable background-music example renders the shared Rust scene at
+1280x720, 30 FPS, for 30 seconds:
+
+```sh
+cargo run --release -p noon-export --example render_audio_video -- scene-with-music.mp4
+```
+
+It uses *A Small Discovery*, the project's quiet original score. The composition
+and generated audio carry the scoped CC0 dedication in
+[`render_background_music/README.md`](../noon/examples/render_background_music/README.md).
+Its synthesis uses no external recording, sample, melody, model or service.
+The visible playback buttons are authored scene objects and appear in the
+rendered movie; an MP4 itself does not provide their interactive scene behavior.
+
+Authored immutable PCM is mixed by the shared Rust runtime into 48 kHz stereo,
+then encoded as AAC at 192 kbit/s alongside H.264 in one FFmpeg encode. There is
+no separate manual audio postprocessing step. Mixing uses each clip's authored
+start, trim, loop, gain and fades at absolute scene time. Source rates use linear
+interpolation; mono is duplicated into the two output channels and stereo is
+preserved. Overlapping clips sum together. A nonfinite mixed sample or a final
+mixed value outside `[-1, 1]` fails the export so the author can lower gains;
+the mixer does not silently clip. Viewer volume, mute and realtime output
+transition ramps do not change the soundtrack.
+
+Audio starts at the same source-grid crop origin as the video. Gaps, exhausted
+clips and the part of a final frame after an explicit requested end are silent.
+An explicit frozen terminal hold adds no new authored sound after clips end.
+The shared finite endpoint already includes authored audio: a clip that outlasts
+an animation keeps the final picture visible until that clip ends. Audio staging
+and muxing do not add frames to or shorten this planned output range.
+Natural, unheld completion preserves the supported exact video endpoint by
+finalizing the last sample duration. Explicit stops and final holds keep the
+existing full video-grid extent. Soundtrack finalization handles the qualified
+one-video/one-audio MP4 layout, preserving AAC priming on a common movie clock.
+Audio presentation ends on the last complete 48 kHz sample at or before the exact
+video end. Unsupported timing layouts fail explicitly. Known clock/duration
+overflows in the qualified version-zero MP4 fields are rejected before staging.
+
+PCM is staged privately before encoding, in blocks of at most 16,384 audio
+frames. Audio memory stays bounded by those blocks, and the video pipe retains
+its existing two-frame buffer pool. The temporary stereo float file uses
+384,000 bytes per second of scheduled video, in addition to the encoded output.
+Cancellation is checked between blocks and before publication. This uses a file
+input for audio rather than another live encoder pipe, and successful or failed
+runs clean their own staging through the existing destination owner.
+
+AAC decoders may return complete 1,024-sample packets beyond the presentation
+endpoint. Raw decoded byte count is therefore not the movie-duration oracle:
+container/edit-list and packet presentation times establish the end, while
+decoded signal checks establish alignment. Audio presentation may end less than
+one 48 kHz sample before video; it cannot extend the reported movie duration.
+An interval shorter than one audio sample can contain no presented audio frames.
+
+PNG sequences are explicitly visual-only and omit authored audio. The existing
+`export_file` live-program MP4 path still rejects audio until live execution is
+qualified. Native Python and browser file-export bindings, live/history audio
+export and narration remain work tracked by #2263; this native finite API does
+not imply those profiles are available.
+
 ## Publication and failures
 
 MP4 is written inside a private same-filesystem staging directory and published
@@ -37,7 +118,8 @@ only after successful input EOF, encoder flush/exit and file synchronization.
 The default no-clobber hard-link operation also protects a path created after
 preflight. Filesystems without hard-link support fail safely. Explicit
 `overwrite = true` uses rename, never remove-then-rename. Existing files survive
-capture/encoder failures. Symlinks and directories are not overwrite targets.
+capture, audio-mixing, timing-finalization or encoder failures. Symlinks and
+directories are not overwrite targets.
 
 A PNG sequence exclusively reserves a **new bundle directory**. During capture,
 only `.incomplete/` exists inside it. After encoder success, `frames/` appears
@@ -85,8 +167,8 @@ The file adapter interprets the current renderer's encoded UNORM RGB values as
 sRGB-transfer, BT.709-primary RGB. MP4 explicitly converts full-range RGB to
 limited-range BT.709 YCbCr and tags the preserved **sRGB** transfer; it does not
 merely relabel those samples as the different BT.709 transfer. PNG preserves
-capture bytes without transfer or alpha conversion. No HDR, audio, alpha-video
-or wide-gamut profile is claimed. Broader color-management/player qualification
+capture bytes without transfer or alpha conversion. No HDR, alpha-video or
+wide-gamut profile is claimed. Broader color-management/player qualification
 remains part of #1896; lossy video is compared with explicit pixel tolerances,
 not bit-identical expectations.
 

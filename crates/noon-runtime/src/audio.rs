@@ -1,8 +1,12 @@
-//! Device instructions borrowed from the current coherent runtime time.
+//! Audio queries borrowed from compiled PCM and the existing authored timeline.
 //!
 //! There is no audio playhead or device in this module. A host obtains a fresh
 //! view after an admitted play/seek/reanchor, then realizes the instructions on
-//! its output device. Preparation and ordinary runtime evaluation are silent.
+//! its output device. Finite export can instead query bounded sample blocks at
+//! explicit authored times. Preparation and ordinary evaluation remain silent.
+
+mod mix;
+pub use mix::{AudioMixError, AudioMixFormat, MAX_AUDIO_MIX_BLOCK_FRAMES};
 
 use noon_core::{AudioResource, AudioResourceHandle, SemanticNodeId};
 

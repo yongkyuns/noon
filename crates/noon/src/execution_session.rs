@@ -1136,6 +1136,23 @@ impl ExecutionSession {
         self.runtime.audio_playback()
     }
 
+    /// Mix a bounded block from the immutable authored PCM and clip definitions.
+    ///
+    /// `scene_start` is the absolute scene time at output frame zero;
+    /// `first_output_frame` is an integer audio-frame offset from that origin.
+    /// This does not evaluate the visual runtime, consume a publication or use
+    /// viewer mute/volume. Output remains unchanged if validation or mixing fails.
+    pub fn mix_audio_block(
+        &self,
+        scene_start: f64,
+        first_output_frame: u64,
+        format: noon_runtime::AudioMixFormat,
+        output: &mut [f32],
+    ) -> Result<(), noon_runtime::AudioMixError> {
+        self.runtime
+            .mix_audio_block(scene_start, first_output_frame, format, output)
+    }
+
     /// Current renderer-facing frame with derived Text/family animation state.
     pub fn planned_family_frame(&self) -> noon_runtime::RetainedPlannedFamilyFrame<'_> {
         self.runtime.planned_family_frame()
