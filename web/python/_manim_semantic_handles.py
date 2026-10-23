@@ -205,20 +205,19 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
+def _bound_query_context(value: _base.Mobject):
+    if not _is_bound(value) or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    if getattr(value, "_semantic_handle", None) is None:
+        return None
+    return getattr(value._scene, "_canonical_authoring_context", None)
+
+
 def _bound_layout_observation(value: _base.Mobject, method="queryMobjectLayout", *arguments):
     """Ask the owning Rust context for one coherent ordinary live observation."""
-
-    if (
-        not _is_bound(value)
-        or not bool(getattr(value, "_semantic_handle_fresh", False))
-    ):
-        return None
-    handle = getattr(value, "_semantic_handle", None)
-    if handle is None:
-        return None
-    context = getattr(value._scene, "_canonical_authoring_context", None)
+    context = _bound_query_context(value)
     query = getattr(context, method, None)
-    return None if query is None else engine_call(query, handle, *arguments)
+    return None if query is None else engine_call(query, value._semantic_handle, *arguments)
 
 
 _CONSTRUCTOR_MISSING = object()
@@ -739,15 +738,15 @@ def _default_point_query_hooks(value: _base.Mobject) -> bool:
     )
 
 
-def _point_boundary_queries_available(value: _base.Mobject) -> bool:
+def _point_boundary_query_kind(value: _base.Mobject):
     if _uses_content_layout(value):
-        return False
+        return "content"
     if _is_shared_family(value):
         from _manim_updaters import canonical_callback_phase_active
         if canonical_callback_phase_active():
             # Keep family layout reads behind their existing staged guard;
             # selecting a point route must not inspect callback membership.
-            return False
+            return None
         handle = value._semantic_family_handle
         available = hasattr(handle, "requiresContentBoundary")
     else:
@@ -758,19 +757,27 @@ def _point_boundary_queries_available(value: _base.Mobject) -> bool:
         else:
             available = handle is not None and hasattr(handle, "requiresContentBoundary")
     if not available:
-        return False
+        return None
     if _default_point_query_hooks(value) and handle is not None:
         # Wrapper subclasses do not identify retained content reliably (for
         # example generic Table entries). Rust selects from current semantic
         # content; no geometry or membership snapshot crosses this boundary.
-        return not bool(_point_query_observation(value, "RequiresContentBoundary"))
-    return True
+        return ("content" if bool(_point_query_observation(value, "RequiresContentBoundary"))
+                else "points")
+    return "points"
+
+
+def _point_boundary_queries_available(value: _base.Mobject) -> bool:
+    return _point_boundary_query_kind(value) == "points"
 
 
 def _get_center(self: _base.Mobject) -> Any:
-    if _point_boundary_queries_available(self):
+    kind = _point_boundary_query_kind(self)
+    if kind == "points":
         from _manim_path_queries import critical_point
         return critical_point(self, (0.0, 0.0, 0.0))
+    if kind == "content":
+        return _content_critical_point_3d(self, (0.0, 0.0, 0.0))
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
@@ -784,11 +791,14 @@ def _get_center(self: _base.Mobject) -> Any:
 
 
 def _get_critical_point(self: _base.Mobject, direction: object) -> Any:
-    """Read a critical point through shared Rust point or content bounds."""
-    if _point_boundary_queries_available(self):
+    """Read full-coordinate point or retained-content bounds through Rust."""
+    kind = _point_boundary_query_kind(self)
+    if kind == "points":
         from _manim_path_queries import critical_point
         return critical_point(self, direction)
-    if not isinstance(direction, _base.Vec2) and len(direction) == 3 and direction[2] != 0:
+    if kind == "content" or (
+        not isinstance(direction, _base.Vec2) and len(direction) == 3 and direction[2] != 0
+    ):
         return _content_critical_point_3d(self, direction)
     axis = _base._as_vec2(direction)
     if _is_shared_family(self):
@@ -814,11 +824,17 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> Any:
 def _content_critical_point_3d(value: _base.Mobject, direction):
     """Forward opaque-content XYZ queries without constructing point geometry."""
     coordinates = _compat._manim_point3(direction)
-    anchor = _layout_anchor(value)
+    family = _is_shared_family(value)
+    # Resolve the callback/live guard before creating an owned observation.
+    context = (_group_live_layout_context(value) if family
+               else _bound_query_context(value) or _live_mutation_context(value))
+    if family:
+        handle = value._semantic_family_handle
+        anchor = engine_call(handle.layoutAnchor, _semantic_member_index(None))
+    else:
+        anchor = _layout_anchor(value)
     if anchor is None:
         raise RuntimeError("content critical points require a current shared Rust layout handle")
-    context = (_group_live_layout_context(value) if _is_shared_family(value)
-               else _live_mutation_context(value))
     try:
         result = (engine_call(anchor.contentCriticalPoint3D, *coordinates) if context is None
                   else engine_call(context.queryLayoutContentCriticalPoint3D, anchor, *coordinates))

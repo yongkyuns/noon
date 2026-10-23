@@ -968,7 +968,7 @@ class PathQueryTests(unittest.TestCase):
 
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(
-            semantic_handles, "_point_boundary_queries_available", return_value=True
+            semantic_handles, "_point_boundary_query_kind", return_value="points"
         ), patch.object(
             queries,
             "critical_point",
