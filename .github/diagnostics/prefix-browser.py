@@ -25,6 +25,7 @@ PATHS = [
     'crates/noon-web/src/semantic_execution_player/pointer_input.rs',
     'crates/noon-web/src/worker_pointer_presentation.rs',
     'crates/noon/src/execution_session/replay/prefix/reader/input.rs',
+    'crates/noon-web/src/retained_execution_resources/image_tests.rs',
 ]
 
 def blob_sha(data):
@@ -36,7 +37,6 @@ if mode == 'apply':
     (ROOT / 'payload.b64').write_text(payload)
     (ROOT / 'base.txt').write_text(BASE + '\n')
     (ROOT / 'diagnostic-head.txt').write_bytes(subprocess.check_output(['git', 'rev-parse', 'HEAD']))
-    # Repair a transcription-only duplicated character before checksum admission.
     payload = payload.replace('CW5Xpppz', 'CW5Xppz')
     patch = zlib.decompress(base64.b64decode(payload))
     if hashlib.sha256(patch).hexdigest() != '61b083bdfc6f8a408d3f2b4872079449971ee0a3f4e83349e5525b8bc80e1d63':
@@ -44,8 +44,21 @@ if mode == 'apply':
     subprocess.run(['git', 'diff', '--exit-code', BASE, '--', *PATHS], check=True)
     subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
     subprocess.run(['git', 'apply', '-'], input=patch, check=True)
-    changed = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all']).decode()
-    print(changed)
+    # Existing renderer-dependent test helpers must follow their owner's feature.
+    # All three assertions remain selected in the standard/all-features profile.
+    path = Path('crates/noon-web/src/retained_execution_resources/image_tests.rs')
+    if blob_sha(path.read_bytes()) != '3cd2467730be0c3f49ad97fea99b3c92ae31d5af':
+        raise RuntimeError('unexpected image test baseline')
+    source = path.read_text()
+    for name in ['rejected_family_delta_does_not_run_resident_preparation', 'stale_family_delta_does_not_advance_resident_mesh_history', 'resident_preload_failure_does_not_reject_an_admitted_delta']:
+        old = '#[test]\nfn ' + name + '('
+        if source.count(old) != 1:
+            raise RuntimeError('missing renderer test: ' + name)
+        source = source.replace(old, '#[cfg(feature = "renderer")]\n' + old)
+    old = 'fn family_delta(retained:'
+    if source.count(old) != 1:
+        raise RuntimeError('missing renderer test helper')
+    path.write_text(source.replace(old, '#[cfg(feature = "renderer")]\n' + old))
     (ROOT / 'paths.json').write_text(json.dumps(PATHS, indent=2))
 elif mode == 'save':
     subprocess.run(['git', 'add', '--', *PATHS], check=True)

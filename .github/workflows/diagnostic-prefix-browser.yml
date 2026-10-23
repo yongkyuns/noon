@@ -53,7 +53,7 @@ jobs:
         run: |
           set -o pipefail
           cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-prefix-browser/wasm-check.log
-          cargo test --locked -p noon-web --no-default-features --features prepared-prefix --lib prefix_browser 2>&1 | tee /tmp/noon-prefix-browser/feature-tests.log
+          cargo test --locked -p noon-web --no-default-features --features prepared-prefix --lib 2>&1 | tee /tmp/noon-prefix-browser/feature-tests.log
       - name: Validate repository and CI topology
         shell: bash
         run: |
