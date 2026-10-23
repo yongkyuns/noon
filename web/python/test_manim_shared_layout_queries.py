@@ -67,17 +67,39 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
             unittest.mock.call(0., -1., 0.)])
         self.assertEqual(anchor.free.call_count, 5)
 
-    def test_bound_content_query_keeps_live_values_without_a_mutation_route_flag(self):
+    def test_bound_content_query_keeps_live_values_from_owning_context(self):
         anchor = SimpleNamespace(contentCriticalPoint3D=Mock(side_effect=AssertionError("authored value")), free=Mock())
         value = self.wrapper(SimpleNamespace(requiresContentBoundary=Mock(), layoutAnchor=Mock(return_value=anchor)))
         query = Mock(return_value=(1.25, -4.5, -3.5))
-        context = SimpleNamespace(queryMobjectRequiresContentBoundary=Mock(return_value=True),
+        context = SimpleNamespace(requiresLiveMutationRouting=Mock(return_value=True),
+                                  queryMobjectRequiresContentBoundary=Mock(return_value=True),
                                   queryLayoutContentCriticalPoint3D=query)
         value._scene = SimpleNamespace(_canonical_authoring_context=context)
         value._object = object()
         self.assert_point_result(value.get_center(), [1.25, -4.5, -3.5])
         query.assert_called_once_with(anchor, 0., 0., 0.)
         anchor.contentCriticalPoint3D.assert_not_called()
+        anchor.free.assert_called_once_with()
+
+    def test_bound_content_before_first_play_queries_authored_anchor_in_owning_scene(self):
+        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(1.25, -4.5, 2.375)),
+                                 free=Mock())
+        value = self.wrapper(SimpleNamespace(requiresContentBoundary=Mock(return_value=True),
+                                             layoutAnchor=Mock(return_value=anchor)))
+        context = SimpleNamespace(requiresLiveMutationRouting=Mock(return_value=False),
+                                  queryMobjectRequiresContentBoundary=Mock(return_value=True),
+                                  queryLayoutContentCriticalPoint3D=Mock(
+                                      side_effect=AssertionError("begin live execution before querying")))
+        foreign_context = SimpleNamespace(requiresLiveMutationRouting=Mock(
+            side_effect=AssertionError("use owning scene, not old constructor context")))
+        value._canonical_live_target_context = foreign_context
+        value._scene = SimpleNamespace(_canonical_authoring_context=context)
+        value._object = object()
+        self.assert_point_result(value.get_center(), [1.25, -4.5, 2.375])
+        context.requiresLiveMutationRouting.assert_called_once_with()
+        context.queryLayoutContentCriticalPoint3D.assert_not_called()
+        foreign_context.requiresLiveMutationRouting.assert_not_called()
+        anchor.contentCriticalPoint3D.assert_called_once_with(0., 0., 0.)
         anchor.free.assert_called_once_with()
 
     def test_content_query_failure_frees_anchor_and_does_not_read_planar_bounds(self):
@@ -122,6 +144,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
                                  layoutAnchor=Mock(return_value=anchor))
         value = self.wrapper(handle)
         context = SimpleNamespace(
+            requiresLiveMutationRouting=Mock(return_value=True),
             queryMobjectRequiresContentBoundary=Mock(return_value=True),
             queryLayoutContentCriticalPoint3D=Mock(return_value=(7., -3., -3.5)),
             queryMobjectLayout=Mock(side_effect=AssertionError("stale planar result")))
@@ -279,6 +302,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         content = Mock(side_effect=lambda source, x, y, z: (anchor.criticalX(x, y), anchor.criticalY(x, y), -3.5))
         dimension = Mock(return_value=10.0)
         value._scene = SimpleNamespace(_canonical_authoring_context=SimpleNamespace(
+            requiresLiveMutationRouting=Mock(return_value=True),
             queryMobjectRequiresContentBoundary=Mock(return_value=True),
             queryMobjectLayout=query, queryMobjectDimension=dimension, queryLayoutContentCriticalPoint3D=content))
         value._object = object()

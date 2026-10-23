@@ -826,8 +826,16 @@ def _content_critical_point_3d(value: _base.Mobject, direction):
     coordinates = _compat._manim_point3(direction)
     family = _is_shared_family(value)
     # Resolve the callback/live guard before creating an owned observation.
-    context = (_group_live_layout_context(value) if family
-               else _bound_query_context(value) or _live_mutation_context(value))
+    if family:
+        context = _group_live_layout_context(value)
+    else:
+        context = _bound_query_context(value)
+        if context is None:
+            context = _live_mutation_context(value)
+        elif not engine_call(context.requiresLiveMutationRouting):
+            # Scene.add may bind this identity before the first execution exists.
+            # Rust owns that lifecycle; the authored anchor is current until then.
+            context = None
     if family:
         handle = value._semantic_family_handle
         anchor = engine_call(handle.layoutAnchor, _semantic_member_index(None))
