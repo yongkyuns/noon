@@ -1,7 +1,0 @@
-[
-  {
-    "path": "crates/noon/src/live_program/prepared/tests.rs",
-    "old": "let mut target = live.target_editor(&self.target)?;\n                    target.set_translation(2.0, 0.0).unwrap();",
-    "new": "let target = live.target_editor(&self.target)?;\n                    live.set_translation(&target, 2.0, 0.0)?;"
-  }
-]
