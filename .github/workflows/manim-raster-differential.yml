@@ -124,6 +124,7 @@ jobs:
         uses: actions/checkout@v7
       - name: Validate raster ratchets, manifests, and shared replay contracts
         run: |
+          python3 -S scripts/test_ci_install_reference_deps.py
           node scripts/manim-raster-policy.test.mjs
           node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-semantic-state.test.mjs scripts/manim-raster-server.test.mjs scripts/manim-raster-support.test.mjs scripts/shared-playback-raster-config.test.mjs
           python3 -m json.tool parity/manim-v0.21/manifest.json > /dev/null

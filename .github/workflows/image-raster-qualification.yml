@@ -82,7 +82,8 @@ jobs:
       - name: Browser and reference tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps chromium
+          bash scripts/ci-install-reference-deps.sh --playwright chromium
+          npx playwright install chromium
       - name: Pinned reference
         run: python scripts/image-manim-reference.py browser-smoke-artifacts/images/manim
       - name: Native retained images against the same pinned reference
