@@ -3,24 +3,74 @@ on:
   push:
     branches: [diagnostic/noon-prefix-browser-20261023]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  source:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Retain exact public product source
+      - name: Apply checksum-qualified candidate
         run: |
-          mkdir -p /tmp/noon-prefix-browser
-          git archive --format=tar.gz a83e4ee62932cc062d41c6d2d5fe5fc38fef29e5 > /tmp/noon-prefix-browser/source.tar.gz
-          printf '%s\n' a83e4ee62932cc062d41c6d2d5fe5fc38fef29e5 > /tmp/noon-prefix-browser/base.txt
-          sha256sum /tmp/noon-prefix-browser/source.tar.gz > /tmp/noon-prefix-browser/sha256.txt
-      - uses: actions/upload-artifact@v7
+          git fetch --no-tags --depth=1 origin a83e4ee62932cc062d41c6d2d5fe5fc38fef29e5
+          python3 .github/diagnostics/prefix-browser.py apply
+      - name: Install pinned Rust
+        run: |
+          rustup install
+          rustc --version --verbose | tee /tmp/noon-prefix-browser/rustc.txt
+      - uses: actions/cache@v6
         with:
-          name: prefix-browser-source
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and retain exact candidate
+        run: |
+          cargo fmt --all
+          python3 .github/diagnostics/prefix-browser.py save
+      - name: Test browser prefix receipts and existing browser input
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked -p noon-web --all-features --lib 2>&1 | tee /tmp/noon-prefix-browser/web-tests.log
+          cargo test --locked -p noon --no-default-features --features prepared-prefix --test prepared_prefix_identity 2>&1 | tee /tmp/noon-prefix-browser/identity-tests.log
+      - name: Check direct Rust WASM and nonrenderer feature isolation
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-prefix-browser/wasm-check.log
+          cargo test --locked -p noon-web --no-default-features --features prepared-prefix --lib prefix_browser 2>&1 | tee /tmp/noon-prefix-browser/feature-tests.log
+      - name: Validate repository and CI topology
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test .github/ci/*.test.mjs 2>&1 | tee /tmp/noon-prefix-browser/ci-topology.log
+          bash scripts/check.sh fast HEAD 2>&1 | tee /tmp/noon-prefix-browser/fast-gate.log
+      - name: Store exact tested blobs without updating refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo fmt --all -- --check
+          python3 .github/diagnostics/prefix-browser.py save
+          python3 .github/diagnostics/prefix-browser.py store
+      - name: Retain evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prefix-browser-qualification
           path: /tmp/noon-prefix-browser
           retention-days: 3
