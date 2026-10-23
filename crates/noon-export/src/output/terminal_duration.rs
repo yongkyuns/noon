@@ -1,6 +1,6 @@
 //! Exact terminal MP4 sample duration without resampling the authored frame grid.
 //!
-//! The pinned FFmpeg H.264 writer uses one video track, version-0 timing boxes,
+//! The video-only FFmpeg H.264 writer uses one track, version-0 timing boxes,
 //! one constant STTS run, faststart MOOV before MDAT, and an 8-byte free atom
 //! between them. For multiple samples, replace that padding with a second
 //! STTS run for the last sample. For a one-frame clip, update its only STTS
@@ -8,6 +8,10 @@
 //! An off-grid crop may also need a finer movie-level timescale: its one
 //! track's MVHD/TKHD/ELST duration fields then use the media tick scale.
 //! Reject unfamiliar layouts instead of publishing a video with unverified timing.
+//! The separate bounded soundtrack profile also preserves AAC's media clock
+//! and priming while keeping its whole-sample end at or before the exact movie end.
+
+mod soundtrack;
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -156,6 +160,73 @@ fn integer_ticks(seconds: f64, timescale: u32) -> Option<u32> {
     Some(rounded as u32)
 }
 
+/// Read the qualified faststart layout without changing a byte on disk.
+/// The free atom is reserved solely for a second video STTS entry.
+fn read_movie(path: &Path) -> io::Result<(File, u64, Vec<u8>, Atom)> {
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let length = file.metadata()?.len();
+    let (ftyp, ftyp_size) = disk_atom(&mut file, 0, length)?;
+    if ftyp != *b"ftyp" {
+        return Err(invalid("MP4 must begin with ftyp"));
+    }
+    let moov_offset = ftyp_size;
+    let (moov_name, moov_size) = disk_atom(&mut file, moov_offset, length)?;
+    if moov_name != *b"moov" || moov_size > MAX_MOOV_BYTES as u64 {
+        return Err(invalid("MP4 must have a bounded faststart moov"));
+    }
+    let free_offset = moov_offset + moov_size;
+    let (free_name, free_size) = disk_atom(&mut file, free_offset, length)?;
+    if free_name != *b"free" || free_size != 8 {
+        return Err(invalid("MP4 must reserve exactly 8 bytes after moov"));
+    }
+    let (mdat_name, _) = disk_atom(&mut file, free_offset + 8, length)?;
+    if mdat_name != *b"mdat" {
+        return Err(invalid("MP4 padding must immediately precede mdat"));
+    }
+    let mut moov = vec![0_u8; moov_size as usize];
+    file.seek(SeekFrom::Start(moov_offset))?;
+    file.read_exact(&mut moov)?;
+    let (moov_type, root) = atom_at(&moov, 0, moov.len())?;
+    if moov_type != *b"moov" || root.header != 8 || root.end != moov.len() {
+        return Err(invalid("unsupported MP4 movie atom header"));
+    }
+    Ok((file, moov_offset, moov, root))
+}
+
+/// Finalize the bounded H.264 + 48 kHz stereo AAC-LC soundtrack profile.
+///
+/// `pcm_frames` is the staged input's actual frame count, padded to the ceiling
+/// of the complete video grid extent. An exactly representable natural source
+/// end shortens the last video sample; otherwise that grid extent is retained.
+/// A checked common movie time base represents the exact video endpoint and
+/// the audio edit's last complete PCM sample at or before it. AAC's media clock
+/// and encoder-priming offset remain unchanged. The audio tail is less than one
+/// sample shorter, and can never make a demuxer extend the movie's duration.
+/// A duration below one audio sample can present zero samples; it does not
+/// promise an audible clip merely because an encoded audio track exists.
+/// The return value reports whether the video sample duration was shortened.
+pub(super) fn finish_mp4_soundtrack(
+    path: &Path,
+    rate: FrameRate,
+    frames: u64,
+    source_end: Option<f64>,
+    pcm_frames: u64,
+) -> io::Result<bool> {
+    soundtrack::finish(path, rate, frames, source_end, pcm_frames)
+}
+
+/// Reject known soundtrack grid, common-clock and AAC duration limits before
+/// creating staging files or starting an encoder. The full video grid must fit
+/// even when a natural endpoint would shorten its final frame. Codec/layout
+/// validation still belongs to finalization of the actual encoded movie.
+pub(super) fn validate_soundtrack_grid(
+    rate: FrameRate,
+    frames: u64,
+    pcm_frames: u64,
+) -> io::Result<()> {
+    soundtrack::validate_grid(rate, frames, pcm_frames).map(|_| ())
+}
+
 /// Return true only if the MP4 was shortened to the representable authored end.
 /// A duration finer than its stream or movie timescale cannot be represented
 /// exactly; leave the previously valid CFR output untouched in that case.
@@ -190,34 +261,8 @@ pub(super) fn finish_mp4_source_end(
     }
     let last_delta = u32::try_from(u64::from(media_ticks) - last_start)
         .map_err(|_| invalid("MP4 final sample duration overflow"))?;
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    let length = file.metadata()?.len();
-    let (ftyp, ftyp_size) = disk_atom(&mut file, 0, length)?;
-    if ftyp != *b"ftyp" {
-        return Err(invalid("MP4 must begin with ftyp"));
-    }
-    let moov_offset = ftyp_size;
-    let (moov_name, moov_size) = disk_atom(&mut file, moov_offset, length)?;
-    if moov_name != *b"moov" || moov_size > MAX_MOOV_BYTES as u64 {
-        return Err(invalid("MP4 must have a bounded faststart moov"));
-    }
-    let free_offset = moov_offset + moov_size;
-    let (free_name, free_size) = disk_atom(&mut file, free_offset, length)?;
-    if free_name != *b"free" || free_size != 8 {
-        return Err(invalid("MP4 must reserve exactly 8 bytes after moov"));
-    }
-    let (mdat_name, _) = disk_atom(&mut file, free_offset + 8, length)?;
-    if mdat_name != *b"mdat" {
-        return Err(invalid("MP4 padding must immediately precede mdat"));
-    }
-    let mut moov = vec![0_u8; moov_size as usize];
-    file.seek(SeekFrom::Start(moov_offset))?;
-    file.read_exact(&mut moov)?;
-
-    let (moov_type, root) = atom_at(&moov, 0, moov.len())?;
-    if moov_type != *b"moov" || root.header != 8 || root.end != moov.len() {
-        return Err(invalid("unsupported MP4 movie atom header"));
-    }
+    let (mut file, moov_offset, mut moov, root) = read_movie(path)?;
+    let moov_size = moov.len();
     let mvhd = child(&moov, root, *b"mvhd")?;
     let trak = child(&moov, root, *b"trak")?;
     let tkhd = child(&moov, trak, *b"tkhd")?;
@@ -280,7 +325,7 @@ pub(super) fn finish_mp4_source_end(
                 .map_err(|_| invalid("expanded MP4 atom exceeds version-zero length"))?;
             set_u32(&mut moov, atom.start, expanded)?;
         }
-        if moov.len() as u64 != moov_size + 8 {
+        if moov.len() != moov_size + 8 {
             return Err(invalid("MP4 final sample expansion was inconsistent"));
         }
     }

@@ -76,8 +76,9 @@ pub enum ExportEndReason {
     RequestedStop,
 }
 
-/// Sampling has finished, NOT the encoder/muxer. A file becomes successful only
-/// after the platform sink has independently flushed and finalized it.
+/// Output range/count result from completed sampling or immutable finite planning.
+/// A preflight plan alone does not certify sampling. Neither form certifies the
+/// encoder/muxer: a file succeeds only after its sink flushes and finalizes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExportFrameSummary {
     pub frames: u64,
@@ -268,13 +269,15 @@ pub enum ExportFramesError<E> {
 impl<E> From<ExportFramePolicyError> for ExportFramesError<E> {
     fn from(error: ExportFramePolicyError) -> Self {
         match error {
-            ExportFramePolicyError::InvalidOptions => Self::InvalidOptions,
+            ExportFramePolicyError::InvalidOptions | ExportFramePolicyError::InvalidSourceEnd => {
+                Self::InvalidOptions
+            }
             ExportFramePolicyError::InvalidHold => Self::InvalidHold,
             ExportFramePolicyError::InvalidObservation => Self::InvalidObservation,
             ExportFramePolicyError::EmptyInterval => Self::EmptyInterval,
             ExportFramePolicyError::FrameLimit => Self::FrameLimit,
             ExportFramePolicyError::WrongSample => Self::WrongSample,
-            ExportFramePolicyError::Inactive => Self::Inactive,
+            ExportFramePolicyError::Inactive | ExportFramePolicyError::NotFresh => Self::Inactive,
             ExportFramePolicyError::Grid(error) => Self::Grid(error),
         }
     }

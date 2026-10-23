@@ -38,7 +38,7 @@ fn encode(directory: &Path, rate: FrameRate, width: u32, height: u32, png: bool,
     } else {
         OutputOptions::mp4(directory.join("video.mp4"))
     };
-    let mut command = encoder_command(&options, rate, width, height, directory);
+    let mut command = encoder_command(&options, rate, width, height, directory, false);
     let mut encoder = Encoder::new(
         &mut command,
         width as usize * height as usize * 4,
