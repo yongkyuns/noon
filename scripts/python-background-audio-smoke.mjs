@@ -160,8 +160,7 @@ function pointCentroid(bytes, y, color, expectedX) {
   return centroid;
 }
 
-async function picture(time, input, filename) {
-  await pausedSeek(time);
+async function currentPicture(input, filename) {
   const bytes = await page.locator("#scene").screenshot({ path: path.join(artifacts, filename) });
   return {
     bytes,
@@ -170,6 +169,11 @@ async function picture(time, input, filename) {
       output: pointCentroid(bytes, -1.1, "gold", 1 + 2 * input),
     },
   };
+}
+
+async function picture(time, input, filename) {
+  await pausedSeek(time);
+  return currentPicture(input, filename);
 }
 
 try {
@@ -185,6 +189,22 @@ try {
   cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
   await cache.install(context);
   await context.addInitScript(observeAudio);
+  await context.addInitScript(() => {
+    // Observe the actual Window-host surface policy without changing requests.
+    // Worker contexts live in their own realm; tiny capability probes are not
+    // product surfaces and are deliberately excluded from this observation.
+    const getContext = OffscreenCanvas.prototype.getContext;
+    const contexts = [];
+    window.noonAudioWebglContexts = contexts;
+    OffscreenCanvas.prototype.getContext = function (...args) {
+      const result = getContext.apply(this, args);
+      if (args[0] === "webgl2" && result && this.width > 2 && this.height > 2 &&
+          !contexts.includes(result)) {
+        contexts.push(result);
+      }
+      return result;
+    };
+  });
   if (backend === "webgl") await context.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
   page = await context.newPage();
   page.setDefaultTimeout(120_000);
@@ -225,8 +245,18 @@ try {
     assert.equal(report.runtimeBuildIdentity.sourceRevision, report.revision);
   } else assert.equal(report.sourceDirty, true, "an unattested source revision must be reported as dirty");
   const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  report.renderHost = metrics.renderHost;
   report.rendererBackend = metrics.rendererBackend ?? await page.locator("#status").getAttribute("data-renderer-backend");
   assert.equal(report.rendererBackend, backend === "webgl" ? "WebGL2" : "WebGPU");
+  report.windowWebglContexts = await page.evaluate(() => noonAudioWebglContexts.map(context => ({
+    width: context.canvas.width, height: context.canvas.height, attributes: context.getContextAttributes(),
+  })));
+  if (backend === "webgl" && report.renderHost === "main-thread") {
+    assert.equal(report.windowWebglContexts.length, 1, "the fallback owns one real Window WebGL surface");
+    assert.equal(report.windowWebglContexts[0].attributes.antialias, false);
+    assert.equal(report.windowWebglContexts[0].attributes.preserveDrawingBuffer, true,
+      "the Window WebGL host must preserve its final presented frame");
+  }
 
   await record("original Python lesson prepares silently at its finite beginning", async () => {
     const initial = await state();
@@ -283,6 +313,20 @@ try {
       const capture = await picture(time, input, `lesson-${time}.png`);
       samples.push({ time, points: capture.points, pngSha256: hash(capture.bytes) });
     }
+    await pausedSeek(0);
+    const forwardSamples = [];
+    for (const [time, input] of [[5, 1], [8, 1.75], [25, -1], [30, 0]]) {
+      const result = await command("advanceTo", time);
+      near(result.time, time, "exact forward sample", 0);
+      const capture = await currentPicture(input, `lesson-forward-${time}.png`);
+      forwardSamples.push({ time, points: capture.points, pngSha256: hash(capture.bytes) });
+    }
+    const completedMetrics = await command("metrics");
+    await quiet();
+    const held = await currentPicture(0, "lesson-final-held.png");
+    const heldMetrics = await command("metrics");
+    assert.equal(heldMetrics.metrics.presentedFrames, completedMetrics.metrics.presentedFrames,
+      "a held final picture must stay correct without an extra draw");
     const capture = await picture(8, 1.75, "showcase-background-music.png");
     poster = capture.bytes;
     const image = PNG.sync.read(poster);
@@ -295,7 +339,12 @@ try {
     assertRetainedPoster(entry, posterRecord, source, poster, report.runtimeBuildIdentity);
     assert.equal((await state()).starts.length, starts, "paused seeks must not start device sources");
     await quiet();
-    return { samples, poster: { ...posterRecord, points: capture.points } };
+    return {
+      samples, forwardSamples,
+      held: { time: 30, points: held.points, pngSha256: hash(held.bytes),
+        presentedFrames: heldMetrics.metrics.presentedFrames },
+      poster: { ...posterRecord, points: capture.points },
+    };
   });
 
   await record("section and restart commands use the authored finite section table", async () => {
@@ -464,7 +513,6 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");
   assert.deepEqual(report.consoleErrors, [], "no browser audio/GPU errors");
   report.status = "passed";
-  report.runtimeResources = cache.stats();
   const evidence = {
     schema: 1, publication: "captured-preview", captureRevision: report.runtimeBuildIdentity.sourceRevision,
     checkoutRevision: report.revision,
@@ -477,6 +525,7 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
   // Retain only a source-bound real capture after the complete browser profile passes.
   // Opt-in avoids one backend silently overwriting another qualification's poster.
   if (process.env.NOON_PYTHON_AUDIO_RETAIN_POSTER === "1") {
+    assert.equal(report.sourceDirty, false, "retaining a publishable poster requires a clean checkout");
     assert.equal(report.runtimeBuildIdentity.sourceRevision, report.revision,
       "retaining a publishable poster requires a clean, source-attested runtime build");
     await writeFile(path.join(root, "web", entry.thumbnail), poster);
@@ -487,9 +536,16 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
   report.error = String(error.stack ?? error);
   process.exitCode = 1;
   console.error(report.error);
-  report.failureState = await state().catch(error => ({ unavailable: String(error) }));
+  const hasExecution = await page?.evaluate(() => Boolean(window.audioQualification?.execution)).catch(() => false);
+  report.failureState = hasExecution ? await state().catch(error => ({ unavailable: String(error) }))
+    : { unavailable: "the authoring execution owner was not ready" };
+  if (hasExecution) {
+    report.failureFrame = await command("debugFrame").catch(error => ({ unavailable: String(error) }));
+    report.failureMetrics = await command("metrics").catch(error => ({ unavailable: String(error) }));
+  }
   await page?.screenshot({ path: path.join(artifacts, "failure.png"), fullPage: true }).catch(() => {});
 } finally {
+  report.runtimeResources = cache?.stats() ?? null;
   await browser?.close();
   await server?.close();
   await writeFile(path.join(artifacts, "report.json"), json(report));

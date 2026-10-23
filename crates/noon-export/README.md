@@ -132,7 +132,7 @@ node scripts/export-python-scene.mjs \
 ```
 
 The default is 640x360 at 30 FPS, WebGPU and transferable worker transport. The
-30-second example is paired with the first-class Rust scene exported above.
+30-second example is paired with `noon::example_scenes::background_music_lesson`.
 `--fps 30000/1001`, `--start-frame N`, `--frames N`, `--end-time T` and `--hold T`
 map to the existing shared frame options. `--frames` and `--end-time` are mutually
 exclusive; omitting both uses the finite source end. `--max-frames` defaults to

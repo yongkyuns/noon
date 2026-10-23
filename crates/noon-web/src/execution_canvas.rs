@@ -40,6 +40,7 @@ mod wasm {
     use crate::{
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
         gpu_timestamps::GpuTimestampProfiler,
+        webgl_context_lifecycle::prepare_main_thread_webgl_context,
         BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan,
         BrowserHostWake,
     };
@@ -2575,6 +2576,7 @@ mod wasm {
         width: u32,
         height: u32,
     ) -> Result<InitializedGpu, String> {
+        prepare_main_thread_webgl_context(canvas).map_err(js_value_message)?;
         let instance = create_instance(wgpu::Backends::GL);
         let surface = create_surface(&instance, canvas).map_err(js_value_message)?;
         let adapter = instance
