@@ -7,18 +7,29 @@ mod reader;
 pub use reader::PrefixReader;
 
 impl ExecutionSession {
+    /// Reject source-only behavior before a cooperative producer drives time.
+    /// This deliberately permits an unfinished ordinary segment, but not a
+    /// callback/causal route that would need sampled source execution.
+    pub(crate) fn ensure_prepared_source_domain(&self) -> Result<(), PrefixError> {
+        if !self.callback_schedule.is_empty()
+            || self.derived_display_plan.is_some()
+            || self.translation_drag.has_targets()
+            || !self.inset_2d_views.is_empty()
+            || !self.signal_timeline.is_empty()
+            || !self.reactive_projection.is_empty()
+        {
+            return Err(noon_runtime::ReplayError::UnsupportedDomain.into());
+        }
+        Ok(())
+    }
+
     fn ensure_prefix_boundary(&self, boundary: ExecutionSegment) -> Result<(), PrefixError> {
         // Check the original session, never a clone (which clears pending tokens).
         // Quiet waits also need the actual source-owned deadline supplied here.
         self.ensure_replay_completion()?;
         // Historical inset roles and reactive routes need their own admission;
         // do not silently drop source-only orchestration from an interactive reader.
-        if !self.inset_2d_views.is_empty()
-            || !self.signal_timeline.is_empty()
-            || !self.reactive_projection.is_empty()
-        {
-            return Err(noon_runtime::ReplayError::UnsupportedDomain.into());
-        }
+        self.ensure_prepared_source_domain()?;
         if self.frame().time != boundary.end_time() || !self.segment_state(boundary).is_complete() {
             return Err(PrefixError::NotReady);
         }

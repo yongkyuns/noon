@@ -1624,6 +1624,52 @@ mod wasm {
             Ok(stats)
         }
 
+        /// Prepare at most one ordinary source continuation and deliver its batch.
+        /// The source stays outside the canvas. Borrowed admission retains a
+        /// rejected suffix for retry and prevents invoking the continuation twice.
+        /// Hosts must yield between calls; one segment is not a wall-time bound.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn prepare_source_step<C: noon::LiveContinuation>(
+            &mut self,
+            source: &mut noon::PreparedSource<C>,
+        ) -> Result<noon::PreparedSourceStatus, JsValue>
+        where
+            C::Error: std::fmt::Display,
+        {
+            // Check host ownership before calling any user code.
+            if !matches!(self.source.authority, DirectSourceAuthority::Prepared(_)) {
+                return Err(js_message("canvas does not own a prepared reader"));
+            }
+            if source.status() == noon::PreparedSourceStatus::ReaderReady {
+                return Err(js_message(
+                    "take the source reader before preparing its canvas",
+                ));
+            }
+            source.prepare_next().map_err(js_error)?;
+            if let Some(batch) = source.pending_batch() {
+                let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
+                    unreachable!()
+                };
+                // A foreign stream is rejected before capacity maintenance.
+                match playback.reader.preflight_append(batch) {
+                    Err(noon::PrefixError::CapacityRequired { object_slots }) => {
+                        playback
+                            .reader
+                            .reserve_object_capacity(object_slots)
+                            .map_err(js_error)?;
+                        playback.reader.preflight_append(batch).map_err(js_error)?;
+                    }
+                    other => {
+                        other.map_err(js_error)?;
+                    }
+                }
+                self.append_prepared_prefix(
+                    source.take_batch().expect("borrowed batch was admitted"),
+                )?;
+            }
+            Ok(source.status())
+        }
+
         /// Build the browser canvas host directly from the typed in-process execution session.
         ///
         /// This constructor is intentionally Rust-only: JavaScript may supply the canvas during

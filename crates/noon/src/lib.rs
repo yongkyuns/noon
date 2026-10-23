@@ -266,6 +266,8 @@ pub use latex_authoring::{
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
+#[cfg(feature = "prepared-prefix")]
+pub use live_program::{PreparedSource, PreparedSourceError, PreparedSourceStatus};
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,

@@ -222,7 +222,10 @@ jobs:
           tool: wasm-pack@0.15.0
           fallback: none
       - name: Test bounded prepared canvas lifecycle
-        run: cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
+        run: |
+          cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
+          cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
+          node --test web/cooperative-preparation-driver.test.mjs
       - name: Build explicitly enabled same-context canvas
         run: wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
       - uses: actions/cache@v6
@@ -234,7 +237,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Qualify actual prepared canvas, DOM input and buffering
-        run: node scripts/prepared-canvas-qualification.mjs
+        run: |
+          node scripts/prepared-canvas-qualification.mjs
+          node scripts/prepared-source-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7

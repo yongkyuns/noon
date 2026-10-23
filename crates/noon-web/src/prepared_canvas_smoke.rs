@@ -136,3 +136,126 @@ impl PreparedCanvasFixture {
         self.source.is_some()
     }
 }
+
+// Cooperative fixture below uses the public shared source driver. Only lifecycle
+// calls cross WASM; the source, histories and batches never leave Rust.
+use noon::{
+    ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, PreparedSource,
+    PreparedSourceStatus,
+};
+use std::{cell::Cell, rc::Rc};
+
+struct CooperativeScene {
+    marker: Mobject,
+    calls: Rc<Cell<u32>>,
+    dropped: Rc<Cell<bool>>,
+    steps: u32,
+    fail_at: u32,
+}
+impl Drop for CooperativeScene {
+    fn drop(&mut self) {
+        self.dropped.set(true);
+    }
+}
+impl LiveContinuation for CooperativeScene {
+    type Error = LiveSessionError;
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        let stage = self.calls.get();
+        self.calls.set(stage + 1);
+        if stage == self.fail_at {
+            return live.wait_segment(-1.0).map(ContinuationStep::Await);
+        }
+        if stage == 0 {
+            return Ok(ContinuationStep::Await(live.wait_segment(1.0)?));
+        }
+        if stage > self.steps {
+            return Ok(ContinuationStep::Finished);
+        }
+        live.set_translation(&self.marker, -2.0 + f64::from(stage % 8) * 0.25, 2.0)?;
+        Ok(ContinuationStep::Await(live.wait_segment(0.25)?))
+    }
+}
+#[wasm_bindgen]
+pub struct CooperativeCanvasFixture {
+    source: PreparedSource<CooperativeScene>,
+    calls: Rc<Cell<u32>>,
+    dropped: Rc<Cell<bool>>,
+}
+#[wasm_bindgen]
+impl CooperativeCanvasFixture {
+    #[wasm_bindgen(constructor)]
+    pub fn new(steps: u32, fail_at: u32) -> Result<Self, JsValue> {
+        if steps == 0 || steps > 256 {
+            return Err(js_error("fixture steps must be 1..256"));
+        }
+        let mut scene = Scene::new();
+        let mut target = scene.circle(0.8).map_err(js_error)?;
+        target.set_fill(0.0, 0.0, 1.0, 1.0).map_err(js_error)?;
+        target.set_stroke_width(0.0).map_err(js_error)?;
+        scene.add(&target).map_err(js_error)?;
+        scene
+            .on_click_indicate(
+                &target,
+                IndicateOptions::default(),
+                AnimationOptions::new().run_time(0.5),
+            )
+            .map_err(js_error)?;
+        let mut marker = scene.circle(0.15).map_err(js_error)?;
+        marker.set_fill(1.0, 0.0, 0.0, 1.0).map_err(js_error)?;
+        marker.set_translation(-2.0, 2.0).map_err(js_error)?;
+        scene.add(&marker).map_err(js_error)?;
+        let calls = Rc::new(Cell::new(0));
+        let dropped = Rc::new(Cell::new(false));
+        let source = scene
+            .into_prepared_source(
+                CooperativeScene {
+                    marker,
+                    calls: calls.clone(),
+                    dropped: dropped.clone(),
+                    steps,
+                    fail_at,
+                },
+                ReplayLimits {
+                    revisions: 2048,
+                    payloads: 32768,
+                },
+            )
+            .map_err(js_error)?;
+        Ok(Self {
+            source,
+            calls,
+            dropped,
+        })
+    }
+    #[wasm_bindgen(js_name = createCanvas)]
+    pub async fn create_canvas(
+        &mut self,
+        canvas: OffscreenCanvas,
+    ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+        self.source.prepare_next().map_err(js_error)?;
+        let mut reader = self
+            .source
+            .take_reader()
+            .ok_or_else(|| js_error("fixture reader already moved"))?;
+        reader.seek(0.5).map_err(js_error)?;
+        WasmExecutionCanvasRenderer::create_from_prepared_prefix(canvas, reader).await
+    }
+    #[wasm_bindgen(js_name = prepareNext)]
+    pub fn prepare_next(
+        &mut self,
+        canvas: &mut WasmExecutionCanvasRenderer,
+    ) -> Result<bool, JsValue> {
+        let status = canvas.prepare_source_step(&mut self.source)?;
+        Ok(status == PreparedSourceStatus::Ready)
+    }
+    pub fn cancel(&mut self) {
+        self.source.cancel();
+    }
+    pub fn calls(&self) -> u32 {
+        self.calls.get()
+    }
+    #[wasm_bindgen(js_name = producerDropped)]
+    pub fn producer_dropped(&self) -> bool {
+        self.dropped.get()
+    }
+}
