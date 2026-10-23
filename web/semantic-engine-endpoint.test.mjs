@@ -54,6 +54,7 @@ function fixture(
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 18, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     sealReplay: () => {},
+    freshFiniteSourceDuration: () => null,
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     debugFrameJson: () => JSON.stringify({ time, source: "active" }),
     initialCallbackPhaseJson: () => null,
@@ -2885,6 +2886,43 @@ test("non-replayable paused scenes drive native interaction wakes and settle", {
     const rejected = await request(f.control.port2, "seek", 992, { time: 0 });
     assert.equal(rejected.type, "error");
     assert.match(rejected.message, /Replay unavailable/);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("finite completion probes use the Rust target and await its matching presentation", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  const requested = 2 + 1e-9;
+  f.player.freshFiniteSourceDuration = () => 1.125;
+  f.player.finiteSourceProbeJson = time => {
+    assert.equal(time, requested);
+    assert.equal(f.player.time(), 0, "querying the source bound must not advance");
+    return JSON.stringify({ targetTime: 1.125, sourceCompleted: true });
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    assert.equal((await ready).finiteSourceDuration, 1.125);
+    const first = await initial;
+    present(f.render.port2, first);
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const publication = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    let settled = false;
+    const result = request(f.control.port2, "advance_to", 1001, {
+      time: requested, stopAtSourceCompletion: true,
+    }).then(value => { settled = true; return value; });
+    const delta = await publication;
+    present(f.render.port2, first);
+    await turn();
+    assert.equal(settled, false, "the prior picture cannot acknowledge the endpoint");
+    assert.equal(f.player.time(), 1.125, "host forwards Rust's target unchanged");
+    present(f.render.port2, delta);
+    const completed = await result;
+    assert.equal(completed.time, 1.125);
+    assert.equal(completed.sourceCompleted, true);
+    assert.equal(f.stats().created, 1);
+    assert.equal(f.stats().returned, 0);
   } finally { endpoint?.stop(); f.close(); }
 });
 

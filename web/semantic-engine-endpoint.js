@@ -953,9 +953,13 @@ export async function attachSemanticEngine(
               );
             }
             latestTick = null;
+            const probe = message.stopAtSourceCompletion === true
+              ? JSON.parse(player.finiteSourceProbeJson(message.time)) : null;
+            const targetTime = probe === null ? message.time : probe.targetTime;
+            if (probe !== null) sourceCompleted = probe.sourceCompleted === true;
             const sampleStartedAtMs = sampleTiming === null ? 0 : performance.now();
             const advanced = await advanceToAuthoredTime(
-              message.time,
+              targetTime,
               message.observeRenderer === true,
               sampleTiming,
             );
@@ -1237,6 +1241,10 @@ export async function attachSemanticEngine(
             typeof message.observeRenderer !== "boolean") {
           throw new Error("renderer observation flag must be boolean");
         }
+        if (message.type === "advance_to" && message.stopAtSourceCompletion !== undefined &&
+            typeof message.stopAtSourceCompletion !== "boolean") {
+          throw new Error("stopAtSourceCompletion must be a boolean");
+        }
         if (message.type === "seek_section" && typeof message.previous !== "boolean") {
           throw new Error("section navigation direction must be boolean");
         }
@@ -1319,6 +1327,7 @@ export async function attachSemanticEngine(
     }
     const audioResources = hasAudio ? Uint8Array.from(player.audioResourceBundleBytes()) : null;
     post({ ...state("ready"), transportMode,
+      finiteSourceDuration: continuation === null ? player.freshFiniteSourceDuration() ?? null : null,
       ...(audioResources === null ? {} : { audioResources }),
     }, audioResources === null ? [] : [audioResources.buffer]);
   } catch (error) { stop(); throw error; }

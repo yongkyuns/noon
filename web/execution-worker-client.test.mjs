@@ -156,6 +156,27 @@ async function waitForRequest(worker, type, occurrence = 1) {
   assert.fail(`missing ${worker.name} ${type} request`);
 }
 
+test("finite completion probe forwards its original bound and preserves Rust's actual endpoint", async () => {
+  const { client, engine } = await startClient();
+  try {
+    const requested = 4 + 1e-9;
+    const before = engine.messages.length;
+    await assert.rejects(client.advanceTo(requested), /exceeds loop duration/);
+    await assert.rejects(client.advanceTo(requested, { stopAtSourceCompletion: "true" }), /must be a boolean/);
+    assert.equal(engine.messages.length, before);
+    const pending = client.advanceTo(requested, { stopAtSourceCompletion: true });
+    const message = await waitForRequest(engine, "advance_to");
+    assert.equal(message.time, requested);
+    assert.equal(message.stopAtSourceCompletion, true);
+    engine.emitMessage(engineMessage("advance_to", {
+      requestId: message.requestId, time: 4, sourceCompleted: true, playing: false,
+    }));
+    const result = await pending;
+    assert.equal(result.time, 4);
+    assert.equal(result.sourceCompleted, true);
+  } finally { client.terminate(); }
+});
+
 test("reserves prepare and fresh startup while render-host probing is pending", async (t) => {
   const resolveProbe = deferredRenderHostProbe(t);
   const canvas = new FakeCanvas();

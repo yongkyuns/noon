@@ -5326,6 +5326,50 @@ impl SemanticExecutionPlayer {
         Ok(phase)
     }
 
+    /// Admit a completed immutable source only while its original execution is
+    /// paused at time zero. A finished continuation/endpoint is not a new source.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = freshFiniteSourceDuration))]
+    pub fn fresh_finite_source_duration(&self) -> Option<f64> {
+        if self.session.frame().time != 0.0
+            || self.clock.is_playing()
+            || self.session.pending_callback_token().is_some()
+            || self.session.replay_scope_active()
+            || self.pending_callback_phase.is_some()
+            || self.session.interactions_active()
+        {
+            return None;
+        }
+        self.session.finite_timeline_end_time()
+    }
+
+    /// Resolve an explicit finite-source completion probe in Rust. Ordinary
+    /// forward samples remain exact; only an opted-in probe may stop early.
+    /// This boundary observation runs once per probe, not on the frame path.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finiteSourceProbeJson))]
+    pub fn finite_source_probe_json(&self, requested_time: f64) -> Result<String, String> {
+        let current = self.session.frame().time;
+        if self.clock.is_playing()
+            || self.session.pending_callback_token().is_some()
+            || self.session.replay_scope_active()
+            || self.pending_callback_phase.is_some()
+            || self.session.interactions_active()
+        {
+            return Err("finite source probe requires paused immutable execution".into());
+        }
+        let end = self
+            .session
+            .finite_timeline_end_time()
+            .ok_or("finite source probe requires a complete immutable timeline")?;
+        if !requested_time.is_finite() || requested_time < current || current > end {
+            return Err("finite source probe requires a valid forward authored time".into());
+        }
+        Ok(serde_json::json!({
+            "targetTime": requested_time.min(end),
+            "sourceCompleted": requested_time >= end,
+        })
+        .to_string())
+    }
+
     /// Derive one browser wake directive for the active ordinary continuation segment.
     ///
     /// This is deliberately a typed WASM value rather than a host-authored duration.

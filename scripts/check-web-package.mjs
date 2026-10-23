@@ -21,6 +21,8 @@ const expectedJavascriptSurface = [
   "audioResourceBundleBytes(",
   "audioAnchorJson(",
   "finiteAudioDuration(",
+  "freshFiniteSourceDuration(",
+  "finiteSourceProbeJson(",
   "seekSectionDeltaJson(",
   "declareValue(",
   "beginFiniteExportJson(",

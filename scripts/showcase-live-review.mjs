@@ -10,6 +10,7 @@ import { waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
 import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js";
 import { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";
+import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 
 const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
@@ -63,7 +64,34 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000) {
   let timer;
   try {
     await Promise.race([
-      page.evaluate(() => window.__noonExampleGallery.run()),
+      (async () => {
+        const run = await page.evaluate(() => window.__noonExampleGallery.run());
+        if (run?.result?.hasAudio !== true) return;
+        // Complete finite audio authoring intentionally prepares a silent,
+        // paused scene. Exercise the same trusted Play gesture as a viewer;
+        // seeking would invalidate the independent first-pass pixel oracle.
+        assert.equal(run.stale, false, "finite audio Run was superseded");
+        assert.equal(run.result.time, 0, "finite audio Run did not prepare at time zero");
+        assert.equal(run.result.playing, false, "finite audio Run must prepare paused");
+        const duration = run.result.durationSeconds;
+        assert.ok(Number.isFinite(duration) && duration > 0, "finite audio Run has no authored duration");
+        await page.getByRole("button", { name: "Play animation", exact: true }).click();
+        await waitForBrowserObservation(page, async (duration) => {
+          const patch = document.querySelector("#patch-status");
+          if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
+          const gallery = window.__noonExampleGallery;
+          const controls = document.querySelector(".playback-controls");
+          if (!gallery || gallery.runInFlight || patch?.dataset.state !== "applied" ||
+              controls?.dataset.controllable !== "true" || controls.dataset.busy !== "false" ||
+              controls.dataset.playing !== "false") return false;
+          const tolerance = 8 * Number.EPSILON * Math.max(1, duration);
+          const elapsed = Number(controls.dataset.elapsedSeconds);
+          if (!Number.isFinite(elapsed) || Math.abs(elapsed - duration) > tolerance) return false;
+          const report = await gallery.executionMetrics();
+          const publishedTime = Number(report?.metrics?.time);
+          return Number.isFinite(publishedTime) && Math.abs(publishedTime - duration) <= tolerance;
+        }, duration, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
+      })(),
       new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error("ordinary gallery Run exceeded its review deadline")), deadlineMs);
       }),
@@ -235,6 +263,7 @@ async function main() {
         result.firstPass = await readLiveState(page);
         assertFirstPass(entry, result.firstPass, expectedBackend);
         assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
+        assert.deepEqual(result.consoleErrors, [], "ordinary source execution raised console errors");
         await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
         // Preserve first-pass evidence; the manifest below distinguishes expected denial from replay failure.
         const firstPass = PNG.sync.read(await canvas.screenshot({
@@ -261,6 +290,7 @@ async function main() {
           result.nonreplayableRerunPixelSha256 = hash(rerunImage.data);
           assertLivePixels(firstPass, rerunImage);
           assert.deepEqual(result.pageErrors, []);
+          assert.deepEqual(result.consoleErrors, []);
           result.nonreplayableRerunOutcome = "pass";
           result.nonreplayableRerunMatchesFirstPass = true;
           result.outcome = "pass";
@@ -349,6 +379,7 @@ async function main() {
           }
         }
         assert.deepEqual(result.pageErrors, []);
+        assert.deepEqual(result.consoleErrors, []);
         assert.deepEqual(result.intermediateSamples.filter(sample => sample.outcome !== "pass")
           .map(sample => `${sample.direction}@${sample.requestedTime}`), [], "intermediate replay differs from first execution");
         result.intermediateReplayOutcome = "pass";

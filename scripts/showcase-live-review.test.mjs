@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
@@ -173,6 +174,112 @@ test("ordinary Run helper applies the same deadline and state snapshot to each e
   let stateCalls = 0;
   assert.deepEqual(await readLiveState({ evaluate: async () => { stateCalls += 1; return state; } }), state);
   assert.equal(stateCalls, 1);
+});
+
+function preparedAudioPage({ run, observations = [] } = {}) {
+  const calls = [], ready = [];
+  let observationIndex = 0;
+  let current = {};
+  const gallery = {
+    async run() {
+      calls.push("run");
+      return run ?? { stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8 } };
+    },
+    get runInFlight() { return current.runInFlight ?? false; },
+    async executionMetrics() { return { metrics: { time: current.publishedTime } }; },
+  };
+  const browser = {
+    window: { __noonExampleGallery: gallery },
+    document: { querySelector(selector) {
+      if (selector === "#patch-status") return {
+        dataset: { state: current.patchState ?? "applied" }, value: current.patchError,
+      };
+      assert.equal(selector, ".playback-controls");
+      return { dataset: { controllable: "true", busy: "false", playing: "false",
+        elapsedSeconds: String(current.elapsed), ...current.controls } };
+    } },
+  };
+  const evaluate = async (fn, argument) => {
+    if (argument !== undefined) {
+      if (observationIndex === 0) calls.push("published endpoint");
+      current = observations[observationIndex++] ?? {};
+    }
+    const value = await runInNewContext(`(${fn.toString()})(argument)`, { ...browser, argument });
+    if (argument !== undefined) ready.push(value);
+    return value;
+  };
+  return {
+    calls, ready,
+    page: {
+      evaluate,
+      getByRole(role, options) {
+        assert.equal(role, "button");
+        assert.deepEqual(options, { name: "Play animation", exact: true });
+        return { async click() { calls.push("trusted Play"); } };
+      },
+      async waitForTimeout(milliseconds) {
+        assert.equal(milliseconds, 25);
+        if (observationIndex >= observations.length) throw new Error("no completed published endpoint");
+      },
+      waitForFunction() { throw new Error("async worker observations must poll their resolved value"); },
+    },
+  };
+}
+
+test("finite audio first pass uses trusted Play and waits for the unseeked published endpoint", async () => {
+  const { page, calls, ready } = preparedAudioPage({ observations: [
+    { elapsed: 0, publishedTime: 0 },
+    { elapsed: 4, publishedTime: 4, controls: { playing: "true" } },
+    { elapsed: 8, publishedTime: 8, controls: { busy: "true" } },
+    { elapsed: 8, publishedTime: 8, runInFlight: true },
+    { elapsed: 8, publishedTime: 8, controls: { controllable: "false" } },
+    { elapsed: 7.999, publishedTime: 8 },
+    { elapsed: 8, publishedTime: 7.999 },
+    { elapsed: 8 },
+    { elapsed: 8, publishedTime: 8 },
+  ] });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
+  assert.deepEqual(ready, [false, false, false, false, false, false, false, false, true]);
+});
+
+test("ordinary Scene.construct completion does not add Play or change its first pass", async () => {
+  const { page, calls } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, time: 8, playing: false } },
+  });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.deepEqual(calls, ["run"]);
+});
+
+test("finite audio preparation must be current, paused at zero, and have a real duration", async () => {
+  for (const change of [{ time: 1 }, { playing: true }, { durationSeconds: 0 },
+    { durationSeconds: NaN }, { durationSeconds: Infinity }, { durationSeconds: "8" }]) {
+    const { page, calls } = preparedAudioPage({ run: {
+      stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8, ...change },
+    } });
+    await assert.rejects(runOrdinaryGallery(page, 100), /finite audio Run/);
+    assert.deepEqual(calls, ["run"]);
+  }
+  const { page, calls } = preparedAudioPage({ run: {
+    stale: true, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8 },
+  } });
+  await assert.rejects(runOrdinaryGallery(page, 100), /superseded/);
+  assert.deepEqual(calls, ["run"]);
+});
+
+test("finite playback errors fail and the ordinary Run deadline includes Play and endpoint publication", async () => {
+  const failed = preparedAudioPage({ observations: [{ patchState: "error", patchError: "audio playback failed" }] });
+  await assert.rejects(runOrdinaryGallery(failed.page, 100), /audio playback failed/);
+  for (const stage of ["click", "endpoint"]) {
+    const { page } = preparedAudioPage();
+    if (stage === "click") page.getByRole = () => ({ click: () => new Promise(() => {}) });
+    else {
+      const evaluate = page.evaluate;
+      page.evaluate = (predicate, argument) => argument === undefined
+        ? evaluate(predicate, argument) : new Promise(() => {});
+    }
+    await assert.rejects(runOrdinaryGallery(page, 5), /review deadline/);
+  }
 });
 
 test("first-pass errors and incomplete execution fail before replay is attempted", () => {

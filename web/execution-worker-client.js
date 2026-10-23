@@ -531,14 +531,20 @@ export class ExecutionWorkerClient {
   // Advance one canonical session barrier to an exact authored time. The
   // semantic endpoint owns forward progression and callback ordering; callers
   // receive only after the matching renderer publication has presented.
-  async advanceTo(timeSeconds, { collectTimings = false } = {}) {
+  async advanceTo(timeSeconds, { collectTimings = false, stopAtSourceCompletion = false } = {}) {
     this.#requireStarted();
-    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    if (typeof stopAtSourceCompletion !== "boolean") {
+      throw new TypeError("stopAtSourceCompletion must be a boolean");
+    }
+    const time = stopAtSourceCompletion
+      ? validateAuthoredSampleTime(timeSeconds)
+      : validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
     if (typeof collectTimings !== "boolean") {
       throw new TypeError("collectTimings must be a boolean");
     }
     const result = await this.#requestEngine("advance_to", {
       time, ...(collectTimings ? { collectTimings: true } : {}),
+      ...(stopAtSourceCompletion ? { stopAtSourceCompletion: true } : {}),
     });
     this.#rememberPlaying(result);
     return result;
