@@ -1,0 +1,24 @@
+name: Diagnostic prefix session
+on:
+  push:
+    branches: [diagnostic/noon-prefix-session-20261022]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Retain exact tracked source
+        run: |
+          mkdir -p /tmp/noon-prefix-session
+          git rev-parse HEAD > /tmp/noon-prefix-session/source-commit.txt
+          git archive HEAD | gzip > /tmp/noon-prefix-session/source.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prefix-session-source
+          path: /tmp/noon-prefix-session
+          retention-days: 3
