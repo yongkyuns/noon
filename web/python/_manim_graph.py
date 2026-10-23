@@ -7,7 +7,6 @@ topology, arrow endpoints, persistent placements, and publication.
 from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
-import math
 from numbers import Integral
 
 import _manim_compat as _compat
@@ -167,7 +166,11 @@ def _graph_labels(labels, vertices, label_fill_color):
 
 
 def _labeled_dot_radius(label):
-    return _base.SMALL_BUFF + math.hypot(float(label.width), float(label.height)) / 2
+    return engine_call(
+        _graph_options.labeledDotRadius,
+        float(label.width), float(label.height), float(_base.SMALL_BUFF),
+        operation="Graph.label_radius",
+    )
 
 
 def _default_vertex_style(circle_vertices, label=None):

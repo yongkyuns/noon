@@ -43,6 +43,17 @@ impl Default for GraphVertexStyle {
     }
 }
 
+impl GraphVertexStyle {
+    /// Radius used by Manim's LabeledDot for a label's bounding dimensions.
+    ///
+    /// Like the reference's two-component NumPy norm, this uses the square
+    /// root of the sum of squares. The ordinary graph constructor validates
+    /// the resulting radius before publishing any semantic nodes.
+    pub fn labeled_dot_radius(width: f64, height: f64, buff: f64) -> f64 {
+        buff + (width * width + height * height).sqrt() / 2.0
+    }
+}
+
 /// Complete constructor paint for one edge. Arrow tips derive their color
 /// from this paint before publication, with their ordinary opaque fill.
 #[derive(Clone, Copy, Debug, PartialEq)]

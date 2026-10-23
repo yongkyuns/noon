@@ -14,6 +14,44 @@ fn graph(scene: &mut Scene) -> Graph<&'static str> {
 }
 
 #[test]
+fn labeled_dot_radius_matches_pinned_manim_and_builds_native_vertex() {
+    // Actual ManimCE 0.21 LabeledDot(Rectangle(...)) observations.
+    for (width, height, expected) in [
+        (0.0, 0.0, 0.1),
+        (0.6, 0.8, 0.6),
+        (0.4, 0.3, 0.35),
+        (6.0, 8.0, 5.1),
+        (3.0, 4.0, 2.6),
+    ] {
+        let radius = GraphVertexStyle::labeled_dot_radius(width, height, 0.1);
+        assert_eq!(radius, expected);
+        let mut scene = Scene::new();
+        let graph = scene
+            .graph_with_options(
+                [("label", (0.0, 0.0))],
+                [],
+                GraphOptions {
+                    vertex_radius: radius,
+                    ..GraphOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            graph.vertex(&"label").unwrap().state().unwrap().content.geometry(),
+            Some(StoredGeometry::Circle { radius: actual })
+                if (f64::from(actual) - expected).abs() < 1e-6
+        ));
+    }
+    // Preserve the reference's sum-of-squares overflow/underflow behavior;
+    // do not silently substitute a numerically rescaled hypot operation.
+    assert!(GraphVertexStyle::labeled_dot_radius(1e200, 1e200, 0.1).is_infinite());
+    assert_eq!(
+        GraphVertexStyle::labeled_dot_radius(1e-200, 1e-200, 0.1),
+        0.1
+    );
+}
+
+#[test]
 fn graph_binds_stable_ids_and_publishes_once_in_edge_then_vertex_order() {
     let mut scene = Scene::new();
     let before = scene.revision();

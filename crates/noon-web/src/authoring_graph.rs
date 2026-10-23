@@ -788,6 +788,11 @@ impl WasmGraphOptions {
         }
     }
 
+    #[wasm_bindgen(js_name = labeledDotRadius)]
+    pub fn labeled_dot_radius(width: f64, height: f64, buff: f64) -> f64 {
+        noon::GraphVertexStyle::labeled_dot_radius(width, height, buff)
+    }
+
     #[wasm_bindgen(js_name = setVertexRadius)]
     pub fn set_vertex_radius(&mut self, radius: f64) {
         self.options.vertex_radius = radius;

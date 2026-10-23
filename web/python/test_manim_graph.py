@@ -255,6 +255,12 @@ class GraphFacadeTests(unittest.TestCase):
                 patch.object(graph, "_spring_layout_config", side_effect=self._spring_without_numpy)
             )
         for patcher in self.patches: patcher.start()
+        # Fixed observations from actual ManimCE 0.21 LabeledDot instances.
+        label_radii = {(0.6, 0.8, 0.1): 0.6, (0.4, 0.3, 0.1): 0.35,
+                       (0.25, 0.5, 0.1): 0.3795084971874737}
+        graph._graph_options.labeledDotRadius.side_effect = (
+            lambda width, height, buff: label_radii[width, height, buff]
+        )
 
     def tearDown(self):
         for patcher in reversed(self.patches): patcher.stop()
@@ -438,6 +444,13 @@ class GraphFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "supports Dot and Circle"):
             graph.Graph({"a": (0, 0)}, [], vertex_type=object)
         self.assertEqual(len(self.context.creation_calls), 1)
+
+    def test_label_radius_coerces_dimensions_and_uses_shared_rust_result(self):
+        label = _Label(width="0.6", height="0.8")
+        graph._graph_options.labeledDotRadius.side_effect = None
+        graph._graph_options.labeledDotRadius.return_value = 1.234
+        self.assertEqual(graph._labeled_dot_radius(label), 1.234)
+        graph._graph_options.labeledDotRadius.assert_called_once_with(0.6, 0.8, 0.1)
 
     def test_labels_true_creates_centered_mathtex_and_sizes_default_dot(self):
         label = _Label()
