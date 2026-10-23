@@ -711,12 +711,23 @@ payloads and ordering neighbours. Resource/payload limits count entries, not byt
 An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or reactive bindings, including later enrollment, require their own history
 policy.
-Family channels, spatial/glow plans, reactive/causal native input, host callbacks
-and a realtime producer/player shell remain outside admission. Explicitly sealed
+Family channels, spatial/glow plans, reactive/causal native input and host callbacks
+remain outside admission. Automatic source continuation/preparation remains separate
+from the bounded direct-canvas integration. Explicitly sealed
 source completion can publish a terminal batch; only reader adoption changes the
 ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
 presentation or establish physical-device performance. Implementation and
 qualification remain in #2211; this is not another scene or rendering authority.
+
+The opt-in direct Rust/WASM canvas can own this reader instead of a live source,
+using the same retained renderer, presentation receipts, pointer normalization and
+wake driver. Incremental delivery is typed and in-process; the producer remains
+outside the canvas. User pause and missing-prefix buffering suppress only authored
+time wakes, not independent effects. At an unavailable frontier the host retains
+its last valid sample and sleeps until explicit delivery, without an epsilon seek
+or a busy timer. Resume reanchors the existing host wake clock so buffered wall
+time is not charged to playback. This does not install the reader in the Python
+playground, admit arbitrary source continuations or change the default viewer.
 
 The reader distinguishes monotonic forward playback from an explicit seek.
 Direct, typed presentation effects use the existing Runtime's bounded Indicate

@@ -27,6 +27,7 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/prepared-canvas-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -57,6 +58,7 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/prepared-canvas-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -188,4 +190,56 @@ jobs:
             browser-smoke-artifacts/playground-playback-dynamic
             browser-smoke-artifacts/playground-playback-dynamic-webgpu
           if-no-files-found: error
+          retention-days: 3
+
+  prepared-canvas:
+    name: Opt-in prepared canvas on WebGPU and WebGL
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Test bounded prepared canvas lifecycle
+        run: cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
+      - name: Build explicitly enabled same-context canvas
+        run: wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned Chromium and pixel decoder
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify actual prepared canvas, DOM input and buffering
+        run: node scripts/prepared-canvas-qualification.mjs
+      - name: Retain prepared canvas evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepared-canvas
+          path: browser-smoke-artifacts/prepared-canvas
+          if-no-files-found: warn
           retention-days: 3
