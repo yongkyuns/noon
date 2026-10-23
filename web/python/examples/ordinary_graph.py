@@ -108,8 +108,8 @@ class OrdinaryGraph(Scene):
         )
         left = centered["left"].get_center()
         right = centered["right"].get_center()
-        assert abs(left.x - 4.4) < 1e-6 and abs(left.y + 1.0) < 1e-6
-        assert abs(right.x - 1.6) < 1e-6 and abs(right.y + 1.0) < 1e-6
+        assert abs(left[0] - 4.4) < 1e-6 and abs(left[1] + 1.0) < 1e-6
+        assert abs(right[0] - 1.6) < 1e-6 and abs(right[1] + 1.0) < 1e-6
         shells = [["s0", "s1"], ["s2"]]
         shell_graph = Graph(
             ["s0", "s1", "s2"], [("s0", "s1"), ("s1", "s2")],
