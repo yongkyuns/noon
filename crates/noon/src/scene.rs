@@ -1,5 +1,6 @@
 //! Direct authoring scope over one family in the shared semantic store.
 mod image;
+mod sections;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,
@@ -9,6 +10,7 @@ use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
     SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
 };
+pub use sections::SectionNavigation;
 use std::{cell::RefCell, rc::Rc};
 
 /// Presentation/export intent attached to one authored section boundary.

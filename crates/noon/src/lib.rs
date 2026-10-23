@@ -337,7 +337,7 @@ pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use scene::{Scene, SceneSection, SectionType};
+pub use scene::{Scene, SceneSection, SectionNavigation, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{
@@ -398,10 +398,10 @@ pub mod prelude {
         LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
         ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
         NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
-        RateFunction, Scene, SemanticObjectState, SemanticStyle, SpatialCompositionError,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
-        SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
-        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        RateFunction, Scene, SceneSection, SectionNavigation, SectionType, SemanticObjectState,
+        SemanticStyle, SpatialCompositionError, StoredGeometry, StyleUpdate, SvgAuthoringError,
+        SvgDefaultStyle, SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker,
+        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
     #[cfg(feature = "code")]
     pub use crate::{
