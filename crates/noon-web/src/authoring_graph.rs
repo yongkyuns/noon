@@ -793,15 +793,20 @@ impl WasmGraphOptions {
         self.options.vertex_radius = radius;
     }
 
-    #[wasm_bindgen(js_name = setVertexRadiusFor)]
-    pub fn set_vertex_radius_for(&mut self, vertex_index: u32, radius: f64) -> Result<(), JsValue> {
-        if !radius.is_finite() || radius <= 0.0 {
-            return Err(js_error("vertex radius must be finite and positive"));
-        }
+    /// Constructor styles are inert inputs. Shared Rust graph construction
+    /// validates all of them before admitting any semantic node or resource.
+    #[wasm_bindgen(js_name = setVertexStyleFor)]
+    pub fn set_vertex_style_for(&mut self, vertex_index: u32, style: WasmGraphOptions) {
         self.options
-            .vertex_radius_overrides
-            .insert(vertex_index as usize, radius);
-        Ok(())
+            .vertex_styles
+            .insert(vertex_index as usize, style.options.vertex_style());
+    }
+
+    #[wasm_bindgen(js_name = setEdgeStyleFor)]
+    pub fn set_edge_style_for(&mut self, edge_index: u32, style: WasmGraphOptions) {
+        self.options
+            .edge_styles
+            .insert(edge_index as usize, style.options.edge_style());
     }
 
     #[wasm_bindgen(js_name = setVertexFill)]

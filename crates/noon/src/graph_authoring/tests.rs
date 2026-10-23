@@ -305,10 +305,16 @@ fn invalid_options_are_rejected_even_without_vertices_or_edges() {
 }
 
 #[test]
-fn per_vertex_radius_overrides_follow_constructor_insertion_order() {
+fn per_vertex_styles_follow_constructor_insertion_order() {
     let options = GraphOptions {
         vertex_radius: 0.2,
-        vertex_radius_overrides: HashMap::from([(1, 0.31)]),
+        vertex_styles: HashMap::from([(
+            1,
+            GraphVertexStyle {
+                radius: 0.31,
+                ..Default::default()
+            },
+        )]),
         ..GraphOptions::default()
     };
     let mut scene = Scene::new();
@@ -340,13 +346,19 @@ fn per_vertex_radius_overrides_follow_constructor_insertion_order() {
 }
 
 #[test]
-fn invalid_per_vertex_radius_override_leaves_graph_unpublished() {
+fn invalid_per_vertex_style_leaves_graph_unpublished() {
     for override_index_and_radius in [(0, f64::NAN), (2, 0.3)] {
         let mut scene = Scene::new();
         let before = scene.revision();
         let nodes_before = scene.integration_store().borrow().len();
         let options = GraphOptions {
-            vertex_radius_overrides: HashMap::from([override_index_and_radius]),
+            vertex_styles: HashMap::from([(
+                override_index_and_radius.0,
+                GraphVertexStyle {
+                    radius: override_index_and_radius.1,
+                    ..Default::default()
+                },
+            )]),
             ..GraphOptions::default()
         };
 
@@ -375,6 +387,134 @@ fn styled_graph_options() -> GraphOptions {
         edge_stroke_width: 0.09,
         edge_stroke_opacity: 0.6,
         ..GraphOptions::default()
+    }
+}
+
+#[test]
+fn keyed_constructor_paint_replaces_globals_before_arrow_tips_are_prepared() {
+    for directed in [false, true] {
+        let mut options = styled_graph_options();
+        options.vertex_styles.insert(
+            1,
+            GraphVertexStyle {
+                radius: 0.28,
+                fill: YELLOW,
+                stroke_opacity: 0.2,
+                ..Default::default()
+            },
+        );
+        options.edge_styles.insert(
+            0,
+            GraphEdgeStyle {
+                color: crate::PURPLE,
+                stroke_opacity: 0.3,
+                ..Default::default()
+            },
+        );
+        let mut scene = Scene::new();
+        let before = scene.revision();
+        let graph = construction::build_graph(
+            &mut scene,
+            [("a", (-1.0, 0.0)), ("b", (1.0, 0.0)), ("c", (1.0, 1.0))],
+            [("a", "b"), ("b", "c")],
+            directed,
+            options,
+        )
+        .unwrap();
+        assert_eq!(scene.revision(), before.checked_next().unwrap());
+        assert!(graph.options.vertex_styles.is_empty());
+        assert!(graph.options.edge_styles.is_empty());
+        assert_vertex_style(graph.vertex(&"a").unwrap());
+        let vertex = graph.vertex(&"b").unwrap().state().unwrap();
+        assert!(matches!(vertex.content.geometry(),
+            Some(StoredGeometry::Circle { radius }) if (radius - 0.28).abs() < f32::EPSILON));
+        assert_eq!(vertex.style.fill, Some(SemanticPaint::Solid(YELLOW)));
+        assert_eq!(vertex.style.fill_opacity, 1.0);
+        assert_eq!(vertex.style.stroke, Some(SemanticPaint::Solid(WHITE)));
+        assert_eq!(vertex.style.stroke_width, 0.0);
+        assert_eq!(vertex.style.stroke_opacity, 0.2);
+        let edge = graph.edge(&"a", &"b").unwrap();
+        let shaft = edge.line().state().unwrap();
+        assert_eq!(
+            shaft.style.stroke,
+            Some(SemanticPaint::Solid(crate::PURPLE))
+        );
+        assert_eq!(shaft.style.stroke_width, DEFAULT_GRAPH_EDGE_STROKE_WIDTH);
+        assert_eq!(shaft.style.stroke_opacity, 0.3);
+        if let Some(arrow) = edge.arrow() {
+            let tip = arrow.end_tip().state().unwrap();
+            assert_eq!(tip.style.fill, Some(SemanticPaint::Solid(crate::PURPLE)));
+            assert_eq!(tip.style.fill_opacity, 1.0);
+            assert_eq!(tip.style.stroke_width, 0.0);
+            assert_eq!(tip.style.stroke_opacity, 1.0);
+        }
+        assert_edge_style(graph.edge(&"b", &"c").unwrap());
+    }
+}
+
+#[test]
+fn invalid_keyed_constructor_styles_never_publish_partial_graphs() {
+    let mut invalid_options = Vec::new();
+    for (index, style) in [
+        (
+            1,
+            GraphVertexStyle {
+                fill_opacity: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        (
+            1,
+            GraphVertexStyle {
+                stroke_width: -1.0,
+                ..Default::default()
+            },
+        ),
+        (2, GraphVertexStyle::default()),
+    ] {
+        invalid_options.push(GraphOptions {
+            vertex_styles: HashMap::from([(index, style)]),
+            ..Default::default()
+        });
+    }
+    for (index, style) in [
+        (
+            0,
+            GraphEdgeStyle {
+                stroke_width: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        (
+            0,
+            GraphEdgeStyle {
+                stroke_opacity: 2.0,
+                ..Default::default()
+            },
+        ),
+        (1, GraphEdgeStyle::default()),
+    ] {
+        invalid_options.push(GraphOptions {
+            edge_styles: HashMap::from([(index, style)]),
+            ..Default::default()
+        });
+    }
+    for directed in [false, true] {
+        for options in &invalid_options {
+            let mut scene = Scene::new();
+            let revision = scene.revision();
+            let nodes = scene.integration_store().borrow().len();
+            assert!(construction::build_graph(
+                &mut scene,
+                [("a", (0.0, 0.0)), ("b", (1.0, 0.0))],
+                [("a", "b")],
+                directed,
+                options.clone(),
+            )
+            .is_err());
+            assert_eq!(scene.revision(), revision);
+            assert_eq!(scene.integration_store().borrow().len(), nodes);
+        }
     }
 }
 

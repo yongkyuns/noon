@@ -1,8 +1,8 @@
 //! Explicit-layout Graph/DiGraph proof over ordinary retained semantics.
 
 use crate::{
-    ExecutionSession, GraphOptions, Mobject, MobjectFamily, MobjectTarget, Scene, StyleUpdate,
-    BLUE, GREEN, PURPLE, RED, YELLOW,
+    ExecutionSession, GraphEdgeStyle, GraphOptions, GraphVertexStyle, Mobject, MobjectFamily,
+    MobjectTarget, Scene, BLUE, GREEN, PURPLE, RED, YELLOW,
 };
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 use crate::{Text, BLACK};
@@ -35,7 +35,23 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         ..GraphOptions::default()
     };
     let mut graph_options = options.clone();
-    graph_options.vertex_radius_overrides.insert(1, 0.28);
+    graph_options.vertex_styles.insert(
+        1,
+        GraphVertexStyle {
+            radius: 0.28,
+            fill: YELLOW,
+            stroke_opacity: 0.2,
+            ..Default::default()
+        },
+    );
+    graph_options.edge_styles.insert(
+        0,
+        GraphEdgeStyle {
+            color: PURPLE,
+            stroke_opacity: 0.3,
+            ..Default::default()
+        },
+    );
     let mut graph = scene.graph_with_options(
         [("a", (-5.0, -1.0)), ("b", (-3.5, 1.2)), ("c", (-2.0, -1.0))],
         [("a", "b"), ("b", "c"), ("c", "a")],
@@ -63,66 +79,38 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("d", (-3.5, -2.4), added_vertex_options)],
         [("a", "d", added_edge_options)],
     )?;
-    let mut standalone_vertex_options = options.clone();
-    standalone_vertex_options.vertex_radius = 0.16;
-    standalone_vertex_options.vertex_fill = YELLOW;
-    standalone_vertex_options.vertex_stroke_width = 0.05;
-    standalone_vertex_options.vertex_stroke_opacity = 0.2;
+    let standalone_vertex_options = GraphOptions {
+        vertex_radius: 0.16,
+        vertex_fill: YELLOW,
+        vertex_stroke_width: 0.05,
+        vertex_stroke_opacity: 0.2,
+        ..Default::default()
+    };
     graph
         .add_vertices_with_options(&mut scene, [("e", (-5.5, -2.4), standalone_vertex_options)])?;
-    graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
-        fill_color: Some(YELLOW),
-        ..Default::default()
-    })?;
-    graph
-        .edge(&"a", &"b")
-        .unwrap()
-        .family()
-        .set_style(StyleUpdate {
-            fill_color: Some(PURPLE),
-            stroke_color: Some(PURPLE),
-            stroke_opacity: Some(0.3),
-            ..Default::default()
-        })?;
-    graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
-        stroke_opacity: Some(0.2),
-        ..Default::default()
-    })?;
-
     let mut digraph_options = options.clone();
-    digraph_options.vertex_radius_overrides.insert(1, 0.28);
+    digraph_options.vertex_styles.insert(
+        1,
+        GraphVertexStyle {
+            radius: 0.28,
+            fill: YELLOW,
+            stroke_opacity: 0.2,
+            ..Default::default()
+        },
+    );
+    digraph_options.edge_styles.insert(
+        1,
+        GraphEdgeStyle {
+            color: PURPLE,
+            stroke_opacity: 0.3,
+            ..Default::default()
+        },
+    );
     let mut digraph = scene.digraph_with_options(
         [("u", (2.0, -1.0)), ("v", (3.5, 1.2)), ("w", (5.0, -1.0))],
         [("u", "v"), ("v", "w"), ("w", "u")],
         digraph_options,
     )?;
-    digraph
-        .vertex(&"v")
-        .unwrap()
-        .clone()
-        .set_style(StyleUpdate {
-            fill_color: Some(YELLOW),
-            ..Default::default()
-        })?;
-    digraph
-        .edge(&"v", &"w")
-        .unwrap()
-        .family()
-        .set_style(StyleUpdate {
-            fill_color: Some(PURPLE),
-            stroke_color: Some(PURPLE),
-            stroke_opacity: Some(0.3),
-            ..Default::default()
-        })?;
-    digraph
-        .vertex(&"v")
-        .unwrap()
-        .clone()
-        .set_style(StyleUpdate {
-            stroke_opacity: Some(0.2),
-            ..Default::default()
-        })?;
-
     digraph.change_layout(
         &mut scene,
         crate::GraphLayoutOptions {
@@ -133,9 +121,11 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
             ..Default::default()
         },
     )?;
-    let mut added_vertex_options = options.clone();
-    added_vertex_options.vertex_fill = YELLOW;
-    added_vertex_options.vertex_stroke = YELLOW;
+    let added_vertex_options = GraphOptions {
+        vertex_fill: YELLOW,
+        vertex_stroke: YELLOW,
+        ..Default::default()
+    };
     let mut added_edge_options = options.clone();
     added_edge_options.edge_color = PURPLE;
     added_edge_options.edge_stroke_width = 0.03;
@@ -144,10 +134,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("x", (5.0, -2.3), added_vertex_options)],
         [("w", "x", added_edge_options)],
     )?;
-    let mut standalone_vertex_options = options.clone();
-    standalone_vertex_options.vertex_radius = 0.16;
-    standalone_vertex_options.vertex_fill = YELLOW;
-    standalone_vertex_options.vertex_stroke = YELLOW;
+    let standalone_vertex_options = GraphOptions {
+        vertex_radius: 0.16,
+        vertex_fill: YELLOW,
+        vertex_stroke: YELLOW,
+        ..Default::default()
+    };
     digraph
         .add_vertices_with_options(&mut scene, [("y", (2.0, -2.3), standalone_vertex_options)])?;
 
@@ -380,9 +372,11 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     )?;
 
     // Python's standard `vertex_type=Circle` selects radius 1, no fill, and
-    // Manim's four-unit white outline while keeping the same retained circles.
+    // Manim's four-unit red outline while keeping the same retained circles.
     let circle_options = GraphOptions {
         vertex_radius: 1.0,
+        vertex_fill: RED,
+        vertex_stroke: RED,
         vertex_fill_opacity: 0.0,
         vertex_stroke_width: 0.04,
         ..GraphOptions::default()

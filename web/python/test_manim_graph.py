@@ -53,6 +53,8 @@ class _GraphOptions:
     def __init__(self):
         self.calls = []
         self.freed = False
+        self.vertex_styles = {}
+        self.edge_styles = {}
 
     def free(self):
         self.freed = True
@@ -61,7 +63,8 @@ class _GraphOptions:
         self.calls.append((name, values))
 
     def setVertexRadius(self, value): self._record("radius", value)
-    def setVertexRadiusFor(self, index, value): self._record("vertex_radius_for", index, value)
+    def setVertexStyleFor(self, index, value): self.vertex_styles[index] = value
+    def setEdgeStyleFor(self, index, value): self.edge_styles[index] = value
     def setVertexFill(self, *values): self._record("fill", *values)
     def setVertexFillOpacity(self, value): self._record("fill_opacity", value)
     def setVertexStroke(self, *values): self._record("stroke", *values)
@@ -453,7 +456,7 @@ class GraphFacadeTests(unittest.TestCase):
 
         math_tex.assert_called_once_with("a", color=graph._compat._as_color("label_fill_color", "#123456"))
         self.assertEqual(label.position, vertex.center)
-        self.assertIn(("vertex_radius_for", (0, 0.6)), self.context.options[0].calls)
+        self.assertIn(("radius", (0.6,)), self.context.options[0].vertex_styles[0].calls)
         self.assertEqual(value._labels, {"a": label})
         self.assertIs(value.labels, value._labels)
         self.assertEqual(labeled_vertex.submobjects, (vertex, label))
@@ -1515,38 +1518,33 @@ class GraphFacadeTests(unittest.TestCase):
             ],
         )
 
-    def test_per_key_vertex_and_edge_style_configs_apply_after_publication(self):
-        with (
-            patch.object(graph, "_apply_key_style") as apply_style,
-            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
-        ):
-            graph.Graph(
+    def test_per_key_styles_reach_rust_before_single_publication(self):
+        target = Mock()
+        with patch.object(graph._GraphBase, "_raw_vertex", return_value=target):
+            graph.DiGraph(
                 ["a", "b"], [("a", "b")],
                 vertex_config={"a": {"fill_color": "#112233", "stroke_opacity": 0.4}},
                 edge_config={("a", "b"): {"color": "#445566", "stroke_width": 2,
-                                              "stroke_opacity": 0.7}},
+                                          "stroke_opacity": 0.7}},
             )
-        self.assertEqual(apply_style.call_count, 2)
-        vertex_style = apply_style.call_args_list[0].args[1]
-        edge_style = apply_style.call_args_list[1].args[1]
-        self.assertEqual(vertex_style["radius"], 0.08)
-        self.assertEqual(vertex_style["fill_color"], graph._compat._as_color("color", "#112233"))
-        self.assertEqual(vertex_style["fill_opacity"], 1.0)
-        self.assertEqual(vertex_style["stroke_color"], graph._compat._as_color("color", "#FFFFFF"))
-        self.assertEqual(vertex_style["stroke_width"], 0.0)
-        self.assertEqual(edge_style["stroke_color"], graph._compat._as_color("color", "#445566"))
-        self.assertEqual(edge_style["stroke_width"], 2)
-        self.assertEqual(vertex_style["stroke_opacity"], 0.4)
-        self.assertEqual(edge_style["stroke_opacity"], 0.7)
-        self.assertEqual(graph._compat._manim_stroke_width(edge_style["stroke_width"]), 0.02)
+        options = self.context.options[0]
+        vertex = dict(options.vertex_styles[0].calls)
+        edge = dict(options.edge_styles[0].calls)
+        self.assertEqual(vertex["radius"], (0.08,))
+        self.assertEqual(vertex["fill"], (17 / 255, 34 / 255, 51 / 255, 1.0))
+        self.assertEqual(vertex["fill_opacity"], (1.0,))
+        self.assertEqual(vertex["stroke"], (1.0, 1.0, 1.0, 1.0))
+        self.assertEqual(vertex["vertex_width"], (0.0,))
+        self.assertEqual(vertex["vertex_opacity"], (0.4,))
+        self.assertEqual(edge["edge_color"], (68 / 255, 85 / 255, 102 / 255, 1.0))
+        self.assertEqual(edge["edge_width"], (2.0,))
+        self.assertEqual(edge["edge_opacity"], (0.7,))
+        target.set_style.assert_not_called()
         self.assertEqual(len(self.context.creation_calls), 1)
 
     def test_partial_key_styles_replace_global_styles_with_manim_defaults(self):
         label = _Label()
-        with (
-            patch.object(graph, "_apply_key_style") as apply_style,
-            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
-        ):
+        with patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()):
             graph.Graph(
                 ["a", "b"], [("a", "b")], labels={"b": label},
                 vertex_config={
@@ -1559,28 +1557,33 @@ class GraphFacadeTests(unittest.TestCase):
                     ("a", "b"): {"stroke_opacity": 0.3},
                 },
             )
-        vertex_style, edge_style = [call.args[1] for call in apply_style.call_args_list]
-        self.assertAlmostEqual(vertex_style["radius"], 0.6)
-        self.assertEqual(vertex_style["fill_color"], graph._compat._as_color("color", "#FFFFFF"))
-        self.assertEqual(vertex_style["fill_opacity"], 1.0)
-        self.assertEqual(vertex_style["stroke_color"], graph._compat._as_color("color", "#FFFFFF"))
-        self.assertEqual(vertex_style["stroke_width"], 0.0)
-        self.assertEqual(vertex_style["stroke_opacity"], 0.2)
-        self.assertEqual(edge_style["stroke_color"], graph._compat._as_color("color", "#FFFFFF"))
-        self.assertEqual(edge_style["stroke_width"], 4.0)
-        self.assertEqual(edge_style["stroke_opacity"], 0.3)
+        options = self.context.options[0]
+        vertex = dict(options.vertex_styles[1].calls)
+        edge = dict(options.edge_styles[0].calls)
+        self.assertAlmostEqual(vertex["radius"][0], 0.6)
+        self.assertEqual(vertex["fill"], (1.0, 1.0, 1.0, 1.0))
+        self.assertEqual(vertex["fill_opacity"], (1.0,))
+        self.assertEqual(vertex["stroke"], (1.0, 1.0, 1.0, 1.0))
+        self.assertEqual(vertex["vertex_width"], (0.0,))
+        self.assertEqual(vertex["vertex_opacity"], (0.2,))
+        self.assertEqual(edge["edge_color"], (1.0, 1.0, 1.0, 1.0))
+        self.assertEqual(edge["edge_width"], (4.0,))
+        self.assertEqual(edge["edge_opacity"], (0.3,))
 
-    def test_constructor_per_key_vertex_radius_is_passed_to_rust_by_vertex_order(self):
-        with patch.object(graph, "_apply_key_style"):
-            graph.Graph(
-                ["left", "right"], [], layout={"left": (0, 0), "right": (1, 0)},
-                vertex_config={"right": {"radius": 0.28}},
-            )
-        self.assertIn(("vertex_radius_for", (1, 0.28)), self.context.options[0].calls)
+    def test_constructor_key_styles_use_vertex_and_edge_input_order(self):
+        graph.Graph(
+            ["left", "right", "third"], [("third", "left"), ("left", "right")],
+            layout={"left": (0, 0), "right": (1, 0), "third": (0, 1)},
+            vertex_config={"right": {"radius": 0.28}},
+            edge_config={("left", "right"): {"color": "#445566"}},
+        )
+        options = self.context.options[0]
+        self.assertEqual(list(options.vertex_styles), [1])
+        self.assertEqual(list(options.edge_styles), [1])
+        self.assertIn(("radius", (0.28,)), options.vertex_styles[1].calls)
         self.assertEqual(len(self.context.creation_calls), 1)
 
     def test_per_key_explicit_colors_override_the_color_fallback(self):
-        # Pinned ManimCE gives explicit fill/stroke colors precedence over color.
         red, blue, green = "#FC6255", "#58C4DD", "#83C167"
         cases = [
             ({"color": red}, red, red),
@@ -1591,19 +1594,11 @@ class GraphFacadeTests(unittest.TestCase):
         for constructor in (graph.Graph, graph.DiGraph):
             for config, fill, stroke in cases:
                 with self.subTest(constructor=constructor.__name__, config=config):
-                    target = Mock()
-                    with patch.object(graph._GraphBase, "_raw_vertex", return_value=target):
-                        constructor(
-                            ["a"], [], layout={"a": (0, 0)},
-                            vertex_config={"a": config},
-                        )
-                    target.set_style.assert_called_once_with(
-                        fill_color=graph._compat._as_color("color", fill),
-                        fill_opacity=1.0,
-                        stroke_color=graph._compat._as_color("color", stroke),
-                        stroke_width=0.0,
-                        stroke_opacity=1.0,
-                    )
+                    constructor(["a"], [], layout={"a": (0, 0)},
+                                vertex_config={"a": config})
+                    style = dict(self.context.options[-1].vertex_styles[0].calls)
+                    self.assertEqual(style["fill"], graph._color_components("color", fill))
+                    self.assertEqual(style["stroke"], graph._color_components("color", stroke))
 
     def test_invalid_per_key_and_unsupported_style_configs_fail_before_publication(self):
         with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config key 0"):

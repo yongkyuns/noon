@@ -26,6 +26,38 @@ pub const DEFAULT_GRAPH_VERTEX_RADIUS: f64 = 0.08;
 pub const DEFAULT_GRAPH_VERTEX_STROKE_WIDTH: f64 = 0.0;
 pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 
+/// Complete constructor appearance for one vertex, independent of graph defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GraphVertexStyle {
+    pub radius: f64,
+    pub fill: Color,
+    pub fill_opacity: f64,
+    pub stroke: Color,
+    pub stroke_width: f64,
+    pub stroke_opacity: f64,
+}
+
+impl Default for GraphVertexStyle {
+    fn default() -> Self {
+        GraphOptions::default().vertex_style()
+    }
+}
+
+/// Complete constructor paint for one edge. Arrow tips derive their color
+/// from this paint before publication, with their ordinary opaque fill.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GraphEdgeStyle {
+    pub color: Color,
+    pub stroke_width: f64,
+    pub stroke_opacity: f64,
+}
+
+impl Default for GraphEdgeStyle {
+    fn default() -> Self {
+        GraphOptions::default().edge_style()
+    }
+}
+
 /// Shared appearance for explicit-position Graph/DiGraph construction.
 ///
 /// All options are validated, including for an empty graph. Directed edges use
@@ -34,9 +66,12 @@ pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 #[derive(Clone, Debug)]
 pub struct GraphOptions {
     pub vertex_radius: f64,
-    /// Optional per-vertex radius overrides keyed by insertion-order index.
-    /// Language adapters use this for Manim's keyed `vertex_config` radius.
-    pub vertex_radius_overrides: HashMap<usize, f64>,
+    /// Complete per-vertex styles keyed by constructor insertion order.
+    /// Omitted entries use the global vertex appearance below.
+    pub vertex_styles: HashMap<usize, GraphVertexStyle>,
+    /// Complete per-edge paint keyed by constructor insertion order.
+    /// Omitted entries use the global edge appearance below.
+    pub edge_styles: HashMap<usize, GraphEdgeStyle>,
     pub vertex_fill: Color,
     /// Opacity applied to every vertex fill independently from its color alpha.
     pub vertex_fill_opacity: f64,
@@ -53,7 +88,8 @@ impl Default for GraphOptions {
     fn default() -> Self {
         Self {
             vertex_radius: DEFAULT_GRAPH_VERTEX_RADIUS,
-            vertex_radius_overrides: HashMap::new(),
+            vertex_styles: HashMap::new(),
+            edge_styles: HashMap::new(),
             vertex_fill: WHITE,
             vertex_fill_opacity: 1.0,
             vertex_stroke: WHITE,
@@ -63,6 +99,27 @@ impl Default for GraphOptions {
             edge_stroke_width: DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
             edge_stroke_opacity: 1.0,
             directed_edge_buff: None,
+        }
+    }
+}
+
+impl GraphOptions {
+    pub fn vertex_style(&self) -> GraphVertexStyle {
+        GraphVertexStyle {
+            radius: self.vertex_radius,
+            fill: self.vertex_fill,
+            fill_opacity: self.vertex_fill_opacity,
+            stroke: self.vertex_stroke,
+            stroke_width: self.vertex_stroke_width,
+            stroke_opacity: self.vertex_stroke_opacity,
+        }
+    }
+
+    pub fn edge_style(&self) -> GraphEdgeStyle {
+        GraphEdgeStyle {
+            color: self.edge_color,
+            stroke_width: self.edge_stroke_width,
+            stroke_opacity: self.edge_stroke_opacity,
         }
     }
 }

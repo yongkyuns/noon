@@ -110,29 +110,6 @@ def _validated_key_style(name, value, supported=None):
     return result
 
 
-def _apply_key_style(target, values):
-    fill_color = values.get("fill_color", values.get("color"))
-    stroke_color = values.get("stroke_color", values.get("color"))
-    fill_opacity = values.get("fill_opacity")
-    stroke_width = values.get("stroke_width")
-    stroke_opacity = values.get("stroke_opacity")
-    if (
-        fill_color is None
-        and stroke_color is None
-        and fill_opacity is None
-        and stroke_width is None
-        and stroke_opacity is None
-    ):
-        return
-    target.set_style(
-        fill_color=fill_color,
-        fill_opacity=fill_opacity,
-        stroke_color=stroke_color,
-        stroke_width=stroke_width,
-        stroke_opacity=stroke_opacity,
-    )
-
-
 def _set_color(method, name, value):
     color = _compat._as_color(name, value)
     engine_call(method, color.red, color.green, color.blue, color.alpha,
@@ -576,11 +553,17 @@ class _GraphBase(_compat.Group):
 
         try:
             for key, style in keyed_vertex_config.items():
-                if "radius" in style:
+                engine_call(
+                    options.setVertexStyleFor,
+                    self._graph_key_ids[key],
+                    _graph_style_options({**global_vertex_config, **style}, {}),
+                    operation="Graph.style",
+                )
+            for edge_index, edge in enumerate(edges):
+                if edge in keyed_edge_config:
                     engine_call(
-                        options.setVertexRadiusFor,
-                        self._graph_key_ids[key],
-                        float(style["radius"]),
+                        options.setEdgeStyleFor, edge_index,
+                        _graph_style_options({}, keyed_edge_config[edge]),
                         operation="Graph.style",
                     )
             if spring:
@@ -675,10 +658,6 @@ class _GraphBase(_compat.Group):
         for key, label in self._labels.items():
             label.move_to(self._raw_vertex(key).get_center())
         _compat.Group.__init__(self, graph_wrapper, *self._labels.values())
-        for key, style in keyed_vertex_config.items():
-            _apply_key_style(self._raw_vertex(key), style)
-        for edge, style in keyed_edge_config.items():
-            _apply_key_style(self._edge_style_target(edge), style)
 
     def _edge_ids(self, edges):
         values = []
