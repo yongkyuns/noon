@@ -1094,7 +1094,8 @@ impl Scene {
     /// successful click transaction. The playback owner applies it using the
     /// same admitted transport as its external controls. This declaration does
     /// not advance the authoring cursor or change the authored audio gain.
-    /// Initial output support is the finite direct Rust/WASM profile (#2263).
+    /// Output support covers finite immutable native Rust and direct Rust/WASM
+    /// sessions; broader source/callback profiles remain under #2263.
     pub fn on_click_playback(
         &mut self,
         target: &Mobject,

@@ -1,5 +1,7 @@
 //! Device-independent callback qualification and a real native output fixture.
 
+mod controls;
+
 use super::*;
 use crate::execution_source::{
     LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource,
@@ -38,7 +40,7 @@ fn callback(
     capacity: usize,
 ) -> OutputCallback {
     OutputCallback::new(
-        Arc::new(OutputState::new(epoch, scene_origin)),
+        Arc::new(OutputState::new(epoch, scene_origin, 1.0)),
         session.prepare_audio_mix(format, capacity).unwrap(),
     )
 }
@@ -53,6 +55,19 @@ fn timestamp(callback: Duration, playback: Duration) -> cpal::OutputStreamTimest
 fn steady_timestamp(elapsed: Duration, latency: Duration) -> cpal::OutputStreamTimestamp {
     let callback = Duration::from_secs(10) + elapsed;
     timestamp(callback, callback + latency)
+}
+
+fn apply_start_attack(samples: &mut [f32], format: AudioMixFormat, first_frame: u64) {
+    let attack_frames = (f64::from(format.sample_rate()) * 0.040).ceil();
+    for (offset, frame) in samples
+        .chunks_exact_mut(usize::from(format.channels()))
+        .enumerate()
+    {
+        let gain = ((first_frame + offset as u64) as f64 / attack_frames).min(1.0);
+        for sample in frame {
+            *sample = (f64::from(*sample) * gain) as f32;
+        }
+    }
 }
 
 #[test]
@@ -98,7 +113,9 @@ fn first_audible_buffer_anchors_existing_clock_at_predicted_playback() {
         now,
         steady_timestamp(Duration::ZERO, Duration::from_millis(25)),
     );
-    assert_eq!(samples, [0.25; 128]);
+    let mut expected = [0.25; 128];
+    apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, 0);
+    assert_eq!(samples, expected);
     let clock = output.state.clock().unwrap();
     assert_eq!(clock.wall_origin, now + Duration::from_millis(25));
     assert_eq!(clock.scene_origin, 0.375);
@@ -156,6 +173,7 @@ fn variable_device_buffers_and_callback_jitter_preserve_one_contiguous_pcm_grid(
     source
         .mix_audio_block(0.0075, 0, AudioMixFormat::STEREO_48_KHZ, &mut expected)
         .unwrap();
+    apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, 0);
     assert_eq!(joined, expected);
     assert_eq!(output.next_frame, first_frame);
     assert_eq!(
@@ -204,11 +222,12 @@ fn cropped_native_start_uses_shared_trim_loop_fade_and_silent_gap_semantics() {
     source
         .mix_audio_block(origin, 0, format, &mut expected)
         .unwrap();
+    assert_eq!(expected[0], 0.0625);
+    assert_eq!(&expected[15..19], &[0.0; 4]);
+    assert_eq!(&expected[19..23], &[0.5; 4]);
+    assert_eq!(&expected[23..], &[0.0; 3]);
+    apply_start_attack(&mut expected, format, 0);
     assert_eq!(samples, expected);
-    assert_eq!(samples[0], 0.0625);
-    assert_eq!(&samples[15..19], &[0.0; 4]);
-    assert_eq!(&samples[19..23], &[0.5; 4]);
-    assert_eq!(&samples[23..], &[0.0; 3]);
 }
 
 #[test]
@@ -235,7 +254,9 @@ fn device_discontinuity_policy_accepts_fifty_milliseconds_and_rejects_more() {
             steady_timestamp(elapsed, latency),
         );
         if drift == MAX_CLOCK_ERROR {
-            assert_eq!(samples, [0.25; 960]);
+            let mut expected = [0.25; 960];
+            apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, 480);
+            assert_eq!(samples, expected);
             assert_eq!(output.state.fault.load(Ordering::Acquire), 0);
             assert_eq!(output.next_frame, 960);
         } else {
@@ -325,7 +346,9 @@ fn device_buffer_guards_reject_incomplete_and_oversized_blocks_silently() {
         epoch,
         steady_timestamp(Duration::ZERO, Duration::ZERO),
     );
-    assert!(maximum.iter().all(|sample| *sample == 0.25));
+    let mut expected = vec![0.25; maximum.len()];
+    apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, 0);
+    assert_eq!(maximum, expected);
     assert_eq!(output.state.fault.load(Ordering::Acquire), 0);
 }
 
@@ -361,42 +384,47 @@ fn a_later_mix_chunk_failure_erases_the_entire_device_buffer() {
 fn integer_pcm_uses_unsigned_equilibrium_and_never_wraps_positive_full_scale() {
     let source = session(vec![(
         pcm(48_000, 1, &[-1.0, 0.0, 1.0]),
-        AudioClipOptions::default(),
+        AudioClipOptions {
+            start_time: 0.040,
+            ..Default::default()
+        },
     )]);
     let epoch = Instant::now();
     let format = AudioMixFormat::new(48_000, 1).unwrap();
     let mut unsigned = callback(&source, epoch, 0.0, format, 3);
-    let mut samples = [0_u16; 3];
+    let mut samples = vec![0_u16; 1_923];
     unsigned.render(
         &mut samples,
         epoch,
         steady_timestamp(Duration::ZERO, Duration::ZERO),
     );
-    assert_eq!(samples, [32_768; 3]);
+    assert!(samples.iter().all(|sample| *sample == 32_768));
     unsigned.state.admitted.store(true, Ordering::Release);
     unsigned.render(
         &mut samples,
         epoch,
         steady_timestamp(Duration::ZERO, Duration::ZERO),
     );
-    assert_eq!(samples, [0, 32_768, 65_535]);
+    assert!(samples[..1_920].iter().all(|sample| *sample == 32_768));
+    assert_eq!(&samples[1_920..], &[0, 32_768, 65_535]);
     unsigned.state.retired.store(true, Ordering::Release);
     unsigned.render(
         &mut samples,
         epoch,
         steady_timestamp(Duration::ZERO, Duration::ZERO),
     );
-    assert_eq!(samples, [32_768; 3]);
+    assert!(samples.iter().all(|sample| *sample == 32_768));
 
     let mut signed = callback(&source, epoch, 0.0, format, 3);
     signed.state.admitted.store(true, Ordering::Release);
-    let mut samples = [0_i16; 3];
+    let mut samples = vec![0_i16; 1_923];
     signed.render(
         &mut samples,
         epoch,
         steady_timestamp(Duration::ZERO, Duration::ZERO),
     );
-    assert_eq!(samples, [i16::MIN, 0, i16::MAX]);
+    assert!(samples[..1_920].iter().all(|sample| *sample == 0));
+    assert_eq!(&samples[1_920..], &[i16::MIN, 0, i16::MAX]);
 }
 
 #[test]
@@ -412,7 +440,9 @@ fn retirement_and_device_faults_prevent_stale_output_and_preserve_first_fault() 
             epoch,
             steady_timestamp(Duration::ZERO, Duration::ZERO),
         );
-        assert_eq!(samples, [0.25; 128]);
+        let mut expected = [0.25; 128];
+        apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, 0);
+        assert_eq!(samples, expected);
         if let Some(fault) = fault {
             output.state.fail(fault);
             output.state.fail(AudioFault::Mix);
@@ -481,7 +511,7 @@ fn a_replacement_stream_has_fresh_admission_and_anchor_state() {
 #[test]
 fn drain_and_callback_timeout_follow_audible_wall_time() {
     let epoch = Instant::now();
-    let state = OutputState::new(epoch, 0.375);
+    let state = OutputState::new(epoch, 0.375, 1.0);
     assert!(!state.drained(1.0, epoch + Duration::from_secs(10)));
     let anchor = epoch + Duration::from_millis(50);
     state
@@ -679,6 +709,11 @@ fn native_audio_device_smoke() {
     use winit::platform::x11::EventLoopBuilderExtX11;
     use winit::window::WindowId;
 
+    // A software X11 surface has no physical refresh cadence. Bound both
+    // redraw requests and delivery so this PCM proof has controlled display
+    // load, matching the separate native-controls device fixture.
+    const PICTURE_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+
     struct Harness {
         app: NativeApp,
         state: Option<Arc<OutputState>>,
@@ -688,9 +723,19 @@ fn native_audio_device_smoke() {
         preparation_wait: Duration,
         silent_heartbeat: Option<Instant>,
         first_picture: Option<Instant>,
+        last_picture: Option<Instant>,
         final_picture: Option<Instant>,
         presents: usize,
         max_display_lag: f64,
+    }
+
+    impl Harness {
+        fn picture_due(&self, now: Instant) -> bool {
+            self.app.publication_pending()
+                || self
+                    .last_picture
+                    .is_none_or(|last| now.duration_since(last) >= PICTURE_INTERVAL)
+        }
     }
 
     impl ApplicationHandler for Harness {
@@ -761,6 +806,9 @@ fn native_audio_device_smoke() {
 
         fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
             let redraw = matches!(event, WindowEvent::RedrawRequested);
+            if redraw && !self.picture_due(Instant::now()) {
+                return;
+            }
             self.app.window_event(event_loop, id, event);
             if self.app.error.is_some() || !redraw {
                 return;
@@ -776,6 +824,7 @@ fn native_audio_device_smoke() {
                 );
             }
             self.first_picture.get_or_insert(now);
+            self.last_picture = Some(now);
             self.presents += 1;
             if let Some(clock) = self.state.as_ref().and_then(|state| state.clock()) {
                 let lag = clock.scene_time_at(now).min(1.0) - time;
@@ -791,7 +840,12 @@ fn native_audio_device_smoke() {
         }
 
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-            self.app.about_to_wait(event_loop);
+            let now = Instant::now();
+            if self.picture_due(now) {
+                self.app.about_to_wait(event_loop);
+            } else if let Err(error) = self.app.check_audio(now) {
+                self.app.fail(event_loop, error);
+            }
             if self.app.error.is_some() {
                 return;
             }
@@ -833,6 +887,10 @@ fn native_audio_device_smoke() {
                 } else {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
                 }
+            } else {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(5),
+                ));
             }
         }
 
@@ -879,6 +937,7 @@ fn native_audio_device_smoke() {
         preparation_wait: Duration::ZERO,
         silent_heartbeat: None,
         first_picture: None,
+        last_picture: None,
         final_picture: None,
         presents: 0,
         max_display_lag: 0.0,
@@ -929,6 +988,7 @@ fn native_audio_device_smoke() {
             "  \"audio_anchor_seconds_from_stream_epoch\": {:.9},\n",
             "  \"final_picture_seconds_from_stream_epoch\": {:.9},\n",
             "  \"displayed_frames\": {},\n  \"max_display_lag_seconds\": {:.9},\n",
+            "  \"fixture_refresh_hz\": 60,\n",
             "  \"audio_drained\": true,\n  \"stream_retired\": true\n}}\n"
         ),
         harness.silent_preparation.as_secs_f64(),
@@ -1011,7 +1071,7 @@ fn native_audio_device_loss_smoke() {
             ..Default::default()
         },
     )]);
-    let output = NativeAudioOutput::prepare(&source).unwrap();
+    let output = NativeAudioOutput::prepare(&source, 1.0).unwrap();
     let state = output.state.clone();
     output.admit();
     let startup = Instant::now();

@@ -2,7 +2,9 @@ use noon::integration::{
     ExecutionViewportQuery, ForwardSample, ForwardSampleStatus, RendererPublication,
     TimelineWakeState,
 };
-use noon::integration::{NativePointerInputToken, PointerFrameSnapshot, PointerFrameView};
+use noon::integration::{
+    NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
+};
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
 };
@@ -13,6 +15,8 @@ use noon_core::{
 
 use crate::NativeHostError;
 
+#[cfg(test)]
+mod playback_tests;
 #[cfg(test)]
 mod viewport_tests;
 
@@ -67,6 +71,18 @@ pub(crate) trait NativeExecutionSource {
     /// bounded per call; the caller retains its absolute wall-time target when
     /// more source work or a renderer publication is required.
     fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError>;
+    /// The engine-admitted finite immutable playback range. Live continuations
+    /// keep their source/completion protocol and do not acquire transport control
+    /// merely because their current runtime has a finite endpoint.
+    fn finite_transport_end(&self) -> Option<f64> {
+        None
+    }
+    /// Apply an explicit viewer seek through the existing shared runtime. The
+    /// platform host retains play/pause intent and resets its existing clock only
+    /// after this succeeds; this source owns no alternate playhead or schedule.
+    fn seek_to(&mut self, _time: f64) -> Result<(), NativeHostError> {
+        Err(NativeHostError::PlaybackControlsUnavailable)
+    }
     /// Resume one authoring continuation when its shared program is ready.
     /// Source execution latency does not start a new playback epoch.
     fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
@@ -80,7 +96,7 @@ pub(crate) trait NativeExecutionSource {
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
-    ) -> Result<(), NativeHostError>;
+    ) -> Result<NativePointerInputPublication, NativeHostError>;
     fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -104,11 +120,24 @@ pub(crate) trait NativeExecutionSource {
 pub(crate) struct StaticExecutionSource {
     session: ExecutionSession,
     callbacks: RustHostCallbackTable,
+    finite_transport_end: Option<f64>,
 }
 
 impl StaticExecutionSource {
-    pub(crate) const fn new(session: ExecutionSession, callbacks: RustHostCallbackTable) -> Self {
-        Self { session, callbacks }
+    pub(crate) fn new(session: ExecutionSession, callbacks: RustHostCallbackTable) -> Self {
+        // This source consumes its complete plan. Supported input can only
+        // change viewer state, so retaining the admitted endpoint avoids
+        // rescanning timeline events at each pause, seek, or pointer occurrence.
+        let finite_transport_end = session.finite_playback_end_time().filter(|&end| {
+            session.frame().time.is_finite()
+                && session.frame().time >= 0.0
+                && session.frame().time <= end
+        });
+        Self {
+            session,
+            callbacks,
+            finite_transport_end,
+        }
     }
 }
 
@@ -164,6 +193,31 @@ impl NativeExecutionSource for StaticExecutionSource {
             .map_err(NativeHostError::from)
     }
 
+    fn finite_transport_end(&self) -> Option<f64> {
+        self.session
+            .supports_immutable_playback()
+            .then_some(self.finite_transport_end)
+            .flatten()
+    }
+
+    fn seek_to(&mut self, time: f64) -> Result<(), NativeHostError> {
+        let end = self
+            .finite_transport_end()
+            .ok_or(NativeHostError::PlaybackControlsUnavailable)?;
+        if !time.is_finite() {
+            return Err(noon::EvaluationError::InvalidTime(time).into());
+        }
+        if time < 0.0 || time > end {
+            return Err(noon::EvaluationError::ReplayTimeOutsideRange {
+                time,
+                start: 0.0,
+                end,
+            }
+            .into());
+        }
+        self.session.seek(time).map(|_| ()).map_err(Into::into)
+    }
+
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
         Ok(false)
     }
@@ -186,10 +240,9 @@ impl NativeExecutionSource for StaticExecutionSource {
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
-    ) -> Result<(), NativeHostError> {
+    ) -> Result<NativePointerInputPublication, NativeHostError> {
         self.session
             .submit_native_pointer_input(token, input)
-            .map(|_| ())
             .map_err(Into::into)
     }
 
@@ -389,10 +442,9 @@ where
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
-    ) -> Result<(), NativeHostError> {
+    ) -> Result<NativePointerInputPublication, NativeHostError> {
         self.program
             .submit_native_pointer_input(token, input)
-            .map(|_| ())
             .map_err(|error| NativeHostError::Program(error.to_string()))
     }
 

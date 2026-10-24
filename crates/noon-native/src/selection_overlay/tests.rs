@@ -21,6 +21,7 @@ fn app() -> NativeApp {
             width: SIZE.width,
             height: SIZE.height,
             inspection_zoom: false,
+            ..Default::default()
         },
     )
 }

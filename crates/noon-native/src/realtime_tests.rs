@@ -221,6 +221,7 @@ fn late_native_surface_retains_all_endpoints_but_presents_only_the_caught_up_fra
             width: 320,
             height: 180,
             inspection_zoom: false,
+            ..Default::default()
         },
     );
     // Begin with the source already overdue. Exit after the FIRST physical

@@ -221,13 +221,42 @@ cargo run -p noon-native --features audio --example background_music_lesson
 
 Preparation stays silent; playback starts after the first native picture is ready.
 The shared Rust mixer supplies loops, trims, fades and overlapping clips on the
-native player's existing timeline. Inspection zoom leaves audio time unchanged,
-and closing the window retires output. This finite profile requires a complete
-immutable scene without required host callbacks. Live authoring, retained history
-and scene-authored playback buttons remain outside the native audio profile.
+native player's existing timeline. The geometric example has the same five
+authored buttons as its browser counterpart: Previous, Play/Pause, Next, Restart
+and Sound. Both native examples also enable these keyboard controls:
+
+| Key | Action |
+| --- | --- |
+| Space | Play or pause; playing a completed scene starts it again |
+| Left / Right | Seek backward or forward five seconds |
+| Page Up / Page Down | Previous or next authored section |
+| Home | Restart at time zero |
+| Up / Down | Increase or decrease viewer volume by five percentage points |
+| M | Mute or restore the retained viewer volume |
+
+Seek, section navigation and Restart preserve play/pause state. A paused seek
+presents the target without starting sound. Playback waits for that picture and
+the preceding release before admitting a fresh device anchor. Ordinary starts
+use a 40 ms attack, pauses and seeks release over at most 60 ms, and viewer gain
+changes use a 20 ms ramp. Viewer volume and mute never alter authored gains or MP4
+exports. Inspection zoom leaves audio time unchanged; closing, suspension and
+output failures retire device output immediately.
+
+Library callers opt in to keyboard controls with
+`NativeViewportConfig { playback_controls: true, section_navigation:
+scene.section_navigation(), ..Default::default() }`. Authored scene buttons use
+the shared Rust input publication and admitted session seek path. The native
+control profile requires a freshly lowered finite immutable scene without prior
+live execution edits, required callbacks, source continuations, retained history,
+external native input routes or effective-driver leases. Deterministic scalar
+bindings in the paired lesson are supported; broader live and dynamic numeric-text
+profiles remain under
+[#2263](https://github.com/yongkyuns/noon/issues/2263).
 The current device profile admits at most 256 immutable clips and mono or stereo
-output at 8–192 kHz. A device timestamp discontinuity above 50 ms stops the run
-with an explicit output error.
+output at 8–192 kHz. It requests a 20 ms callback period within the device's
+supported range; the backend may negotiate a different buffer size. This keeps
+the requested scheduling headroom consistent across sample rates. A device
+timestamp discontinuity above 50 ms stops the run with an explicit output error.
 
 The device backend uses ALSA on Linux, WASAPI on Windows, and CoreAudio on macOS.
 Linux builds with the `audio` feature (including workspace `--all-features`
@@ -243,6 +272,12 @@ The feature is disabled by default, so visual-only native builds do not acquire
 this audio dependency.
 Automated output and clock checks do not establish physical-speaker latency or
 replace listening tests on supported devices.
+Linux capture fixtures use a private PulseAudio sink and a 60 Hz software viewport
+to check recorded PCM, output ramps, silent gaps and exact source offsets. This
+controlled software profile does not establish resilience under arbitrary host
+load. Captured gaps and driver-reported underruns, including a headless attempt,
+remain recorded in [#2263](https://github.com/yongkyuns/noon/issues/2263); their
+underlying cause and broader load/device qualification remain open.
 
 ## Browser playground
 

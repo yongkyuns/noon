@@ -1,6 +1,6 @@
 //! Native device I/O for the admitted finite immutable audio profile.
 //!
-//! The first audible callback supplies a predicted DAC observation to the
+//! The first admitted callback supplies a predicted DAC observation to the
 //! existing native RealtimeClock. An integer output-frame offset keeps PCM
 //! contiguous; it never advances Runtime or selects authored events. Preparation
 //! retains shared PCM and scratch once. Callbacks only mix into that scratch,
@@ -15,7 +15,9 @@ use cpal::{FromSample, SampleFormat, SizedSample, StreamInstant};
 use noon::integration::{AudioMixFormat, PreparedAudioMix, MAX_AUDIO_MIX_BLOCK_FRAMES};
 use noon::ExecutionSession;
 
-use crate::{NativeApp, NativeHostError, RealtimeClock};
+#[cfg(test)]
+use crate::NativeApp;
+use crate::{NativeHostError, RealtimeClock};
 
 const MIX_BLOCK_FRAMES: usize = 1_024;
 const MAX_CLIPS: usize = 256;
@@ -24,6 +26,9 @@ const MAX_CLOCK_ERROR: Duration = Duration::from_millis(50);
 const MAX_OUTPUT_LATENCY: Duration = Duration::from_millis(500);
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 const HEALTH_POLL: Duration = Duration::from_millis(20);
+const ATTACK: Duration = Duration::from_millis(40);
+const RELEASE: Duration = Duration::from_millis(60);
+const VIEWER_RAMP: Duration = Duration::from_millis(20);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,10 +67,15 @@ struct OutputState {
     // the only writer. Readers never wait for initialization or take a lock.
     anchor: AtomicU64,
     heartbeat: AtomicU64,
+    // Host commands are bounded atomic targets. Only the callback advances
+    // their sample-grid envelopes; they never change authored gain or time.
+    viewer_gain: AtomicU64,
+    release_requested: AtomicBool,
+    release_end: AtomicU64,
 }
 
 impl OutputState {
-    fn new(epoch: Instant, scene_origin: f64) -> Self {
+    fn new(epoch: Instant, scene_origin: f64, viewer_gain: f64) -> Self {
         Self {
             epoch,
             scene_origin,
@@ -74,6 +84,9 @@ impl OutputState {
             fault: AtomicU8::new(0),
             anchor: AtomicU64::new(0),
             heartbeat: AtomicU64::new(0),
+            viewer_gain: AtomicU64::new(viewer_gain.to_bits()),
+            release_requested: AtomicBool::new(false),
+            release_end: AtomicU64::new(0),
         }
     }
 
@@ -100,6 +113,23 @@ impl OutputState {
             .is_some_and(|end| now >= end)
     }
 
+    fn release(&self) {
+        // An unobserved start must never be resurrected by a late picture or
+        // callback. The final callback retirement check also covers this race.
+        self.release_requested.store(true, Ordering::Release);
+        if self.anchor.load(Ordering::Acquire) == 0 {
+            self.retired.store(true, Ordering::Release);
+        }
+    }
+
+    fn released(&self, now: Instant) -> bool {
+        self.retired.load(Ordering::Acquire)
+            || self
+                .decode(self.release_end.load(Ordering::Acquire))
+                .and_then(|end| end.checked_add(MAX_CLOCK_ERROR))
+                .is_some_and(|end| now >= end)
+    }
+
     fn fail(&self, fault: AudioFault) {
         let _ = self
             .fault
@@ -123,6 +153,53 @@ impl OutputState {
     }
 }
 
+/// Linear output gain on the already selected device sample grid. This is an
+/// envelope, not a playback clock: it cannot select or advance authored time.
+#[derive(Clone, Copy)]
+struct GainRamp {
+    first_frame: u64,
+    frames: u64,
+    from: f64,
+    to: f64,
+}
+
+impl GainRamp {
+    fn constant(gain: f64) -> Self {
+        Self {
+            first_frame: 0,
+            frames: 0,
+            from: gain,
+            to: gain,
+        }
+    }
+
+    fn value_at(self, frame: u64) -> f64 {
+        let elapsed = frame.saturating_sub(self.first_frame);
+        if elapsed >= self.frames {
+            self.to
+        } else {
+            self.from + (self.to - self.from) * elapsed as f64 / self.frames as f64
+        }
+    }
+
+    fn retarget(&mut self, frame: u64, target: f64, frames: u64) {
+        if target != self.to {
+            *self = Self {
+                first_frame: frame,
+                frames,
+                from: self.value_at(frame),
+                to: target,
+            };
+        }
+    }
+}
+
+fn ramp_frames(duration: Duration, sample_rate: u32) -> u64 {
+    // These fixed millisecond durations and the admitted rates fit exactly in
+    // integer arithmetic; round up so a ramp is never shorter than requested.
+    (duration.as_millis() as u64 * u64::from(sample_rate)).div_ceil(1_000)
+}
+
 struct OutputCallback {
     state: Arc<OutputState>,
     mixer: PreparedAudioMix,
@@ -130,17 +207,30 @@ struct OutputCallback {
     first_playback: Option<StreamInstant>,
     // Position in the output buffer grid, never the Runtime's authored playhead.
     next_frame: u64,
+    viewer_ramp: GainRamp,
+    transport_ramp: GainRamp,
+    releasing: bool,
 }
 
 impl OutputCallback {
     fn new(state: Arc<OutputState>, mixer: PreparedAudioMix) -> Self {
         let samples = vec![0.0; mixer.max_block_frames() * usize::from(mixer.format().channels())];
+        let viewer_gain = f64::from_bits(state.viewer_gain.load(Ordering::Acquire));
+        let attack_frames = ramp_frames(ATTACK, mixer.format().sample_rate());
         Self {
             state,
             mixer,
             samples,
             first_playback: None,
             next_frame: 0,
+            viewer_ramp: GainRamp::constant(viewer_gain),
+            transport_ramp: GainRamp {
+                first_frame: 0,
+                frames: attack_frames,
+                from: 0.0,
+                to: 1.0,
+            },
+            releasing: false,
         }
     }
 
@@ -183,6 +273,7 @@ impl OutputCallback {
             self.state.fail(AudioFault::Timestamp);
             return;
         };
+        let viewer_gain = f64::from_bits(self.state.viewer_gain.load(Ordering::Acquire));
         if let Some(first) = self.first_playback {
             let elapsed = self.next_frame as f64 / f64::from(self.mixer.format().sample_rate());
             let expected = Duration::from_secs_f64(elapsed);
@@ -203,7 +294,34 @@ impl OutputCallback {
                 return;
             };
             self.first_playback = Some(timestamp.playback);
+            // A viewer change made while preparation was silent must be in
+            // effect before the first audible sample, especially an initial
+            // mute. There is no previously audible gain to ramp from yet.
+            self.viewer_ramp = GainRamp::constant(viewer_gain);
             self.state.anchor.store(anchor, Ordering::Release);
+        }
+        let sample_rate = self.mixer.format().sample_rate();
+        self.viewer_ramp.retarget(
+            self.next_frame,
+            viewer_gain,
+            ramp_frames(VIEWER_RAMP, sample_rate),
+        );
+        if self.state.release_requested.load(Ordering::Acquire) && !self.releasing {
+            // Release is bounded by 60 ms, including on rates whose sample
+            // grid cannot represent that duration exactly. Round down here.
+            let frames = RELEASE.as_millis() as u64 * u64::from(sample_rate) / 1_000;
+            self.transport_ramp.retarget(self.next_frame, 0.0, frames);
+            self.releasing = true;
+            let Some(end) = predicted_wall
+                .checked_add(Duration::from_secs_f64(
+                    frames as f64 / f64::from(sample_rate),
+                ))
+                .and_then(|end| self.state.encode(end))
+            else {
+                self.state.fail(AudioFault::Timestamp);
+                return;
+            };
+            self.state.release_end.store(end, Ordering::Release);
         }
         for chunk in output.chunks_mut(self.samples.len()) {
             let samples = &mut self.samples[..chunk.len()];
@@ -217,15 +335,24 @@ impl OutputCallback {
                 self.state.fail(AudioFault::Mix);
                 return;
             }
-            for (target, &sample) in chunk.iter_mut().zip(samples.iter()) {
-                // Integer PCM has an asymmetric positive endpoint. CPAL/dasp's
-                // conversion from +1.0 can wrap; saturate only the representation.
-                let sample = if T::FORMAT.is_int() || T::FORMAT.is_uint() {
-                    sample.min(f32::from_bits(1.0_f32.to_bits() - 1))
-                } else {
-                    sample
-                };
-                *target = T::from_sample(sample);
+            for (offset, (targets, samples)) in chunk
+                .chunks_exact_mut(channels)
+                .zip(samples.chunks_exact(channels))
+                .enumerate()
+            {
+                let frame = self.next_frame + offset as u64;
+                let gain = self.transport_ramp.value_at(frame) * self.viewer_ramp.value_at(frame);
+                for (target, &sample) in targets.iter_mut().zip(samples) {
+                    let sample = (f64::from(sample) * gain) as f32;
+                    // Integer PCM has an asymmetric positive endpoint. CPAL/dasp's
+                    // conversion from +1.0 can wrap; saturate only the representation.
+                    let sample = if T::FORMAT.is_int() || T::FORMAT.is_uint() {
+                        sample.min(f32::from_bits(1.0_f32.to_bits() - 1))
+                    } else {
+                        sample
+                    };
+                    *target = T::from_sample(sample);
+                }
             }
             self.next_frame += (chunk.len() / channels) as u64;
         }
@@ -245,7 +372,11 @@ pub(super) struct NativeAudioOutput {
 }
 
 impl NativeAudioOutput {
-    pub(super) fn prepare(session: &ExecutionSession) -> Result<Self, NativeHostError> {
+    pub(super) fn prepare(
+        session: &ExecutionSession,
+        viewer_gain: f64,
+    ) -> Result<Self, NativeHostError> {
+        validate_gain(viewer_gain)?;
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or_else(|| {
             NativeHostError::Audio("no default output device is available".into())
@@ -256,12 +387,16 @@ impl NativeAudioOutput {
         let mixer = session
             .prepare_audio_mix(format, MIX_BLOCK_FRAMES)
             .map_err(|error| NativeHostError::Audio(error.to_string()))?;
-        let state = Arc::new(OutputState::new(Instant::now(), session.frame().time));
+        let state = Arc::new(OutputState::new(
+            Instant::now(),
+            session.frame().time,
+            viewer_gain,
+        ));
         let callback = OutputCallback::new(state.clone(), mixer);
         let mut config = supported.config();
-        if let cpal::SupportedBufferSize::Range { min, max } = *supported.buffer_size() {
-            config.buffer_size = cpal::BufferSize::Fixed(512_u32.clamp(min, max));
-        }
+        config.buffer_size = device_buffer_size(format.sample_rate(), *supported.buffer_size());
+        #[cfg(test)]
+        let requested_buffer = config.buffer_size;
         let stream = match supported.sample_format() {
             SampleFormat::F32 => build::<f32>(&device, config, callback),
             SampleFormat::F64 => build::<f64>(&device, config, callback),
@@ -281,6 +416,12 @@ impl NativeAudioOutput {
             }
         }
         .map_err(|error| NativeHostError::Audio(error.to_string()))?;
+        #[cfg(test)]
+        eprintln!(
+            "native audio fixture: sample_rate={} requested_buffer_frames={requested_buffer:?} negotiated_buffer_frames={:?}",
+            format.sample_rate(),
+            stream.buffer_size(),
+        );
         stream
             .play()
             .map_err(|error| NativeHostError::Audio(error.to_string()))?;
@@ -292,15 +433,61 @@ impl NativeAudioOutput {
     }
 
     pub(super) fn admit(&self) {
-        self.state.admitted.store(true, Ordering::Release);
+        if !self.state.release_requested.load(Ordering::Acquire) {
+            self.state.admitted.store(true, Ordering::Release);
+        }
     }
 
     pub(super) fn clock(&self) -> Option<RealtimeClock> {
         self.state.clock()
     }
 
-    fn drained(&self, now: Instant) -> bool {
+    pub(super) fn drained(&self, now: Instant) -> bool {
         self.state.drained(self.audio_end, now)
+    }
+
+    pub(super) fn set_gain(&self, gain: f64) -> Result<(), NativeHostError> {
+        validate_gain(gain)?;
+        self.state
+            .viewer_gain
+            .store(gain.to_bits(), Ordering::Release);
+        Ok(())
+    }
+
+    pub(super) fn release(&self) {
+        self.state.release();
+    }
+
+    pub(super) fn released(&self, now: Instant) -> bool {
+        self.state.released(now) || self.drained(now)
+    }
+
+    pub(super) fn check(&self, now: Instant) -> Result<(), NativeHostError> {
+        self.state.check(now)
+    }
+}
+
+fn device_buffer_size(sample_rate: u32, supported: cpal::SupportedBufferSize) -> cpal::BufferSize {
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            // This is media playback, so request consistent 20 ms scheduling
+            // headroom across admitted rates, rather than a fixed frame count
+            // that becomes an accidental low-latency request at high rates.
+            // Devices may negotiate a different period; callback size and
+            // observed latency/discontinuity guards remain authoritative.
+            cpal::BufferSize::Fixed(sample_rate.div_ceil(50).clamp(min, max))
+        }
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
+    }
+}
+
+fn validate_gain(gain: f64) -> Result<(), NativeHostError> {
+    if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
+        Err(NativeHostError::Audio(
+            "viewer volume must be finite and between zero and one".into(),
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -398,66 +585,7 @@ pub(super) fn admit_profile(
     Ok(())
 }
 
-impl NativeApp {
-    pub(super) fn prepare_audio(&mut self) -> Result<(), NativeHostError> {
-        if self.audio_output.is_none() && self.audio_remaining() {
-            self.audio_output = Some(NativeAudioOutput::prepare(self.execution.session())?);
-            self.audio_picture_ready = false;
-        }
-        Ok(())
-    }
-
-    pub(super) fn audio_remaining(&self) -> bool {
-        self.execution
-            .session()
-            .audio_end_time()
-            .is_some_and(|end| self.execution.frame_time() < end)
-    }
-
-    pub(super) fn suspend_audio(&mut self, now: Instant) -> Result<(), NativeHostError> {
-        if self.audio_output.is_some() {
-            self.advance_realtime_timeline(now)?;
-            self.audio_output = None;
-            self.realtime_clock = None;
-            self.audio_picture_ready = false;
-        }
-        Ok(())
-    }
-
-    pub(super) fn check_audio(&mut self, now: Instant) -> Result<(), NativeHostError> {
-        if let Some(output) = self.audio_output.as_ref() {
-            output.state.check(now)?;
-            // A busy window thread can first observe the anchor after all audio
-            // has played. Preserve that same epoch before retiring the stream,
-            // so Runtime can catch up instead of waiting for a vanished device.
-            if self.realtime_clock.is_none() {
-                self.realtime_clock = output.clock();
-            }
-            if output.drained(now) {
-                self.audio_output = None;
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn audio_control_flow(
-        &self,
-        flow: winit::event_loop::ControlFlow,
-    ) -> winit::event_loop::ControlFlow {
-        use winit::event_loop::ControlFlow;
-        if self.audio_output.is_none() {
-            return flow;
-        }
-        let health_deadline = Instant::now() + HEALTH_POLL;
-        match flow {
-            ControlFlow::Poll => ControlFlow::Poll,
-            ControlFlow::WaitUntil(deadline) => {
-                ControlFlow::WaitUntil(deadline.min(health_deadline))
-            }
-            ControlFlow::Wait => ControlFlow::WaitUntil(health_deadline),
-        }
-    }
-}
+mod host;
 
 #[cfg(test)]
 mod tests;

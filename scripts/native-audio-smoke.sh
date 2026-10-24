@@ -4,6 +4,24 @@ set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repository_root"
+case "${1:-}" in
+  "")
+    noon_audio_test=native_audio_device_smoke
+    noon_audio_checker=scripts/native_audio_capture.py
+    ;;
+  --controls)
+    noon_audio_test=native_audio_controls_device_smoke
+    noon_audio_checker=scripts/native_audio_controls_capture.py
+    ;;
+  *)
+    echo "Usage: bash scripts/native-audio-smoke.sh [--controls]" >&2
+    exit 2
+    ;;
+esac
+if (( $# > 1 )); then
+  echo "Usage: bash scripts/native-audio-smoke.sh [--controls]" >&2
+  exit 2
+fi
 for executable in cargo pulseaudio pactl pacat xvfb-run python3 timeout; do
   command -v "$executable" >/dev/null || {
     echo "Native audio smoke requires $executable" >&2
@@ -16,7 +34,7 @@ export NOON_NATIVE_AUDIO_PROOF_DIR
 NOON_NATIVE_AUDIO_PROOF_DIR="$(cd "${NOON_NATIVE_AUDIO_PROOF_DIR:-native-audio-proof}" && pwd)"
 
 # Compile before recording: cold compilation is not an audio timing observation.
-cargo test -p noon-native --features audio --lib native_audio_device_smoke --no-run \
+cargo test -p noon-native --features audio --lib "$noon_audio_test" --no-run \
   2>&1 | tee "$NOON_NATIVE_AUDIO_PROOF_DIR/build.log"
 
 noon_pulse_dir="$(mktemp -d /tmp/noon-native-audio.XXXXXX)"
@@ -98,6 +116,7 @@ fi
 
 pulseaudio -n --daemonize=no --exit-idle-time=-1 --use-pid-file=no \
   --disable-shm=yes --realtime=no --high-priority=no --log-target=stderr \
+  --log-level=debug --log-time=yes \
   --file="$noon_pulse_dir/server.pa" \
   > "$NOON_NATIVE_AUDIO_PROOF_DIR/pulseaudio.log" 2>&1 &
 pulse_pid=$!
@@ -148,7 +167,7 @@ set +e
 # admitted-playback deadline. Slow initialization must remain silent.
 timeout --signal=TERM --kill-after=3s 60s \
   xvfb-run -a -s "-screen 0 1280x720x24" \
-  cargo test -p noon-native --features audio --lib native_audio_device_smoke \
+  cargo test -p noon-native --features audio --lib "$noon_audio_test" \
     -- --ignored --nocapture --test-threads=1 \
     2>&1 | tee "$NOON_NATIVE_AUDIO_PROOF_DIR/device-test.log"
 test_status=${PIPESTATUS[0]}
@@ -161,7 +180,10 @@ record_pid=
 if (( test_status != 0 )); then
   exit "$test_status"
 fi
-python3 scripts/native_audio_capture.py "$NOON_NATIVE_AUDIO_PROOF_DIR"
+python3 "$noon_audio_checker" "$NOON_NATIVE_AUDIO_PROOF_DIR"
+if [[ "$noon_audio_test" == native_audio_controls_device_smoke ]]; then
+  exit 0
+fi
 
 # A fresh stream must report real platform loss and retire without a window.
 # Clear only this phase's owned handshake/output; prior evidence cannot admit it.

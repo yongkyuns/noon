@@ -21,6 +21,7 @@ on:
       - '.github/workflows/platform-release.yml'
   pull_request:
     paths:
+      - 'crates/noon-native/**'
       - 'crates/noon/src/semantic_mobject.rs'
       - 'crates/noon/src/semantic_mobject/bounds.rs'
       - 'crates/noon/tests/image_seek.rs'

@@ -10,6 +10,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         noon_native::NativeViewportConfig {
             title: "Noon — Double the input".to_owned(),
             inspection_zoom: true,
+            playback_controls: true,
+            section_navigation: scene.section_navigation(),
             ..Default::default()
         },
     )?;

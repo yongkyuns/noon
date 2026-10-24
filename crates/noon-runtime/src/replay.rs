@@ -68,6 +68,25 @@ pub(crate) struct ReplayHistory {
 }
 
 impl SceneInstance {
+    /// Whether the initial complete projection admits immutable playback without
+    /// an external effective owner or retained source history. The monotonic
+    /// execution revision excludes prior live edits and destructive source
+    /// completion, even if a caller subsequently seeks back to time zero. Fresh
+    /// lowering establishes a new complete projection; this query never
+    /// reconstructs missing historical state.
+    ///
+    /// This is an O(1) capability query over existing revision/ownership indices,
+    /// not a new replay scope.
+    /// Numeric text currently shares the effective-driver gate; extending that
+    /// finite controlled profile is owned by #2263.
+    pub fn supports_immutable_playback(&self) -> bool {
+        self.publication.execution_revision() == noon_core::ExecutionRevision::default()
+            && self.replay_history.is_none()
+            && self.effective_driver_rows.is_empty()
+            && self.effective_content_drivers.is_empty()
+            && self.translation_drag_rows.is_empty()
+    }
+
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
         if self.replay_history.is_some() {
             return Err(ReplayError::AlreadyStarted);
