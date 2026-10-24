@@ -192,6 +192,13 @@ impl SemanticReactiveProjection {
             .unwrap_or(&[])
     }
 
+    /// Whether externally supplied native state or events can change this
+    /// projection. Viewer picking/selection and playback requests are separate
+    /// session policy and do not create a reactive input route.
+    pub fn has_native_input_routes(&self) -> bool {
+        !self.native_state_targets.is_empty() || !self.native_event_targets.is_empty()
+    }
+
     /// Whether a lowered signal is owned by a native source rather than direct writes.
     pub fn is_native_owned(&self, signal: SemanticNodeId) -> bool {
         self.native_signals.contains(&signal)

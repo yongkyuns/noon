@@ -17,6 +17,8 @@ on:
       - "scripts/ci-build-pulse-plugin.sh"
       - "scripts/native_audio_capture.py"
       - "scripts/test_native_audio_capture.py"
+      - "scripts/native_audio_controls_capture.py"
+      - "scripts/test_native_audio_controls_capture.py"
   push:
     branches: [master]
     paths:
@@ -34,6 +36,8 @@ on:
       - "scripts/ci-build-pulse-plugin.sh"
       - "scripts/native_audio_capture.py"
       - "scripts/test_native_audio_capture.py"
+      - "scripts/native_audio_controls_capture.py"
+      - "scripts/test_native_audio_controls_capture.py"
 
 permissions:
   contents: read
@@ -83,7 +87,9 @@ jobs:
           bash scripts/ci-build-pulse-plugin.sh "$noon_pulse_output"
           echo "NOON_NATIVE_AUDIO_PULSE_PLUGIN=$noon_pulse_output/libasound_module_pcm_pulse.so" >> "$GITHUB_ENV"
       - name: Prove captured-audio checks reject timing and channel errors
-        run: python3 scripts/test_native_audio_capture.py
+        run: |
+          python3 scripts/test_native_audio_capture.py
+          python3 scripts/test_native_audio_controls_capture.py
       - name: Capture native audio and retire output after device loss
         run: bash scripts/native-audio-smoke.sh
       - name: Qualify silent cold startup
@@ -91,6 +97,10 @@ jobs:
           NOON_NATIVE_AUDIO_COLD_START_DELAY_MS: 20000
           NOON_NATIVE_AUDIO_PROOF_DIR: native-audio-proof/cold-start
         run: bash scripts/native-audio-smoke.sh
+      - name: Capture native transport and viewer controls
+        env:
+          NOON_NATIVE_AUDIO_PROOF_DIR: native-audio-proof/controls
+        run: bash scripts/native-audio-smoke.sh --controls
       - name: Retain device, PCM and timing evidence
         if: always()
         uses: actions/upload-artifact@v7

@@ -1,8 +1,8 @@
 //! Finite authored animation and original background music on one scene timeline.
 //!
 //! Native Rust and direct Rust/WASM lower the same music and animation. The
-//! browser variant adds ordinary authored playback buttons; the native example
-//! explicitly omits those controls until its host supports their dispatch.
+//! same ordinary authored playback buttons use shared picking and commands on
+//! both native and browser hosts.
 //! This builder owns no device, wall clock, or transport.
 
 pub mod music;
@@ -31,19 +31,6 @@ pub const SAMPLE_RATE: u32 = 24_000;
 /// Restart and Sound. The existing shared picker resolves their semantic targets;
 /// the direct host applies the resulting command after the input publication.
 pub fn scene() -> Result<(Scene, DeclaredAnimation), String> {
-    prepare_scene(true)
-}
-
-/// The same finite music and animation without authored playback buttons.
-///
-/// Native device playback uses this variant while native scene-control dispatch
-/// remains outside its supported profile. The scene's sections, audio clips and
-/// animation are identical to [`scene`].
-pub fn scene_without_playback_controls() -> Result<(Scene, DeclaredAnimation), String> {
-    prepare_scene(false)
-}
-
-fn prepare_scene(playback_controls: bool) -> Result<(Scene, DeclaredAnimation), String> {
     let pcm = music::render_music(SAMPLE_RATE).map_err(|error| error.to_string())?;
     let resource = AudioResource::from_interleaved(
         pcm.sample_rate(),
@@ -52,13 +39,10 @@ fn prepare_scene(playback_controls: bool) -> Result<(Scene, DeclaredAnimation), 
         DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
     )
     .map_err(|error| error.to_string())?;
-    scene_with_music(resource, playback_controls)
+    scene_with_music(resource)
 }
 
-fn scene_with_music(
-    resource: AudioResource,
-    playback_controls: bool,
-) -> Result<(Scene, DeclaredAnimation), String> {
+fn scene_with_music(resource: AudioResource) -> Result<(Scene, DeclaredAnimation), String> {
     let mut scene = Scene::new();
     let vertices = [(-2.7, -1.5), (0.0, 1.8), (2.7, -1.5)];
     for (start, end) in vertices
@@ -97,9 +81,7 @@ fn scene_with_music(
         .set_stroke_width(0.035)
         .map_err(|error| error.to_string())?;
     scene.add(&square).map_err(|error| error.to_string())?;
-    if playback_controls {
-        add_playback_controls(&mut scene).map_err(|error| error.to_string())?;
-    }
+    add_playback_controls(&mut scene).map_err(|error| error.to_string())?;
     let mut point = scene.circle(0.26).map_err(|error| error.to_string())?;
     point
         .set_translation(vertices[0].0, vertices[0].1)
@@ -277,13 +259,11 @@ mod tests {
             DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
         )
         .unwrap();
-        for playback_controls in [false, true] {
-            assert_finite_authored_interval(resource.clone(), playback_controls);
-        }
+        assert_finite_authored_interval(resource);
     }
 
-    fn assert_finite_authored_interval(resource: AudioResource, playback_controls: bool) {
-        let (scene, animation) = scene_with_music(resource, playback_controls).unwrap();
+    fn assert_finite_authored_interval(resource: AudioResource) {
+        let (scene, animation) = scene_with_music(resource).unwrap();
         assert_eq!(scene.time(), DURATION_SECONDS);
         assert_eq!(
             scene
@@ -305,7 +285,7 @@ mod tests {
         let mut session = scene
             .execution_session_with_animation_root(&animation)
             .unwrap();
-        assert_eq!(session.has_playback_controls(), playback_controls);
+        assert!(session.has_playback_controls());
         assert_eq!(session.finite_timeline_end_time(), Some(DURATION_SECONDS));
         let clip = {
             let store = scene.integration_store().borrow();
