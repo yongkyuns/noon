@@ -3310,6 +3310,19 @@ class LiveExecution:
         """Evaluate canonical deterministic tracks at one session-owned time."""
         engine_call(self._context.liveEvaluate, float(time), operation="LiveExecution.evaluate")
 
+    def prepare(self) -> float:
+        """Complete the pending admitted segment headlessly (opt-in build).
+
+        Rust chooses its actual boundary and reconciles completion. This does
+        not run another source statement, select a displayed frame, or enable
+        prepared playback in the normal playground. A host must retain/deliver
+        history separately and stop source execution on failure.
+        """
+        prepare = getattr(self._context, "livePrepareSegment", None)
+        if not callable(prepare):
+            raise NotImplementedError("headless preparation requires the prepared-prefix engine feature")
+        return float(engine_call(prepare, operation="LiveExecution.prepare"))
+
     def complete(self) -> None:
         """Publish the active endpoint before sequential authoring continues."""
         engine_call(self._context.liveCompleteSegment, operation="LiveExecution.complete")

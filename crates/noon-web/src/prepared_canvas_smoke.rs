@@ -281,3 +281,63 @@ impl CooperativeCanvasFixture {
         self.dropped.get()
     }
 }
+
+/// Qualification-only bridge for a real Python authoring context. The interpreter
+/// retains its source; only the existing typed derived reader moves to the canvas.
+/// JavaScript never receives or retransmits a history/scene representation.
+#[wasm_bindgen]
+pub struct InterpreterCanvasFixture {
+    publisher: PrefixPublisher,
+    reader: Option<PrefixReader>,
+}
+
+#[wasm_bindgen]
+impl InterpreterCanvasFixture {
+    #[wasm_bindgen(constructor)]
+    pub fn new(context: &mut crate::CanonicalAuthoringSceneContext) -> Result<Self, JsValue> {
+        let (publisher, mut reader) = context.inner.create_prepared_prefix().map_err(js_error)?;
+        reader.seek(0.5).map_err(js_error)?;
+        Ok(Self {
+            publisher,
+            reader: Some(reader),
+        })
+    }
+
+    #[wasm_bindgen(js_name = createCanvas)]
+    pub async fn create_canvas(
+        &mut self,
+        canvas: OffscreenCanvas,
+    ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+        let reader = self
+            .reader
+            .take()
+            .ok_or_else(|| js_error("fixture reader already moved"))?;
+        WasmExecutionCanvasRenderer::create_from_prepared_prefix(canvas, reader).await
+    }
+
+    /// Test delivery uses the same caller-owned typed batch as a future host.
+    /// The fixture intentionally targets only its own correctly paired reader.
+    #[wasm_bindgen(js_name = publishCompleted)]
+    pub fn publish_completed(
+        &mut self,
+        context: &mut crate::CanonicalAuthoringSceneContext,
+        canvas: &mut WasmExecutionCanvasRenderer,
+        terminal: bool,
+    ) -> Result<(), JsValue> {
+        let batch = if terminal {
+            context.inner.seal_prepared_source().map_err(js_error)?;
+            context
+                .inner
+                .finish_prepared_prefix(&mut self.publisher)
+                .map_err(js_error)?
+        } else {
+            context
+                .inner
+                .publish_prepared_prefix(&mut self.publisher)
+                .map_err(js_error)?
+        };
+        canvas.reserve_prepared_prefix_capacity(batch.required_object_capacity())?;
+        canvas.preflight_prepared_prefix(&batch)?;
+        canvas.append_prepared_prefix(batch).map(|_| ())
+    }
+}

@@ -1,5 +1,7 @@
 #[cfg(any(target_arch = "wasm32", test))]
 mod effects;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+mod prepared;
 mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
@@ -9363,6 +9365,13 @@ mod wasm {
                 .map_err(typed_js_error)?
                 .live_advance_segment_to(time)
                 .map_err(typed_js_error)
+        }
+
+        /// Opt-in headless source barrier, not presentation or source scheduling.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = livePrepareSegment)]
+        pub fn live_prepare_segment(&mut self) -> Result<f64, JsValue> {
+            self.inner.prepare_live_segment().map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveCompleteSegment)]

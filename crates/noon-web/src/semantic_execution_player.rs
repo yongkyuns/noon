@@ -17,6 +17,8 @@ mod matrix;
 mod numbers;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+mod prepared;
 mod provisional_geometry;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;

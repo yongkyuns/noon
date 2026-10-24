@@ -10,7 +10,7 @@ impl ExecutionSession {
     /// Reject source-only behavior before a cooperative producer drives time.
     /// This deliberately permits an unfinished ordinary segment, but not a
     /// callback/causal route that would need sampled source execution.
-    pub(crate) fn ensure_prepared_source_domain(&self) -> Result<(), PrefixError> {
+    pub fn validate_prepared_source_domain(&self) -> Result<(), PrefixError> {
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
@@ -29,7 +29,7 @@ impl ExecutionSession {
         self.ensure_replay_completion()?;
         // Historical inset roles and reactive routes need their own admission;
         // do not silently drop source-only orchestration from an interactive reader.
-        self.ensure_prepared_source_domain()?;
+        self.validate_prepared_source_domain()?;
         if self.frame().time != boundary.end_time() || !self.segment_state(boundary).is_complete() {
             return Err(PrefixError::NotReady);
         }
