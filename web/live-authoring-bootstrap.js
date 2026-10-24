@@ -1,6 +1,3 @@
-const API_POLL_MS = 16;
-const API_WAIT_TIMEOUT_MS = 15_000;
-
 const status = document.querySelector("#status");
 
 if (!(status instanceof HTMLOutputElement)) {
@@ -11,16 +8,14 @@ void startLiveAuthoring();
 
 async function startLiveAuthoring() {
   let disposed = false;
+  const onPageHide = () => { disposed = true; };
+  // Navigation may happen while main.js is still loading its initial source.
+  // A later module completion must not start work in a retired page.
+  window.addEventListener("pagehide", onPageHide, { once: true });
 
   try {
     const gallery = await waitForGalleryApi();
-    window.addEventListener(
-      "pagehide",
-      () => {
-        disposed = true;
-      },
-      { once: true },
-    );
+    if (disposed) return;
 
     // Cross a real paint boundary after the loaded source/gallery is ready, then immediately
     // warm the persistent Pyodide + execution session. Subsequent edits are handled by main.js: cancel the old run
@@ -39,27 +34,25 @@ async function startLiveAuthoring() {
       status.dataset.liveAuthoring = "error";
       console.warn("Noon live authoring preload failed", error);
     }
+  } finally {
+    window.removeEventListener("pagehide", onPageHide);
   }
 }
 
 async function waitForGalleryApi() {
-  const startedAt = performance.now();
-  while (performance.now() - startedAt < API_WAIT_TIMEOUT_MS) {
-    const gallery = window.__noonExampleGallery;
-    if (
-      gallery &&
-      typeof gallery.run === "function" &&
-      typeof gallery.selectedExampleId === "string"
-    ) {
-      return gallery;
-    }
-    await delay(API_POLL_MS);
+  // Join the same module evaluation as index.html, including main.js's awaited
+  // manifest/source loading. A slow but valid startup is not a failed startup.
+  // Module caching prevents a second execution owner or another gallery boot.
+  await import("./main.js");
+  const gallery = window.__noonExampleGallery;
+  if (
+    gallery &&
+    typeof gallery.run === "function" &&
+    typeof gallery.selectedExampleId === "string"
+  ) {
+    return gallery;
   }
-  throw new Error("Noon playground API did not become ready for live authoring");
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  throw new Error("Noon playground API unavailable after initialization");
 }
 
 function afterInitialPaint() {
