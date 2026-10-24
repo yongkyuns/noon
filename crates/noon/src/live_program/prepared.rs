@@ -24,6 +24,8 @@ pub enum PreparedSourceError<E> {
     Program(LiveProgramError<E>),
     /// This slice needs a nonzero readable prefix; do not invent source time.
     NoPreparedInterval,
+    /// Invalid demand is rejected before invoking source code or changing state.
+    InvalidPreparationTarget(f64),
 }
 impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,6 +34,7 @@ impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
             Self::Replay(e) => e.fmt(f),
             Self::Prefix(e) => e.fmt(f),
             Self::Program(e) => e.fmt(f),
+            Self::InvalidPreparationTarget(time) => write!(f, "invalid preparation target {time}"),
             Self::NoPreparedInterval => {
                 f.write_str("prepared source finished without a readable interval")
             }
@@ -147,22 +150,65 @@ impl<C: LiveContinuation> PreparedSource<C> {
         }
     }
 
+    /// Prepare only while the published frontier is below an absolute demand.
+    ///
+    /// `None` means demand is satisfied: the host should sleep until playback or
+    /// explicit navigation changes demand. No continuation, retention operation,
+    /// frame evaluation or allocation is performed in that case. Pending output
+    /// and terminal lifecycle states are still returned for delivery/cleanup.
+    /// Bootstrap always admits one step because it has no readable prefix yet.
+    ///
+    /// The next segment's duration is unknown until user code returns. It may
+    /// overshoot the target by that one segment; this is neither a hard memory
+    /// budget nor preemption. Retention limits still apply and rewind never
+    /// discards history or reruns a completed source. A host blocked on an open
+    /// frontier may explicitly request one `prepare_next` step to close it.
+    pub fn prepare_until(
+        &mut self,
+        target: f64,
+    ) -> Result<Option<PreparedSourceStatus>, PreparedSourceError<C::Error>> {
+        if !target.is_finite() || target < 0.0 {
+            return Err(PreparedSourceError::InvalidPreparationTarget(target));
+        }
+        if self.pending.is_none()
+            && self.phase == PreparedSourceStatus::Ready
+            && self.publisher.is_some()
+            && self.published_until >= target
+        {
+            return Ok(None);
+        }
+        self.prepare_next().map(Some)
+    }
+
     /// Invoke at most one continuation, complete its actual segment, and publish
     /// at most one suffix. Zero-duration waits yield without a busy inner loop.
     /// Pending output and terminal states are idempotent no-ops.
+    ///
+    /// An unwinding panic propagates unchanged, but leaves this owner failed and
+    /// releases its source-owned state. Already-transferred history is unaffected.
+    /// Abort/trap configurations require host-context teardown; this is not panic
+    /// recovery on those targets or rollback of arbitrary external side effects.
     pub fn prepare_next(&mut self) -> Result<PreparedSourceStatus, PreparedSourceError<C::Error>> {
         if self.pending.is_some() || self.phase != PreparedSourceStatus::Ready {
             return Ok(self.status());
         }
-        if let Err(error) = self.prepare_one() {
-            // A source invocation can have external side effects. Never retry it
-            // automatically, including after a partial source edit or budget error.
-            self.program = None;
-            self.publisher = None;
-            self.pending = None;
-            self.phase = PreparedSourceStatus::Failed;
-            return Err(error);
-        }
+        // Leave a failed, empty owner behind before invoking arbitrary source or
+        // completion code. The one existing program/publisher move into this local
+        // attempt; no scene, runtime or retained history is cloned. If unwinding
+        // escapes, ordinary stack cleanup releases the attempt and its undelivered
+        // output. A caller that catches the panic cannot resume partial source work
+        // or take a terminal batch staged before a panicking continuation destructor.
+        let mut attempt = Self {
+            program: self.program.take(),
+            publisher: self.publisher.take(),
+            boundary: self.boundary,
+            published_until: self.published_until,
+            pending: None,
+            phase: PreparedSourceStatus::Ready,
+        };
+        self.phase = PreparedSourceStatus::Failed;
+        attempt.prepare_one()?;
+        *self = attempt;
         Ok(self.status())
     }
 

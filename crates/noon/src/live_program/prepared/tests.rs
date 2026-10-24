@@ -321,3 +321,151 @@ fn cooperative_source_cancel_before_start_does_not_call_user_code() {
     assert_eq!(calls.get(), 0);
     assert_eq!(drops.get(), 1);
 }
+
+#[test]
+fn cooperative_source_demand_sleeps_at_frontier_and_admits_only_one_unknown_segment() {
+    let (mut source, calls, drops) = fixture(false, false, None, ReplayLimits::default());
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    reader.seek(0.5).unwrap();
+    let before = reader.frame().clone();
+    let publication = reader.publication_context();
+    for target in [1.0, 0.5, 0.0, 1.0] {
+        assert_eq!(source.prepare_until(target).unwrap(), None);
+        assert_eq!(source.status(), PreparedSourceStatus::Ready);
+    }
+    assert_eq!(calls.get(), 1);
+    assert_eq!(drops.get(), 0);
+    assert!(source.pending_batch().is_none());
+    assert_eq!(reader.end_time(), None);
+    assert_eq!(reader.frame(), &before);
+    assert_eq!(reader.publication_context(), publication);
+    // A segment is indivisible: a 1.1 demand can admit the next endpoint at 2.0.
+    assert_eq!(
+        source.prepare_until(1.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    assert_eq!(calls.get(), 2);
+    // Pending output is not hidden or recomputed when demand decreases.
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    assert_eq!(calls.get(), 2);
+    deliver(&mut source, &mut reader);
+    assert_eq!(reader.frontier(), 2.0);
+    assert_eq!(source.prepare_until(2.0).unwrap(), None);
+    assert_eq!(
+        reader.end_time(),
+        None,
+        "throttling must not invent completion"
+    );
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    assert!(source.pending_batch().unwrap().is_terminal());
+    deliver(&mut source, &mut reader);
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::Finished)
+    );
+    assert_eq!(calls.get(), 3);
+    assert_eq!(drops.get(), 1);
+    assert_eq!(reader.end_time(), Some(2.0));
+    assert_eq!(reader.frame(), &before);
+}
+
+#[test]
+fn cooperative_source_invalid_demand_is_atomic_before_and_after_output() {
+    let (mut source, calls, _) = fixture(false, false, None, ReplayLimits::default());
+    for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        assert!(matches!(
+            source.prepare_until(target),
+            Err(PreparedSourceError::InvalidPreparationTarget(_))
+        ));
+        assert_eq!(source.status(), PreparedSourceStatus::Ready);
+    }
+    assert_eq!(calls.get(), 0);
+    source.prepare_next().unwrap();
+    let mut reader = source.take_reader().unwrap();
+    source.prepare_until(1.5).unwrap();
+    let batch = std::ptr::from_ref(source.pending_batch().unwrap());
+    for target in [f64::NAN, f64::INFINITY, -1.0] {
+        assert!(source.prepare_until(target).is_err());
+        assert_eq!(std::ptr::from_ref(source.pending_batch().unwrap()), batch);
+        assert_eq!(source.status(), PreparedSourceStatus::BatchReady);
+    }
+    assert_eq!(calls.get(), 2);
+    deliver(&mut source, &mut reader);
+    assert_eq!(reader.frontier(), 2.0);
+}
+
+#[test]
+fn cooperative_source_waiting_does_not_touch_effects_or_retry_a_later_failure() {
+    let (mut source, calls, drops) = fixture(false, false, Some(1), ReplayLimits::default());
+    source.prepare_next().unwrap();
+    let mut reader = source.take_reader().unwrap();
+    reader.seek(0.5).unwrap();
+    let baseline = reader.frame().clone();
+    let action = reader
+        .prepare_bound_click_indicate(reader.frame().objects[0].id)
+        .unwrap()
+        .unwrap();
+    reader.start_transient_animation(action).unwrap();
+    reader.advance_interactions(10.0).unwrap();
+    reader.advance_interactions(10.25).unwrap();
+    let middle = reader.frame().clone();
+    let publication = reader.publication_context();
+    let history = reader.replay_stats();
+    assert_ne!(middle, baseline);
+    for _ in 0..32 {
+        assert_eq!(source.prepare_until(1.0).unwrap(), None);
+    }
+    assert_eq!(calls.get(), 1);
+    assert_eq!(reader.frame(), &middle);
+    assert_eq!(reader.publication_context(), publication);
+    assert_eq!(reader.replay_stats(), history);
+    assert!(source.prepare_until(1.1).is_err());
+    assert_eq!(
+        source.prepare_until(100.0).unwrap(),
+        Some(PreparedSourceStatus::Failed)
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(drops.get(), 1);
+    reader.advance_interactions(10.5).unwrap();
+    assert_eq!(reader.frame(), &baseline);
+    assert_eq!(reader.end_time(), None);
+}
+
+#[test]
+fn cooperative_source_demand_keeps_zero_bootstrap_cooperative_and_cancel_terminal() {
+    let (mut source, calls, drops) = fixture(true, false, None, ReplayLimits::default());
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::Ready)
+    );
+    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    assert_eq!(calls.get(), 2);
+    let reader = source.take_reader().unwrap();
+    assert_eq!(source.prepare_until(0.0).unwrap(), None);
+    source.cancel();
+    assert_eq!(
+        source.prepare_until(999.0).unwrap(),
+        Some(PreparedSourceStatus::Cancelled)
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(drops.get(), 1);
+    assert_eq!(reader.frontier(), 1.0);
+    assert_eq!(reader.end_time(), None);
+}
+
+#[cfg(all(panic = "unwind", not(target_arch = "wasm32")))]
+mod unwind;

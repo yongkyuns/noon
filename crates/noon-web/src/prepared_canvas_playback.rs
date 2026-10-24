@@ -25,6 +25,14 @@ impl PreparedCanvasPlayback {
     pub(crate) fn buffering(&self) -> bool {
         self.buffering
     }
+    /// Pure demand derived from the reader, never a JavaScript timeline clock.
+    pub(crate) fn preparation_target(&self, ahead: f64) -> Result<f64, &'static str> {
+        let target = self.reader.frame().time + ahead;
+        if !ahead.is_finite() || ahead <= 0.0 || !target.is_finite() {
+            return Err("preparation look-ahead must be finite, positive and representable");
+        }
+        Ok(target)
+    }
     pub(crate) fn set_playing(&mut self, playing: bool) -> bool {
         let changed = self.playing != playing;
         self.playing = playing;

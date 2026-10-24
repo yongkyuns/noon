@@ -719,7 +719,11 @@ headlessly using the shared evaluator/completion path. One pending reader/batch
 applies backpressure; no further source invocation occurs until it is taken.
 Retention admits the producer publication, not a displayed-frame receipt. Failure
 is terminal and never retries user code; cancellation releases only source-owned
-state while already-delivered history remains usable. Zero-duration waits yield,
+state while already-delivered history remains usable. An unwinding panic leaves
+that source owner terminally failed before propagating its original payload;
+source-owned unpublished output is released even if final cleanup panics. This
+is not rollback of external side effects or in-process recovery from abort/trap
+configurations, which require host-context teardown. Zero-duration waits yield,
 and sources with no positive readable interval are explicitly unsupported here.
 This is a work-count bound, not preemption of a long user call or resource operation.
 Explicitly sealed
@@ -741,8 +745,18 @@ A browser task driver may schedule one cooperative Rust preparation call per
 macrotask and wake the existing presentation driver after typed delivery. It owns
 only task handles/cancellation, never authored time, source semantics or batches.
 The native path calls the same producer directly without browser infrastructure.
-Automatic scheduling of the Python interpreter, ahead-of-playback time budgets,
-heavy-source latency and restart/recovery policy remain separate qualifications.
+The producer's `prepare_until` demand gate admits another continuation only below
+an absolute requested frontier, while preserving pending-output backpressure. An
+unknown segment may overshoot that target once; this does not bound resource bytes
+or discard history required for rewind. The canvas derives a positive look-ahead
+from its reader, not from a JavaScript timeline clock. Satisfied demand sleeps with
+no preparation timer until the existing playback/control driver reports progress.
+A missing open frontier admits one refill even when the last rendered sample still
+predates a long static wait, preventing a demand/buffering deadlock. Rejected
+nonfinite demand performs no user work. Terminal delivery and explicit cancellation
+remain distinct from temporary demand satisfaction.
+Automatic scheduling of the Python interpreter, hard byte budgets, preemption of
+heavy source work and restart/recovery policy remain separate qualifications.
 
 The reader distinguishes monotonic forward playback from an explicit seek.
 Direct, typed presentation effects use the existing Runtime's bounded Indicate
