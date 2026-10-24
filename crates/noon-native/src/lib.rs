@@ -11,6 +11,9 @@ mod execution_source;
 mod pointer_input;
 mod selection_overlay;
 
+#[cfg(feature = "audio")]
+mod audio_output;
+
 #[cfg(test)]
 mod realtime_tests;
 
@@ -77,6 +80,7 @@ impl Default for NativeViewportConfig {
 #[derive(Debug)]
 pub enum NativeHostError {
     AudioOutputUnavailable,
+    Audio(String),
     PlaybackControlsUnavailable,
     Platform(String),
     Gpu(String),
@@ -93,8 +97,9 @@ impl std::fmt::Display for NativeHostError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::AudioOutputUnavailable => formatter.write_str(
-                "native device audio output is not available yet; this scene requires an audio-capable host (#2263)",
+                "native device audio requires the noon-native audio feature (#2263)",
             ),
+            Self::Audio(message) => write!(formatter, "native audio error: {message}"),
             Self::PlaybackControlsUnavailable => formatter.write_str(
                 "native in-scene playback controls are not available yet; use the finite direct Rust/WASM playback host (#2263)",
             ),
@@ -238,7 +243,10 @@ fn run_source(
     // Profile admission precedes window/device allocation. The host must not
     // silently omit authored audio or consume a click without its control action.
     if source.session().has_audio() {
+        #[cfg(not(feature = "audio"))]
         return Err(NativeHostError::AudioOutputUnavailable);
+        #[cfg(feature = "audio")]
+        audio_output::admit_profile(source.as_ref())?;
     }
     if source.session().has_playback_controls() {
         return Err(NativeHostError::PlaybackControlsUnavailable);
@@ -302,6 +310,12 @@ struct NativeApp {
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
     realtime_clock: Option<RealtimeClock>,
+    #[cfg(feature = "audio")]
+    audio_output: Option<audio_output::NativeAudioOutput>,
+    #[cfg(feature = "audio")]
+    audio_picture_ready: bool,
+    #[cfg(feature = "audio")]
+    finite_audio_end: Option<f64>,
     interaction_wall_origin: Instant,
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
@@ -343,12 +357,24 @@ impl NativeApp {
     }
 
     fn from_source(source: Box<dyn NativeExecutionSource>, config: NativeViewportConfig) -> Self {
+        #[cfg(feature = "audio")]
+        let finite_audio_end = source
+            .session()
+            .has_audio()
+            .then(|| source.session().finite_timeline_end_time())
+            .flatten();
         Self {
             execution: source,
             config,
             window: None,
             gpu: None,
             realtime_clock: None,
+            #[cfg(feature = "audio")]
+            audio_output: None,
+            #[cfg(feature = "audio")]
+            audio_picture_ready: false,
+            #[cfg(feature = "audio")]
+            finite_audio_end,
             interaction_wall_origin: Instant::now(),
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
@@ -389,6 +415,10 @@ impl NativeApp {
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: NativeHostError) {
+        #[cfg(feature = "audio")]
+        {
+            self.audio_output = None;
+        }
         if self.error.is_none() {
             self.error = Some(error);
         }
@@ -462,6 +492,14 @@ impl NativeApp {
             return None;
         }
         if self.realtime_clock.is_none() {
+            #[cfg(feature = "audio")]
+            if self.audio_remaining() {
+                // Cold preparation and suspension hold both consumers. The
+                // first admitted device buffer supplies one common wall anchor;
+                // only this existing native clock advances the scene.
+                self.realtime_clock = self.audio_output.as_ref().and_then(|output| output.clock());
+                return self.realtime_clock;
+            }
             self.realtime_clock = Some(RealtimeClock::new(now, self.execution.frame_time()));
         }
         self.realtime_clock
@@ -480,6 +518,10 @@ impl NativeApp {
             return Ok(());
         };
         let requested = clock.scene_time_at(now).max(self.execution.frame_time());
+        #[cfg(feature = "audio")]
+        let requested = self
+            .finite_audio_end
+            .map_or(requested, |end| requested.min(end));
         match timeline {
             TimelineWakeState::Continuous => self.execution.advance_to(requested)?,
             TimelineWakeState::Deadline(scene_time) => {
@@ -689,7 +731,7 @@ impl NativeApp {
                 self.last_text_draw_calls = _draw.text.draw_calls;
             }
             window.pre_present_notify();
-            gpu.queue.submit(Some(encoder.finish()));
+            let _submission = gpu.queue.submit(Some(encoder.finish()));
             gpu.queue.present(surface_texture);
             if reconfigure_after_present {
                 gpu.surface.configure(&gpu.device, &gpu.config);
@@ -697,6 +739,22 @@ impl NativeApp {
             let presented = publication.context();
             debug_assert_eq!(pointer_frame.publication(), presented);
             self.execution.admit_presented_frame(&pointer_frame)?;
+            #[cfg(feature = "audio")]
+            if !self.audio_picture_ready {
+                if let Some(output) = self.audio_output.as_ref() {
+                    // One cold/resume barrier, never a per-frame GPU fence.
+                    // Queue submission alone does not mean the first picture
+                    // has finished its shader/resource preparation.
+                    gpu.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: Some(_submission),
+                            timeout: Some(Duration::from_secs(10)),
+                        })
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    self.audio_picture_ready = true;
+                    output.admit();
+                }
+            }
             self.pointer.presented = Some(pointer_frame);
             self.pointer.refresh_pending = false;
             self.last_selection_presentation = highlight;
@@ -712,6 +770,12 @@ impl NativeApp {
             return Ok(());
         }
         unreachable!("the final bounded preparation pass always presents")
+    }
+
+    fn set_wait_mode(&self, event_loop: &ActiveEventLoop, flow: ControlFlow) {
+        #[cfg(feature = "audio")]
+        let flow = self.audio_control_flow(flow);
+        event_loop.set_control_flow(flow);
     }
 
     fn publication_pending(&self) -> bool {
@@ -743,6 +807,11 @@ impl NativeApp {
 
 impl ApplicationHandler for NativeApp {
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "audio")]
+        if let Err(error) = self.suspend_audio(Instant::now()) {
+            self.fail(event_loop, error);
+            return;
+        }
         if let Err(error) = self
             .pointer_focus_lost()
             .and_then(|()| self.rebind_pointer_view())
@@ -792,6 +861,12 @@ impl ApplicationHandler for NativeApp {
                 Err(error) => self.fail(event_loop, error),
             }
         }
+        #[cfg(feature = "audio")]
+        if self.error.is_none() {
+            if let Err(error) = self.prepare_audio() {
+                self.fail(event_loop, error);
+            }
+        }
     }
 
     fn window_event(
@@ -808,8 +883,21 @@ impl ApplicationHandler for NativeApp {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                #[cfg(feature = "audio")]
+                {
+                    self.audio_output = None;
+                }
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
+                #[cfg(feature = "audio")]
+                if size.width == 0 || size.height == 0 {
+                    if let Err(error) = self.suspend_audio(Instant::now()) {
+                        self.fail(event_loop, error);
+                        return;
+                    }
+                }
                 if let Err(error) = self.dispatch_viewport_size(&window, size) {
                     self.fail(event_loop, error);
                     return;
@@ -830,6 +918,12 @@ impl ApplicationHandler for NativeApp {
                 }
                 if let Err(error) = self.rebind_pointer_view() {
                     self.fail(event_loop, error);
+                }
+                #[cfg(feature = "audio")]
+                if size.width > 0 && size.height > 0 && self.error.is_none() {
+                    if let Err(error) = self.prepare_audio() {
+                        self.fail(event_loop, error);
+                    }
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -906,12 +1000,17 @@ impl ApplicationHandler for NativeApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "audio")]
+        if let Err(error) = self.check_audio(Instant::now()) {
+            self.fail(event_loop, error);
+            return;
+        }
         let Some(window) = self.window.as_ref().cloned() else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         };
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
 
@@ -926,43 +1025,57 @@ impl ApplicationHandler for NativeApp {
         }
         if self.publication_pending() {
             window.request_redraw();
-            event_loop.set_control_flow(ControlFlow::Wait);
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
 
         if self.execution.session().interactions_active() {
             window.request_redraw();
-            event_loop.set_control_flow(ControlFlow::Poll);
+            self.set_wait_mode(event_loop, ControlFlow::Poll);
             return;
         }
         let timeline = self.execution.timeline();
         let now = Instant::now();
         let clock = self.realtime_clock_for_timeline(timeline, now);
+        #[cfg(feature = "audio")]
+        if clock.is_none() && self.audio_picture_ready && self.audio_remaining() {
+            // The prepared picture is already visible. Wait for the admitted
+            // device anchor without repeatedly redrawing a frozen scene.
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
+            return;
+        }
         match timeline {
             TimelineWakeState::Continuous => {
                 window.request_redraw();
-                event_loop.set_control_flow(ControlFlow::Poll);
+                self.set_wait_mode(event_loop, ControlFlow::Poll);
             }
             TimelineWakeState::Deadline(scene_time) => {
                 let Some(clock) = clock else {
                     window.request_redraw();
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.set_wait_mode(event_loop, ControlFlow::Wait);
                     return;
                 };
                 let Some(deadline) = clock.wall_deadline(scene_time) else {
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.set_wait_mode(event_loop, ControlFlow::Wait);
                     return;
                 };
                 if deadline <= now {
                     window.request_redraw();
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.set_wait_mode(event_loop, ControlFlow::Wait);
                 } else {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                    self.set_wait_mode(event_loop, ControlFlow::WaitUntil(deadline));
                 }
             }
             TimelineWakeState::Quiescent => {
-                event_loop.set_control_flow(ControlFlow::Wait);
+                self.set_wait_mode(event_loop, ControlFlow::Wait);
             }
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "audio")]
+        {
+            self.audio_output = None;
         }
     }
 }
@@ -1173,6 +1286,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(feature = "audio"))]
     fn native_host_rejects_audio_before_opening_a_window() {
         let mut scene = Scene::new();
         scene

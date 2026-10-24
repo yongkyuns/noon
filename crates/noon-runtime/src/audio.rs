@@ -6,7 +6,7 @@
 //! explicit authored times. Preparation and ordinary evaluation remain silent.
 
 mod mix;
-pub use mix::{AudioMixError, AudioMixFormat, MAX_AUDIO_MIX_BLOCK_FRAMES};
+pub use mix::{AudioMixError, AudioMixFormat, PreparedAudioMix, MAX_AUDIO_MIX_BLOCK_FRAMES};
 
 use noon_core::{
     AudioClipDefinition, AudioClipError, AudioResource, AudioResourceHandle, SemanticNodeId,

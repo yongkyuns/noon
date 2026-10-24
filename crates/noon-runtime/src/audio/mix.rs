@@ -1,6 +1,6 @@
-//! Bounded offline PCM queries over compiled audio; no transport or runtime writes.
+//! Bounded PCM queries over compiled audio; no transport or runtime writes.
 
-use noon_core::AudioResource;
+use noon_core::{AudioClipDefinition, AudioResource};
 
 use crate::SceneInstance;
 
@@ -66,6 +66,9 @@ pub enum AudioMixError {
         frames: usize,
         limit: usize,
     },
+    InvalidBlockFrameCapacity {
+        frames: usize,
+    },
     OutputFrameRangeOverflow,
     OutputFramePrecisionLoss {
         frame: u64,
@@ -77,6 +80,7 @@ pub enum AudioMixError {
         frame: u64,
     },
     ScratchAllocationFailed,
+    ClipStorageAllocationFailed,
     NonFiniteMix {
         frame: u64,
         channel: u16,
@@ -111,6 +115,10 @@ impl std::fmt::Display for AudioMixError {
                 formatter,
                 "audio mix block has {frames} frames, exceeding its {limit}-frame limit"
             ),
+            Self::InvalidBlockFrameCapacity { frames } => write!(
+                formatter,
+                "prepared audio mix capacity must be between 1 and {MAX_AUDIO_MIX_BLOCK_FRAMES} frames, received {frames}"
+            ),
             Self::OutputFrameRangeOverflow => {
                 formatter.write_str("audio mix output frame range overflows u64")
             }
@@ -128,6 +136,9 @@ impl std::fmt::Display for AudioMixError {
             ),
             Self::ScratchAllocationFailed => {
                 formatter.write_str("could not allocate bounded audio mix scratch storage")
+            }
+            Self::ClipStorageAllocationFailed => {
+                formatter.write_str("could not retain immutable audio mix clip dependencies")
             }
             Self::NonFiniteMix { frame, channel } => write!(
                 formatter,
@@ -160,6 +171,7 @@ impl OutputGrid {
         first_frame: u64,
         format: AudioMixFormat,
         samples: usize,
+        max_block_frames: usize,
     ) -> Result<Self, AudioMixError> {
         if !scene_start.is_finite() || scene_start < 0.0 {
             return Err(AudioMixError::InvalidSceneStart(scene_start));
@@ -171,10 +183,10 @@ impl OutputGrid {
             });
         }
         let frames = samples / usize::from(format.channels);
-        if frames > MAX_AUDIO_MIX_BLOCK_FRAMES {
+        if frames > max_block_frames {
             return Err(AudioMixError::BlockFrameLimitExceeded {
                 frames,
-                limit: MAX_AUDIO_MIX_BLOCK_FRAMES,
+                limit: max_block_frames,
             });
         }
         let end = first_frame
@@ -233,7 +245,113 @@ impl OutputGrid {
     }
 }
 
+#[derive(Debug)]
+struct PreparedAudioClip {
+    definition: AudioClipDefinition,
+    pcm: AudioResource,
+}
+
+/// Immutable audio dependencies and reusable scratch for bounded PCM queries.
+///
+/// Preparation retains existing shared PCM allocations and copies only validated
+/// clip definitions. This value has no runtime, playhead, publication or device;
+/// every query supplies its authored-time origin and absolute sample index.
+/// A host must retire it when its admitted immutable execution is replaced.
+///
+/// Mixing performs no allocation, locking, decoding or scene evaluation. Work
+/// visits the retained audio clips and their intersecting output samples, using
+/// at most the block capacity chosen at preparation. Destruction releases its
+/// retained resources and scratch, so hosts must also keep destruction outside
+/// their real-time callback.
+#[derive(Debug)]
+pub struct PreparedAudioMix {
+    clips: Vec<PreparedAudioClip>,
+    format: AudioMixFormat,
+    scratch: Vec<f64>,
+}
+
+impl PreparedAudioMix {
+    pub const fn format(&self) -> AudioMixFormat {
+        self.format
+    }
+
+    /// Maximum output frames accepted without growing the prepared scratch.
+    pub fn max_block_frames(&self) -> usize {
+        self.scratch.len() / usize::from(self.format.channels)
+    }
+
+    /// Number of immutable clips visited by one block query.
+    pub fn clip_count(&self) -> usize {
+        self.clips.len()
+    }
+
+    /// Mix on the same explicit sample grid as [`SceneInstance::mix_audio_block`].
+    ///
+    /// Calls may arrive in any time order, including after a seek. Smaller blocks
+    /// reuse the prepared scratch prefix; no previous samples or time cursor are
+    /// retained. Invalid or out-of-range mixes leave all output samples intact.
+    pub fn mix_audio_block(
+        &mut self,
+        scene_start: f64,
+        first_output_frame: u64,
+        output: &mut [f32],
+    ) -> Result<(), AudioMixError> {
+        let grid = OutputGrid::validate(
+            scene_start,
+            first_output_frame,
+            self.format,
+            output.len(),
+            self.max_block_frames(),
+        )?;
+        mix_audio_clips(
+            self.clips.iter().map(|clip| (&clip.definition, &clip.pcm)),
+            &grid,
+            self.format,
+            &mut self.scratch[..output.len()],
+            output,
+        )
+    }
+}
+
 impl SceneInstance {
+    /// Retain this plan's immutable audio closure with reusable bounded scratch.
+    ///
+    /// This preparation may allocate; later [`PreparedAudioMix::mix_audio_block`]
+    /// calls do not. PCM remains shared with the compiled plan and stays valid
+    /// after the runtime is dropped. Preparation grants no playback admission:
+    /// the host still owns finite-profile checks, its clock and device lifecycle.
+    pub fn prepare_audio_mix(
+        &self,
+        format: AudioMixFormat,
+        max_block_frames: usize,
+    ) -> Result<PreparedAudioMix, AudioMixError> {
+        if !(1..=MAX_AUDIO_MIX_BLOCK_FRAMES).contains(&max_block_frames) {
+            return Err(AudioMixError::InvalidBlockFrameCapacity {
+                frames: max_block_frames,
+            });
+        }
+        let scratch = allocate_scratch(max_block_frames * usize::from(format.channels))?;
+        let mut clips = Vec::new();
+        clips
+            .try_reserve_exact(self.compiled.audio_clips().len())
+            .map_err(|_| AudioMixError::ClipStorageAllocationFailed)?;
+        for clip in self.compiled.audio_clips() {
+            let definition = *clip.definition();
+            let pcm = self
+                .compiled
+                .resources()
+                .audio(definition.resource())
+                .expect("compiled audio owns its immutable PCM closure")
+                .clone();
+            clips.push(PreparedAudioClip { definition, pcm });
+        }
+        Ok(PreparedAudioMix {
+            clips,
+            format,
+            scratch,
+        })
+    }
+
     /// Mix a bounded block of interleaved PCM without advancing Runtime.
     ///
     /// Sample `i` is evaluated at `scene_start + (first_output_frame + i) / rate`.
@@ -257,79 +375,107 @@ impl SceneInstance {
         format: AudioMixFormat,
         output: &mut [f32],
     ) -> Result<(), AudioMixError> {
-        let grid = OutputGrid::validate(scene_start, first_output_frame, format, output.len())?;
+        let grid = OutputGrid::validate(
+            scene_start,
+            first_output_frame,
+            format,
+            output.len(),
+            MAX_AUDIO_MIX_BLOCK_FRAMES,
+        )?;
         if output.is_empty() {
             return Ok(());
         }
-        let mut mixed = Vec::<f64>::new();
-        mixed
-            .try_reserve_exact(output.len())
-            .map_err(|_| AudioMixError::ScratchAllocationFailed)?;
-        mixed.resize(output.len(), 0.0);
-        let output_channels = usize::from(format.channels);
-        for clip in self.compiled.audio_clips() {
+        let mut scratch = allocate_scratch(output.len())?;
+        let clips = self.compiled.audio_clips().iter().map(|clip| {
             let definition = clip.definition();
-            let start = grid.lower_bound(definition.start_time());
-            let end = grid.lower_bound(definition.end_time());
-            if start == end {
-                continue;
-            }
             let pcm = self
                 .compiled
                 .resources()
                 .audio(definition.resource())
                 .expect("compiled audio owns its immutable PCM closure");
-            for index in start..end {
-                let position = definition
-                    .state_at(grid.time_at(index))
-                    .expect("audio mix sample grid was validated")
-                    .expect("clip intersection includes only its half-open active interval");
-                let lower = position.source_frame.floor() as usize;
-                let upper = if lower + 1 < definition.source_end_frame() {
-                    lower + 1
-                } else if definition.is_looped() {
-                    definition.source_start_frame()
-                } else {
-                    lower
-                };
-                let fraction = position.source_frame - lower as f64;
-                let left = interpolate(pcm, lower, upper, 0, fraction);
-                let right = if pcm.channels() == 1 {
-                    left
-                } else {
-                    interpolate(pcm, lower, upper, 1, fraction)
-                };
-                let samples = if output_channels == 1 {
-                    [(left + right) * 0.5, 0.0]
-                } else {
-                    [left, right]
-                };
-                for (channel, sample) in samples[..output_channels].iter().enumerate() {
-                    let slot = &mut mixed[index * output_channels + channel];
-                    *slot += sample * position.gain;
-                    if !slot.is_finite() {
-                        return Err(AudioMixError::NonFiniteMix {
-                            frame: first_output_frame + index as u64,
-                            channel: channel as u16,
-                        });
-                    }
+            (definition, pcm)
+        });
+        mix_audio_clips(clips, &grid, format, &mut scratch, output)
+    }
+}
+
+fn allocate_scratch(samples: usize) -> Result<Vec<f64>, AudioMixError> {
+    let mut scratch = Vec::new();
+    scratch
+        .try_reserve_exact(samples)
+        .map_err(|_| AudioMixError::ScratchAllocationFailed)?;
+    scratch.resize(samples, 0.0);
+    Ok(scratch)
+}
+
+fn mix_audio_clips<'a>(
+    clips: impl Iterator<Item = (&'a AudioClipDefinition, &'a AudioResource)>,
+    grid: &OutputGrid,
+    format: AudioMixFormat,
+    mixed: &mut [f64],
+    output: &mut [f32],
+) -> Result<(), AudioMixError> {
+    if output.is_empty() {
+        return Ok(());
+    }
+    mixed.fill(0.0);
+    let output_channels = usize::from(format.channels);
+    for (definition, pcm) in clips {
+        let start = grid.lower_bound(definition.start_time());
+        let end = grid.lower_bound(definition.end_time());
+        if start == end {
+            continue;
+        }
+        for index in start..end {
+            let position = definition
+                .state_at(grid.time_at(index))
+                .expect("audio mix sample grid was validated")
+                .expect("clip intersection includes only its half-open active interval");
+            let lower = position.source_frame.floor() as usize;
+            let upper = if lower + 1 < definition.source_end_frame() {
+                lower + 1
+            } else if definition.is_looped() {
+                definition.source_start_frame()
+            } else {
+                lower
+            };
+            let fraction = position.source_frame - lower as f64;
+            let left = interpolate(pcm, lower, upper, 0, fraction);
+            let right = if pcm.channels() == 1 {
+                left
+            } else {
+                interpolate(pcm, lower, upper, 1, fraction)
+            };
+            let samples = if output_channels == 1 {
+                [(left + right) * 0.5, 0.0]
+            } else {
+                [left, right]
+            };
+            for (channel, sample) in samples[..output_channels].iter().enumerate() {
+                let slot = &mut mixed[index * output_channels + channel];
+                *slot += sample * position.gain;
+                if !slot.is_finite() {
+                    return Err(AudioMixError::NonFiniteMix {
+                        frame: grid.first_frame + index as u64,
+                        channel: channel as u16,
+                    });
                 }
             }
         }
-        for (index, &value) in mixed.iter().enumerate() {
-            if !(-1.0..=1.0).contains(&value) {
-                return Err(AudioMixError::OutputOutOfRange {
-                    frame: first_output_frame + (index / output_channels) as u64,
-                    channel: (index % output_channels) as u16,
-                    value,
-                });
-            }
-        }
-        for (target, value) in output.iter_mut().zip(mixed) {
-            *target = value as f32;
-        }
-        Ok(())
     }
+    for (index, &value) in mixed.iter().enumerate() {
+        if !(-1.0..=1.0).contains(&value) {
+            return Err(AudioMixError::OutputOutOfRange {
+                frame: grid.first_frame + (index / output_channels) as u64,
+                channel: (index % output_channels) as u16,
+                value,
+            });
+        }
+    }
+    for (target, &value) in output.iter_mut().zip(mixed.iter()) {
+        *target = value as f32;
+    }
+    Ok(())
 }
 
 fn interpolate(

@@ -1152,6 +1152,20 @@ impl ExecutionSession {
         self.runtime.audio_playback_at(time)
     }
 
+    /// Retain immutable audio dependencies and allocate reusable bounded scratch.
+    ///
+    /// The returned mixer shares PCM with this plan and can outlive the session.
+    /// Its block queries allocate nothing and do not evaluate the scene. This
+    /// does not admit playback or create a clock; hosts must keep preparation
+    /// silent and retire the mixer on execution replacement.
+    pub fn prepare_audio_mix(
+        &self,
+        format: noon_runtime::AudioMixFormat,
+        max_block_frames: usize,
+    ) -> Result<noon_runtime::PreparedAudioMix, noon_runtime::AudioMixError> {
+        self.runtime.prepare_audio_mix(format, max_block_frames)
+    }
+
     /// Mix a bounded block from the immutable authored PCM and clip definitions.
     ///
     /// `scene_start` is the absolute scene time at output frame zero;

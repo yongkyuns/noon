@@ -188,6 +188,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
 | Coordinate plotting | [coordinate_plotting.rs](crates/noon-native/examples/coordinate_plotting.rs) | [coordinate_plotting.py](web/python/examples/coordinate_plotting.py) |
 | Retained images | [raster_image.rs](crates/noon-native/examples/raster_image.rs) | [raster_image.py](web/python/examples/raster_image.py) |
+| Finite background music | [background_music_lesson.rs](crates/noon-native/examples/background_music_lesson.rs) | [background_music_lesson.py](web/python/examples/background_music_lesson.py) |
 
 The complete qualification corpus lives under [`crates/noon-native/examples`](crates/noon-native/examples) and [`web/python/examples`](web/python/examples).
 
@@ -200,6 +201,48 @@ The current plotting subset uses linear 2D coordinates and bounded sampled curve
 The retained raster image example admits immutable PNG/JPEG or uint8 array resources through shared Rust semantics. The qualification corpus checks decoded dimensions, sampler behavior, opacity, endpoint transforms, and texture reuse. Noon’s decomposed Transform midpoint (22.5°/.875) differs from Manim’s pointwise quad midpoint (19.113565°/.809809), so that sample is recorded as a known boundary while endpoint parity remains explicit.
 
 Current Phase A acceptance status is intentionally not duplicated here; use the [Phase A umbrella](https://github.com/yongkyuns/noon/issues/953) and the architecture guide for current ownership and invariants.
+
+## Native background audio
+
+Enable the optional `noon-native` audio feature to play finite Rust scenes through
+the default output device. The example uses the same original score, motion and
+three authored sections as the direct Rust/WASM background-music example:
+
+```bash
+cargo run -p noon-native --features audio --example background_audio
+```
+
+The paired Python lesson also has a native entry point. Both versions use the
+same shared Rust lesson, scalar bindings, sections and music:
+
+```bash
+cargo run -p noon-native --features audio --example background_music_lesson
+```
+
+Preparation stays silent; playback starts after the first native picture is ready.
+The shared Rust mixer supplies loops, trims, fades and overlapping clips on the
+native player's existing timeline. Inspection zoom leaves audio time unchanged,
+and closing the window retires output. This finite profile requires a complete
+immutable scene without required host callbacks. Live authoring, retained history
+and scene-authored playback buttons remain outside the native audio profile.
+The current device profile admits at most 256 immutable clips and mono or stereo
+output at 8–192 kHz. A device timestamp discontinuity above 50 ms stops the run
+with an explicit output error.
+
+The device backend uses ALSA on Linux, WASAPI on Windows, and CoreAudio on macOS.
+Linux builds with the `audio` feature (including workspace `--all-features`
+validation) require `pkg-config` and the ALSA development package, for example
+`sudo apt-get install libasound2-dev pkg-config` on Debian or Ubuntu. Native audio
+requires macOS 14.2 or newer with the [pinned CPAL backend](https://docs.rs/crate/cpal/0.18.2/source/README.md).
+Linux ALSA routes through PulseAudio also need the upstream
+[startup timing fix](https://github.com/alsa-project/alsa-plugins/commit/811c2ce69d1265ace42a05ef045ca1b4ed72e01c).
+Older Pulse plugins can report missing initial timing as an I/O error; Noon stops
+playback when the backend reports that failure. The software-device CI fixture
+selects a private build containing the fix without replacing system plugins.
+The feature is disabled by default, so visual-only native builds do not acquire
+this audio dependency.
+Automated output and clock checks do not establish physical-speaker latency or
+replace listening tests on supported devices.
 
 ## Browser playground
 

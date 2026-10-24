@@ -105,8 +105,8 @@ pub use noon_core::{
 };
 pub use noon_runtime::{
     AudioMixError, AudioMixFormat, EffectiveObjectProperties, FrameChanges, FrameObjectState,
-    FrameState, RendererPublication, RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
-    MAX_AUDIO_MIX_BLOCK_FRAMES,
+    FrameState, PreparedAudioMix, RendererPublication, RuntimeIdentity, RuntimeWakeState,
+    TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
 /// Construct one detached family through an explicitly supplied live execution

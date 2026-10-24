@@ -58,6 +58,8 @@ jobs:
         with:
           tool: cargo-llvm-cov
           fallback: none
+      - name: Install native audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
       - name: Generate Rust coverage
         run: |
           mkdir -p test-artifacts
