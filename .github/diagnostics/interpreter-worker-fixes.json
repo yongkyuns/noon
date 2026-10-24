@@ -1,0 +1,1 @@
+[{"path":"crates/noon-web/src/canonical_authoring_scene/prepared/tests/worker.rs","old":"context.scene.circle(0.25).unwrap()","new":"context.live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.25).unwrap()).unwrap()","count":2}]

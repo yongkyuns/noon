@@ -25,16 +25,18 @@ jobs:
       - name: Apply exact-base candidate after checksum validation
         run: |
           python3 - <<'PYCODE'
-          import base64, gzip, hashlib, pathlib, subprocess
-          text=pathlib.Path('.github/diagnostics/interpreter-worker.b64').read_text()
-          # Correct one verified transcription omission, then authenticate the
-          # complete original patch bytes before decoding or executing them.
-          text=text.replace('qWOTHVel','qWwOTHVel')
+          import base64, gzip, hashlib, pathlib, subprocess, json
+          fixes=json.loads(pathlib.Path('.github/diagnostics/interpreter-worker-fixes.json').read_text())
+          text=pathlib.Path('.github/diagnostics/interpreter-worker.b64').read_text().replace('qWOTHVel','qWwOTHVel')
           data=base64.b64decode(text,validate=True)
           assert hashlib.sha256(data).hexdigest() == 'fe69b3b6be65f42611376e7cff98c38bf6655ba8b7797350b358f0be995849f3'
           patch=gzip.decompress(data)
           subprocess.run(['git','reset','--hard','1cba0c3ed8e9e17f7007c542baa84a933c7c0a61'],check=True)
           subprocess.run(['git','apply','--index','-'],input=patch,check=True)
+          for fix in fixes:
+              path=pathlib.Path(fix['path']); content=path.read_text()
+              assert content.count(fix['old'])==fix['count']
+              path.write_text(content.replace(fix['old'],fix['new']))
           pathlib.Path('evidence').mkdir()
           pathlib.Path('evidence/product-base.txt').write_text('1cba0c3ed8e9e17f7007c542baa84a933c7c0a61\n')
           PYCODE
