@@ -654,6 +654,21 @@ fn proof_directory() -> std::path::PathBuf {
 }
 
 #[cfg(target_os = "linux")]
+fn assert_selected_pulse_plugin_loaded() {
+    if let Some(path) = std::env::var_os("NOON_NATIVE_AUDIO_PULSE_PLUGIN") {
+        let path = std::path::PathBuf::from(path).canonicalize().unwrap();
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+        assert!(
+            maps.lines()
+                .any(|line| line.ends_with(path.to_str().unwrap())),
+            "the selected private Pulse PCM plugin was not loaded: {}",
+            path.display()
+        );
+        eprintln!("native audio fixture: loaded PCM plugin {}", path.display());
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires X11, WGPU and a controlled default output device; selected by native audio qualification"]
 fn native_audio_device_smoke() {
@@ -668,6 +683,7 @@ fn native_audio_device_smoke() {
         app: NativeApp,
         state: Option<Arc<OutputState>>,
         started: Instant,
+        host_ready: Option<Instant>,
         silent_preparation: Duration,
         preparation_wait: Duration,
         silent_heartbeat: Option<Instant>,
@@ -683,6 +699,12 @@ fn native_audio_device_smoke() {
             if self.app.error.is_some() {
                 return;
             }
+            self.host_ready = Some(Instant::now());
+            assert_selected_pulse_plugin_loaded();
+            eprintln!(
+                "native audio fixture: host ready after {:.3}s; output is still unadmitted",
+                self.started.elapsed().as_secs_f64()
+            );
             assert!(self.app.pointer.presented.is_none());
             let output = self
                 .app
@@ -747,6 +769,12 @@ fn native_audio_device_smoke() {
                 return;
             };
             let now = Instant::now();
+            if self.first_picture.is_none() {
+                eprintln!(
+                    "native audio fixture: first picture after {:.3}s at scene time {time}",
+                    now.duration_since(self.started).as_secs_f64()
+                );
+            }
             self.first_picture.get_or_insert(now);
             self.presents += 1;
             if let Some(clock) = self.state.as_ref().and_then(|state| state.clock()) {
@@ -767,9 +795,32 @@ fn native_audio_device_smoke() {
             if self.app.error.is_some() {
                 return;
             }
+            // Cold window/GPU initialization precedes playback admission. Its
+            // time must not consume the independent finite-playback deadline.
+            // The shell harness also bounds the entire process at 60 seconds.
+            let now = Instant::now();
+            let (phase, elapsed, budget) = self.first_picture.map_or(
+                (
+                    "startup",
+                    now.duration_since(self.started),
+                    Duration::from_secs(45),
+                ),
+                |first| {
+                    (
+                        "playback",
+                        now.duration_since(first),
+                        Duration::from_secs(15),
+                    )
+                },
+            );
             assert!(
-                self.started.elapsed() < Duration::from_secs(15),
-                "native audio fixture failed to reach its finite endpoint"
+                elapsed < budget,
+                "native audio fixture {phase} deadline exceeded: elapsed={elapsed:?}, runtime={}, presented={:?}, pictures={}, admitted={}, fault={}",
+                self.app.execution.frame_time(),
+                self.app.presented_frame_time,
+                self.presents,
+                self.state.as_ref().is_some_and(|state| state.admitted.load(Ordering::Acquire)),
+                self.state.as_ref().map_or(0, |state| state.fault.load(Ordering::Acquire)),
             );
             if let Some(presented) = self.final_picture {
                 let deadline = presented + Duration::from_millis(150);
@@ -823,6 +874,7 @@ fn native_audio_device_smoke() {
         ),
         state: None,
         started: Instant::now(),
+        host_ready: None,
         silent_preparation: Duration::ZERO,
         preparation_wait: Duration::ZERO,
         silent_heartbeat: None,
@@ -833,7 +885,23 @@ fn native_audio_device_smoke() {
     };
     let mut builder = EventLoop::builder();
     builder.with_any_thread(true);
-    builder.build().unwrap().run_app(&mut harness).unwrap();
+    let event_loop = builder.build().unwrap();
+    // Fault injection for the real-device regression: model slow cold platform
+    // startup before the host can prepare or admit audio. Default runs add no delay.
+    let cold_start_delay = std::env::var("NOON_NATIVE_AUDIO_COLD_START_DELAY_MS")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .expect("cold-start delay must be milliseconds")
+        })
+        .unwrap_or(0);
+    assert!(
+        cold_start_delay <= 25_000,
+        "cold-start injection exceeds its bound"
+    );
+    std::thread::sleep(Duration::from_millis(cold_start_delay));
+    event_loop.run_app(&mut harness).unwrap();
     assert!(harness.app.error.is_none(), "{:?}", harness.app.error);
     assert_eq!(harness.app.presented_frame_time, Some(1.0));
     assert_eq!(harness.app.execution.frame_time(), 1.0);
@@ -854,6 +922,8 @@ fn native_audio_device_smoke() {
             "{{\n  \"sample_rate\": 48000,\n  \"channels\": 2,\n  \"duration\": 1.0,\n",
             "  \"prepared_silent_seconds\": {:.9},\n  \"displayed_end_time\": 1.0,\n",
             "  \"preparation_wait_seconds\": {:.9},\n",
+            "  \"host_setup_seconds\": {:.9},\n",
+            "  \"injected_cold_start_milliseconds\": {},\n",
             "  \"silent_callback_seconds_from_stream_epoch\": {:.9},\n",
             "  \"first_picture_seconds_from_stream_epoch\": {:.9},\n",
             "  \"audio_anchor_seconds_from_stream_epoch\": {:.9},\n",
@@ -863,6 +933,12 @@ fn native_audio_device_smoke() {
         ),
         harness.silent_preparation.as_secs_f64(),
         harness.preparation_wait.as_secs_f64(),
+        harness
+            .host_ready
+            .unwrap()
+            .duration_since(harness.started)
+            .as_secs_f64(),
+        cold_start_delay,
         seconds(harness.silent_heartbeat.unwrap()),
         seconds(harness.first_picture.unwrap()),
         seconds(clock.wall_origin),
@@ -893,6 +969,7 @@ fn native_audio_device_loss_smoke() {
         NativeViewportConfig::default(),
     );
     late.prepare_audio().unwrap();
+    assert_selected_pulse_plugin_loaded();
     let short_output = late.audio_output.as_ref().unwrap();
     let short_state = short_output.state.clone();
     short_output.admit();

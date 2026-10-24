@@ -234,6 +234,11 @@ Linux builds with the `audio` feature (including workspace `--all-features`
 validation) require `pkg-config` and the ALSA development package, for example
 `sudo apt-get install libasound2-dev pkg-config` on Debian or Ubuntu. Native audio
 requires macOS 14.2 or newer with the [pinned CPAL backend](https://docs.rs/crate/cpal/0.18.2/source/README.md).
+Linux ALSA routes through PulseAudio also need the upstream
+[startup timing fix](https://github.com/alsa-project/alsa-plugins/commit/811c2ce69d1265ace42a05ef045ca1b4ed72e01c).
+Older Pulse plugins can report missing initial timing as an I/O error; Noon stops
+playback when the backend reports that failure. The software-device CI fixture
+selects a private build containing the fix without replacing system plugins.
 The feature is disabled by default, so visual-only native builds do not acquire
 this audio dependency.
 Automated output and clock checks do not establish physical-speaker latency or

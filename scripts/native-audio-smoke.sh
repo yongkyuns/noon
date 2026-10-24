@@ -70,6 +70,32 @@ ctl.!default {
 }
 EOF
 
+# The controlled CI route selects a pinned upstream Pulse PCM plugin with the
+# initial-latency fix. Selection is private to this ALSA config; system modules
+# remain available for control devices and all ordinary native execution.
+if [[ -n "${NOON_NATIVE_AUDIO_PULSE_PLUGIN:-}" ]]; then
+  noon_pulse_plugin="$NOON_NATIVE_AUDIO_PULSE_PLUGIN"
+  if [[ "$noon_pulse_plugin" != /* || ! -f "$noon_pulse_plugin" ]]; then
+    echo "NOON_NATIVE_AUDIO_PULSE_PLUGIN must name an existing absolute library path" >&2
+    exit 2
+  fi
+  case "$noon_pulse_plugin" in
+    *$'\n'*|*$'\r'*|*\"*|*\\*)
+      echo "Pulse PCM plugin path cannot contain ALSA configuration escapes" >&2
+      exit 2
+      ;;
+  esac
+  cat >> "$ALSA_CONFIG_PATH" <<EOF
+pcm_type.!pulse {
+    lib "$noon_pulse_plugin"
+}
+EOF
+  printf '%s\n' "$noon_pulse_plugin" > "$NOON_NATIVE_AUDIO_PROOF_DIR/pulse-plugin.txt"
+  sha256sum "$noon_pulse_plugin" > "$NOON_NATIVE_AUDIO_PROOF_DIR/pulse-plugin.sha256"
+else
+  printf 'system ALSA Pulse PCM plugin\n' > "$NOON_NATIVE_AUDIO_PROOF_DIR/pulse-plugin.txt"
+fi
+
 pulseaudio -n --daemonize=no --exit-idle-time=-1 --use-pid-file=no \
   --disable-shm=yes --realtime=no --high-priority=no --log-target=stderr \
   --file="$noon_pulse_dir/server.pa" \
@@ -118,7 +144,10 @@ wc -c < "$NOON_NATIVE_AUDIO_PROOF_DIR/capture.f32" \
   > "$NOON_NATIVE_AUDIO_PROOF_DIR/recorder-ready-bytes.txt"
 
 set +e
-xvfb-run -a -s "-screen 0 1280x720x24" \
+# Bound cold window/GPU startup separately from the fixture's 15-second
+# admitted-playback deadline. Slow initialization must remain silent.
+timeout --signal=TERM --kill-after=3s 60s \
+  xvfb-run -a -s "-screen 0 1280x720x24" \
   cargo test -p noon-native --features audio --lib native_audio_device_smoke \
     -- --ignored --nocapture --test-threads=1 \
     2>&1 | tee "$NOON_NATIVE_AUDIO_PROOF_DIR/device-test.log"

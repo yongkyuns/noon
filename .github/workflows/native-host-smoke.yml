@@ -14,6 +14,7 @@ on:
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
       - "scripts/native-audio-smoke.sh"
+      - "scripts/ci-build-pulse-plugin.sh"
       - "scripts/native_audio_capture.py"
       - "scripts/test_native_audio_capture.py"
   push:
@@ -30,6 +31,7 @@ on:
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
       - "scripts/native-audio-smoke.sh"
+      - "scripts/ci-build-pulse-plugin.sh"
       - "scripts/native_audio_capture.py"
       - "scripts/test_native_audio_capture.py"
 
@@ -74,10 +76,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
       - name: Install software audio and native surface dependencies
-        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config pulseaudio pulseaudio-utils libasound2-plugins xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev libpulse-dev pkg-config build-essential autoconf automake libtool curl ca-certificates pulseaudio pulseaudio-utils libasound2-plugins xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+      - name: Build pinned PulseAudio ALSA timing fix
+        run: |
+          noon_pulse_output="$GITHUB_WORKSPACE/$NOON_NATIVE_AUDIO_PROOF_DIR/pulse-plugin"
+          bash scripts/ci-build-pulse-plugin.sh "$noon_pulse_output"
+          echo "NOON_NATIVE_AUDIO_PULSE_PLUGIN=$noon_pulse_output/libasound_module_pcm_pulse.so" >> "$GITHUB_ENV"
       - name: Prove captured-audio checks reject timing and channel errors
         run: python3 scripts/test_native_audio_capture.py
       - name: Capture native audio and retire output after device loss
+        run: bash scripts/native-audio-smoke.sh
+      - name: Qualify silent cold startup
+        env:
+          NOON_NATIVE_AUDIO_COLD_START_DELAY_MS: 20000
+          NOON_NATIVE_AUDIO_PROOF_DIR: native-audio-proof/cold-start
         run: bash scripts/native-audio-smoke.sh
       - name: Retain device, PCM and timing evidence
         if: always()
