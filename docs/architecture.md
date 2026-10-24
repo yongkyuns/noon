@@ -755,6 +755,17 @@ A missing open frontier admits one refill even when the last rendered sample sti
 predates a long static wait, preventing a demand/buffering deadlock. Rejected
 nonfinite demand performs no user work. Terminal delivery and explicit cancellation
 remain distinct from temporary demand satisfaction.
+The optional canonical interpreter context can complete its actual pending segment
+headlessly through the same player-owned receipt, admission and semantic completion
+path. A thin Python `LiveExecution.prepare()` request does not supply a guessed
+endpoint or authorize presentation. The existing context retains the sole source
+runtime; typed Rust prefix extraction supplies a separate historical reader without
+leasing the source player to it. Source callbacks/causal state are rejected before
+headless advancement, and pending or transferred source ownership cannot publish a
+prefix. Explicit source sealing remains distinct from finishing an individual
+segment. Host orchestration must retain/deliver each extracted batch, yield interpreter
+work and stop on errors; this bridge provides no retry, source scheduler or new wire
+format. A frame/debug observation is never fed back as engine authority.
 Automatic scheduling of the Python interpreter, hard byte budgets, preemption of
 heavy source work and restart/recovery policy remain separate qualifications.
 

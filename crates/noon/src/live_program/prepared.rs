@@ -80,7 +80,7 @@ impl Scene {
             .map_err(PreparedSourceError::Lowering)?;
         program
             .session()
-            .ensure_prepared_source_domain()
+            .validate_prepared_source_domain()
             .map_err(PreparedSourceError::Prefix)?;
         program
             .scene
@@ -219,12 +219,12 @@ impl<C: LiveContinuation> PreparedSource<C> {
             .expect("ready source owns its live program");
         program
             .session()
-            .ensure_prepared_source_domain()
+            .validate_prepared_source_domain()
             .map_err(PreparedSourceError::Prefix)?;
         let status = program.resume().map_err(PreparedSourceError::Program)?;
         program
             .session()
-            .ensure_prepared_source_domain()
+            .validate_prepared_source_domain()
             .map_err(PreparedSourceError::Prefix)?;
         if status == LiveProgramStatus::Finished {
             let boundary = self
