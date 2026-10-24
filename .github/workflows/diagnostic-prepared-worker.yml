@@ -1,0 +1,134 @@
+name: Diagnostic prepared worker
+on:
+  push:
+    branches: [diagnostic/noon-prepared-worker-20261023]
+permissions:
+  contents: write
+concurrency:
+  group: diagnostic-prepared-worker
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Apply checksum-verified candidate on exact product base
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, pathlib, subprocess
+          text = ''.join(pathlib.Path(f'.github/diagnostics/prepared-worker.part{i}').read_text() for i in range(3))
+          data = base64.b64decode(text,validate=True)
+          assert hashlib.sha256(data).hexdigest() == 'cd3c8a732c6462449df1f6e337f1cf72ee7e0f4f80a167ce797030a3b2ca867f'
+          patch = gzip.decompress(data)
+          subprocess.run(['git','reset','--hard','2293f031ef8801b782e802507d84a1fb22506943'],check=True)
+          subprocess.run(['git','apply','--index','-'],input=patch,check=True)
+          pathlib.Path('evidence').mkdir()
+          pathlib.Path('evidence/product-base.txt').write_text('2293f031ef8801b782e802507d84a1fb22506943\n')
+          PY
+      - name: Install pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and retain exact candidate
+        run: |
+          cargo fmt --all
+          git diff --check HEAD
+          rustc --version --verbose > evidence/rustc.txt
+          python3 - <<'PY'
+          import subprocess, pathlib, json, hashlib, tarfile
+          paths = subprocess.check_output(['git','diff','--name-only','HEAD']).decode().splitlines()
+          assert len(paths) == 13, paths
+          pathlib.Path('evidence/paths.json').write_text(json.dumps(paths))
+          pathlib.Path('evidence/candidate.patch').write_bytes(subprocess.check_output(['git','diff','--binary','HEAD']))
+          hashes = {}
+          with tarfile.open('evidence/candidate-files.tar.gz','w:gz') as archive:
+              for name in paths:
+                  data = pathlib.Path(name).read_bytes()
+                  hashes[name] = hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+                  archive.add(name,arcname=name)
+          pathlib.Path('evidence/file-hashes.json').write_text(json.dumps(hashes,indent=2))
+          PY
+      - name: Selected historical publication and existing codec regressions
+        run: |
+          set -o pipefail
+          cargo test --locked -p noon-web --all-features --lib prepared_worker 2>&1 | tee evidence/prepared-worker-tests.log
+          cargo test --locked -p noon-web --all-features --lib 2>&1 | tee evidence/web-tests.log
+          cargo test --locked -p noon-web --no-default-features --features prepared-prefix --lib prepared_worker 2>&1 | tee evidence/no-renderer-tests.log
+          cargo check --locked -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee evidence/no-renderer-wasm.log
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build actual prepared canvas and render worker
+        run: |
+          set -o pipefail
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked 2>&1 | tee evidence/wasm-build.log
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Real render worker with both transports and GPU backends
+        env:
+          NOON_PREPARED_WORKER_ARTIFACTS: evidence/worker
+          NOON_PREPARED_CONSTRUCT_ARTIFACTS: evidence/construct
+          NOON_PREPARED_PYTHON_ARTIFACTS: evidence/python
+        run: |
+          set -o pipefail
+          node scripts/prepared-worker-qualification.mjs 2>&1 | tee evidence/worker.log
+          node scripts/worker-inspection-qualification.mjs 2>&1 | tee evidence/worker-inspection.log
+          node scripts/prepared-construct-qualification.mjs 2>&1 | tee evidence/construct.log
+          node scripts/prepared-python-qualification.mjs 2>&1 | tee evidence/python.log
+          node scripts/prepared-canvas-qualification.mjs 2>&1 | tee evidence/canvas.log
+          node scripts/prepared-source-qualification.mjs 2>&1 | tee evidence/source.log
+      - name: Required repository gate and workflow topology
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast HEAD 2>&1 | tee evidence/fast-gate.log
+          node --test .github/ci/*.test.mjs 2>&1 | tee evidence/ci-topology.log
+      - name: Store tested blobs without changing product refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import os, json, pathlib, hashlib, urllib.request
+          hashes = json.loads(pathlib.Path('evidence/file-hashes.json').read_text())
+          blobs = []
+          for name, expected in hashes.items():
+              data = pathlib.Path(name).read_bytes()
+              assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == expected
+              req = urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/git/blobs',data=json.dumps({'content':data.decode(),'encoding':'utf-8'}).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req) as response: result = json.load(response)
+              assert result['sha'] == expected
+              blobs.append({'path':name,'mode':'100644','type':'blob','sha':expected})
+          pathlib.Path('evidence/blobs.json').write_text(json.dumps(blobs,indent=2))
+          PY
+      - name: Preserve source and evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepared-worker-qualification
+          path: evidence
+          if-no-files-found: error
+          retention-days: 3
