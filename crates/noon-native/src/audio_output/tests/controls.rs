@@ -75,7 +75,7 @@ fn expected_segment(
         )
         .unwrap();
     apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, first_frame);
-    for (offset, pair) in expected.chunks_exact_mut(2).enumerate() {
+    for (offset, pair) in expected.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         let gain = if offset >= ramp_frames {
             to
         } else {
@@ -223,7 +223,7 @@ fn release_during_attack_keeps_continuity_and_original_drain_deadline() {
             .decode(output.state.release_end.load(Ordering::Acquire)),
         Some(end)
     );
-    for (frame, pair) in samples.chunks_exact(2).enumerate() {
+    for (frame, pair) in samples.as_chunks::<2>().0.iter().enumerate() {
         let gain = (1.0 - frame as f64 / 2_880.0).max(0.0);
         let expected = (0.25_f64 * 0.25 * gain) as f32;
         assert_eq!(pair, [expected; 2]);
