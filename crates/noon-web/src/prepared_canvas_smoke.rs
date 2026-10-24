@@ -84,6 +84,24 @@ impl PreparedCanvasFixture {
         canvas: &mut WasmExecutionCanvasRenderer,
         terminal: bool,
     ) -> Result<(), JsValue> {
+        let batch = self.next_batch(terminal)?;
+        canvas.reserve_prepared_prefix_capacity(batch.required_object_capacity())?;
+        canvas.preflight_prepared_prefix(&batch)?;
+        canvas.append_prepared_prefix(batch)?;
+        if terminal {
+            self.source = None;
+        }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = producerAlive)]
+    pub fn producer_alive(&self) -> bool {
+        self.source.is_some()
+    }
+}
+
+impl PreparedCanvasFixture {
+    fn next_batch(&mut self, terminal: bool) -> Result<noon::PrefixBatch, JsValue> {
         let source = self
             .source
             .as_mut()
@@ -122,18 +140,41 @@ impl PreparedCanvasFixture {
                 .publish_prepared_prefix(segment, &mut source.publisher)
                 .map_err(js_error)?
         };
-        canvas.reserve_prepared_prefix_capacity(batch.required_object_capacity())?;
-        canvas.preflight_prepared_prefix(&batch)?;
-        canvas.append_prepared_prefix(batch)?;
+        Ok(batch)
+    }
+}
+
+#[wasm_bindgen]
+impl PreparedCanvasFixture {
+    /// Move the same reader to the existing retained worker publication channel.
+    #[wasm_bindgen(js_name = createWorkerPlayer)]
+    pub fn create_worker_player(
+        &mut self,
+        session: u32,
+    ) -> Result<crate::PreparedExecutionPlayer, JsValue> {
+        let reader = self
+            .reader
+            .take()
+            .ok_or_else(|| js_error("fixture reader already moved"))?;
+        Ok(crate::PreparedExecutionPlayer::from_reader(reader, session))
+    }
+
+    #[wasm_bindgen(js_name = publishNextToWorker)]
+    pub fn publish_next_to_worker(
+        &mut self,
+        player: &mut crate::PreparedExecutionPlayer,
+        terminal: bool,
+    ) -> Result<(), JsValue> {
+        let batch = self.next_batch(terminal)?;
+        player
+            .reserve_object_capacity(batch.required_object_capacity())
+            .map_err(js_error)?;
+        player.preflight_append(&batch).map_err(js_error)?;
+        player.append(batch).map_err(js_error)?;
         if terminal {
             self.source = None;
         }
         Ok(())
-    }
-
-    #[wasm_bindgen(js_name = producerAlive)]
-    pub fn producer_alive(&self) -> bool {
-        self.source.is_some()
     }
 }
 

@@ -31,6 +31,7 @@ on:
       - "scripts/prepared-source-qualification.mjs"
       - "scripts/prepared-python-qualification.mjs"
       - "scripts/prepared-construct-qualification.mjs"
+      - "scripts/prepared-worker-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -66,6 +67,7 @@ on:
       - "scripts/prepared-source-qualification.mjs"
       - "scripts/prepared-python-qualification.mjs"
       - "scripts/prepared-construct-qualification.mjs"
+      - "scripts/prepared-worker-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -231,6 +233,7 @@ jobs:
       - name: Test bounded prepared canvas lifecycle
         run: |
           cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
+          cargo test --locked -p noon-web --all-features --lib prepared_worker
           cargo test --locked -p noon-web --all-features --lib interpreter_prefix
           python3 -m unittest discover -s web/python -p test_prepared_execution.py
           cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
@@ -251,11 +254,14 @@ jobs:
           node scripts/prepared-source-qualification.mjs
           node scripts/prepared-python-qualification.mjs
           node scripts/prepared-construct-qualification.mjs
+          node scripts/prepared-worker-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: prepared-canvas
-          path: browser-smoke-artifacts/prepared-canvas
+          path: |
+            browser-smoke-artifacts/prepared-canvas
+            browser-smoke-artifacts/prepared-worker
           if-no-files-found: warn
           retention-days: 3
