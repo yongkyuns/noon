@@ -226,7 +226,7 @@ fn release_during_attack_keeps_continuity_and_original_drain_deadline() {
     for (frame, pair) in samples.as_chunks::<2>().0.iter().enumerate() {
         let gain = (1.0 - frame as f64 / 2_880.0).max(0.0);
         let expected = (0.25_f64 * 0.25 * gain) as f32;
-        assert_eq!(pair, [expected; 2]);
+        assert_eq!(*pair, [expected; 2]);
     }
     assert_eq!(&samples[samples.len() - 2..], &[0.0; 2]);
     assert!(!output
