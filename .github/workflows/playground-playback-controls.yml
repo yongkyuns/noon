@@ -30,6 +30,7 @@ on:
       - "scripts/prepared-canvas-qualification.mjs"
       - "scripts/prepared-source-qualification.mjs"
       - "scripts/prepared-python-qualification.mjs"
+      - "scripts/prepared-construct-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -46,6 +47,7 @@ on:
       - "web/browser-pointer-input*"
       - "web/native-inputs*"
       - "web/direct-execution-wake-driver*"
+      - "web/prepared-interpreter-driver*"
       - "web/authoring-execution-client*"
       - "web/execution-worker-client*"
       - "crates/noon-render-wgpu/**"
@@ -63,6 +65,7 @@ on:
       - "scripts/prepared-canvas-qualification.mjs"
       - "scripts/prepared-source-qualification.mjs"
       - "scripts/prepared-python-qualification.mjs"
+      - "scripts/prepared-construct-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -231,7 +234,7 @@ jobs:
           cargo test --locked -p noon-web --all-features --lib interpreter_prefix
           python3 -m unittest discover -s web/python -p test_prepared_execution.py
           cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
-          node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs
+          node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs web/prepared-interpreter-driver.test.mjs
       - name: Build explicitly enabled same-context canvas
         run: wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
       - uses: actions/cache@v6
@@ -247,6 +250,7 @@ jobs:
           node scripts/prepared-canvas-qualification.mjs
           node scripts/prepared-source-qualification.mjs
           node scripts/prepared-python-qualification.mjs
+          node scripts/prepared-construct-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7
