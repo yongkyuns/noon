@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 3
+          fetch-depth: 4
       - name: Apply checksum-verified candidate on exact product base
         run: |
           python3 - <<'PY'
@@ -83,10 +83,14 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Build actual prepared canvas and render worker
+      - name: Build actual prepared canvas and verified worker package
         run: |
           set -o pipefail
           wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked 2>&1 | tee evidence/wasm-build.log
+          node scripts/build-python-worker.mjs 2>&1 | tee evidence/worker-package.log
+          node scripts/build-runtime-identity.mjs 2>&1 | tee -a evidence/worker-package.log
+          node scripts/check-web-package.mjs 2>&1 | tee -a evidence/worker-package.log
+          cp web/runtime-build-identity.json evidence/runtime-build-identity.json
       - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
@@ -98,8 +102,11 @@ jobs:
       - name: Real render worker with both transports and GPU backends
         env:
           NOON_PREPARED_WORKER_ARTIFACTS: evidence/worker
+          NOON_WORKER_INSPECTION_ARTIFACTS: evidence/worker-inspection
           NOON_PREPARED_CONSTRUCT_ARTIFACTS: evidence/construct
           NOON_PREPARED_PYTHON_ARTIFACTS: evidence/python
+          NOON_PREPARED_CANVAS_ARTIFACTS: evidence/canvas
+          NOON_PREPARED_SOURCE_ARTIFACTS: evidence/source
         run: |
           set -o pipefail
           node scripts/prepared-worker-qualification.mjs 2>&1 | tee evidence/worker.log
