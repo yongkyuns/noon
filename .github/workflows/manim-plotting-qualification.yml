@@ -80,6 +80,8 @@ jobs:
           JS
       # Run before npm and screenshot output create untracked files. The shared
       # architecture gate must inspect source, not generated browser dependencies.
+      - name: Install native audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
       - name: Validate full integrated repository
         shell: bash
         env:

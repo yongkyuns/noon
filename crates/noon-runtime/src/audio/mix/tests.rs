@@ -52,6 +52,15 @@ fn render(
     runtime
         .mix_audio_block(scene_start, first_frame, format, &mut output)
         .unwrap();
+    let mut prepared = runtime.prepare_audio_mix(format, frames.max(1)).unwrap();
+    let mut retained_output = vec![0.875; output.len()];
+    prepared
+        .mix_audio_block(scene_start, first_frame, &mut retained_output)
+        .unwrap();
+    assert_eq!(
+        retained_output, output,
+        "prepared and borrowed mixers differ"
+    );
     output
 }
 
@@ -67,7 +76,170 @@ fn rejected_without_writes(
         .mix_audio_block(scene_start, first_frame, format, &mut output)
         .unwrap_err();
     assert!(output.iter().all(|value| *value == 0.875));
+    let mut prepared = runtime
+        .prepare_audio_mix(format, MAX_AUDIO_MIX_BLOCK_FRAMES)
+        .unwrap();
+    let prepared_error = prepared
+        .mix_audio_block(scene_start, first_frame, &mut output)
+        .unwrap_err();
+    // NaN in InvalidSceneStart intentionally does not compare equal to itself.
+    if scene_start.is_nan() {
+        assert!(matches!(prepared_error, AudioMixError::InvalidSceneStart(time) if time.is_nan()));
+    } else {
+        assert_eq!(prepared_error, error);
+    }
+    assert!(output.iter().all(|value| *value == 0.875));
     error
+}
+
+#[test]
+fn prepared_mixer_retains_the_original_pcm_after_runtime_retirement() {
+    let resource = pcm(RATE, 1, &[0.0, 0.25, 0.5, 0.75]);
+    let samples = resource.samples().as_ptr();
+    let runtime = runtime(vec![(resource, AudioClipOptions::default())]);
+    let mut prepared = runtime.prepare_audio_mix(mono_format(), 5).unwrap();
+    assert_eq!(prepared.clip_count(), 1);
+    assert_eq!(prepared.clips[0].pcm.samples().as_ptr(), samples);
+    drop(runtime);
+
+    let mut output = [0.875; 5];
+    prepared.mix_audio_block(0.0, 0, &mut output).unwrap();
+    assert_eq!(output, [0.0, 0.25, 0.5, 0.75, 0.0]);
+}
+
+#[test]
+fn preparation_rejects_zero_and_excess_capacity_before_allocating() {
+    let runtime = runtime(Vec::new());
+    for frames in [0, MAX_AUDIO_MIX_BLOCK_FRAMES + 1, usize::MAX] {
+        assert!(matches!(
+            runtime.prepare_audio_mix(mono_format(), frames),
+            Err(AudioMixError::InvalidBlockFrameCapacity { frames: actual }) if actual == frames
+        ));
+    }
+    for capacity in [1, MAX_AUDIO_MIX_BLOCK_FRAMES] {
+        let format = AudioMixFormat::STEREO_48_KHZ;
+        let mut prepared = runtime.prepare_audio_mix(format, capacity).unwrap();
+        assert_eq!(prepared.max_block_frames(), capacity);
+        assert_eq!(prepared.format(), format);
+        assert_eq!(prepared.clip_count(), 0);
+        let mut output = vec![0.875; capacity * 2];
+        prepared.mix_audio_block(0.0, 0, &mut output).unwrap();
+        assert!(output.iter().all(|sample| *sample == 0.0));
+    }
+}
+
+#[test]
+fn prepared_mixer_bounds_requests_and_recovers_after_atomic_rejection() {
+    let runtime = runtime(vec![(
+        pcm(RATE, 2, &[0.25, 0.25, 0.5, -1.25]),
+        AudioClipOptions::default(),
+    )]);
+    let mut prepared = runtime
+        .prepare_audio_mix(AudioMixFormat::new(RATE, 2).unwrap(), 2)
+        .unwrap();
+    let mut too_large = [0.875; 6];
+    assert_eq!(
+        prepared.mix_audio_block(0.0, 0, &mut too_large),
+        Err(AudioMixError::BlockFrameLimitExceeded {
+            frames: 3,
+            limit: 2
+        })
+    );
+    assert_eq!(too_large, [0.875; 6]);
+    let mut incomplete = [0.875; 3];
+    assert_eq!(
+        prepared.mix_audio_block(0.0, 0, &mut incomplete),
+        Err(AudioMixError::IncompleteOutputFrame {
+            samples: 3,
+            channels: 2
+        })
+    );
+    assert_eq!(incomplete, [0.875; 3]);
+
+    let mut overloaded = [0.875; 4];
+    assert_eq!(
+        prepared.mix_audio_block(0.0, 0, &mut overloaded),
+        Err(AudioMixError::OutputOutOfRange {
+            frame: 1,
+            channel: 1,
+            value: -1.25
+        })
+    );
+    assert_eq!(overloaded, [0.875; 4]);
+    let mut valid = [0.875; 2];
+    prepared.mix_audio_block(0.0, 0, &mut valid).unwrap();
+    assert_eq!(valid, [0.25; 2]);
+    prepared.mix_audio_block(0.0, 2, &mut valid).unwrap();
+    assert_eq!(valid, [0.0; 2]);
+    prepared.mix_audio_block(0.0, 0, &mut []).unwrap();
+}
+
+#[test]
+fn prepared_mixer_reuses_storage_across_variable_blocks_and_seek_order() {
+    let mut runtime = runtime(vec![
+        (
+            pcm(24_000, 1, &[-1.0, 0.25, 0.5, 0.0, -0.5, -1.0]),
+            AudioClipOptions {
+                start_time: 0.001,
+                source_start_frame: 1,
+                source_end_frame: Some(5),
+                duration: Some(0.1),
+                looped: true,
+                gain: 0.25,
+                fade_in: 0.0125,
+                fade_out: 0.0125,
+            },
+        ),
+        (
+            pcm(48_000, 2, &[0.125, -0.25, 0.25, -0.125, 0.0, 0.125]),
+            AudioClipOptions {
+                start_time: 0.01,
+                duration: Some(0.07),
+                looped: true,
+                gain: 0.25,
+                ..Default::default()
+            },
+        ),
+    ]);
+    runtime.seek(1.0).unwrap();
+    runtime.take_frame_changes();
+    let publication = runtime.publication_context();
+    let wake_state = runtime.wake_state();
+    let format = AudioMixFormat::STEREO_48_KHZ;
+    let mut prepared = runtime.prepare_audio_mix(format, 257).unwrap();
+    let scratch_storage = (prepared.scratch.as_ptr(), prepared.scratch.capacity());
+    let clip_storage = (prepared.clips.as_ptr(), prepared.clips.capacity());
+    let mut output = [0.875; 514];
+    for (scene_start, first_frame, frames) in [
+        (0.0, 1_000, 257),
+        (0.0, 0, 17),
+        (1.0 / 96_000.0, 3_900, 127),
+        (0.0, 480, 1),
+        (0.02, 0, 257),
+        (0.001, 13, 3),
+        (0.1, 0, 257),
+    ] {
+        let actual = &mut output[..frames * 2];
+        prepared
+            .mix_audio_block(scene_start, first_frame, actual)
+            .unwrap();
+        assert_eq!(
+            actual,
+            render(&runtime, scene_start, first_frame, format, frames)
+        );
+        assert_eq!(
+            (prepared.scratch.as_ptr(), prepared.scratch.capacity()),
+            scratch_storage
+        );
+        assert_eq!(
+            (prepared.clips.as_ptr(), prepared.clips.capacity()),
+            clip_storage
+        );
+    }
+    assert_eq!(runtime.frame().time, 1.0);
+    assert_eq!(runtime.publication_context(), publication);
+    assert_eq!(runtime.wake_state(), wake_state);
+    assert!(runtime.take_frame_changes().is_empty());
 }
 
 #[test]

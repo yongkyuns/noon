@@ -13,6 +13,9 @@ on:
       - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
+      - "scripts/native-audio-smoke.sh"
+      - "scripts/native_audio_capture.py"
+      - "scripts/test_native_audio_capture.py"
   push:
     branches: [master]
     paths:
@@ -26,6 +29,9 @@ on:
       - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
+      - "scripts/native-audio-smoke.sh"
+      - "scripts/native_audio_capture.py"
+      - "scripts/test_native_audio_capture.py"
 
 permissions:
   contents: read
@@ -35,6 +41,53 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  native-audio-output:
+    name: Native audio device output and timing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+      NOON_NATIVE_AUDIO_PROOF_DIR: native-audio-proof
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Record exact source
+        run: |
+          mkdir -p "$NOON_NATIVE_AUDIO_PROOF_DIR"
+          git rev-parse HEAD > "$NOON_NATIVE_AUDIO_PROOF_DIR/source-sha.txt"
+          mkdir -m 700 "$RUNNER_TEMP/noon-native-audio-xdg"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/noon-native-audio-xdg" >> "$GITHUB_ENV"
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustc -Vv > "$NOON_NATIVE_AUDIO_PROOF_DIR/rust-version.txt"
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Install software audio and native surface dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config pulseaudio pulseaudio-utils libasound2-plugins xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+      - name: Prove captured-audio checks reject timing and channel errors
+        run: python3 scripts/test_native_audio_capture.py
+      - name: Capture native audio and retire output after device loss
+        run: bash scripts/native-audio-smoke.sh
+      - name: Retain device, PCM and timing evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-audio-output
+          path: native-audio-proof/
+          retention-days: 3
+          if-no-files-found: error
+
   native-surface-presentation:
     name: Rust semantic scene presents natively
     runs-on: ubuntu-latest
@@ -53,10 +106,8 @@ jobs:
           rustup show active-toolchain
           rustc --version --verbose
 
-      - name: Install virtual display and software Vulkan
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+      - name: Install virtual display, software Vulkan and native audio headers
+        run: bash scripts/ci-install-reference-deps.sh xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libasound2-dev pkg-config
 
       - name: Check transient viewport integration
         run: cargo test -p noon --all-features --test transient_viewport

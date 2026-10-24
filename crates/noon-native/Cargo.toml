@@ -6,15 +6,21 @@ license = "MIT"
 description = "Native window host for typed Noon execution sessions"
 
 [features]
+audio = ["dep:cpal"]
 latex = ["noon/latex"]
 
 [dependencies]
+cpal = { version = "=0.18.2", default-features = false, optional = true }
 noon = { path = "../noon" }
 noon-core = { path = "../noon-core" }
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }
 pollster = "1.0"
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
 winit = "0.30.13"
+
+[[example]]
+name = "background_audio"
+required-features = ["audio"]
 
 [dev-dependencies]
 wgpu = { version = "30.0.1", default-features = false, features = ["noop"] }

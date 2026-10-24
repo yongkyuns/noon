@@ -63,8 +63,7 @@ jobs:
           python-version: "3.12"
       - name: Install pinned Cairo reference
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          bash scripts/ci-install-reference-deps.sh ffmpeg libcairo2-dev libpango1.0-dev pkg-config libasound2-dev
           python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt "manim[typst]==0.21.0" "typst==0.15.0"
       - name: Render actual Manim frames and observe tip geometry
         run: python scripts/manim-arrow-tip-reference.py

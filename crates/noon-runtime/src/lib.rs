@@ -5,7 +5,7 @@
 mod audio;
 pub use audio::{
     AudioGainEnvelope, AudioGainPoint, AudioLoopRegion, AudioMixError, AudioMixFormat,
-    AudioPlaybackClip, AudioPlaybackError, MAX_AUDIO_MIX_BLOCK_FRAMES,
+    AudioPlaybackClip, AudioPlaybackError, PreparedAudioMix, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 mod compaction;
 mod derived_display_evaluation;

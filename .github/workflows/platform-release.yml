@@ -76,6 +76,9 @@ jobs:
           key: ${{ runner.os }}-platform-cargo-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-platform-cargo-
+      - name: Install Linux native audio build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
       - name: Compile and test native workspace
         run: cargo test --workspace --all-features --lib --tests
 
