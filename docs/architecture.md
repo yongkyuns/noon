@@ -719,7 +719,11 @@ headlessly using the shared evaluator/completion path. One pending reader/batch
 applies backpressure; no further source invocation occurs until it is taken.
 Retention admits the producer publication, not a displayed-frame receipt. Failure
 is terminal and never retries user code; cancellation releases only source-owned
-state while already-delivered history remains usable. Zero-duration waits yield,
+state while already-delivered history remains usable. An unwinding panic leaves
+that source owner terminally failed before propagating its original payload;
+source-owned unpublished output is released even if final cleanup panics. This
+is not rollback of external side effects or in-process recovery from abort/trap
+configurations, which require host-context teardown. Zero-duration waits yield,
 and sources with no positive readable interval are explicitly unsupported here.
 This is a work-count bound, not preemption of a long user call or resource operation.
 Explicitly sealed

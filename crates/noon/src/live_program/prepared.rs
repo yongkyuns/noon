@@ -183,19 +183,32 @@ impl<C: LiveContinuation> PreparedSource<C> {
     /// Invoke at most one continuation, complete its actual segment, and publish
     /// at most one suffix. Zero-duration waits yield without a busy inner loop.
     /// Pending output and terminal states are idempotent no-ops.
+    ///
+    /// An unwinding panic propagates unchanged, but leaves this owner failed and
+    /// releases its source-owned state. Already-transferred history is unaffected.
+    /// Abort/trap configurations require host-context teardown; this is not panic
+    /// recovery on those targets or rollback of arbitrary external side effects.
     pub fn prepare_next(&mut self) -> Result<PreparedSourceStatus, PreparedSourceError<C::Error>> {
         if self.pending.is_some() || self.phase != PreparedSourceStatus::Ready {
             return Ok(self.status());
         }
-        if let Err(error) = self.prepare_one() {
-            // A source invocation can have external side effects. Never retry it
-            // automatically, including after a partial source edit or budget error.
-            self.program = None;
-            self.publisher = None;
-            self.pending = None;
-            self.phase = PreparedSourceStatus::Failed;
-            return Err(error);
-        }
+        // Leave a failed, empty owner behind before invoking arbitrary source or
+        // completion code. The one existing program/publisher move into this local
+        // attempt; no scene, runtime or retained history is cloned. If unwinding
+        // escapes, ordinary stack cleanup releases the attempt and its undelivered
+        // output. A caller that catches the panic cannot resume partial source work
+        // or take a terminal batch staged before a panicking continuation destructor.
+        let mut attempt = Self {
+            program: self.program.take(),
+            publisher: self.publisher.take(),
+            boundary: self.boundary,
+            published_until: self.published_until,
+            pending: None,
+            phase: PreparedSourceStatus::Ready,
+        };
+        self.phase = PreparedSourceStatus::Failed;
+        attempt.prepare_one()?;
+        *self = attempt;
         Ok(self.status())
     }
 

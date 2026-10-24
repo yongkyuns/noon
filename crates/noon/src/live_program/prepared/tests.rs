@@ -466,3 +466,6 @@ fn cooperative_source_demand_keeps_zero_bootstrap_cooperative_and_cancel_termina
     assert_eq!(reader.frontier(), 1.0);
     assert_eq!(reader.end_time(), None);
 }
+
+#[cfg(all(panic = "unwind", not(target_arch = "wasm32")))]
+mod unwind;
