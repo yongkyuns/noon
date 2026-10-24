@@ -1,0 +1,135 @@
+name: Diagnostic interpreter worker bridge
+on:
+  push:
+    branches: [diagnostic/noon-interpreter-worker-20261024]
+permissions:
+  contents: write
+concurrency:
+  group: diagnostic-interpreter-worker
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Apply exact-base candidate after checksum validation
+        run: |
+          python3 - <<'PYCODE'
+          import base64, gzip, hashlib, pathlib, subprocess
+          text=pathlib.Path('.github/diagnostics/interpreter-worker.b64').read_text()
+          # Correct one verified transcription omission, then authenticate the
+          # complete original patch bytes before decoding or executing them.
+          text=text.replace('qWOTHVel','qWwOTHVel')
+          data=base64.b64decode(text,validate=True)
+          assert hashlib.sha256(data).hexdigest() == 'fe69b3b6be65f42611376e7cff98c38bf6655ba8b7797350b358f0be995849f3'
+          patch=gzip.decompress(data)
+          subprocess.run(['git','reset','--hard','1cba0c3ed8e9e17f7007c542baa84a933c7c0a61'],check=True)
+          subprocess.run(['git','apply','--index','-'],input=patch,check=True)
+          pathlib.Path('evidence').mkdir()
+          pathlib.Path('evidence/product-base.txt').write_text('1cba0c3ed8e9e17f7007c542baa84a933c7c0a61\n')
+          PYCODE
+      - name: Install pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and retain candidate identity
+        run: |
+          cargo fmt --all
+          git diff --check HEAD
+          rustc --version --verbose > evidence/rustc.txt
+          python3 - <<'PYCODE'
+          import subprocess,pathlib,json,hashlib,tarfile
+          paths=subprocess.check_output(['git','diff','--name-only','HEAD']).decode().splitlines()
+          assert len(paths)==12,paths
+          pathlib.Path('evidence/paths.json').write_text(json.dumps(paths))
+          pathlib.Path('evidence/candidate.patch').write_bytes(subprocess.check_output(['git','diff','--binary','HEAD']))
+          hashes={}
+          with tarfile.open('evidence/candidate-files.tar.gz','w:gz') as archive:
+              for name in paths:
+                  data=pathlib.Path(name).read_bytes()
+                  hashes[name]=hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+                  archive.add(name,arcname=name)
+          pathlib.Path('evidence/file-hashes.json').write_text(json.dumps(hashes,indent=2))
+          PYCODE
+      - name: Canonical source delivery and existing worker regressions
+        run: |
+          set -o pipefail
+          cargo test --locked -p noon-web --all-features --lib interpreter_worker 2>&1 | tee evidence/source-tests.log
+          cargo test --locked -p noon-web --all-features --lib 2>&1 | tee evidence/web-tests.log
+          cargo test --locked -p noon-web --no-default-features --features prepared-prefix --lib interpreter_worker 2>&1 | tee evidence/no-renderer-tests.log
+          cargo check --locked -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee evidence/no-renderer-wasm.log
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build public WASM and ordinary worker package
+        run: |
+          set -o pipefail
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked 2>&1 | tee evidence/wasm-build.log
+          node scripts/build-python-worker.mjs 2>&1 | tee evidence/worker-build.log
+          node scripts/build-runtime-identity.mjs 2>&1 | tee evidence/identity-build.log
+          node scripts/check-web-package.mjs 2>&1 | tee evidence/package-check.log
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Actual Python source to actual render worker and prior browser proofs
+        run: |
+          set -o pipefail
+          NOON_PREPARED_WORKER_SOURCE=python NOON_PREPARED_WORKER_ARTIFACTS=evidence/python-worker node scripts/prepared-worker-qualification.mjs 2>&1 | tee evidence/python-worker.log
+          NOON_PREPARED_WORKER_ARTIFACTS=evidence/rust-worker node scripts/prepared-worker-qualification.mjs 2>&1 | tee evidence/rust-worker.log
+          node scripts/worker-inspection-qualification.mjs 2>&1 | tee evidence/inspection.log
+          NOON_PREPARED_CONSTRUCT_ARTIFACTS=evidence/construct node scripts/prepared-construct-qualification.mjs 2>&1 | tee evidence/construct.log
+          NOON_PREPARED_PYTHON_ARTIFACTS=evidence/python node scripts/prepared-python-qualification.mjs 2>&1 | tee evidence/python.log
+      - name: Repository fast gate and workflow tests
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast HEAD 2>&1 | tee evidence/fast-gate.log
+          node --test .github/ci/*.test.mjs 2>&1 | tee evidence/ci-topology.log
+      - name: Store validated file blobs without moving product refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYCODE'
+          import os,json,pathlib,hashlib,urllib.request
+          hashes=json.loads(pathlib.Path('evidence/file-hashes.json').read_text())
+          blobs=[]
+          for name,expected in hashes.items():
+              data=pathlib.Path(name).read_bytes()
+              assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()==expected
+              req=urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/git/blobs',data=json.dumps({'content':data.decode(),'encoding':'utf-8'}).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req) as response: result=json.load(response)
+              assert result['sha']==expected
+              blobs.append({'path':name,'mode':'100644','type':'blob','sha':expected})
+          pathlib.Path('evidence/blobs.json').write_text(json.dumps(blobs,indent=2))
+          PYCODE
+      - name: Preserve all evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: interpreter-worker-qualification
+          path: evidence
+          if-no-files-found: error
+          retention-days: 3
