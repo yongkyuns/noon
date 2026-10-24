@@ -1624,6 +1624,19 @@ mod wasm {
             Ok(stats)
         }
 
+        /// Read-only demand for a host-owned interpreter whose completed batch
+        /// has already been adopted here. Hosts never reconstruct authored time
+        /// from debug snapshots; a completed reader never requests more source.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn prepared_source_needs_work(&self, lookahead_seconds: f64) -> Result<bool, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            playback
+                .needs_preparation(lookahead_seconds)
+                .map_err(js_message)
+        }
+
         /// Prepare at most one ordinary source continuation and deliver its batch.
         /// The source stays outside the canvas. Borrowed admission retains a
         /// rejected suffix for retry and prevents invoking the continuation twice.

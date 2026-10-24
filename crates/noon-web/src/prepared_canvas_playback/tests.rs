@@ -238,3 +238,44 @@ fn prepared_canvas_demand_is_reader_local_validated_and_read_only() {
     playback.seek(0.25).unwrap();
     assert_eq!(playback.preparation_target(1.0).unwrap(), 1.25);
 }
+
+#[test]
+fn prepared_canvas_interpreter_demand_sleeps_refills_and_ignores_rewind_history() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.set_playing(false);
+    playback.reader.take_renderer_publication();
+    let before = playback.reader.frame().clone();
+    let publication = playback.reader.publication_context();
+    assert!(!playback.needs_preparation(0.5).unwrap());
+    assert!(playback.needs_preparation(1.0).unwrap());
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(playback.needs_preparation(invalid).is_err());
+    }
+    assert_eq!(playback.reader.frame(), &before);
+    assert_eq!(playback.reader.publication_context(), publication);
+    assert!(!playback.reader.wake_state().frame_pending());
+    playback
+        .append(next(&mut source, &mut publisher, false))
+        .unwrap();
+    assert!(!playback.needs_preparation(1.0).unwrap());
+    playback.seek(0.25).unwrap();
+    assert!(!playback.needs_preparation(1.0).unwrap());
+    playback.seek(1.5).unwrap();
+    assert!(playback.needs_preparation(1.0).unwrap());
+}
+
+#[test]
+fn prepared_canvas_interpreter_demand_refills_open_wait_but_not_a_terminal_reader() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    assert!(!playback.needs_preparation(0.125).unwrap());
+    playback.advance(1.0).unwrap();
+    assert!(playback.buffering());
+    assert!(playback.needs_preparation(0.125).unwrap());
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    assert!(!playback.needs_preparation(100.0).unwrap());
+    playback.seek(0.25).unwrap();
+    assert!(!playback.needs_preparation(100.0).unwrap());
+    assert!(playback.needs_preparation(f64::NAN).is_err());
+}

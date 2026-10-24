@@ -766,8 +766,21 @@ prefix. Explicit source sealing remains distinct from finishing an individual
 segment. Host orchestration must retain/deliver each extracted batch, yield interpreter
 work and stop on errors; this bridge provides no retry, source scheduler or new wire
 format. A frame/debug observation is never fed back as engine authority.
-Automatic scheduling of the Python interpreter, hard byte budgets, preemption of
-heavy source work and restart/recovery policy remain separate qualifications.
+An opt-in interpreter suspension driver may hold the existing canonical Python
+continuation after its segment has been completed and adopted. A typed Rust canvas
+query decides whether to resume source under the same look-ahead/open-frontier
+policy; JavaScript receives a boolean, not an authored cursor or history payload.
+One macrotask yields between continuation releases. Satisfied demand keeps no
+scheduled preparation task. The driver is single-use, rejects overlapping barriers
+and latches failure/cancellation even when source catches the rejected await. It
+reuses the existing complete control event and never automatically retries user
+statements. Asynchronous host bootstrap/cleanup must observe its abort signal
+before publishing after a wait; neither arbitrary Python execution nor such host
+work is preempted. The admitted ordinary construct path uses the existing portable
+source compiler, with no second rewrite or source-language engine. This same-context
+host integration remains opt-in and does not change the production worker topology.
+Production Python/worker adoption, hard byte budgets, preemption of heavy source
+work and restart/recovery policy remain separate qualifications.
 
 The reader distinguishes monotonic forward playback from an explicit seek.
 Direct, typed presentation effects use the existing Runtime's bounded Indicate

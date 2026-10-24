@@ -33,6 +33,12 @@ impl PreparedCanvasPlayback {
         }
         Ok(target)
     }
+    /// Interpreter continuations use the same reader-local demand as the typed
+    /// Rust producer. This is permission to resume source, not a guessed endpoint.
+    pub(crate) fn needs_preparation(&self, ahead: f64) -> Result<bool, &'static str> {
+        let target = self.preparation_target(ahead)?;
+        Ok(self.reader.end_time().is_none() && (self.buffering || self.reader.frontier() < target))
+    }
     pub(crate) fn set_playing(&mut self, playing: bool) -> bool {
         let changed = self.playing != playing;
         self.playing = playing;

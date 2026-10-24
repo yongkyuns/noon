@@ -315,6 +315,17 @@ impl InterpreterCanvasFixture {
         WasmExecutionCanvasRenderer::create_from_prepared_prefix(canvas, reader).await
     }
 
+    /// Qualification projects only a Rust demand decision, never scene time or
+    /// history data for JavaScript to reinterpret as scheduling authority.
+    #[wasm_bindgen(js_name = needsPreparation)]
+    pub fn needs_preparation(
+        &self,
+        canvas: &WasmExecutionCanvasRenderer,
+        lookahead_seconds: f64,
+    ) -> Result<bool, JsValue> {
+        canvas.prepared_source_needs_work(lookahead_seconds)
+    }
+
     /// Test delivery uses the same caller-owned typed batch as a future host.
     /// The fixture intentionally targets only its own correctly paired reader.
     #[wasm_bindgen(js_name = publishCompleted)]
