@@ -22,5 +22,9 @@ winit = "0.30.13"
 name = "background_audio"
 required-features = ["audio"]
 
+[[example]]
+name = "background_music_lesson"
+required-features = ["audio"]
+
 [dev-dependencies]
 wgpu = { version = "30.0.1", default-features = false, features = ["noop"] }

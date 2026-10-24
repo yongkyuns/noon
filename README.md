@@ -188,7 +188,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
 | Coordinate plotting | [coordinate_plotting.rs](crates/noon-native/examples/coordinate_plotting.rs) | [coordinate_plotting.py](web/python/examples/coordinate_plotting.py) |
 | Retained images | [raster_image.rs](crates/noon-native/examples/raster_image.rs) | [raster_image.py](web/python/examples/raster_image.py) |
-| Finite background music | [background_audio.rs](crates/noon-native/examples/background_audio.rs) | [background_music_lesson.py](web/python/examples/background_music_lesson.py) |
+| Finite background music | [background_music_lesson.rs](crates/noon-native/examples/background_music_lesson.rs) | [background_music_lesson.py](web/python/examples/background_music_lesson.py) |
 
 The complete qualification corpus lives under [`crates/noon-native/examples`](crates/noon-native/examples) and [`web/python/examples`](web/python/examples).
 
@@ -210,6 +210,13 @@ three authored sections as the direct Rust/WASM background-music example:
 
 ```bash
 cargo run -p noon-native --features audio --example background_audio
+```
+
+The paired Python lesson also has a native entry point. Both versions use the
+same shared Rust lesson, scalar bindings, sections and music:
+
+```bash
+cargo run -p noon-native --features audio --example background_music_lesson
 ```
 
 Preparation stays silent; playback starts after the first native picture is ready.
