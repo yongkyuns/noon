@@ -1,3 +1,5 @@
+mod publication;
+
 use crate::retained_resource_transport::residency::{ResourceResidency, StagedResourceResidency};
 use noon_core::{
     Camera2DState, FontResourceLookup, GeometryRef, GeometryResource, GeometryResourceLookup,

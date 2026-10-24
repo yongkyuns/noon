@@ -114,11 +114,12 @@ mod plot_error;
     any(debug_assertions, feature = "renderer-smoke")
 ))]
 mod pointer_selection_smoke;
-#[cfg(all(
-    feature = "prepared-prefix",
-    any(all(feature = "renderer", target_arch = "wasm32"), test)
-))]
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
 mod prepared_canvas_playback;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+mod prepared_execution_player;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+pub use prepared_execution_player::PreparedExecutionPlayer;
 #[cfg(all(
     feature = "renderer",
     target_arch = "wasm32",

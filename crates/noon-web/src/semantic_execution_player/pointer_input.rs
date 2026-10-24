@@ -1,18 +1,12 @@
 //! Genuine worker input envelope; the collection receipt is never refreshed here.
-use crate::browser_pointer_input::{BrowserPointerInput, BrowserPointerTarget};
-use crate::worker_pointer_presentation::WorkerPointerReceipt;
+#[cfg(test)]
+use crate::browser_pointer_input::BrowserPointerInput;
+use crate::browser_pointer_input::BrowserPointerTarget;
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::ExecutionSession;
 use noon_core::{NativePointerId, NativePointerInput, Vec2};
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct WorkerPointerInput {
-    pub input: BrowserPointerInput,
-    pub presentation: Option<WorkerPointerReceipt>,
-}
 
 /// Borrowed input adapter for one player-owned semantic store/session pair.
 /// It owns no pointer policy, target set, or source state: all occurrences

@@ -57,6 +57,15 @@ impl WorkerPointerReceipt {
     }
 }
 
+/// Shared collection-time pointer envelope for the existing worker control port.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerPointerInput {
+    pub(crate) input: crate::browser_pointer_input::BrowserPointerInput,
+    pub(crate) presentation: Option<WorkerPointerReceipt>,
+}
+
 /// One normalized view-navigation occurrence at the genuine worker boundary.
 /// The receipt is captured when the DOM event arrives, never at delivery time.
 #[cfg(any(target_arch = "wasm32", test))]

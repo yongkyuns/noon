@@ -782,6 +782,20 @@ host integration remains opt-in and does not change the production worker topolo
 Production Python/worker adoption, hard byte budgets, preemption of heavy source
 work and restart/recovery policy remain separate qualifications.
 
+At the genuine execution-to-render-worker boundary, an opt-in prepared player
+may own the independent reader in the producing execution context. It encodes
+only that reader's selected RendererPublication with the existing retained
+codec, resource residency and input presentation receipts. The rendering worker
+remains a derived GPU/presentation consumer; prefix batches and the source
+runtime do not become a second cross-context history protocol. Initial resource
+bootstrap is empty and selected immutable closures accompany the initial delta.
+Future append alone sends no render publication. A drained delta is owned by the
+host for ordered, backpressured delivery; neither consumption nor extraction
+acknowledges display. Rebootstrapping that stream with an incomplete inventory is
+rejected. Full worker restart/rehydration and production interpreter-worker
+adoption still require their own lifecycle qualification. Single-context/native
+hosts continue to borrow publications directly without this transport.
+
 The reader distinguishes monotonic forward playback from an explicit seek.
 Direct, typed presentation effects use the existing Runtime's bounded Indicate
 admission against the displayed historical target, not the producer's current
