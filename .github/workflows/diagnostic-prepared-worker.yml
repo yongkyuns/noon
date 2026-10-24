@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          fetch-depth: 3
       - name: Apply checksum-verified candidate on exact product base
         run: |
           python3 - <<'PY'
@@ -32,6 +32,12 @@ jobs:
           patch = gzip.decompress(data)
           subprocess.run(['git','reset','--hard','2293f031ef8801b782e802507d84a1fb22506943'],check=True)
           subprocess.run(['git','apply','--index','-'],input=patch,check=True)
+          report_path = pathlib.Path('scripts/prepared-worker-qualification.mjs')
+          report_source = report_path.read_text()
+          old = 'JSON.stringify(report,null,2)'
+          new = 'JSON.stringify(report, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2)'
+          assert report_source.count(old) == 2
+          report_path.write_text(report_source.replace(old,new))
           pathlib.Path('evidence').mkdir()
           pathlib.Path('evidence/product-base.txt').write_text('2293f031ef8801b782e802507d84a1fb22506943\n')
           PY
