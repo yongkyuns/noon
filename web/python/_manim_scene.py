@@ -2807,16 +2807,21 @@ def _build_canonical_composition_candidate(
                 raise NotImplementedError("unsupported canonical Transform options")
             source_handle = getattr(source, "_semantic_handle")
             target_handle = getattr(target, "_semantic_handle")
-            # Resource-backed text has no vector point correspondence. Its
-            # transform uses the same Rust affine channels as native Text.
+            # Rust classifies current retained content, including images and
+            # generic wrappers after content replacement. Such content keeps
+            # the same affine channels as native authoring; only vector method
+            # targets request point correspondence. Do not infer this from the
+            # Python wrapper class or relax explicit compiler admission.
             point_correspondence = (
-                not isinstance(source, _typst._RetainedTextMobject)
-                and type(leaf) is _animate._AlignedAnimationBuilder
+                type(leaf) is _animate._AlignedAnimationBuilder
                 and not math.isclose(
                     float(source_handle.rotation),
                     float(target_handle.rotation),
                     abs_tol=1e-12,
                 )
+                and not bool(_semantic_handles._point_query_observation(
+                    source, "RequiresContentBoundary"
+                ))
             )
             if type(leaf) is _animate._AlignedAnimationBuilder:
                 entering_id = str(reserve(source).object.id) if source._scene is None else None
