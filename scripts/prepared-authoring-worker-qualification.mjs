@@ -64,6 +64,7 @@ async function start(page, source, transportMode, cancelBeforeAttach = false) {
   await page.evaluate(async ({ source, transportMode, cancelBeforeAttach }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+    const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
     const worker = new Worker("./python-worker.js", { type: "module" });
     const host = { events: [], errors: [], registration: null, outcome: null, attached: false };
     globalThis.preparedAuthoring = host;
@@ -93,6 +94,13 @@ async function start(page, source, transportMode, cancelBeforeAttach = false) {
           authoringClient: host.authoring, transportMode, initiallyPaused: true,
           loopDurationSeconds: Math.max(1, registration.duration),
         });
+        const preview = document.createElement("section");
+        preview.id = "prepared-controls";
+        document.body.append(preview);
+        host.controls = new PlaygroundPlaybackControls(host.execution, preview, {
+          onError: error => host.errors.push(String(error)),
+        });
+        host.controls.observe(await host.execution.state());
         host.attached = true;
       },
     });
@@ -111,7 +119,11 @@ try {
       const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
       page.setDefaultTimeout(180_000); await cache.install(page.context());
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
-      const state = () => page.evaluate(async () => ({ ...(await preparedAuthoring.execution.state()), events: preparedAuthoring.events, outcome: preparedAuthoring.outcome, errors: preparedAuthoring.errors }));
+      const state = () => page.evaluate(async () => {
+        const state = await preparedAuthoring.execution.state();
+        preparedAuthoring.controls?.observe(state);
+        return { ...state, events: preparedAuthoring.events, outcome: preparedAuthoring.outcome, errors: preparedAuthoring.errors };
+      });
       const metrics = () => page.evaluate(async () => (await preparedAuthoring.execution.metrics()).metrics);
       const capture = async name => {
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -150,7 +162,21 @@ try {
         assert.deepEqual((await state()).events, ["start"]);
         entry.checks.push("real-production-workers", "initially-paused-lookahead", "satisfied-demand-sleeps");
 
-        await page.evaluate(() => preparedAuthoring.execution.seek(0.5));
+        const seekInput = page.locator(".playback-prepared-seek");
+        assert.equal(await seekInput.isVisible(), true);
+        assert.equal(await seekInput.isEnabled(), true);
+        assert.equal(await page.locator(".playback-scrubber").isVisible(), false);
+        assert.equal(await page.locator(".playback-time").textContent(), "0.00 / — s");
+        await seekInput.fill("1");
+        await seekInput.press("Tab");
+        assert.match(await page.locator(".playback-live-status").textContent(), /before 1 s/);
+        const atOpenBoundary = await state();
+        assert.equal(atOpenBoundary.time, 0);
+        assert.deepEqual(atOpenBoundary.events, ["start"]);
+        assert.deepEqual(atOpenBoundary.errors, []);
+        entry.checks.push("shared-controls-open-history", "controls-refuse-open-boundary");
+        await seekInput.fill("0.5");
+        await seekInput.press("Tab");
         await waitState(s => s.preparedFrontier === 2 && s.events.length === 2);
         const baseline = await capture("historical");
         assert.equal((await state()).time, 0.5); assert.deepEqual((await state()).events, ["start", "first"]);
@@ -175,18 +201,27 @@ try {
         assert.equal(rejected.after.preparedFrontier, rejected.before.preparedFrontier);
         entry.checks.push("unavailable-seek-is-atomic");
 
-        await page.evaluate(() => preparedAuthoring.execution.resume());
+        await page.getByRole("button", { name: "Play animation", exact: true }).click();
         await page.waitForFunction(() => preparedAuthoring.outcome !== null, null, { timeout: 30_000 });
         const finished = await state();
         assert.equal(finished.outcome.status, "finished", JSON.stringify(finished.outcome));
         assert.equal(finished.outcome.result.duration, 4); assert.equal(finished.durationSeconds, 4);
         assert.equal(finished.outcome.result.semanticExecution.preparedPlayback, true);
         assert.deepEqual(finished.events, ["start", "first", "moved", 0, 1, 2, 3, 4, 5, 6, 7, "end"]);
-        await page.evaluate(async () => { await preparedAuthoring.execution.pause(); await preparedAuthoring.execution.seek(4); });
+        assert.equal(await seekInput.isVisible(), false);
+        const slider = page.locator(".playback-scrubber");
+        assert.equal(await slider.isVisible(), true);
+        assert.equal(await slider.getAttribute("max"), "4");
+        await page.getByRole("button", { name: "Pause animation", exact: true }).click();
+        await page.waitForFunction(() => preparedAuthoring.controls.element.dataset.busy === "false");
+        await slider.fill("4");
+        await waitState(s => s.time === 4 && s.playing === false);
         assert.equal((await state()).time, 4);
         assert.ok(changedPixels(baseline, await capture("terminal")) > 100);
-        await page.evaluate(() => preparedAuthoring.execution.seek(0.5));
+        await slider.fill("0.5");
+        await waitState(s => s.time === 0.5 && s.playing === false);
         assert.equal(changedPixels(baseline, await capture("rewind")), 0);
+        entry.checks.push("controls-terminal-slider-and-rewind");
         const recovery = await page.evaluate(async () => {
           try { await preparedAuthoring.execution.restart(); return null; } catch (error) { return String(error); }
         });
@@ -227,8 +262,14 @@ try {
       if (mode === "source-error") {
         const status = await page.evaluate(() => preparedAuthoring.execution.state());
         assert.equal(status.durationSeconds, null); assert.equal(status.preparedFrontier, 1);
-        await page.evaluate(() => preparedAuthoring.execution.seek(0.25));
-        assert.equal((await page.evaluate(() => preparedAuthoring.execution.state())).time, 0.25);
+        await page.evaluate(state => preparedAuthoring.controls.observe(state), status);
+        assert.equal(await page.locator(".playback-scrubber").isVisible(), false);
+        const seekInput = page.locator(".playback-prepared-seek");
+        assert.equal(await seekInput.isEnabled(), true);
+        await seekInput.fill("0.25");
+        await seekInput.press("Tab");
+        await page.waitForFunction(async () => (await preparedAuthoring.execution.state()).time === 0.25);
+        entry.checks.push("controls-retain-partial-history-after-source-error");
       }
       const reused = await page.evaluate(async () => {
         const result = await preparedAuthoring.authoring.run("from noon import *\nclass NextSource(Scene):\n    def construct(self):\n        self.add(Circle())\n");
