@@ -67,6 +67,9 @@ fn runtime_profile(
             .capture_image_from_arena(&images, noon_core::SemanticImageContent::new(handle))
             .unwrap();
         objects[1].content = ObjectContentRef::Image(content);
+        // The shared circle fixture inherits a nonzero default stroke width.
+        // Images require the ordinary stroke-free image presentation profile.
+        objects[1].base_style.stroke_width = 0.0;
         objects[1].base_style.opacity = 0.55;
         objects[1].base_style.fill = Some(Color {
             alpha: 0.43,
