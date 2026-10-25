@@ -38,12 +38,13 @@ function fixture({ preparedPlayback = true, continuationGeneration = 1,
     terminate() { calls.push(["terminate", this]); },
   };
   const preparation = { candidate, ready: preparationGate.promise, startedAtMs: 1, readyAtMs: 2 };
-  const env = { calls, token, currentToken: token, preparation, controlsError: null };
+  const env = { calls, token, currentToken: token, preparation, controlsError: null, now: 0 };
   const api = new Function("env", `
     let player = null, preparedPlaybackPlayer = null, playbackControls = null;
     let runtimePreparation = env.preparation, runtimeStartPromise = null;
     let playerNeedsRestart = true, rendererBackend = "";
     const status = { dataset: {} }, patchStatus = { dataset: {} };
+    const performance = { now: () => env.now };
     const isCurrentRun = token => token === env.currentToken;
     const ensureRuntimePreparation = () => runtimePreparation;
     const setRuntimeStatus = (...args) => env.calls.push(["status", ...args]);
@@ -223,3 +224,96 @@ test("concurrent attachment callers join one startup and an attached player is n
   assert.equal(await f.attach(f.options), null);
   assert.equal(f.count("start"), 1);
 });
+
+for (const preparedPlayback of [true, false]) {
+  const profile = preparedPlayback ? "prepared" : "source-owned";
+
+  test(`${profile} startup records actual preparation and engine intervals at their respective barriers`, async () => {
+    const f = fixture({ preparedPlayback });
+    const metrics = { sourceRunStartedAtMs: 0.5 };
+    f.options.runPhaseMetrics = metrics;
+    const task = f.attach(f.options);
+    assert.deepEqual(metrics, { sourceRunStartedAtMs: 0.5 });
+    assert.equal(f.count("start"), 0);
+    f.env.now = 11;
+    f.preparationGate.resolve();
+    await until(() => f.count("start") === 1);
+    assert.deepEqual(metrics, {
+      sourceRunStartedAtMs: 0.5,
+      renderPreparation: { startedAtMs: 1, readyAtMs: 2 },
+      initialEngineStartStartedAtMs: 11,
+    });
+    assert.equal(f.inspect().player, null);
+    f.env.now = 29;
+    f.startGate.resolve({ render: { backend: "WebGL2" } });
+    await until(() => f.count("state") === 1);
+    assert.equal(metrics.initialEngineStartCompletedAtMs, 29);
+    assert.equal(f.inspect().player, null);
+    f.env.now = 47;
+    f.stateGate.resolve(f.initialState);
+    await task;
+    assert.deepEqual(metrics, {
+      sourceRunStartedAtMs: 0.5,
+      renderPreparation: { startedAtMs: 1, readyAtMs: 2 },
+      initialEngineStartStartedAtMs: 11,
+      initialEngineStartCompletedAtMs: 29,
+    });
+    assert.equal(f.inspect().player, f.candidate);
+  });
+
+  test(`${profile} supersession before preparation settles cannot record startup timings`, async () => {
+    const f = fixture({ preparedPlayback });
+    const metrics = { sourceRunStartedAtMs: 0.5 };
+    f.options.runPhaseMetrics = metrics;
+    const task = f.attach(f.options);
+    const rejected = assert.rejects(task, /superseded source run/);
+    f.supersede();
+    f.env.now = 11;
+    f.resolveAll();
+    await rejected;
+    assert.deepEqual(metrics, { sourceRunStartedAtMs: 0.5 });
+    assert.equal(f.count("start"), 0);
+    assert.equal(f.count("status"), 0);
+    assert.equal(f.count("controls"), 0);
+    assert.equal(f.count("terminate"), 1);
+    assert.equal(f.count("adopt"), 0);
+  });
+
+  test(`${profile} failed preparation has no invented readiness or engine timing`, async () => {
+    const f = fixture({ preparedPlayback });
+    const metrics = {};
+    f.options.runPhaseMetrics = metrics;
+    const failure = new Error("preparation failed");
+    const task = f.attach(f.options);
+    const rejected = assert.rejects(task, error => error === failure);
+    f.preparationGate.reject(failure);
+    await rejected;
+    assert.deepEqual(metrics, {});
+    assert.equal(f.count("start"), 0);
+    assert.equal(f.count("terminate"), 1);
+  });
+
+  test(`${profile} failed engine attachment retains its measured interval and original error`, async () => {
+    const f = fixture({ preparedPlayback });
+    const metrics = {};
+    f.options.runPhaseMetrics = metrics;
+    const failure = new Error("engine attachment failed");
+    const task = f.attach(f.options);
+    const rejected = assert.rejects(task, error => error === failure);
+    f.env.now = 11;
+    f.preparationGate.resolve();
+    await until(() => f.count("start") === 1);
+    f.env.now = 29;
+    f.startGate.reject(failure);
+    await rejected;
+    assert.deepEqual(metrics, {
+      renderPreparation: { startedAtMs: 1, readyAtMs: 2 },
+      initialEngineStartStartedAtMs: 11,
+      initialEngineStartCompletedAtMs: 29,
+    });
+    assert.equal(f.count("state"), 0);
+    assert.equal(f.count("controls"), 0);
+    assert.equal(f.count("terminate"), 1);
+    assert.equal(f.inspect().player, null);
+  });
+}
