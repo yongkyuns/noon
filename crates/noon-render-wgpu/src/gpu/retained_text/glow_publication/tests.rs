@@ -342,6 +342,162 @@ fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
 }
 
 #[test]
+fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
+    let mut fixture = Fixture::new();
+    let mut runtime = runtime(4096, true, false);
+    let persistent = runtime.frame().objects[1].id;
+    let temporary = runtime.frame().objects[2].id;
+    let temporary_attachment = SemanticNodeId::new(32, 5);
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            object: temporary,
+            expected: None,
+            glow: Some(Arc::new(CompiledGlow {
+                attachment: temporary_attachment,
+                definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0))).unwrap(),
+            })),
+        })
+        .unwrap();
+    let warm = fixture.prepare(&mut runtime, true);
+    assert_eq!((warm.sources_prepared, warm.source_passes), (2, 2));
+    assert_eq!(fixture.renderer.retained_glow.packed.len(), 2);
+
+    let mut transform = runtime.frame().objects[1].transform;
+    transform.translation = Vec2::new(-4.1, 0.4);
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetTransform {
+            object: persistent,
+            transform,
+        })
+        .unwrap();
+    let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
+    glow.definition = GlowUpdate::default()
+        .radius(Pixels(4.0))
+        .apply_to(glow.definition)
+        .unwrap();
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetGlow {
+            object: persistent,
+            glow: Arc::new(glow),
+        })
+        .unwrap();
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            object: temporary,
+            expected: Some(temporary_attachment),
+            glow: None,
+        })
+        .unwrap();
+
+    for (step, time) in [1.6, 2.0, 2.125].into_iter().enumerate() {
+        runtime.advance_to(time).unwrap();
+        let publication = runtime.take_renderer_publication();
+        assert!(!publication.changes().is_all());
+        assert_eq!(
+            publication.changes().object_indices(),
+            if step == 0 { &[1, 2][..] } else { &[] }
+        );
+        let visible = publication
+            .painter_order()
+            .iter()
+            .map(|&index| index as usize)
+            .filter(|&index| index != 1)
+            .collect::<Vec<_>>();
+        let expanded = fixture
+            .renderer
+            .glow_source_visibility(&publication, &visible)
+            .unwrap();
+        let prepared = fixture
+            .preparer
+            .prepare_planned_publication_visible(
+                &fixture.device,
+                &publication,
+                expanded,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .unwrap();
+        fixture.renderer.upload_retained(
+            &fixture.device,
+            &fixture.queue,
+            &prepared,
+            &mut fixture.text,
+        );
+        assert_eq!(fixture.renderer.retained_glow.dirty, BTreeSet::from([1, 2]));
+        assert_eq!(fixture.renderer.retained_glow.sources.len(), 1);
+        if step < 2 {
+            // Endpoint drains retain publication dirtiness and ordinary GPU
+            // geometry without recording an obsolete capture/filter workload.
+            assert_eq!(fixture.renderer.retained_glow.packed.len(), 2);
+            continue;
+        }
+
+        let mut encoder = fixture.device.create_command_encoder(&Default::default());
+        let presented = fixture
+            .renderer
+            .prepare_retained_analytic_glows(
+                &fixture.device,
+                &fixture.queue,
+                &mut encoder,
+                &prepared,
+                &fixture.text,
+                &publication,
+                1_000_000,
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                presented.rows_examined,
+                presented.sources_prepared,
+                presented.source_passes,
+                presented.blur_passes,
+                presented.composite_passes,
+            ),
+            (2, 1, 1, 2, 1)
+        );
+        assert_eq!(
+            prepared.geometry.observe_object(1).unwrap().transform,
+            transform.into()
+        );
+        let target = fixture.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("retained endpoint glow regression"),
+            size: wgpu::Extent3d {
+                width: 80,
+                height: 60,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        // Encoding checks that the retained effect captured the exact latest
+        // source instance, including the pose changed in the drained endpoint.
+        fixture
+            .renderer
+            .encode_retained(
+                &mut encoder,
+                &target.create_view(&Default::default()),
+                &prepared,
+                &fixture.text,
+                wgpu::Color::TRANSPARENT,
+                None,
+            )
+            .unwrap();
+        fixture.queue.submit([encoder.finish()]);
+        assert_eq!(fixture.renderer.retained_glow.packed.len(), 1);
+        assert!(fixture.renderer.retained_glow.packed.contains_key(&1));
+        assert!(fixture.renderer.retained_glow.dirty.is_empty());
+    }
+    // Retiring the only remaining binding must release every scope: the
+    // temporary attachment removed during the endpoint drain cannot leak.
+    let packed = fixture.renderer.retained_glow.packed[&1].1;
+    fixture.renderer.remove_analytic_glow(packed);
+    assert_eq!(fixture.renderer.analytic_glow_texture_bytes(), 0);
+}
+
+#[test]
 fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
     let mut fixture = Fixture::new();
     let mut runtime = runtime(3, true, false);
