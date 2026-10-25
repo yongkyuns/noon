@@ -2,6 +2,8 @@ use super::*;
 use noon::{AnimationOptions, IndicateOptions, Mobject, RateFunction};
 use noon_core::{HostCallbackId, ObjectId, Vec2};
 
+mod worker;
+
 fn fixture() -> (CanonicalAuthoringScene, Mobject) {
     let mut context = CanonicalAuthoringScene::default();
     let mut target = context.scene.circle(0.5).unwrap();

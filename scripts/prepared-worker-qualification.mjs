@@ -2,18 +2,29 @@
 // Source/history remain typed in the producing WASM context. Only the existing
 // retained renderer wire protocol crosses the MessagePort/shared mailbox.
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { PYTHON_COMPAT_MODULES } from "../web/python-compat-modules.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = process.env.NOON_PREPARED_WORKER_ARTIFACTS ?? path.join(root, "browser-smoke-artifacts/prepared-worker");
+const sourceKind = process.env.NOON_PREPARED_WORKER_SOURCE ?? "rust";
+assert.ok(["rust", "python"].includes(sourceKind), "unknown prepared-worker source");
+const workerSource = sourceKind === "python" ? await readFile(path.join(root, "web/python-worker.source.js"), "utf8") : null;
+const pyodideUrl = workerSource?.match(/import \{ loadPyodide \} from "([^"]+)";/)?.[1];
+if (sourceKind === "python") assert.ok(pyodideUrl, "use the product's pinned interpreter");
+const modules = sourceKind === "python" ? await Promise.all(PYTHON_COMPAT_MODULES.map(async ({sourcePath, runtimePath}) => ({
+  runtimePath, source: await readFile(path.join(root, "web", sourcePath), "utf8"),
+}))) : [];
+const cache = workerSource ? createPyodideResourceCache(workerSource) : null;
+const out = process.env.NOON_PREPARED_WORKER_ARTIFACTS ?? path.join(root, `browser-smoke-artifacts/prepared-worker${sourceKind === "python" ? "/python" : ""}`);
 await mkdir(out, { recursive: true });
-const report = { status: "running", scope: "prepared reader to production render worker, explicit source/tick fixture, not automatic Python worker adoption", cases: [] };
+const report = { status: "running", sourceKind, scope: "prepared reader to production render worker, explicit source/tick fixture, not automatic Python worker adoption", cases: [] };
 let server, browser;
 function pixels(a, b) {
   assert.equal(a.width, b.width); assert.equal(a.height, b.height);
@@ -28,7 +39,8 @@ try {
     for (const mode of ["transferable", "shared"]) {
       const result = { backend, mode, status: "running", checks: [] }; report.cases.push(result);
       const page = await browser.newPage({ viewport: { width:900, height:600 } });
-      page.setDefaultTimeout(60_000);
+      page.setDefaultTimeout(sourceKind === "python" ? 180_000 : 60_000);
+      if (cache) await cache.install(page.context());
       const errors = []; page.on("pageerror", error => errors.push(String(error)));
       const capture = async name => {
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -43,13 +55,18 @@ try {
       const step = timestamp => page.evaluate(timestamp => preparedWorker.send(preparedWorker.player.tickDeltaJson(timestamp)), timestamp);
       try {
         await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
-        const ready = await page.evaluate(async mode => {
-          const { default:init, PreparedCanvasFixture } = await import("./pkg/noon_web.js");
-          await init();
+        const ready = await page.evaluate(async ({mode, sourceKind, modules, pyodideUrl}) => {
+          const wasm = await import("./pkg/noon_web.js");
+          await wasm.default();
           const { attachBrowserPointerInput } = await import("./browser-pointer-input.js");
           const { SharedExecutionDeltaWriter, TransferableExecutionDeltaSender, createSharedExecutionMailbox,
             executionDeltaMetadata } = await import("./execution-transport.js");
-          const source = new PreparedCanvasFixture(), player = source.createWorkerPlayer(710);
+          // Python mode uses the public canonical context factory, not a smoke
+          // fixture, a second scene representation or a serialized prefix.
+          const source = sourceKind === "python"
+            ? await (await import("../scripts/prepared-worker-python-source.mjs")).createPythonSource(wasm, modules, pyodideUrl)
+            : new wasm.PreparedCanvasFixture();
+          const player = source.createWorkerPlayer(710);
           player.setPreparedPlaying(false);
           const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
           player.setBrowserPointerViewJson(JSON.stringify({ revision:1, width:rect.width, height:rect.height }));
@@ -125,9 +142,10 @@ try {
               host.outcomes.push({kind:input.kind,admitted}); return admitted;
             }, onError:fail,
           });
-          await host.send(player.initialDeltaJson());
+          // Bootstrap resources first; the first selected snapshot may be a seek.
+          await host.send(sourceKind === "python" ? player.seekDeltaJson(0.5) : player.initialDeltaJson());
           return { isolated:crossOriginIsolated, metrics:await host.metrics(), receipt:host.receipt };
-        }, mode);
+        }, { mode, sourceKind, modules, pyodideUrl });
         assert.equal(ready.isolated, true);
         assert.ok(ready.receipt, "actual renderer must return a presented-frame receipt");
         const metrics = ready.metrics;

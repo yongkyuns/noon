@@ -8,6 +8,15 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
 }
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn validate_prepared_publisher(
+        &self,
+        publisher: &PrefixPublisher,
+    ) -> Result<(), AuthoringFailure> {
+        self.session
+            .validate_prepared_publisher(publisher)
+            .map_err(prefix_error)
+    }
+
     /// Complete the pending admitted segment without waiting for presentation.
     /// This does not resume source, publish a renderer delta or authorize input.
     /// A rejected source domain leaves its pending segment at the original time.

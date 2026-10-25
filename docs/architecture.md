@@ -782,6 +782,22 @@ host integration remains opt-in and does not change the production worker topolo
 Production Python/worker adoption, hard byte budgets, preemption of heavy source
 work and restart/recovery policy remain separate qualifications.
 
+The canonical interpreter context can construct that prepared worker host after
+its actual first segment completes, without leasing away its source runtime.
+The host may retain one source-bound publisher cursor and one undelivered suffix;
+these are delivery metadata, not another semantic scene or source evaluator.
+Source identity/scope and pending-output admission are checked before completing
+or sealing the source. Completion extracts at most one suffix; adoption is a
+separate typed Rust operation. Capacity rejection keeps the same suffix for
+explicit reservation and retry, never repeating Python or completion. Zero-duration
+completion invents no readable range. Only adopting an explicitly finished suffix
+exposes the exact endpoint. Cancellation drops unpublished delivery state without
+revoking earlier history; the caller still cancels/releases the interpreter.
+A failure after source completion begins closes that delivery binding rather than
+automatically retrying partially completed work. None of these operations is a
+presentation acknowledgment. Production authoring-worker scheduling, source-run
+retirement, and receiver rehydration still require combined lifecycle integration.
+
 At the genuine execution-to-render-worker boundary, an opt-in prepared player
 may own the independent reader in the producing execution context. It encodes
 only that reader's selected RendererPublication with the existing retained

@@ -14,6 +14,9 @@ use crate::{
 };
 use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
 
+mod source;
+use source::SourceDelivery;
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct PreparedExecutionPlayer {
     playback: PreparedCanvasPlayback,
@@ -24,6 +27,8 @@ pub struct PreparedExecutionPlayer {
     pointer: WorkerPointerPresentation,
     binding: Option<BrowserPointerBinding>,
     sequence: u64,
+    // Optional interpreter delivery cursor; never the source scene/runtime.
+    source: Option<SourceDelivery>,
 }
 
 impl PreparedExecutionPlayer {
@@ -40,6 +45,7 @@ impl PreparedExecutionPlayer {
             pointer: WorkerPointerPresentation::default(),
             binding: None,
             sequence: 0,
+            source: None,
         }
     }
 
