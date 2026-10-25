@@ -55,6 +55,11 @@ function fixture(
   const player = {
     sealReplay: () => {},
     freshFiniteSourceDuration: () => null,
+    finitePlaybackDuration: () => undefined,
+    sectionsJson: () => "[]",
+    pendingSceneControlJson: () => undefined,
+    takeSceneControl: () => undefined,
+    cancelSceneControl: () => {},
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     debugFrameJson: () => JSON.stringify({ time, source: "active" }),
     initialCallbackPhaseJson: () => null,
@@ -2929,7 +2934,7 @@ test("finite completion probes use the Rust target and await its matching presen
 test("finite audio prepares silently and anchors resume/seek only after matching presentation", async () => {
   const f = fixture();
   f.player.hasAudio = () => true;
-  f.player.finiteAudioDuration = () => 2;
+  f.player.finitePlaybackDuration = () => 2;
   f.player.sectionsJson = () => JSON.stringify([{ index: 0, name: "Opening", time: 0 }]);
   f.player.audioResourceBundleBytes = () => new Uint8Array([2, 3, 4]);
   f.player.audioAnchorJson = sampledEpochMs => JSON.stringify({
@@ -2966,6 +2971,181 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     assert.equal(sought.audioAnchor.time, 1.25);
     assert.equal(sought.audioAnchor.playing, true);
     assert.equal(f.stats().created, 1, "the original player remains sole execution owner");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+function sceneControlFixture(audio = true) {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let pending = null, nextAction = null, sequence = 0n, accepted = true;
+  const input = f.player.submitBrowserPointerInputJson;
+  f.player.submitBrowserPointerInputJson = json => {
+    input(json);
+    if (accepted && nextAction !== null) {
+      pending = { sequence: String(++sequence), action: nextAction };
+      nextAction = null;
+    }
+    return accepted;
+  };
+  f.player.pendingSceneControlJson = () => pending === null ? undefined : JSON.stringify(pending);
+  f.player.takeSceneControl = value => {
+    if (pending === null || value !== BigInt(pending.sequence)) return undefined;
+    const action = pending.action;
+    pending = null;
+    return action;
+  };
+  f.player.cancelSceneControl = () => { pending = null; };
+  f.player.finitePlaybackDuration = () => 2;
+  f.player.sectionsJson = () => JSON.stringify([
+    { index: 0, name: "Opening", time: 0 }, { index: 1, name: "Example", time: 1 },
+  ]);
+  f.player.seekSectionDeltaJson = previous => f.player.seekDeltaJson(previous ? 0 : 1);
+  if (audio) {
+    f.player.hasAudio = () => true;
+    f.player.audioResourceBundleBytes = () => new Uint8Array([2, 3]);
+    f.player.audioAnchorJson = sampledEpochMs => JSON.stringify({
+      session: 7, time: f.player.time(), playing: f.player.isPlaying(), sampledEpochMs,
+    });
+  }
+  return { ...f,
+    arm(action, admit = true) { nextAction = action; accepted = admit; },
+    pending: () => pending,
+    async attachPresented() {
+      const ready = next(f.control.port2);
+      const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      const endpoint = await f.attach();
+      await ready;
+      present(f.render.port2, await initial);
+      await turn();
+      return endpoint;
+    },
+    pointer(id) {
+      return request(f.control.port2, "browser_pointer_input", id, { input: { kind: "release" } });
+    },
+  };
+}
+
+test("scene Play retains only its Rust receipt across device unlock and hover cannot redeliver it", async () => {
+  const f = sceneControlFixture();
+  let endpoint;
+  try {
+    endpoint = await f.attachPresented();
+    f.arm("toggle_playback");
+    const clicked = await f.pointer(1);
+    assert.deepEqual(clicked.sceneControl, { sequence: "1", action: "toggle_playback" });
+    assert.equal(clicked.playing, false);
+    assert.equal(clicked.audioAnchor, undefined);
+    const moved = await f.pointer(2);
+    assert.equal(moved.sceneControl, undefined, "unchanged pending receipt is not a new action");
+    const wrong = await request(f.control.port2, "scene_control", 3, { sequence: "0" });
+    assert.equal(wrong.sceneControlApplied, false);
+    assert.equal(f.pending().sequence, "1", "an old completion cannot consume a newer receipt");
+    const completed = await request(f.control.port2, "scene_control", 4, { sequence: "1" });
+    assert.equal(completed.sceneControlApplied, true);
+    assert.equal(completed.sceneControlAction, "toggle_playback");
+    assert.equal(completed.playing, true);
+    assert.equal(completed.audioAnchor.playing, true);
+    assert.equal(f.pending(), null);
+    assert.equal(f.stats().created, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("scene sections wait for their picture, preserve playing state, and mute leaves the anchor alone", async () => {
+  const f = sceneControlFixture();
+  let endpoint;
+  try {
+    endpoint = await f.attachPresented();
+    await request(f.control.port2, "resume", 1);
+    f.arm("next_section");
+    const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    let settled = false;
+    const clicked = f.pointer(2).then(result => { settled = true; return result; });
+    const delta = await changed;
+    await turn();
+    assert.equal(settled, false);
+    assert.equal(f.player.isPlaying(), false, "clock is pinned until the target picture presents");
+    present(f.render.port2, delta);
+    const sought = await clicked;
+    assert.equal(sought.sceneControlApplied, true);
+    assert.equal(sought.time, 1);
+    assert.equal(sought.playing, true);
+    assert.equal(sought.audioAnchor.time, 1);
+    assert.equal(sought.audioAnchor.playing, true);
+    f.arm("toggle_audio_muted");
+    const muted = await f.pointer(3);
+    assert.equal(muted.sceneControlAction, "toggle_audio_muted");
+    assert.equal(muted.sceneControlApplied, true);
+    assert.equal(muted.audioAnchor, undefined, "viewer mute must not restart the source");
+    assert.equal(muted.time, 1);
+    assert.equal(muted.playing, true);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("a finite scene without audio can resume, navigate paused, and restart from completion", async () => {
+  const f = sceneControlFixture(false);
+  let endpoint;
+  try {
+    endpoint = await f.attachPresented();
+    f.arm("toggle_playback");
+    const played = await f.pointer(1);
+    assert.equal(played.sceneControlApplied, true);
+    assert.equal(played.sceneControl, undefined, "silent scenes do not await an audio unlock");
+    assert.equal(played.playing, true);
+    await request(f.control.port2, "pause", 2);
+    f.arm("next_section");
+    const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    const seeking = f.pointer(3);
+    present(f.render.port2, await changed);
+    const sought = await seeking;
+    assert.equal(sought.time, 1);
+    assert.equal(sought.playing, false);
+    const endpointDelta = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    await request(f.control.port2, "seek", 4, { time: 2 });
+    present(f.render.port2, await endpointDelta);
+    f.arm("toggle_playback");
+    const restartedDelta = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    let settled = false;
+    const restarting = f.pointer(5).then(result => { settled = true; return result; });
+    const delta = await restartedDelta;
+    await turn();
+    assert.equal(settled, false, "restart must present time zero before resuming");
+    present(f.render.port2, delta);
+    const restarted = await restarting;
+    assert.equal(restarted.time, 0);
+    assert.equal(restarted.playing, true);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("superseding transport and exact-sequence cancellation cannot revive pending scene Play", async () => {
+  const f = sceneControlFixture();
+  let endpoint;
+  try {
+    endpoint = await f.attachPresented();
+    f.arm("toggle_playback");
+    await f.pointer(1);
+    await request(f.control.port2, "pause", 2);
+    const retired = await request(f.control.port2, "scene_control", 3, { sequence: "1" });
+    assert.equal(retired.sceneControlApplied, false);
+    assert.equal(retired.playing, false);
+    f.arm("toggle_playback");
+    await f.pointer(4);
+    await request(f.control.port2, "scene_control", 5, { sequence: "1", cancel: true });
+    assert.equal(f.pending().sequence, "2");
+    const canceled = await request(f.control.port2, "scene_control", 6, { sequence: "2", cancel: true });
+    assert.equal(canceled.sceneControlApplied, false);
+    assert.equal(f.pending(), null);
+    const stale = await request(f.control.port2, "scene_control", 7, { sequence: "2" });
+    assert.equal(stale.playing, false);
+    assert.equal(stale.audioAnchor, undefined);
+    for (const sequence of [2, "-1", "01", "18446744073709551616"]) {
+      const invalid = await request(f.control.port2, "scene_control", 8, { sequence });
+      assert.equal(invalid.type, "error");
+      assert.match(invalid.message, /exact input sequence/);
+    }
+    f.arm("toggle_playback", false);
+    const rejected = await f.pointer(9);
+    assert.equal(rejected.pointerInputAccepted, false);
+    assert.equal(rejected.sceneControl, undefined);
+    assert.equal(rejected.sceneControlApplied, undefined);
   } finally { endpoint?.stop(); f.close(); }
 });
 

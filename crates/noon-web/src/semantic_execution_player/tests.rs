@@ -19,7 +19,7 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
     let mut player =
         SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 99).unwrap();
     assert!(player.has_audio_wasm());
-    assert_eq!(player.finite_audio_duration(), Some(1.0));
+    assert_eq!(player.finite_playback_duration(), Some(1.0));
     assert_eq!(player.clock.loop_duration(), None);
     let resources = crate::worker_audio::WorkerAudioResources::decode(
         &player.audio_resource_bundle_bytes().unwrap(),
@@ -36,7 +36,7 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
     assert!(player.seek_delta_json(1.01).is_err());
     assert_eq!(player.time(), 0.25);
     assert!(player.set_loop_duration(f64::NAN).is_err());
-    assert_eq!(player.finite_audio_duration(), Some(1.0));
+    assert_eq!(player.finite_playback_duration(), Some(1.0));
     assert!(
         player.begin_replay_retention().is_err(),
         "sequential source audio remains explicitly gated"
@@ -55,7 +55,7 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
         101,
     )
     .unwrap();
-    assert_eq!(live.finite_audio_duration(), Some(1.0));
+    assert_eq!(live.finite_playback_duration(), Some(1.0));
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn worker_audio_sections_use_shared_strict_nonwrapping_navigation() {
 }
 
 #[test]
-fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport() {
+fn worker_player_admits_finite_scene_controls_without_audio_but_not_source_history() {
     let mut scene = noon::Scene::new();
     let mut button = scene.rectangle(1.7, 0.65).unwrap();
     button.set_fill(0.2, 0.4, 0.5, 1.0).unwrap();
@@ -95,23 +95,26 @@ fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport
     let session = scene.execution_session().unwrap();
     assert!(!session.has_audio());
     assert!(session.has_playback_controls());
-    // The profile rejection must precede even playback-clock validation, which
-    // itself precedes resource encoding. No partial worker player is returned.
-    let error = SemanticExecutionPlayer::from_session(session, f64::NAN, 101)
-        .err()
-        .expect("worker transport must not silently discard scene control actions");
-    assert!(error.contains("scene playback controls"));
-    assert!(error.contains("#2263"));
-    let error = SemanticExecutionPlayer::from_live_session(
+    let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 101).unwrap();
+    assert_eq!(player.finite_playback_duration(), Some(2.0));
+    assert!(!player.has_audio_wasm());
+    assert_eq!(player.clock.loop_duration(), None);
+    assert!(player.begin_replay_retention().is_err());
+    player.tick_callback_phase_json(1_000.0).unwrap();
+    player.tick_callback_phase_json(4_000.0).unwrap();
+    assert_eq!(player.time(), 2.0);
+    assert!(!player.is_playing());
+    let mut live = SemanticExecutionPlayer::from_live_session(
         scene.execution_session().unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
-        f64::NAN,
+        2.0,
         102,
     )
-    .err()
-    .expect("live worker entry must reject the same unsupported controls");
-    assert!(error.contains("scene playback controls"));
+    .unwrap();
+    assert_eq!(live.finite_playback_duration(), Some(2.0));
+    assert!(live.begin_replay_retention().is_err());
+    assert!(live.set_translation_drag_targets(&[button]).is_err());
     assert_eq!(scene.revision(), revision);
 }
 
@@ -184,6 +187,7 @@ fn submit_drag_input(
         session: &mut player.session,
         semantics: player.semantics.as_ref(),
         translation_drag_undo: &mut player.translation_drag_undo,
+        control_publication: None,
     };
     crate::browser_pointer_input::BrowserPointerTarget::submit_pointer(&mut target, &token, input)
         .unwrap();

@@ -20,13 +20,15 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
   "set_loop_duration",
   "advance_to",
   "seek_section",
+  "scene_control",
 ]);
 // A denied replay capability is not a denial of forward execution. Pause and
 // advance_to keep the existing callback-aware, non-rewinding Rust path; only
 // controls that can restart/loop the historical plan require replay admission.
 const REPLAY_DEPENDENT_CONTROLS = new Set([
-  "resume", "seek", "restart_playback", "set_loop_duration", "seek_section",
+  "resume", "seek", "restart_playback", "set_loop_duration", "seek_section", "scene_control",
 ]);
+const TRANSPORT_CONTROLS = new Set(["pause", "resume", "seek", "seek_section", "restart_playback"]);
 const FINITE_EXPORT_CONTROLS = new Set([
   "begin_finite_export", "sample_finite_export", "acknowledge_finite_export",
   "finite_export_audio", "cancel_finite_export",
@@ -263,6 +265,7 @@ export async function attachSemanticEngine(
         canUndoTranslationDrag: false,
       };
     }
+    const finiteDuration = player.finitePlaybackDuration();
     return {
       type,
       // Observe the Rust clock during idle waits. Command acknowledgements and
@@ -270,7 +273,7 @@ export async function attachSemanticEngine(
       time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
         ? player.playbackTimeAt(performance.now()) : player.time(),
       playing: player.isPlaying(), nextPatchSequence: "0",
-      ...(hasAudio ? { hasAudio, sections, durationSeconds: player.finiteAudioDuration() } : {}),
+      ...(hasAudio || finiteDuration != null ? { hasAudio, sections, durationSeconds: finiteDuration } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null
@@ -842,6 +845,58 @@ export async function attachSemanticEngine(
     } : null;
   }
 
+  // External controls and committed scene actions use the same existing Rust
+  // playback operations and presentation barrier. This host maps typed actions
+  // to transport operations; it never selects a target or computes a section.
+  async function applyPlaybackControl(type, message = {}) {
+    if (type === "pause") {
+      latestTick = null;
+      if (pacing === SEMANTIC_PACING_REALTIME) {
+        const time = player.playbackTimeAt(performance.now());
+        if (time > player.time()) await advanceToAuthoredTime(time);
+      }
+      player.pause();
+      observeExecutionWake(performance.now(), true);
+    } else if (type === "resume") {
+      const finiteEnd = player.finitePlaybackDuration();
+      if (hasAudio || finiteEnd != null) {
+        await awaitPresentation(null);
+        if (finiteEnd != null && player.time() === finiteEnd) {
+          await awaitPresentation(send(player.seekDeltaJson(0)));
+        }
+      }
+      player.resume();
+      if (!hasAudio) observeExecutionWake(performance.now(), true);
+    } else {
+      latestTick = null;
+      const playing = player.isPlaying();
+      if (hasAudio) player.pause();
+      const delta = type === "seek_section"
+        ? player.seekSectionDeltaJson(message.previous)
+        : player.seekDeltaJson(type === "restart_playback" ? 0 : message.time);
+      const publication = send(delta);
+      if (hasAudio) {
+        await awaitPresentation(publication);
+        if (playing) player.resume();
+      } else observeExecutionWake(performance.now());
+    }
+  }
+
+  async function applySceneControl(action) {
+    switch (action) {
+      case "toggle_playback":
+        await applyPlaybackControl(player.isPlaying() ? "pause" : "resume");
+        break;
+      case "restart": await applyPlaybackControl("restart_playback"); break;
+      case "previous_section": await applyPlaybackControl("seek_section", { previous: true }); break;
+      case "next_section": await applyPlaybackControl("seek_section", { previous: false }); break;
+      // Viewer gain belongs to the disposable Window output. Its acknowledgement
+      // carries only this committed action, never an authored scene mutation.
+      case "toggle_audio_muted": break;
+      default: throw new Error(`unsupported scene playback action ${action}`);
+    }
+  }
+
   async function drain() {
     if (stopped || !transport || draining) return;
     draining = true;
@@ -859,6 +914,9 @@ export async function attachSemanticEngine(
       let audioAnchor;
       let finiteExport;
       let audioBlock;
+      let sceneControl;
+      let sceneControlAction;
+      let sceneControlApplied;
       try {
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
@@ -892,47 +950,24 @@ export async function attachSemanticEngine(
             player.cancelFiniteExport();
             observeExecutionWake(performance.now(), true);
             break;
-          case "pause": {
-            latestTick = null;
-            if (pacing === SEMANTIC_PACING_REALTIME) {
-              const time = player.playbackTimeAt(performance.now());
-              // Commit elapsed static time before freezing, so pause/resume does
-              // not jump back to the previous rendered frame's timestamp.
-              if (time > player.time()) await advanceToAuthoredTime(time);
-            }
-            player.pause();
-            observeExecutionWake(performance.now(), true);
+          case "pause":
+          case "resume":
+          case "seek":
+          case "seek_section":
+          case "restart_playback":
+            await applyPlaybackControl(message.type, message);
             break;
-          }
-          case "resume": {
-            if (hasAudio) {
-              await awaitPresentation(null);
-              if (player.time() === player.finiteAudioDuration()) {
-                await awaitPresentation(send(player.seekDeltaJson(0)));
-              }
-            }
-            player.resume();
-            if (!hasAudio) observeExecutionWake(performance.now(), true);
-            break;
-          }
           case "set_loop_duration":
             player.setLoopDuration(message.loopDurationSeconds);
             observeExecutionWake(performance.now());
             break;
-          case "seek":
-          case "seek_section":
-          case "restart_playback": {
-            latestTick = null;
-            const playing = player.isPlaying();
-            if (hasAudio) player.pause();
-            const delta = message.type === "seek_section"
-              ? player.seekSectionDeltaJson(message.previous)
-              : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
-            const publication = send(delta);
-            if (hasAudio) {
-              await awaitPresentation(publication);
-              if (playing) player.resume();
-            } else observeExecutionWake(performance.now());
+          case "scene_control": {
+            const action = player.takeSceneControl(BigInt(message.sequence));
+            sceneControlApplied = action != null && message.cancel !== true;
+            if (sceneControlApplied) {
+              sceneControlAction = action;
+              await applySceneControl(action);
+            }
             break;
           }
           case "undo_translation_drag": {
@@ -1001,8 +1036,29 @@ export async function attachSemanticEngine(
           case "inspection_scroll":
           case "pointer_fill_selection":
           case "browser_pointer_view": {
+            const previousSceneControl = message.type === "browser_pointer_input"
+              ? player?.pendingSceneControlJson() : null;
             pointerInputAccepted = applyNativeInput(message);
             if (player === null) break;
+            if (message.type === "browser_pointer_input" && pointerInputAccepted === true) {
+              const pending = player.pendingSceneControlJson();
+              if (pending != null && pending !== previousSceneControl) {
+                const request = JSON.parse(pending);
+                if (hasAudio && request.action === "toggle_playback" && !player.isPlaying()) {
+                  // This is the only action that crosses an asynchronous device
+                  // unlock. Rust retains its one sequence/publication receipt.
+                  sceneControl = request;
+                } else {
+                  const action = player.takeSceneControl(BigInt(request.sequence));
+                  sceneControlApplied = action != null;
+                  if (sceneControlApplied) {
+                    sceneControlAction = action;
+                    await applySceneControl(action);
+                    await awaitPresentation(null);
+                  }
+                }
+              }
+            }
             const publication = drainAndSendDelta();
             // Unavailable mappings cannot be presented. Acknowledging their
             // registration authorizes no input and must not block the reveal
@@ -1025,7 +1081,8 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
-        if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
+        if (hasAudio && (TRANSPORT_CONTROLS.has(message.type) ||
+            (sceneControlApplied && sceneControlAction !== "toggle_audio_muted"))) {
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives
           // the runtime and no frontend cursor is retained.
@@ -1045,6 +1102,9 @@ export async function attachSemanticEngine(
           ...(audioAnchor === undefined ? {} : { audioAnchor }),
           ...(finiteExport === undefined ? {} : { finiteExport }),
           ...(audioBlock === undefined ? {} : { audioBlock }),
+          ...(sceneControl === undefined ? {} : { sceneControl }),
+          ...(sceneControlApplied === undefined ? {} : { sceneControlApplied }),
+          ...(sceneControlAction === undefined ? {} : { sceneControlAction }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
           ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         }, audioBlock === undefined ? [] : [audioBlock.buffer]);
@@ -1138,6 +1198,7 @@ export async function attachSemanticEngine(
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
+      player.cancelSceneControl();
       player.clearTranslationDragUndo();
       if (pendingPhaseJson !== null) {
         const interruption = new Error("canonical callback phase interrupted by endpoint stop");
@@ -1170,7 +1231,7 @@ export async function attachSemanticEngine(
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
-    sections = hasAudio ? JSON.parse(player.sectionsJson()) : [];
+    sections = JSON.parse(player.sectionsJson());
     if (continuation === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
@@ -1192,7 +1253,7 @@ export async function attachSemanticEngine(
           post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
           return;
         }
-        if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
+        if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "scene_control", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
           "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {
@@ -1248,8 +1309,18 @@ export async function attachSemanticEngine(
         if (message.type === "seek_section" && typeof message.previous !== "boolean") {
           throw new Error("section navigation direction must be boolean");
         }
+        if (message.type === "scene_control" &&
+            (typeof message.sequence !== "string" || !/^(0|[1-9][0-9]*)$/.test(message.sequence) ||
+             message.sequence.length > 20 || BigInt(message.sequence) > 0xffffffffffffffffn ||
+             (message.cancel !== undefined && typeof message.cancel !== "boolean"))) {
+          throw new Error("scene playback completion requires an exact input sequence and boolean cancellation");
+        }
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
+        }
+        if (TRANSPORT_CONTROLS.has(message.type) || message.type === "set_loop_duration" ||
+            message.type === "begin_finite_export" || message.type === "advance_to") {
+          player?.cancelSceneControl();
         }
         controls.push(message);
         if (message.type === "sample_to_authored_time") lastExternalSampleTime = message.time;

@@ -22,6 +22,9 @@ pub(super) struct PlayerPointerTarget<'a> {
     pub(super) session: &'a mut ExecutionSession,
     pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
+    /// The same committed input receipt, observed only after the shared
+    /// transaction returns. No target or click is inferred by this adapter.
+    pub(super) control_publication: Option<NativePointerInputPublication>,
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
@@ -70,21 +73,24 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, String> {
-        let Some(semantics) = self.semantics.as_ref() else {
-            return self
+        let publication = if let Some(semantics) = self.semantics.as_ref() {
+            let receipt = self
                 .session
+                .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
+                .map_err(|error| error.to_string())?;
+            if let Some(undo) = receipt.undo {
+                *self.translation_drag_undo = Some(undo);
+            }
+            receipt.input
+        } else {
+            self.session
                 .submit_native_pointer_input(token, input)
-                .map_err(|error| error.to_string());
+                .map_err(|error| error.to_string())?
         };
-        self.session
-            .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
-            .map(|receipt| {
-                if let Some(undo) = receipt.undo {
-                    *self.translation_drag_undo = Some(undo);
-                }
-                receipt.input
-            })
-            .map_err(|error| error.to_string())
+        if publication.playback_control().is_some() {
+            self.control_publication = Some(publication);
+        }
+        Ok(publication)
     }
 }
 

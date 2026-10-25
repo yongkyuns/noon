@@ -67,6 +67,11 @@ export class ExecutionWorkerClient {
   #playing = true;
   #audioDevice = new WorkerAudioDevice(() => this.#audioInterrupted());
   #audioControlGeneration = 0;
+  // Scene acknowledgements arrive in worker order. Retire older external
+  // command completions without suppressing a later admitted scene action.
+  #audioCommandGeneration = 0;
+  #sceneControlGeneration = 0;
+  #pendingSceneControl = null;
   #onError;
   #onRecoverableError;
   #semanticAuthoringClient = null;
@@ -399,6 +404,7 @@ export class ExecutionWorkerClient {
     const wasPlaying = this.#playing;
     const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
     const oldEngine = this.#engineWorker;
+    this.#invalidateSceneControl();
     if (this.#audioDevice.available) {
       this.#audioControlGeneration += 1;
       this.#audioDevice.stop();
@@ -505,6 +511,7 @@ export class ExecutionWorkerClient {
 
   async setLoopDurationSeconds(loopDurationSeconds) {
     const duration = validateLoopDurationSeconds(loopDurationSeconds);
+    this.#invalidateSceneControl();
     const result = await this.#requestEngine("set_loop_duration", {
       loopDurationSeconds: duration,
     });
@@ -598,10 +605,19 @@ export class ExecutionWorkerClient {
     return this.#audioCommand("seek_section", { previous });
   }
 
-  setAudioVolume(volume) { this.#audioDevice.setVolume(volume); }
-  setAudioMuted(muted) { this.#audioDevice.setMuted(muted); }
+  setAudioVolume(volume) {
+    this.#audioDevice.setVolume(volume);
+    this.#audioControlGeneration += 1;
+    this.#invalidateSceneControl();
+  }
+  setAudioMuted(muted) {
+    this.#audioDevice.setMuted(muted);
+    this.#audioControlGeneration += 1;
+    this.#invalidateSceneControl();
+  }
 
   async beginFiniteExport(frameOptions) {
+    this.#invalidateSceneControl();
     this.#audioControlGeneration += 1;
     this.#audioDevice.stop();
     const result = await this.#requestEngine("begin_finite_export", { frameOptions });
@@ -626,18 +642,22 @@ export class ExecutionWorkerClient {
   }
 
   async #audioCommand(type, payload, unlocked = null) {
+    this.#invalidateSceneControl();
     const generation = ++this.#audioControlGeneration;
+    const commandGeneration = ++this.#audioCommandGeneration;
     const lifecycle = this.#lifecycleGeneration;
     const session = this.#session;
     this.#audioDevice.pause();
     if (unlocked !== null) await unlocked;
-    if (generation !== this.#audioControlGeneration || lifecycle !== this.#lifecycleGeneration) {
+    if (generation !== this.#audioControlGeneration || commandGeneration !== this.#audioCommandGeneration ||
+        lifecycle !== this.#lifecycleGeneration) {
       const error = new Error("audio playback command was superseded");
       error.name = "AbortError";
       throw error;
     }
     const result = await this.#requestEngine(type, payload);
-    if (generation === this.#audioControlGeneration && lifecycle === this.#lifecycleGeneration && session === this.#session) {
+    if (generation === this.#audioControlGeneration && commandGeneration === this.#audioCommandGeneration &&
+        lifecycle === this.#lifecycleGeneration && session === this.#session) {
       try { this.#audioDevice.applyAnchor(result.audioAnchor, session); }
       catch (error) {
         this.#audioDevice.stop();
@@ -687,6 +707,7 @@ export class ExecutionWorkerClient {
       }
       return Promise.resolve({ type: "browser_pointer_view" });
     }
+    this.#invalidateSceneControl();
     this.#pointerView = view;
     this.#pointerReceipt = null;
     const requested = this.#requestNativeInput("browser_pointer_view", { view });
@@ -726,15 +747,125 @@ export class ExecutionWorkerClient {
   // or delivery yields. A later acknowledgement never relabels this occurrence.
   async submitBrowserPointerInput(input) {
     this.#requireStarted();
-    return this.#requestNativeInput("browser_pointer_input", {
+    if (["press", "cancel", "capture_lost"].includes(input.kind)) {
+      this.#invalidateSceneControl();
+    }
+    const admission = {
+      generation: this.#sceneControlGeneration,
+      audioGeneration: this.#audioControlGeneration,
+      lifecycle: this.#lifecycleGeneration, session: this.#session,
+      worker: this.#engineWorker,
+    };
+    // Browser activation expires before a worker round trip. Unlock is silent;
+    // only the shared Rust click action can subsequently admit playback. Keep a
+    // rejected unlock observed even when this release hits no playback control.
+    let unlocked = null;
+    if (input.kind === "release" && input.button === 0) {
+      try { unlocked = Promise.resolve(this.#audioDevice.unlock()).then(() => null, error => error); }
+      catch (error) { unlocked = Promise.resolve(error); }
+    }
+    const result = await this.#requestNativeInput("browser_pointer_input", {
       input, presentation: this.pointerPresentation,
     });
+    if (result.pointerInputAccepted === false) this.#invalidateSceneControl();
+    if (!this.#sceneControlOwnerCurrent(admission)) {
+      const sequence = result.sceneControl?.sequence;
+      if (typeof sequence === "string" && /^(0|[1-9][0-9]*)$/.test(sequence) &&
+          sequence.length <= 20 && BigInt(sequence) <= 0xffffffffffffffffn) {
+        this.#cancelSceneControlReceipt({ ...admission, sequence });
+        return { ...result, sceneControlApplied: false };
+      }
+      return result;
+    }
+    if (result.sceneControlApplied === true) {
+      this.#invalidateSceneControl();
+      return this.#applySceneControlResult(result);
+    }
+    if (result.sceneControl === undefined) return result;
+    const { sequence, action } = result.sceneControl;
+    if (typeof sequence !== "string" || !/^(0|[1-9][0-9]*)$/.test(sequence) ||
+        sequence.length > 20 || BigInt(sequence) > 0xffffffffffffffffn ||
+        action !== "toggle_playback" || result.playing !== false || unlocked === null) {
+      throw new Error("invalid pending worker scene playback control");
+    }
+    if (admission.generation !== this.#sceneControlGeneration) {
+      this.#cancelSceneControlReceipt({ ...admission, sequence });
+      return { ...result, sceneControlApplied: false };
+    }
+    this.#invalidateSceneControl();
+    this.#audioCommandGeneration += 1;
+    let cancel;
+    const cancelled = new Promise(resolve => { cancel = () => resolve(null); });
+    const pending = { ...admission, sequence, generation: this.#sceneControlGeneration, cancel };
+    this.#pendingSceneControl = pending;
+    const unlockError = await Promise.race([unlocked, cancelled]);
+    if (this.#pendingSceneControl !== pending || !this.#sceneControlOwnerCurrent(pending)) {
+      return { ...result, sceneControlApplied: false };
+    }
+    if (unlockError !== null) {
+      this.#invalidateSceneControl();
+      throw unlockError;
+    }
+    try {
+      const completed = await this.#requestNativeInput("scene_control", { sequence });
+      if (this.#pendingSceneControl !== pending || !this.#sceneControlOwnerCurrent(pending)) {
+        return { ...result, sceneControlApplied: false };
+      }
+      this.#pendingSceneControl = null;
+      return this.#applySceneControlResult({ ...result, ...completed,
+        type: result.type, pointerInputAccepted: result.pointerInputAccepted });
+    } finally {
+      if (this.#pendingSceneControl === pending) this.#pendingSceneControl = null;
+    }
+  }
+
+  #sceneControlOwnerCurrent(receipt) {
+    return receipt.lifecycle === this.#lifecycleGeneration && receipt.session === this.#session &&
+      receipt.worker === this.#engineWorker && receipt.audioGeneration === this.#audioControlGeneration &&
+      this.#candidateEngineWorker === null && this.#fatalOwner === null;
+  }
+
+  #cancelSceneControlReceipt(receipt) {
+    if (receipt.lifecycle !== this.#lifecycleGeneration || receipt.session !== this.#session ||
+        receipt.worker !== this.#engineWorker || this.#candidateEngineWorker !== null || this.#fatalOwner !== null) return;
+    // One bounded best-effort retirement, qualified by the original sequence.
+    // A failed transport cannot authorize a later completion or cancel a newer
+    // pending action. Normal worker faults already use the client's error path.
+    void this.#requestNativeInput("scene_control", { sequence: receipt.sequence, cancel: true }).catch(() => {});
+  }
+
+  #invalidateSceneControl() {
+    const pending = this.#pendingSceneControl;
+    this.#pendingSceneControl = null;
+    this.#sceneControlGeneration += 1;
+    if (pending !== null) {
+      pending.cancel();
+      this.#cancelSceneControlReceipt(pending);
+    }
+  }
+
+  async #applySceneControlResult(result) {
+    if (result.sceneControlApplied !== true) return this.#audioState(result);
+    this.#audioCommandGeneration += 1;
+    if (result.sceneControlAction === "toggle_audio_muted") {
+      this.#audioDevice.setMuted(!this.#audioDevice.muted);
+    } else {
+      try { this.#audioDevice.applyAnchor(result.audioAnchor, this.#session); }
+      catch (error) {
+        this.#audioDevice.stop();
+        await this.#requestEngine("pause", {});
+        throw error;
+      }
+    }
+    this.#rememberPlaying(result);
+    return this.#audioState(result);
   }
 
   // View navigation is occurrence-bound input too. The receipt and normalized
   // cursor are copied by the existing bounded ingress before any readiness yield.
   async scrollInspectionView(input) {
     this.#requireStarted();
+    this.#invalidateSceneControl();
     return this.#requestNativeInput("inspection_scroll", {
       input, presentation: this.pointerPresentation,
     });
@@ -979,6 +1110,7 @@ export class ExecutionWorkerClient {
       try {
         validateWorkerEnvelope(message, channel);
         if (owner === "engine" && message.type === "audio_stopped") {
+          this.#invalidateSceneControl();
           this.#audioControlGeneration += 1;
           this.#audioDevice.stop();
           return;
@@ -1009,7 +1141,10 @@ export class ExecutionWorkerClient {
           const current = this.#pointerReceipt, receipt = message.receipt;
           if (current !== null && receipt && current.session === receipt.session &&
               current.sequence === receipt.sequence && current.presentation === receipt.presentation &&
-              current.view_revision === receipt.view_revision) this.#pointerReceipt = null;
+              current.view_revision === receipt.view_revision) {
+            this.#invalidateSceneControl();
+            this.#pointerReceipt = null;
+          }
           return;
         }
         if (message.type === "ready") {
@@ -1280,6 +1415,7 @@ export class ExecutionWorkerClient {
   }
 
   #retireAudio() {
+    this.#invalidateSceneControl();
     this.#audioControlGeneration += 1;
     this.#audioDevice.dispose();
     globalThis.document?.removeEventListener?.("visibilitychange", this.#visibilityChanged);
@@ -1291,9 +1427,13 @@ export class ExecutionWorkerClient {
   };
 
   #audioInterrupted = () => {
+    this.#invalidateSceneControl();
     this.#audioControlGeneration += 1;
     this.#audioDevice.stop();
-    if (this.#engineWorker === null || !this.#playing) return;
+    // The worker may have admitted resume while its picture/acknowledgement is
+    // still in flight. A cached paused observation cannot authorize a later
+    // hidden-tab restart; queue pause behind that same existing command stream.
+    if (this.#engineWorker === null) return;
     void this.#requestEngine("pause", {}).then(result => this.#rememberPlaying(result))
       .catch(error => { if (this.#engineWorker !== null) this.#notifyError(error, "engine"); });
   };

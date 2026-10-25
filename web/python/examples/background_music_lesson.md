@@ -5,10 +5,12 @@ shows the input and a gold point shows the output. Positive values, negative
 values, and zero each have their own named section. The original instrumental
 score **A Small Discovery** accompanies all three sections.
 
-Open **Double the input** in the Noon showcase, then press **Play** to hear the
-music. The prepared scene starts paused. Seeking and section navigation use the
-same authored times for the picture and music. Viewer volume and mute change the
-device output without changing the authored gain or fades.
+Open **Double the input** in the Noon showcase, then press the lesson's
+**Play / Pause** button or the viewer's **Play** button to hear the music. The
+prepared scene starts paused. Its five buttons provide **Previous**,
+**Play / Pause**, **Next**, **Restart**, and **Sound on / off**. Seeking and section
+navigation use the same authored times for the picture and music. Viewer volume
+and mute change the device output without changing the authored gain or fades.
 
 ## The paired authoring paths
 
@@ -16,7 +18,11 @@ The Python source is [background_music_lesson.py](background_music_lesson.py).
 Its direct Rust counterpart is
 [`noon::example_scenes::background_music_lesson::scene`](../../../crates/noon/src/example_scenes/background_music_lesson.rs).
 The Rust function returns an ordinary `Scene` for `Scene::execution_session`
-and native MP4 export. Native window audio output has not yet been qualified.
+and native MP4 export. The same authored buttons also work in the native window:
+
+```bash
+cargo run -p noon-native --features audio --example background_music_lesson
+```
 
 Python uses an explicit finite `result = Scene()`. This complete scene is declared
 before playback. Normal `Scene.construct`, `Scene.play`, and `Scene.wait` retain
@@ -45,6 +51,27 @@ advances the Rust authoring cursor. `next_section` records a boundary at that
 cursor. `bind_position` keeps the relationship in Rust; no Python callback runs
 on animation frames.
 
+## Buttons inside the lesson
+
+Both examples attach the existing shared `on_click_playback` action to ordinary
+filled rectangles. For example, after adding a button to the scene:
+
+```python
+result.on_click_playback(button, PlaybackControl.TOGGLE_PLAYBACK)
+```
+
+The other actions are `PREVIOUS_SECTION`, `NEXT_SECTION`, `RESTART`, and
+`TOGGLE_AUDIO_MUTED`. Rust owns picking and click recognition. The host applies
+the emitted viewer request after the input publication, using the same transport
+as the external viewer controls. The worker remains the one execution and
+playback-clock owner; sound follows the target picture's presentation. Seek and
+restart preserve play/pause intent. Playing after completion restarts the lesson.
+
+The button icons use unfilled strokes, with text captions below the clickable
+fill. This keeps the filled rectangle available to the shared picker; a filled
+text decoration placed on top would obscure that target. The controls do not
+add animation tracks, change section times, or modify the authored soundtrack.
+
 ## Finite clip options
 
 `AudioSource.small_discovery()` prepares the bundled 80-second stereo composition
@@ -68,9 +95,10 @@ payload. Rust validates its format, finite sample values, and resource budget.
 Clips may overlap; the shared Rust audio plan owns their timing and mixing.
 Declarations must precede execution. Live audio mutations, callback-driven
 audio, and audio history changes remain outside this finite profile. The source
-does not perform file decoding or network loading. The Python worker currently
-uses the viewer's transport controls; scene-authored `on_click_playback` actions
-remain explicitly gated until that input path is qualified.
+does not perform file decoding or network loading. Scene-authored worker controls
+use the complete immutable `result = Scene()` profile; source continuations,
+required callbacks, retained history, and native CPython audio remain separate
+work under [#2263](https://github.com/yongkyuns/noon/issues/2263).
 
 The original composition and its rendered audio are CC0-1.0; the software remains
 MIT. The scoped notice is in
@@ -91,10 +119,11 @@ After building the web runtime, run the real browser profile with:
 node scripts/python-background-audio-smoke.mjs
 ```
 
-The script loads the unchanged Python source through the normal showcase and
+The script loads the checked-in Python source through the normal showcase and
 Pyodide worker, checks actual Web Audio output using an analyser, verifies seek
-and section behavior, checks viewer controls and lifecycle retirement, and
-captures real rendered checkpoints. It exercises the product visibility handler
+and section behavior, exercises the actual in-canvas buttons, checks viewer
+controls and lifecycle retirement, and captures real rendered checkpoints.
+It exercises the product visibility handler
 with a controlled document visibility event. A separate editor/Run fixture passes
 decoded Python PCM through the real Pyodide boundary, then verifies immutable
 buffer reuse, overlapping trimmed loops, and their seek phase on actual output.

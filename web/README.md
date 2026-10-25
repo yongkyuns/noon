@@ -39,10 +39,15 @@ The audible profiles accept finite, predeclared direct Rust/WASM scenes and
 complete Python scenes returned as `result = Scene()`. The Python gallery lesson
 is [Double the input](python/examples/background_music_lesson.py), paired with
 [`background_music_lesson.rs`](../crates/noon/src/example_scenes/background_music_lesson.rs).
-Open `/?catalog=showcase&example=showcase-background-music`, then choose **Play
-with sound**. Its three sections, point motion and soundtrack share Rust time.
-The viewer's Previous/Next, seek, mute and volume controls operate on this same
-execution owner. Leaving the page pauses playback; returning does not restart it.
+Open `/?catalog=showcase&example=showcase-background-music`, then choose the
+lesson's **Play / Pause** button or the viewer's **Play** button. Its three
+sections, point motion and soundtrack share Rust time. Five ordinary scene
+buttons provide Previous, Play/Pause, Next, Restart, and Sound on/off through
+`Scene.on_click_playback(button, PlaybackControl.TOGGLE_PLAYBACK)`. Shared Rust picking emits
+the viewer command; the worker applies it through the same execution owner as
+the viewer's seek and transport controls. Audio waits for the corresponding
+retained picture, and viewer volume/mute leave authored clip gain unchanged.
+Leaving the page pauses playback; returning does not restart it.
 
 `AudioSource.small_discovery()` prepares the bundled music. Use
 `AudioSource.from_interleaved(samples, sample_rate=48000, channels=2)` for decoded
@@ -70,9 +75,9 @@ the native encoder produces one MP4 with sound. `--fps 30000/1001`,
 policy as native Rust export. The capture directory must be new; an existing
 movie is replaced only with explicit `--overwrite` after successful encoding.
 
-Live authored mutation, source continuations, retained source history, native
-device playback and scene-authored click controls in the Python worker remain
-gated under [#2263](https://github.com/yongkyuns/noon/issues/2263). Ordinary
+Live authored mutation, source continuations, retained source history, required
+callbacks, and native CPython audio remain gated under
+[#2263](https://github.com/yongkyuns/noon/issues/2263). Ordinary
 `Scene.play`/`construct` execution retains its existing continuation behavior.
 The headless export command uses browser rendering and native encoding; it is
 not an in-process native Python runtime. Text-to-speech is a later milestone.
@@ -85,8 +90,8 @@ music quality or production audio latency budgets.
 
 Run `node scripts/python-background-audio-smoke.mjs` for the actual Python
 gallery path, shared Rust animation, gesture activation, fades, sections,
-viewer controls and output retirement. Its reports include the source and
-runtime build identities plus a real captured lesson frame.
+in-canvas buttons, viewer controls and output retirement. Its reports include
+the source and runtime build identities plus a real captured lesson frame.
 
 | Direct Rust/WASM qualification | Shared Rust builder | Browser-owned input |
 | --- | --- | --- |
