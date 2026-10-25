@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import test from "node:test";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 
@@ -20,8 +21,18 @@ assert.match(
 );
 assert.match(
   runtimeBody,
-  /playbackControls\?\.sync\(\{[\s\S]*?durationSeconds: loopDurationSeconds,/,
-  "cold playback sync must use the startup-local authored duration",
+  /updatePlaybackControls\(\{[^}]*durationSeconds: loopDurationSeconds,[^}]*playbackState: initialState,/,
+  "cold startup must deliver its complete reader observation through the duration-aware helper",
+);
+assert.doesNotMatch(
+  runtimeBody,
+  /playbackControls\??\.(?:sync|observe|setDuration)\(/,
+  "startup must not bypass the helper and overwrite prepared readiness or a pending command",
+);
+assert.doesNotMatch(
+  runtimeBody,
+  /\bplaybackDurationSeconds\s*=/,
+  "cold startup must not commit the global duration before runScene accepts the current result",
 );
 
 const runStart = main.indexOf("async function runScene()");
@@ -58,3 +69,90 @@ assert.equal(
 );
 
 console.log("✓ playback duration commits only with the current authored scene");
+
+// Execute the production helper. The controls double records calls only: it
+// does not reimplement readiness, command arbitration, or an engine clock.
+function controlsFixture() {
+  const calls = [], owner = {}, pane = {}, status = { dataset: {} };
+  class Controls {
+    constructor(...args) { calls.push(["create", ...args]); }
+    setDuration(value) { calls.push(["duration", value]); }
+    setControllable(value) { calls.push(["controllable", value]); }
+    setBusy(value) { calls.push(["busy", value]); }
+    sync(value) { calls.push(["sync", value]); }
+    observe(value) { calls.push(["observe", value]); }
+  }
+  const onError = () => {};
+  const api = new Function("PlaygroundPlaybackControls", "status", "pane", "showPlaybackError", `
+    let playbackControls = null, busyDepth = 0;
+    const playbackDurationSeconds = 12345;
+    const document = { querySelector(selector) {
+      if (selector !== ".preview-pane") throw new Error("unexpected controls container");
+      return pane;
+    } };
+    ${controlsBody}
+    return {
+      update: updatePlaybackControls,
+      controls: () => playbackControls,
+      setBusyDepth: value => { busyDepth = value; },
+    };
+  `)(Controls, status, pane, onError);
+  return { ...api, calls, owner, pane, status, onError };
+}
+
+for (const existing of [false, true]) {
+  for (const explicitProfile of [false, true]) {
+    test(`${existing ? "warm" : "cold"} ordinary controls use this run's duration (${explicitProfile ? "explicit" : "implicit"} profile)`, () => {
+      const f = controlsFixture();
+      if (existing) f.update({ supported: true, player: f.owner, durationSeconds: 2 });
+      const previous = f.controls();
+      f.calls.length = 0;
+      f.setBusyDepth(1);
+      const state = Object.freeze({ time: 1.25, playing: false, durationSeconds: 99,
+        canUndoTranslationDrag: true, ...(explicitProfile ? { preparedPlayback: false } : {}) });
+      f.update({ supported: false, player: f.owner, durationSeconds: 7, playbackState: state });
+      const expected = existing ? [["duration", 7]]
+        : [["create", f.owner, f.pane, { durationSeconds: 7, onError: f.onError }]];
+      expected.push(["controllable", false], ["busy", true], ["sync", { ...state, durationSeconds: 7 }]);
+      assert.deepEqual(f.calls, expected);
+      assert.equal(f.status.dataset.playbackControls, "unavailable");
+      assert.equal(state.durationSeconds, 99, "the observation must not be mutated");
+      if (existing) assert.equal(f.controls(), previous, "reuse the existing controls");
+    });
+  }
+
+  for (const [name, readiness] of [
+    ["open", { preparedFrontier: 2, durationSeconds: null, buffering: false }],
+    ["buffering", { preparedFrontier: 2, durationSeconds: null, buffering: true }],
+    ["terminal", { preparedFrontier: 7, durationSeconds: 7, buffering: false }],
+    ["zero-duration terminal", { preparedFrontier: 0, durationSeconds: 0, buffering: false }],
+  ]) {
+    test(`${existing ? "existing" : "new"} ${name} prepared controls observe readiness without a source-duration sync`, () => {
+      const f = controlsFixture();
+      if (existing) f.update({ supported: true, player: f.owner, durationSeconds: 2,
+        playbackState: Object.freeze({ preparedPlayback: true, preparedFrontier: 1,
+          durationSeconds: null, time: 0, playing: false, buffering: false }) });
+      const previous = f.controls();
+      f.calls.length = 0;
+      const state = Object.freeze({ preparedPlayback: true, time: 0, playing: false,
+        canUndoTranslationDrag: false, ...readiness });
+      f.update({ supported: true, player: f.owner, durationSeconds: 99, playbackState: state });
+      const expected = existing ? []
+        : [["create", f.owner, f.pane, { durationSeconds: 99, onError: f.onError }]];
+      expected.push(["controllable", true], ["busy", false], ["observe", state]);
+      assert.deepEqual(f.calls, expected);
+      assert.equal(f.calls.at(-1)[1], state, "forward the complete observation unchanged");
+      assert.equal(f.status.dataset.playbackControls, "available");
+      if (existing) assert.equal(f.controls(), previous, "source completion must retain the controls");
+    });
+  }
+}
+
+test("controls without a reader observation do not invent playback state", () => {
+  const f = controlsFixture();
+  f.update({ supported: false, player: f.owner, durationSeconds: 3 });
+  assert.deepEqual(f.calls, [
+    ["create", f.owner, f.pane, { durationSeconds: 3, onError: f.onError }],
+    ["controllable", false], ["busy", false],
+  ]);
+});

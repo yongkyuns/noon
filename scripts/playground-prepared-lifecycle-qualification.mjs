@@ -42,7 +42,7 @@ const entries = ["prepared-lifecycle", "prepared-failure"].map((id, order) => ({
 }));
 const hash = value => createHash("sha256").update(value).digest("hex");
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
-  sourceSha256: hash(source), cases: [] };
+  sourceSha256: hash(source), captureBackdrop: "opaque canvas-wrap; unchanged full-canvas RGBA equality", cases: [] };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
 
@@ -134,6 +134,11 @@ try {
         await installFixture(page);
         await page.goto(`${server.baseUrl}/web/index.html?example=prepared-lifecycle`);
         await page.waitForFunction(() => globalThis.__noonExampleGallery !== undefined);
+        // Rounded canvas corners and fractional edge coverage expose the page
+        // backdrop. Its decorative gradient can dither between screenshots.
+        // Make only that backdrop opaque; retain the canvas geometry, border,
+        // renderer, full screenshot and exact pixel comparisons unchanged.
+        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; }" });
         await page.evaluate(() => {
           if (!__noonExampleGallery.runInFlight && !document.querySelector(".playback-controls")) void __noonExampleGallery.run();
         });
