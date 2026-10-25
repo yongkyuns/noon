@@ -33,6 +33,7 @@ on:
       - "scripts/prepared-construct-qualification.mjs"
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
+      - "scripts/playground-prepared-lifecycle-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -70,6 +71,7 @@ on:
       - "scripts/prepared-construct-qualification.mjs"
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
+      - "scripts/playground-prepared-lifecycle-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -242,6 +244,7 @@ jobs:
           cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
           node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs web/prepared-interpreter-driver.test.mjs
           node --test web/semantic-engine-endpoint.prepared.test.mjs web/prepared-authoring-worker.test.mjs
+          node --test web/playground-prepared-lifecycle.test.mjs
       - name: Build explicitly enabled same-context canvas
         run: |
           wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
@@ -265,6 +268,7 @@ jobs:
           node scripts/prepared-worker-qualification.mjs
           NOON_PREPARED_WORKER_SOURCE=python node scripts/prepared-worker-qualification.mjs
           node scripts/prepared-authoring-worker-qualification.mjs
+          node scripts/playground-prepared-lifecycle-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -274,5 +278,6 @@ jobs:
             browser-smoke-artifacts/prepared-canvas
             browser-smoke-artifacts/prepared-worker
             browser-smoke-artifacts/prepared-authoring-worker
+            browser-smoke-artifacts/prepared-gallery
           if-no-files-found: warn
           retention-days: 3
