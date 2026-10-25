@@ -240,14 +240,20 @@ mod wasm {
 
         /// Reuse one outstanding native device operation. Its completion owns
         /// no renderer, playback command, or capability to revive a retired run.
+        /// A ready device retains its voices and viewer gain automation while
+        /// the host determines whether this gesture carries a playback action.
         pub(crate) fn unlock(&mut self) -> Result<js_sys::Promise, JsValue> {
-            self.stop();
-            self.interrupted.set(false);
-            let gain = self.controls.device_gain();
-            let now = self.context.current_time();
-            self.master.gain().cancel_scheduled_values(now)?;
-            self.master.gain().set_value_at_time(gain, now)?;
-            self.master_ramp.set(GainRamp::constant(gain));
+            if !self.is_ready() {
+                // Retire interrupted output before reopening its master gain;
+                // device resumption alone must never revive an old graph.
+                self.stop();
+                self.interrupted.set(false);
+                let gain = self.controls.device_gain();
+                let now = self.context.current_time();
+                self.master.gain().cancel_scheduled_values(now)?;
+                self.master.gain().set_value_at_time(gain, now)?;
+                self.master_ramp.set(GainRamp::constant(gain));
+            }
             if self.unlock_pending.get() {
                 return Ok(self.unlock_promise.as_ref().unwrap().clone());
             }

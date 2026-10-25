@@ -35,7 +35,7 @@ const report = {
   revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   sourcePath: entry.path, sourceSha256: hash(source), cases: [], browserErrors: [], consoleErrors: [],
-  failedResponses: [],
+  failedResponses: [], sceneControlGestures: [],
 };
 await mkdir(artifacts, { recursive: true });
 let browser, server, page, context, cache;
@@ -134,23 +134,61 @@ async function hoverScenePosition(x, y = -3.45) {
 }
 
 async function pointerCompletion(first, kind = "release") {
-  await page.waitForFunction(({ first, kind }) => {
-    const inputs = audioQualification.pointerInputs.slice(first);
-    return inputs.some(input => input.input.kind === kind) &&
-      inputs.every(input => input.status !== "pending");
-  }, { first, kind });
+  // The physical operation has returned, so its DOM samples are already
+  // collected. A rejected press may retire the source before mouseup arrives;
+  // waiting for a release that the normal collector suppressed would hang.
+  await page.waitForFunction(first => audioQualification.pointerInputs.slice(first)
+    .every(input => input.status !== "pending"), first);
   const inputs = await page.evaluate(first => audioQualification.pointerInputs.slice(first), first);
+  assert.ok(inputs.length > 0, "the physical gesture must reach the canvas collector");
   assert.ok(inputs.every(input => input.status === "fulfilled"),
     `physical pointer delivery failed: ${JSON.stringify(inputs)}`);
+  assert.ok(inputs.some(input => input.input.kind === kind) ||
+    (kind === "release" && inputs.some(input => input.input.kind === "press" &&
+      input.result.pointerInputAccepted === false)),
+    `physical ${kind} is missing without an explicitly rejected press: ${JSON.stringify(inputs)}`);
   return inputs;
 }
 
 async function clickSceneControl(name, { settle = true, y = -3.45 } = {}) {
   assert.ok(Object.hasOwn(sceneControls, name), "known authored scene control");
-  const position = await hoverScenePosition(sceneControls[name], y);
-  const first = await page.evaluate(() => audioQualification.pointerInputs.length);
-  await page.mouse.click(position.x, position.y);
-  return settle ? pointerCompletion(first) : first;
+  let retiredSource = null;
+  for (let attempt = 1; attempt <= (settle ? 8 : 1); attempt++) {
+    await hoverScenePosition(sceneControls[name], y);
+    const first = await page.evaluate(() => audioQualification.pointerInputs.length);
+    // Hover has already positioned the real pointer. Do not add mouse.click's
+    // redundant move between the acknowledged hover and this fresh gesture.
+    await page.mouse.down();
+    await page.mouse.up();
+    if (!settle) return first;
+    const inputs = await pointerCompletion(first);
+    const press = inputs.find(input => input.input.kind === "press");
+    assert.ok(press, "a scene-control attempt must collect a physical press");
+    if (retiredSource !== null) assert.ok(press.input.source_id > retiredSource,
+      "a rejected occurrence may only be followed by a fresh DOM pointer source");
+    const applied = inputs.some(input => input.result.sceneControlApplied === true);
+    const rejected = inputs.some(input => input.result.pointerInputAccepted === false);
+    const carriesAction = inputs.some(input => input.result.sceneControl !== undefined ||
+      input.result.sceneControlAction !== undefined || input.result.sceneControlApplied === true);
+    const observation = { control: name, world: [sceneControls[name], y], attempt,
+      outcome: applied ? "applied" : rejected ? "rejected" : "admitted-without-action", inputs };
+    report.sceneControlGestures.push(observation);
+    if (applied) return inputs;
+    assert.ok(rejected && !carriesAction,
+      `an admitted or pending scene action must never be retried: ${JSON.stringify(observation)}`);
+    assert.ok(attempt < 8, `eight distinct scene ${name} gestures were rejected`);
+    retiredSource = press.input.source_id;
+    const receipts = inputs.map(input => input.presentation).filter(Boolean);
+    assert.ok(receipts.length > 0, "a rejected gesture must retain its collected presentation receipt");
+    const latest = receipts.reduce((a, b) => a.presentation > b.presentation ? a : b);
+    // This is a new physical attempt after an explicit rejection, not replay or
+    // relabelling. Wait for an actually newer picture before collecting it.
+    await page.waitForFunction(previous => {
+      const current = audioQualification.pointerPlayer?.pointerPresentation;
+      return current?.session === previous.session && current.presentation > previous.presentation;
+    }, latest);
+  }
+  throw new Error("scene control gesture bound exhausted");
 }
 
 async function scenePlay() {
@@ -530,20 +568,31 @@ try {
   await record("scene Sound changes only viewer gain and keeps the same device source", async () => {
     const revision = await authoredRevisions();
     const before = await state();
+    const activeSource = before.starts.at(-1);
+    assert.ok(activeSource, "scene mute qualification requires an active device source");
+    // Restart may still be retiring the preceding graph. Track only the live
+    // source while retaining every old-source stop in each reported snapshot.
+    const activeStops = snapshot => snapshot.stops.filter(stop =>
+      stop.context === activeSource.context && stop.node === activeSource.node).length;
     await clickSceneControl("mute");
     await quiet();
     const muted = await state();
     assert.equal(muted.transport.audioMuted, true);
     assert.equal(muted.transport.playing, true);
-    assert.equal(muted.starts.length, before.starts.length);
+    assert.equal(muted.starts.length, before.starts.length, "scene mute must not restart clip phase");
+    assert.equal(activeStops(muted), 0, "scene mute must not stop the active device source");
     assert.ok(muted.transport.time > before.transport.time);
     await clickSceneControl("mute");
+    const unmuted = await state();
+    assert.equal(unmuted.starts.length, before.starts.length, "scene unmute must preserve the current device source");
+    assert.equal(activeStops(unmuted), 0, "scene unmute must not stop the active device source");
     const restored = await audible();
     assert.equal(restored.transport.audioMuted, false);
     assert.equal(restored.starts.length, before.starts.length, "scene mute must not restart clip phase");
+    assert.equal(activeStops(restored), 0, "scene mute recovery must preserve the active device source");
     assert.equal(restored.transport.audioVolume, before.transport.audioVolume);
     assert.deepEqual(await authoredRevisions(), revision);
-    return { revision, before, muted, restored };
+    return { revision, activeSource, before, muted, unmuted, restored };
   });
 
   await record("background, dragged and cancelled gestures cannot activate a scene button", async () => {
