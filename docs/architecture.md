@@ -778,9 +778,9 @@ statements. Asynchronous host bootstrap/cleanup must observe its abort signal
 before publishing after a wait; neither arbitrary Python execution nor such host
 work is preempted. The admitted ordinary construct path uses the existing portable
 source compiler, with no second rewrite or source-language engine. This same-context
-host integration remains opt-in and does not change the production worker topology.
-Production Python/worker adoption, hard byte budgets, preemption of heavy source
-work and restart/recovery policy remain separate qualifications.
+host integration remains opt-in and does not change the default viewer.
+Hard byte budgets, preemption of heavy source work and restart/recovery policy
+remain separate qualifications.
 
 The canonical interpreter context can construct that prepared worker host after
 its actual first segment completes, without leasing away its source runtime.
@@ -795,8 +795,27 @@ exposes the exact endpoint. Cancellation drops unpublished delivery state withou
 revoking earlier history; the caller still cancels/releases the interpreter.
 A failure after source completion begins closes that delivery binding rather than
 automatically retrying partially completed work. None of these operations is a
-presentation acknowledgment. Production authoring-worker scheduling, source-run
-retirement, and receiver rehydration still require combined lifecycle integration.
+presentation acknowledgment.
+
+An explicitly prepared Python run uses the same production authoring worker,
+canonical context and source generation. Its single-use interpreter driver wraps
+the whole source invocation and yields at ordinary play/wait barriers. The existing
+execution endpoint owns the independent prepared reader in that WASM context;
+the source runtime remains with the interpreter. Rust look-ahead demand resumes
+the suspended stack, and one retained suffix must be adopted before another
+segment completes. Prefix delivery neither waits for nor fabricates presentation.
+Only selected frame output uses the existing bounded render transport. The first
+actual presentation receipt admits the Rust playback clock; pure typed status
+observations do not start it. Pausing commits elapsed interior static-wait time
+through the same clock and reader, without selecting an unavailable open frontier.
+Source failure retires preparation and preserves already-adopted history; explicit
+cancellation retires the endpoint and releases its reader. Late attachment results
+cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
+rather than reconciling it into the source's latest-state player. This bounded
+profile rejects causal input, host callbacks, looping, and sources without an
+initial readable interval. A receiver restart still requires a fresh source run;
+it must reject before destroying the existing historical player. The gallery and
+default viewer do not opt into this experimental run option.
 
 At the genuine execution-to-render-worker boundary, an opt-in prepared player
 may own the independent reader in the producing execution context. It encodes
@@ -808,8 +827,8 @@ bootstrap is empty and selected immutable closures accompany the initial delta.
 Future append alone sends no render publication. A drained delta is owned by the
 host for ordered, backpressured delivery; neither consumption nor extraction
 acknowledges display. Rebootstrapping that stream with an incomplete inventory is
-rejected. Full worker restart/rehydration and production interpreter-worker
-adoption still require their own lifecycle qualification. Single-context/native
+rejected. Full worker restart/rehydration still requires its own lifecycle
+qualification. Single-context/native
 hosts continue to borrow publications directly without this transport.
 
 The reader distinguishes monotonic forward playback from an explicit seek.

@@ -118,6 +118,50 @@ async function startClient(errors = []) {
   return { client, authoring, engine, render };
 }
 
+for (const explicit of [true, false]) test(`prepared reader refuses destructive recovery regardless of caller hint (${explicit})`, async () => {
+  const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("prepared-scene", authoring, {
+      transportMode: "transferable", continuationGeneration: 7,
+      initiallyPaused: explicit, ...(explicit ? { preparedPlayback: true } : {}),
+    });
+    const { render } = await finishStartup(starting, authoring, offset);
+    assert.equal(authoring.attachments[0].options.initiallyPaused, explicit);
+    assert.equal(authoring.attachments[0].options.continuationGeneration, 7);
+    const canvas = client.canvas;
+    const messages = render.messages.length;
+    await assert.rejects(client.restart({ failedOwner: "render" }), /fresh Run/);
+    await assert.rejects(client.restart({ failedOwner: "engine" }), /fresh Run/);
+    await assert.rejects(client.switchToSemanticExecution("prepared-scene", authoring), /historical player/);
+    assert.equal(client.canvas, canvas);
+    assert.equal(render.messages.length, messages, "denial must precede renderer teardown or rebuild");
+    assert.equal(authoring.attachments.length, 1);
+    assert.deepEqual(authoring.stoppedContexts, []);
+    assert.equal((await client.seek(12)).time, 12, "prepared readiness belongs to the reader, not the bootstrap loop duration");
+    for (const time of [-1, NaN, Infinity]) await assert.rejects(client.seek(time), /finite and non-negative/);
+    assert.equal((await client.pause()).playing, false, "the existing endpoint remains usable");
+  } finally { client.terminate(); }
+});
+
+test("invalid prepared startup profiles reject before allocating a renderer", async () => {
+  for (const options of [
+    { preparedPlayback: "true", continuationGeneration: 1 },
+    { preparedPlayback: true },
+    { preparedPlayback: true, continuationGeneration: 1, pacing: "external_samples" },
+  ]) {
+    const canvas = new FakeCanvas();
+    const client = new ExecutionWorkerClient(canvas);
+    const offset = FakeWorker.instances.length;
+    await assert.rejects(client.startSemanticExecution("scene", new FakeSemanticAuthoringClient(), options), /preparedPlayback|prepared playback/);
+    assert.equal(FakeWorker.instances.length, offset);
+    assert.equal(canvas.transfers, 0);
+    client.terminate();
+  }
+});
+
 function requestMessage(worker, type) {
   const entry = worker.messages.findLast(entry => (entry.message ?? entry).type === type);
   assert.ok(entry, `missing ${worker.name} ${type} request`);
