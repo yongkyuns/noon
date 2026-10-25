@@ -84,6 +84,13 @@ pub struct PrefixPublisher {
     resources: CompiledResources,
 }
 
+impl PrefixPublisher {
+    /// The last extracted frontier, not a displayed time or proof of delivery.
+    pub fn frontier(&self) -> f64 {
+        self.frontier
+    }
+}
+
 /// An owned, ordered extension of one read-only historical projection.
 /// Fields are private: callers cannot mint revisions, edit identities, or combine
 /// streams. Moving it across threads requires no serialization or shared writes.
@@ -484,11 +491,13 @@ impl SceneInstance {
         self.prepare_prefix_batch(publisher, true)
     }
 
-    fn prepare_prefix_batch(
+    /// Validate source provenance before an interpreter advances or seals it.
+    /// This read-only check deliberately permits an unfinished source segment.
+    #[doc(hidden)]
+    pub fn validate_prefix_publisher(
         &self,
-        publisher: &mut PrefixPublisher,
-        terminal: bool,
-    ) -> Result<PrefixBatch, PrefixError> {
+        publisher: &PrefixPublisher,
+    ) -> Result<(), PrefixError> {
         let history = self
             .replay_history
             .as_ref()
@@ -498,6 +507,19 @@ impl SceneInstance {
         {
             return Err(PrefixError::SourceChanged);
         }
+        Ok(())
+    }
+
+    fn prepare_prefix_batch(
+        &self,
+        publisher: &mut PrefixPublisher,
+        terminal: bool,
+    ) -> Result<PrefixBatch, PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        self.validate_prefix_publisher(publisher)?;
         if let Some(error) = history.failure {
             return Err(error.into());
         }

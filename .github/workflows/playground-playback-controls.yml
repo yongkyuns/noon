@@ -235,6 +235,7 @@ jobs:
           cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
           cargo test --locked -p noon-web --all-features --lib prepared_worker
           cargo test --locked -p noon-web --all-features --lib interpreter_prefix
+          cargo test --locked -p noon-web --all-features --lib interpreter_worker
           python3 -m unittest discover -s web/python -p test_prepared_execution.py
           cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
           node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs web/prepared-interpreter-driver.test.mjs
@@ -255,6 +256,7 @@ jobs:
           node scripts/prepared-python-qualification.mjs
           node scripts/prepared-construct-qualification.mjs
           node scripts/prepared-worker-qualification.mjs
+          NOON_PREPARED_WORKER_SOURCE=python node scripts/prepared-worker-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7

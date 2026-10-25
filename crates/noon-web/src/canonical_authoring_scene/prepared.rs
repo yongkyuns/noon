@@ -4,6 +4,14 @@ use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn validate_prepared_publisher(
+        &mut self,
+        publisher: &PrefixPublisher,
+    ) -> Result<(), AuthoringFailure> {
+        self.active_live_player()?
+            .validate_prepared_publisher(publisher)
+    }
+
     /// Headlessly complete one actual pending source segment. The caller still
     /// owns interpreter suspension, cancellation and demand. Never retry source
     /// statements on failure, and never treat completion as a display receipt.

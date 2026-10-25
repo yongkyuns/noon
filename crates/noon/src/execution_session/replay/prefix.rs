@@ -23,6 +23,15 @@ impl ExecutionSession {
         Ok(())
     }
 
+    /// Check an existing stream against this source before headless completion.
+    /// A matching stream does not grant permission to bypass segment/domain gates.
+    pub fn validate_prepared_publisher(
+        &self,
+        publisher: &PrefixPublisher,
+    ) -> Result<(), PrefixError> {
+        self.runtime.validate_prefix_publisher(publisher)
+    }
+
     fn ensure_prefix_boundary(&self, boundary: ExecutionSegment) -> Result<(), PrefixError> {
         // Check the original session, never a clone (which clears pending tokens).
         // Quiet waits also need the actual source-owned deadline supplied here.
