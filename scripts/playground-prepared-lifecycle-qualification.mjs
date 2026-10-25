@@ -106,6 +106,15 @@ async function seekSealed(page, time) {
     return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t;
   }, time);
 }
+async function assertGallerySourceFailure(page) {
+  // The status is the exception title. Its message belongs to the visible
+  // diagnostic panel, not the status or the echoed Python source excerpt.
+  const panel = page.locator("#authoring-problem");
+  await panel.waitFor({ state: "visible" });
+  assert.equal(await page.locator("#patch-status").evaluate(element => element.value ?? element.textContent), "Python raised RuntimeError");
+  assert.equal(await panel.locator("strong").textContent(), "Python raised RuntimeError");
+  assert.equal(await panel.locator("p").first().textContent(), "intentional gallery source failure");
+}
 async function selectGalleryExample(page, id) {
   // The production picker keeps cards hidden until its trigger opens the dialog.
   // Use ordinary DOM clicks; do not force a hidden click or bypass selection.
@@ -189,7 +198,7 @@ try {
         await openReady(page); await pause(page); await seekOpen(page, 29.5);
         await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
           document.querySelector("#patch-status")?.dataset.state === "error");
-        assert.match(await page.locator("#patch-status").evaluate(element => element.value ?? element.textContent), /intentional gallery source failure/);
+        await assertGallerySourceFailure(page);
         await openReady(page); await seekOpen(page, 5);
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
         assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-partial-history`)));
@@ -207,6 +216,8 @@ try {
         entry.diagnostics = await page.evaluate(() => ({
           status: document.querySelector("#status")?.dataset,
           message: document.querySelector("#patch-status")?.value,
+          diagnosticTitle: document.querySelector("#authoring-problem > strong")?.textContent,
+          diagnosticMessage: document.querySelector("#authoring-problem > p")?.textContent,
           run: globalThis.__noonExampleGallery?.runPhaseMetrics,
           controls: document.querySelector(".playback-controls")?.dataset,
         })).catch(() => null);
