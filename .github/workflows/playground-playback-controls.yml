@@ -32,6 +32,7 @@ on:
       - "scripts/prepared-python-qualification.mjs"
       - "scripts/prepared-construct-qualification.mjs"
       - "scripts/prepared-worker-qualification.mjs"
+      - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -68,6 +69,7 @@ on:
       - "scripts/prepared-python-qualification.mjs"
       - "scripts/prepared-construct-qualification.mjs"
       - "scripts/prepared-worker-qualification.mjs"
+      - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -239,8 +241,13 @@ jobs:
           python3 -m unittest discover -s web/python -p test_prepared_execution.py
           cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
           node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs web/prepared-interpreter-driver.test.mjs
+          node --test web/semantic-engine-endpoint.prepared.test.mjs web/prepared-authoring-worker.test.mjs
       - name: Build explicitly enabled same-context canvas
-        run: wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
+        run: |
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
+          node scripts/build-python-worker.mjs
+          node scripts/build-runtime-identity.mjs
+          node scripts/check-web-package.mjs
       - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
@@ -257,6 +264,7 @@ jobs:
           node scripts/prepared-construct-qualification.mjs
           node scripts/prepared-worker-qualification.mjs
           NOON_PREPARED_WORKER_SOURCE=python node scripts/prepared-worker-qualification.mjs
+          node scripts/prepared-authoring-worker-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -265,5 +273,6 @@ jobs:
           path: |
             browser-smoke-artifacts/prepared-canvas
             browser-smoke-artifacts/prepared-worker
+            browser-smoke-artifacts/prepared-authoring-worker
           if-no-files-found: warn
           retention-days: 3

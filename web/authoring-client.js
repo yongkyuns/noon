@@ -53,7 +53,7 @@ export class PythonAuthoringClient {
   async run(
     source,
     context = {},
-    { onSemanticContinuation = null } = {},
+    { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1 } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
@@ -64,14 +64,22 @@ export class PythonAuthoringClient {
     if (onSemanticContinuation !== null && typeof onSemanticContinuation !== "function") {
       throw new TypeError("onSemanticContinuation must be a function");
     }
+    if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
+      throw new TypeError("preparationLookaheadSeconds must be positive and finite");
+    }
+    if (preparedPlayback && onSemanticContinuation === null) {
+      throw new Error("prepared playback requires a semantic continuation consumer");
+    }
     await this.ready();
     const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId, { onSemanticContinuation });
+    const result = this.#resultFor(requestId, { onSemanticContinuation, preparedPlayback });
     this.#worker.postMessage(
       envelope("run", {
         requestId,
         source,
         context,
+        ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
       }),
     );
     return result;
@@ -122,9 +130,6 @@ export class PythonAuthoringClient {
     if (typeof initiallyPaused !== "boolean") {
       throw new TypeError("initiallyPaused must be a boolean");
     }
-    if (initiallyPaused && continuationGeneration !== null) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     if (pacing !== "realtime" && pacing !== "external_samples") {
       throw new TypeError(`unsupported semantic execution pacing ${pacing}`);
     }
@@ -134,6 +139,17 @@ export class PythonAuthoringClient {
     const continuation = continuationGeneration === null
       ? null
       : this.#matchingContinuation(contextId, continuationGeneration);
+    const preparedPlayback = continuation?.preparedPlayback === true;
+    if (initiallyPaused && continuationGeneration !== null && !preparedPlayback) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
+    if (this.#continuations.get(contextId)?.preparedPlayback &&
+        (continuation === null || replaceExistingEndpoint)) {
+      throw new Error("prepared playback cannot reattach or replace its endpoint");
+    }
+    if (preparedPlayback && (callbackSessionId !== null || pacing !== "realtime")) {
+      throw new Error("prepared playback requires realtime pacing without Python callbacks");
+    }
     await this.ready();
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
@@ -257,6 +273,12 @@ export class PythonAuthoringClient {
         const pending = this.#pendingFor(message.requestId);
         if (pending === null) return;
         const result = parseAuthoringResult(message.resultJson);
+        if (pending.preparedPlayback &&
+            (result.semanticExecution.preparedPlayback !== true ||
+             result.semanticExecution.contextId !== pending.continuationDescriptor?.contextId ||
+             result.semanticExecution.continuationGeneration !== pending.continuationDescriptor?.continuationGeneration)) {
+          throw new Error("prepared source result does not match its registered continuation");
+        }
         if (message.workerRunTiming !== undefined && message.workerRunTiming !== null) {
           result.workerRunTiming = validateWorkerRunTiming(message.workerRunTiming);
         }
@@ -317,6 +339,9 @@ export class PythonAuthoringClient {
     if (semanticExecution?.continuationGeneration !== message.generation) {
       throw new Error("Python semantic continuation registration generation does not match");
     }
+    if ((semanticExecution.preparedPlayback === true) !== pending.preparedPlayback) {
+      throw new Error("Python semantic continuation preparation mode does not match its source run");
+    }
     const registration = Object.freeze({
       semanticExecution,
       generation: message.generation,
@@ -326,9 +351,11 @@ export class PythonAuthoringClient {
       throw new Error("Python semantic continuation context is already registered");
     }
     pending.continuationRegistered = true;
+    pending.continuationDescriptor = semanticExecution;
     this.#continuations.set(semanticExecution.contextId, {
       generation: message.generation,
       runRequestId: message.requestId,
+      preparedPlayback: semanticExecution.preparedPlayback === true,
     });
     const registrationCompletion = Promise.resolve()
       .then(() => pending.onSemanticContinuation(registration));
@@ -456,6 +483,7 @@ export function validateSemanticExecutionDescriptor(descriptor) {
   validateSemanticExecutionContextId(descriptor.context_id);
   const callbackSessionId = descriptor.callback_session_id;
   const continuationGeneration = descriptor.continuation_generation;
+  const preparedPlayback = descriptor.prepared_playback;
   if (
     callbackSessionId !== null &&
     callbackSessionId !== undefined &&
@@ -467,10 +495,17 @@ export function validateSemanticExecutionDescriptor(descriptor) {
       (!Number.isSafeInteger(continuationGeneration) || continuationGeneration <= 0)) {
     throw new TypeError("semantic continuation generation must be a positive safe integer");
   }
+  if (preparedPlayback !== undefined && typeof preparedPlayback !== "boolean") {
+    throw new TypeError("semantic prepared playback mode must be a boolean");
+  }
+  if (preparedPlayback && (continuationGeneration == null || callbackSessionId != null)) {
+    throw new Error("prepared playback requires a source continuation without Python callbacks");
+  }
   return Object.freeze({
     contextId: descriptor.context_id,
     ...(callbackSessionId == null ? {} : { callbackSessionId }),
     ...(continuationGeneration == null ? {} : { continuationGeneration }),
+    ...(preparedPlayback === true ? { preparedPlayback: true } : {}),
   });
 }
 

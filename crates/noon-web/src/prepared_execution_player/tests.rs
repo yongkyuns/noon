@@ -394,3 +394,200 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
         .iter()
         .any(|row| row.content.image().is_some()));
 }
+
+#[test]
+fn prepared_worker_status_observations_never_start_the_presentation_clock() {
+    let mut f = Fixture::new(82);
+    f.player.set_prepared_playing(true);
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(f.player.prepared_frontier(), 1.0);
+    assert_eq!(f.player.prepared_end_time(), None);
+    assert!(f.player.prepared_playing());
+    assert!(!f.player.prepared_buffering());
+    let clock = f.player.clock;
+    let publication = f.player.playback.reader.publication_context();
+    for wall in [0.0, 1_000.0, 50_000.0] {
+        assert_eq!(f.player.prepared_playback_time_at(wall).unwrap(), 0.5);
+    }
+    assert_eq!(f.player.clock, clock);
+    assert_eq!(f.player.playback.reader.publication_context(), publication);
+    let batch = f.next(true);
+    assert_eq!(f.player.prepared_frontier(), 1.0);
+    assert_eq!(f.player.prepared_end_time(), None);
+    f.deliver(batch);
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(f.player.prepared_frontier(), 2.0);
+    assert_eq!(f.player.prepared_end_time(), Some(2.0));
+    assert_eq!(f.player.clock, clock);
+}
+
+#[test]
+fn prepared_worker_static_pause_preserves_elapsed_time_and_resume_excludes_paused_wall_time() {
+    let mut f = Fixture::new(83);
+    ready(&mut f.player);
+    f.player.set_prepared_playing(true);
+    assert_eq!(
+        f.player
+            .execution_wake(1_000.0)
+            .unwrap()
+            .timer_after_milliseconds(),
+        Some(500.0)
+    );
+    let frame = f.player.playback.reader.frame().clone();
+    let clock = f.player.clock;
+    assert_eq!(f.player.prepared_playback_time_at(900.0).unwrap(), 0.5);
+    assert_eq!(f.player.prepared_playback_time_at(1_250.0).unwrap(), 0.75);
+    assert_eq!(f.player.playback.reader.frame(), &frame);
+    assert_eq!(f.player.clock, clock);
+    assert!(f.player.drain_delta_json().unwrap().is_none());
+    f.player.pause_prepared_at(1_250.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.75);
+    assert!(!f.player.prepared_playing());
+    assert!(!f.player.prepared_buffering());
+    assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 0.75);
+    f.player.pause_prepared_at(90_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.75);
+    f.player.set_prepared_playing(true);
+    assert_eq!(f.player.prepared_playback_time_at(100_000.0).unwrap(), 0.75);
+    assert_eq!(
+        f.player
+            .execution_wake(100_000.0)
+            .unwrap()
+            .timer_after_milliseconds(),
+        Some(250.0)
+    );
+    assert_eq!(
+        f.player.prepared_playback_time_at(100_125.0).unwrap(),
+        0.875
+    );
+    f.player.pause_prepared_at(100_125.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.875);
+}
+
+#[test]
+fn prepared_worker_pause_at_open_frontier_buffers_without_selecting_an_epsilon_frame() {
+    let mut f = Fixture::new(84);
+    ready(&mut f.player);
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+    let frame = f.player.playback.reader.frame().clone();
+    let publication = f.player.playback.reader.publication_context();
+    assert_eq!(f.player.prepared_playback_time_at(50_000.0).unwrap(), 1.0);
+    assert!(
+        !f.player.prepared_buffering(),
+        "observation does not mutate readiness"
+    );
+    f.player.pause_prepared_at(50_000.0).unwrap();
+    assert!(f.player.prepared_buffering());
+    assert!(!f.player.prepared_playing());
+    assert_eq!(f.player.prepared_end_time(), None);
+    assert_eq!(f.player.playback.reader.frame(), &frame);
+    assert_eq!(f.player.playback.reader.publication_context(), publication);
+    assert!(f.player.drain_delta_json().unwrap().is_none());
+    assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 0.5);
+    let batch = f.next(false);
+    f.deliver(batch);
+    assert!(!f.player.prepared_buffering());
+    assert!(!f.player.prepared_playing());
+    f.player.set_prepared_playing(true);
+    assert_eq!(f.player.prepared_playback_time_at(100_000.0).unwrap(), 0.5);
+    assert_eq!(
+        f.player
+            .execution_wake(100_000.0)
+            .unwrap()
+            .timer_after_milliseconds(),
+        Some(500.0)
+    );
+    assert_eq!(f.player.prepared_playback_time_at(100_250.0).unwrap(), 0.75);
+}
+
+#[test]
+fn prepared_worker_static_observation_stops_at_next_revision_before_terminal_time() {
+    let mut f = Fixture::new(85);
+    let batch = f.next(true);
+    f.deliver(batch);
+    ready(&mut f.player);
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+    assert_eq!(f.player.prepared_end_time(), Some(2.0));
+    assert_eq!(f.player.prepared_playback_time_at(9_000.0).unwrap(), 1.0);
+    f.player.pause_prepared_at(9_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.0);
+    assert!(!f.player.prepared_buffering());
+    assert!(f
+        .player
+        .playback
+        .reader
+        .frame()
+        .objects
+        .iter()
+        .any(|row| row.transform.translation.x == 1.0));
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(10_000.0).unwrap();
+    assert_eq!(f.player.prepared_playback_time_at(20_000.0).unwrap(), 2.0);
+    f.player.pause_prepared_at(20_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 2.0);
+    assert_eq!(f.player.prepared_end_time(), Some(2.0));
+    assert!(!f.player.prepared_buffering());
+}
+
+#[test]
+fn prepared_worker_static_time_controls_reject_invalid_wall_time_atomically() {
+    let mut f = Fixture::new(86);
+    ready(&mut f.player);
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+    let frame = f.player.playback.reader.frame().clone();
+    let publication = f.player.playback.reader.publication_context();
+    let clock = f.player.clock;
+    for wall in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        assert!(f.player.prepared_playback_time_at(wall).is_err());
+        assert!(f.player.pause_prepared_at(wall).is_err());
+        assert_eq!(f.player.clock, clock);
+        assert_eq!(f.player.playback.reader.frame(), &frame);
+        assert_eq!(f.player.playback.reader.publication_context(), publication);
+        assert!(f.player.prepared_playing());
+        assert!(!f.player.prepared_buffering());
+    }
+    assert!(f.player.drain_delta_json().unwrap().is_none());
+}
+
+#[test]
+fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
+    let mut f = Fixture::new(87);
+    let segment = {
+        let mut live = f.scene.live(&mut f.source);
+        let target = live.target_editor(&f.target).unwrap();
+        live.set_translation(&target, 2.0, 0.0).unwrap();
+        let segment = live
+            .declare_and_activate_transform_to(
+                &f.target,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(noon_core::RateFunction::Linear),
+            )
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        segment
+    };
+    let batch = f
+        .source
+        .publish_prepared_prefix(segment, &mut f.publisher)
+        .unwrap();
+    f.deliver(batch);
+    f.player.seek_delta_json(1.25).unwrap();
+    f.player.set_prepared_playing(true);
+    assert_eq!(
+        f.player.execution_wake(1_000.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    let frame = f.player.playback.reader.frame().clone();
+    assert_eq!(f.player.prepared_playback_time_at(1_500.0).unwrap(), 1.25);
+    f.player.pause_prepared_at(1_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.25);
+    assert_eq!(f.player.playback.reader.frame(), &frame);
+    assert!(!f.player.prepared_playing());
+}

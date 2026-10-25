@@ -26,6 +26,10 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
 const REPLAY_DEPENDENT_CONTROLS = new Set([
   "resume", "seek", "restart_playback", "set_loop_duration",
 ]);
+const PREPARED_PLAYBACK_CONTROLS = new Set([
+  "pause", "resume", "seek", "restart_playback", "browser_pointer_input",
+  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
+]);
 
 function normalizeReplayUnavailableReason(error) {
   return String(error?.message ?? error).replace(/^replay unavailable:\s*/i, "");
@@ -40,6 +44,7 @@ export async function attachSemanticEngine(
   completeRequiredCallbackPhase = null,
   discardRequiredCallbackPhase = null,
   testOnlyTickTimestamp = null,
+  prepared = null,
 ) {
   const {
     controlPort,
@@ -53,9 +58,17 @@ export async function attachSemanticEngine(
   if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
     throw new Error("semantic execution requires control and render ports");
   }
-  if (typeof context?.createExecutionPlayer !== "function" ||
-      typeof context.returnExecutionPlayer !== "function") {
+  if (prepared === null && (typeof context?.createExecutionPlayer !== "function" ||
+      typeof context.returnExecutionPlayer !== "function")) {
     throw new Error("semantic execution requires a context player lease API");
+  }
+  if (prepared !== null && (!prepared.player || typeof prepared.wakeSource !== "function")) {
+    throw new TypeError("prepared execution requires its reader and source wake callback");
+  }
+  if (prepared !== null && (continuation !== null || runRequiredCallbackPhase !== null ||
+      completeRequiredCallbackPhase !== null || discardRequiredCallbackPhase !== null ||
+      pacing !== SEMANTIC_PACING_REALTIME)) {
+    throw new Error("prepared execution does not lease source continuations or admit callbacks/external samples");
   }
   if (typeof initiallyPaused !== "boolean") {
     throw new Error("semantic execution has an invalid initially-paused state");
@@ -74,10 +87,13 @@ export async function attachSemanticEngine(
   }
   let player = null;
   let replayUnavailable = null;
-  // A player is leased from the authoring context. The transport session only
-  // frames deltas; it never selects or creates a second runtime for a scene.
+  // Live execution leases its existing source player. Prepared execution owns
+  // an independent typed reader; the source player stays in its active context.
+  // Transport sessions frame selected publications, never source/history state.
   let transport;
   let stopped = false;
+  let engineTrapped = false;
+  let failedPreparedPublication = null;
   let latestTick = null;
   let draining = false;
   let callbackGeneration = 0;
@@ -85,6 +101,7 @@ export async function attachSemanticEngine(
   let callbackFault = null;
   let lastSentPublication = null;
   let lastPresentedPublication = null;
+  let preparedClockAdmitted = false;
   let pendingPresentation = null;
   let pendingPointerInvalidation = null;
   let pendingPointerPresentation = null;
@@ -103,23 +120,45 @@ export async function attachSemanticEngine(
   let pendingExternalContinuation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
-  const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
+  function notePreparedTrap(error) {
+    if (prepared === null || !(error instanceof WebAssembly.RuntimeError)) return false;
+    if (!engineTrapped) {
+      engineTrapped = true;
+      // WASM cannot unwind outstanding Rust borrows. Use the existing fatal
+      // authoring-worker channel before any source or endpoint cleanup runs.
+      try { globalThis.noonReportEngineTrap?.(error); }
+      catch { /* The original trap still forbids Rust cleanup or reuse. */ }
+    }
+    return true;
+  }
+  const fail = (error, requestId = null) => {
+    if (engineTrapped) return;
+    if (notePreparedTrap(error)) { stop(); return; }
+    post({ type: "error", requestId, message: String(error?.message ?? error) });
+  };
   const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
   const send = (json, timing = null, workerCarrier = false) => {
     if (json == null) return null;
-    const metadataStartedAtMs = timing === null ? 0 : performance.now();
-    const prepared = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
-    const publication = prepared?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
-    if (prepared !== null) json = prepared.json;
-    if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
-    const transportStartedAtMs = timing === null ? 0 : performance.now();
-    if (!transport.send(json, publication)) {
-      throw new Error("semantic transport became backpressured after admission");
+    try {
+      const metadataStartedAtMs = timing === null ? 0 : performance.now();
+      const carrier = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
+      const publication = carrier?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+      if (carrier !== null) json = carrier.json;
+      if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
+      const transportStartedAtMs = timing === null ? 0 : performance.now();
+      if (!transport.send(json, publication)) {
+        throw new Error("semantic transport became backpressured after admission");
+      }
+      if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
+      lastSentPublication = publication;
+      if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
+      return publication;
+    } catch (error) {
+      // Once extracted, sequence/resource ownership cannot be reconstructed by
+      // retrying a control. A packet-size/encoding failure retires this stream.
+      if (prepared !== null) failedPreparedPublication = error;
+      throw error;
     }
-    if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
-    lastSentPublication = publication;
-    if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
-    return publication;
   };
   const sendRendererObservationPublication = (json) => {
     if (typeof json !== "string") {
@@ -236,13 +275,38 @@ export async function attachSemanticEngine(
       pendingPresentation = null;
       resolve();
     }
-    if (firstPresentation && continuationActive && player !== null &&
-        pacing === SEMANTIC_PACING_REALTIME) {
-      try { observeContinuationWake(performance.now(), true); }
+    const admitsPreparedClock = prepared !== null && !preparedClockAdmitted &&
+      samePublication(publication, lastSentPublication);
+    if (player !== null && pacing === SEMANTIC_PACING_REALTIME &&
+        (admitsPreparedClock || (firstPresentation && continuationActive))) {
+      try {
+        if (admitsPreparedClock) {
+          // A cold seek may already have selected a newer frame. An older
+          // actual receipt must not start that newly selected frame's clock.
+          preparedClockAdmitted = true;
+          observeExecutionWake(performance.now(), true);
+          prepared.wakeSource();
+        } else observeContinuationWake(performance.now(), true);
+      }
       catch (error) { terminateProgression(error); }
     }
   };
   const state = (type) => {
+    if (prepared !== null && player !== null) {
+      return {
+        type, preparedPlayback: true,
+        // Cold initialization and command acknowledgements observe only the
+        // coherent reader. Rust may project a sleeping wait after first display.
+        time: type === "state" && preparedClockAdmitted
+          ? player.preparedPlaybackTimeAt(performance.now()) : player.preparedTime(),
+        playing: player.preparedPlaying(),
+        preparedFrontier: player.preparedFrontier(),
+        durationSeconds: player.preparedEndTime() ?? null,
+        buffering: player.preparedBuffering(),
+        replaySupported: true, replayUnavailable: null,
+        canUndoTranslationDrag: false, nextPatchSequence: "0",
+      };
+    }
     if (player === null) {
       if (continuation === null) {
         throw new Error("semantic continuation is idle in its authoring context");
@@ -280,6 +344,10 @@ export async function attachSemanticEngine(
     });
   };
   const observeExecutionWake = (wallTime, force = false) => {
+    if (prepared !== null && !preparedClockAdmitted) {
+      emitExecutionWake("idle", null, force);
+      return;
+    }
     const wake = player.executionWake(wallTime);
     const cadence = wake.cadence;
     const timerAfterMilliseconds = wake.timerAfterMilliseconds;
@@ -719,10 +787,15 @@ export async function attachSemanticEngine(
   }
 
   function drainAndSendDelta(timing = null) {
-    const drainStartedAtMs = timing === null ? 0 : performance.now();
-    const packet = player.drainDeltaTransportJson();
-    if (timing !== null) timing.deltaDrainMs += performance.now() - drainStartedAtMs;
-    return send(packet, timing, true);
+    try {
+      const drainStartedAtMs = timing === null ? 0 : performance.now();
+      const packet = player.drainDeltaTransportJson();
+      if (timing !== null) timing.deltaDrainMs += performance.now() - drainStartedAtMs;
+      return send(packet, timing, true);
+    } catch (error) {
+      if (prepared !== null) failedPreparedPublication = error;
+      throw error;
+    }
   }
 
   async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion, timing = null) {
@@ -852,6 +925,13 @@ export async function attachSemanticEngine(
         switch (message.type) {
           case "pause": {
             latestTick = null;
+            if (prepared !== null) {
+              if (!preparedClockAdmitted) player.setPreparedPlaying(false);
+              else player.pausePreparedAt(performance.now());
+              drainAndSendDelta();
+              observeExecutionWake(performance.now(), true);
+              break;
+            }
             if (pacing === SEMANTIC_PACING_REALTIME) {
               const time = player.playbackTimeAt(performance.now());
               // Commit elapsed static time before freezing, so pause/resume does
@@ -863,7 +943,8 @@ export async function attachSemanticEngine(
             break;
           }
           case "resume":
-            player.resume();
+            if (prepared !== null) player.setPreparedPlaying(true);
+            else player.resume();
             observeExecutionWake(performance.now(), true);
             break;
           case "set_loop_duration":
@@ -966,6 +1047,7 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
+        if (prepared !== null) prepared.wakeSource();
         post({
           requestId: message.requestId,
           ...state(message.type),
@@ -977,7 +1059,8 @@ export async function attachSemanticEngine(
           ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         });
       } catch (error) {
-        if (message.type === "sample_to_authored_time" && continuation !== null) {
+        if ((prepared !== null && error === failedPreparedPublication) ||
+            (message.type === "sample_to_authored_time" && continuation !== null)) {
           terminateProgression(error, message.requestId);
         } else {
           fail(error, message.requestId);
@@ -991,7 +1074,16 @@ export async function attachSemanticEngine(
         // side effects while this player is retained for recovery.
         if (callbackFault === null) {
           try {
-            if (continuationActive && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+            if (prepared !== null) {
+              // The render timestamp is a wake opportunity only. The prepared
+              // reader maps this producing context's monotonic clock in Rust.
+              if (preparedClockAdmitted) {
+                send(player.tickDeltaJson(testOnlyTickTimestamp === null
+                  ? performance.now() : testOnlyTickTimestamp()));
+                observeExecutionWake(performance.now());
+                prepared.wakeSource();
+              }
+            } else if (continuationActive && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) {
               if (player.interactionsActive()) {
                 const publication = send(
                   player.advanceInteractionsDeltaJson(advanceExternalInteractionClock(performance.now())),
@@ -1037,6 +1129,7 @@ export async function attachSemanticEngine(
   }
   function terminateProgression(error, requestId = null) {
     if (stopped) return;
+    if (notePreparedTrap(error)) { stop(); return; }
     callbackFault = error instanceof Error ? error : new Error(String(error));
     fail(callbackFault, requestId);
     try {
@@ -1061,6 +1154,28 @@ export async function attachSemanticEngine(
     }
     controls.length = 0;
     latestTick = null;
+    if (prepared !== null) {
+      const retiringPlayer = player;
+      player = null;
+      // Latch interpreter cancellation before freeing its reader handle. An
+      // asynchronous bootstrap may still be unwinding on that source's stack.
+      try { onStop(); }
+      catch (error) { notePreparedTrap(error); throw error; }
+      finally {
+        try { if (!engineTrapped) retiringPlayer?.stopSourcePreparation(); }
+        catch (error) { notePreparedTrap(error); throw error; }
+        finally {
+          try { if (!engineTrapped) retiringPlayer?.free(); }
+          catch (error) { notePreparedTrap(error); throw error; }
+          finally {
+            transport?.close?.();
+            renderPort.close();
+            controlPort.close();
+          }
+        }
+      }
+      return;
+    }
     if (player !== null) {
       player.clearTranslationDragUndo();
       if (pendingPhaseJson !== null) {
@@ -1086,19 +1201,25 @@ export async function attachSemanticEngine(
     onStop();
   }
   try {
+    // Prepared ownership crosses this boundary before setup can fail. Teardown
+    // notifies the source owner and must then release this same adopted handle.
+    if (prepared !== null) player = prepared.player;
     if (!Number.isInteger(session) || session < 0 || session > 0xffffffff) {
       throw new Error("semantic execution session must fit u32");
     }
     if (![EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE].includes(transportMode)) {
       throw new Error("unsupported semantic execution transport");
     }
-    player = context.createExecutionPlayer(loopDurationSeconds, session);
-    if (continuation === null) {
+    if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
+    if (continuation === null && prepared === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
-    if (initiallyPaused || replayUnavailable !== null) player.pause();
+    if (initiallyPaused || replayUnavailable !== null) {
+      if (prepared !== null) player.setPreparedPlaying(false);
+      else player.pause();
+    }
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
@@ -1119,6 +1240,9 @@ export async function attachSemanticEngine(
           "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
+        }
+        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type)) {
+          throw new Error(`prepared playback does not support ${message.type}`);
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
@@ -1201,7 +1325,7 @@ export async function attachSemanticEngine(
       else if (message?.type === "render_error") {
         const error = new Error(message.message);
         rejectPendingRendererObservation(error);
-        if (continuation !== null) {
+        if (continuation !== null || prepared !== null) {
           terminateProgression(error);
         } else {
           rejectPendingPresentation(error);
@@ -1224,7 +1348,8 @@ export async function attachSemanticEngine(
     if (request.initialPointerView !== undefined) {
       applyNativeInput({ type: "browser_pointer_view", view: request.initialPointerView });
     }
-    await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
+    if (prepared !== null) send(player.initialDeltaJson());
+    else await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
     controlPort.start();
     renderPort.start();
     continuationActive = continuation !== null;
@@ -1234,10 +1359,23 @@ export async function attachSemanticEngine(
     } else {
       observeExecutionWake(performance.now(), true);
     }
-    post({ type: "ready", transportMode });
-  } catch (error) { stop(); throw error; }
+    post({ type: "ready", transportMode, ...(prepared === null ? {} : { preparedPlayback: true }) });
+  } catch (error) { notePreparedTrap(error); stop(); throw error; }
   return {
     stop,
+    sourcePrefixDelivered() {
+      if (prepared === null) throw new Error("semantic endpoint has no prepared source");
+      if (stopped) throw new Error("prepared execution endpoint is stopped");
+      // History adoption alone neither selects another frame nor drains a
+      // renderer delta. It may release Rust buffering/demand and wake sleepers.
+      try {
+        observeExecutionWake(performance.now());
+        prepared.wakeSource();
+      } catch (error) {
+        if (notePreparedTrap(error)) stop();
+        throw error;
+      }
+    },
     async publishContinuationResult(generation) {
       if (stopped || continuation === null || continuationActive || player !== null ||
           generation !== continuation.generation) {

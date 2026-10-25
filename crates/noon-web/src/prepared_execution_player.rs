@@ -106,13 +106,18 @@ impl PreparedExecutionPlayer {
         Ok(Some(delta))
     }
 
+    fn validate_wall_time(wall_time_ms: f64) -> Result<(), String> {
+        if !wall_time_ms.is_finite() || wall_time_ms < 0.0 {
+            return Err("prepared playback requires finite non-negative wall time".into());
+        }
+        Ok(())
+    }
+
     fn observe_clock(
         &mut self,
         wall_time_ms: f64,
     ) -> Result<crate::BrowserExecutionWakeDirective, String> {
-        if !wall_time_ms.is_finite() || wall_time_ms < 0.0 {
-            return Err("prepared playback requires finite non-negative wall time".into());
-        }
+        Self::validate_wall_time(wall_time_ms)?;
         self.clock
             .directive(
                 BrowserExecutionWakePlan::from_runtime(self.playback.wake_state()),
@@ -244,6 +249,73 @@ impl PreparedExecutionPlayer {
         if self.playback.set_playing(playing) {
             self.clock = BrowserExecutionWakeClock::default();
         }
+    }
+
+    /// Last coherent evaluated sample, independent of the producer's frontier.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedTime))]
+    pub fn prepared_time(&self) -> f64 {
+        self.playback.reader.frame().time
+    }
+
+    /// Adopted history frontier. It is open until a terminal batch is adopted.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedFrontier))]
+    pub fn prepared_frontier(&self) -> f64 {
+        self.playback.reader.frontier()
+    }
+
+    /// Inclusive final time, available only after terminal history adoption.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedEndTime))]
+    pub fn prepared_end_time(&self) -> Option<f64> {
+        self.playback.reader.end_time()
+    }
+
+    /// User playback intent; buffering and terminal readiness remain separate.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaying))]
+    pub fn prepared_playing(&self) -> bool {
+        self.playback.playing()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedBuffering))]
+    pub fn prepared_buffering(&self) -> bool {
+        self.playback.buffering()
+    }
+
+    /// Observe elapsed time in a sleeping static interval through the existing
+    /// Rust clock. This never starts/reanchors that clock or evaluates a frame.
+    /// Active animation stays at its last coherent sample; a static observation
+    /// stops at the next runtime deadline, which may be the unreadable frontier.
+    /// Observing that boundary does not authorize selecting it or prove display.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaybackTimeAt))]
+    pub fn prepared_playback_time_at(&self, wall_time_ms: f64) -> Result<f64, String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        let current = self.prepared_time();
+        let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
+            BrowserExecutionWakePlan::from_runtime(self.playback.wake_state()).cadence()
+        else {
+            return Ok(current);
+        };
+        Ok(self
+            .clock
+            .scene_time_at(wall_time_ms)
+            .unwrap_or(current)
+            .min(deadline)
+            .max(current))
+    }
+
+    /// Preserve elapsed interior static-wait time before pausing, without a
+    /// frontend clock or an epsilon seek. Reaching an open frontier buffers at
+    /// the last coherent sample instead. Any renderer delta remains available to
+    /// the caller's ordinary ordered drain; this call never acknowledges display.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pausePreparedAt))]
+    pub fn pause_prepared_at(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        let time = self.prepared_playback_time_at(wall_time_ms)?;
+        if time > self.prepared_time() {
+            self.playback
+                .advance(time)
+                .map_err(|error| error.to_string())?;
+        }
+        self.set_prepared_playing(false);
+        Ok(())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = needsPreparation))]

@@ -18,7 +18,6 @@ impl PreparedCanvasPlayback {
             buffering: false,
         }
     }
-    #[cfg(any(test, debug_assertions, feature = "renderer-smoke"))]
     pub(crate) fn playing(&self) -> bool {
         self.playing
     }

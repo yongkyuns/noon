@@ -70,6 +70,7 @@ export class ExecutionWorkerClient {
   #semanticContextId = null;
   #semanticCallbackSessionId = null;
   #semanticPacing = SEMANTIC_PACING_REALTIME;
+  #semanticPreparedPlayback = false;
   #fatalOwner = null;
   #lifecycleGeneration = 0;
   #staleWorkerEvents = { engine: 0, render: 0 };
@@ -210,9 +211,14 @@ export class ExecutionWorkerClient {
     );
     const initiallyPaused = validateInitiallyPaused(options.initiallyPaused);
     const pacing = validateSemanticPacing(options.pacing);
+    const preparedPlayback = options.preparedPlayback ?? false;
+    if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (preparedPlayback && (continuationGeneration === null || pacing !== SEMANTIC_PACING_REALTIME)) {
+      throw new Error("prepared playback requires its original source continuation and realtime pacing");
+    }
     const initialPointerView = options.initialPointerView === undefined ? undefined
       : validatedBrowserPointerView(options.initialPointerView.revision, options.initialPointerView.width, options.initialPointerView.height);
-    if (initiallyPaused && continuationGeneration !== null) {
+    if (initiallyPaused && continuationGeneration !== null && !preparedPlayback) {
       throw new Error("source-owned semantic continuations cannot start paused");
     }
     if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationGeneration === null) {
@@ -236,6 +242,7 @@ export class ExecutionWorkerClient {
       initiallyPaused,
       pacing,
       initialPointerView,
+      preparedPlayback,
     );
   }
 
@@ -248,6 +255,7 @@ export class ExecutionWorkerClient {
     initiallyPaused,
     pacing,
     initialPointerView,
+    preparedPlayback,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -303,11 +311,17 @@ export class ExecutionWorkerClient {
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
+      if (preparedPlayback && ready.engine.preparedPlayback !== true) {
+        throw new Error("prepared playback startup did not attach a prepared reader");
+      }
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
       this.#semanticPacing = pacing;
+      // The source owner chooses the profile. Caller options only request
+      // admission and cannot hide a prepared reader from recovery guards.
+      this.#semanticPreparedPlayback = ready.engine.preparedPlayback === true;
       this.#playing = !initiallyPaused;
       this.#fatalOwner = null;
       return ready;
@@ -387,6 +401,9 @@ export class ExecutionWorkerClient {
     },
   ) {
     this.#requireStarted();
+    if (this.#semanticPreparedPlayback) {
+      throw new Error("prepared playback retains its historical player; use a fresh Run to replace it");
+    }
     validateSemanticContextId(contextId);
     validateSemanticAuthoringClient(authoringClient);
     const generation = this.#lifecycleGeneration;
@@ -518,7 +535,9 @@ export class ExecutionWorkerClient {
   }
 
   async seek(timeSeconds) {
-    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    // A prepared source has an open future. Its Rust reader alone validates
+    // readiness; the bootstrap segment horizon is not a playback duration.
+    const time = validateSeekTimeSeconds(timeSeconds, this.#semanticPreparedPlayback ? null : this.#loopDurationSeconds);
     const result = await this.#requestEngine("seek", { time });
     this.#rememberPlaying(result);
     return result;
@@ -714,6 +733,9 @@ export class ExecutionWorkerClient {
   }
 
   async restart({ failedOwner = this.#fatalOwner } = {}) {
+    if (this.#semanticPreparedPlayback) {
+      throw new Error("prepared playback receiver recovery requires a fresh Run");
+    }
     const hasAuthoring = this.#semanticContextId !== null && this.#semanticAuthoringClient !== null;
     if (!hasAuthoring || this.#transportMode === null) {
       throw new Error("ExecutionWorkerClient has not been started");
@@ -806,6 +828,7 @@ export class ExecutionWorkerClient {
       this.#semanticContextId = null;
       this.#semanticCallbackSessionId = null;
       this.#semanticPacing = SEMANTIC_PACING_REALTIME;
+      this.#semanticPreparedPlayback = false;
     }
     this.#fatalOwner = null;
   }
@@ -1344,7 +1367,7 @@ function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
   if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
     throw new TypeError("playback seek time must be finite and non-negative");
   }
-  if (timeSeconds > loopDurationSeconds) {
+  if (loopDurationSeconds !== null && timeSeconds > loopDurationSeconds) {
     throw new RangeError(
       `playback seek time ${timeSeconds} exceeds loop duration ${loopDurationSeconds}`,
     );
