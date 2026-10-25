@@ -1863,6 +1863,8 @@ fn validate_object_fields(
     if object.glow.is_some_and(|glow| glow.to_compiled().is_none())
         || (object.glow.is_some()
             && (!glow_content_is_supported(&object.content)
+                || (matches!(&object.content, TransportObjectContent::Image { .. })
+                    && !noon_core::SemanticImageContent::supports_render_style(&object.style))
                 || object.spatial.is_some()
                 || !object.reveal.is_finite()
                 || !(0.0..=1.0).contains(&object.reveal)
@@ -1946,7 +1948,10 @@ fn glow_content_is_supported(content: &TransportObjectContent) -> bool {
             GeometryRef::External(_) => true,
         },
         TransportObjectContent::Text { .. } => true,
-        TransportObjectContent::Image { .. } => false,
+        // The existing resource installation resolves the immutable pixels and
+        // dimensions before committing the row. Image style, reveal and morph
+        // admission remain independently checked by validate_object_fields.
+        TransportObjectContent::Image { .. } => true,
     }
 }
 
@@ -2281,6 +2286,8 @@ mod tests {
                     },
                     sampling: crate::TransportImageSampling::Linear,
                 };
+                // Images now support glow, but never vector stroke paint.
+                corrupt.objects[0].style.stroke = Some(Color::WHITE);
                 corrupt
             },
         ] {
@@ -2390,6 +2397,117 @@ mod tests {
             ))
         );
         assert_eq!(encoder.next_sequence, before_sequence);
+    }
+
+    #[test]
+    fn image_glow_transport_preserves_source_and_rejects_invalid_edits_atomically() {
+        use noon_core::{
+            RasterImageContentRef, RasterImageResource, RasterImageResourceHandle,
+            RasterImageResourceId, RasterImageSampling, SemanticImageContent,
+        };
+
+        let resource =
+            RasterImageResource::from_rgba8(2, 1, [255_u8, 0, 0, 255, 0, 0, 255, 64]).unwrap();
+        let handle = RasterImageResourceHandle {
+            arena: 41,
+            id: RasterImageResourceId::new(9),
+            version: 3,
+        };
+        for sampling in [
+            RasterImageSampling::Nearest,
+            RasterImageSampling::Linear,
+            RasterImageSampling::Bicubic,
+        ] {
+            for source in [GlowSource::Painted, GlowSource::Silhouette] {
+                let image = RasterImageContentRef::from_resource(
+                    SemanticImageContent::with_sampling(handle, sampling),
+                    &resource,
+                );
+                let mut frame = mixed_frame();
+                frame.objects[0].content = image.into();
+                frame.objects[0].style = Style {
+                    fill: Some(Color::rgba(1.0, 1.0, 1.0, 0.4)),
+                    opacity: 0.7,
+                    ..Style::default()
+                };
+                let glow = Arc::new(noon_compile::CompiledGlow {
+                    attachment: SemanticNodeId::new(99, 7),
+                    definition: Glow::new(GlowUpdate::default().source(source)).unwrap(),
+                });
+                frame.objects[0].glow = Some(glow.clone());
+                let camera = Camera2DState::default();
+                let context = PublicationContext::default();
+                let mut encoder = RetainedExecutionDeltaEncoder::new(9);
+                let snapshot = encoder
+                    .encode_snapshot_with_context(&frame, camera, context)
+                    .unwrap();
+                let mut mirror = test_mirror();
+                assert_eq!(
+                    mirror.apply(snapshot.clone()),
+                    Err(RetainedExecutionTransportError::UnknownImageResource(
+                        handle.into()
+                    ))
+                );
+                assert!(mirror.frame().is_none());
+                assert!(mirror.session().is_none());
+                mirror.extend_installed_image_handles(&HashMap::from([(handle.into(), image)]));
+                mirror.apply(snapshot).unwrap();
+                let installed = &mirror.frame().unwrap().objects[0];
+                assert_eq!(installed.content.image(), Some(image));
+                assert_eq!(installed.glow.as_deref(), Some(glow.as_ref()));
+                assert_eq!(installed.style, frame.objects[0].style);
+
+                let changed = Arc::new(noon_compile::CompiledGlow {
+                    attachment: glow.attachment,
+                    definition: GlowUpdate::default()
+                        .intensity(1.5)
+                        .apply_to(glow.definition)
+                        .unwrap(),
+                });
+                frame.objects[0].glow = Some(changed.clone());
+                let delta = encoder
+                    .encode_incremental_with_context(
+                        &frame,
+                        &FrameChanges::objects(vec![0]),
+                        camera,
+                        context,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let sequence = mirror.next_sequence;
+                let before = mirror.frame().unwrap().clone();
+                let mut recolored = delta.clone();
+                recolored.objects[0].style.fill = Some(Color::RED);
+                assert!(matches!(
+                    mirror.apply(recolored),
+                    Err(RetainedExecutionTransportError::InvalidGlowState(_))
+                ));
+                let mut revealed = delta.clone();
+                revealed.objects[0].reveal = 0.5;
+                assert!(matches!(
+                    mirror.apply(revealed),
+                    Err(RetainedExecutionTransportError::ImageRenderGeometry(_))
+                ));
+                let mut morphed = delta.clone();
+                morphed.objects[0].morph = 0.5;
+                assert!(matches!(
+                    mirror.apply(morphed),
+                    Err(RetainedExecutionTransportError::InvalidGlowState(_))
+                ));
+                assert_eq!(mirror.next_sequence, sequence);
+                assert_eq!(mirror.frame().unwrap(), &before);
+                mirror.apply(delta).unwrap();
+                assert_eq!(
+                    mirror.frame().unwrap().objects[0].content.image(),
+                    Some(image)
+                );
+                assert_eq!(
+                    mirror.frame().unwrap().objects[0].glow.as_deref(),
+                    Some(changed.as_ref())
+                );
+                assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
+            }
+        }
     }
 
     #[test]

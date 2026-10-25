@@ -861,6 +861,13 @@ try {
     // Actual Python -> shared Rust -> retained worker; the matching ordinary
     // circle is an in-frame no-effect negative control for off-source pixels.
     { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
+    // Ordinary Python image construction and .animate use the same worker path.
+    // Its restored, no-glow image must remain at the final authored position.
+    {
+      filename: "image_glow.py", objectCount: 3, expectedDuration: 6,
+      endpointTime: null, expectedFinalCenter: [2.2, 0],
+      finalPixelPredicate: (_red, _green, blue, x) => x > 320 && blue > 80,
+    },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -998,7 +1005,7 @@ try {
         }
 
         const initial = await waitForFrame();
-        if (expectedGlowPair || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
+        if (expectedGlowPair || filename === "image_glow.py" || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
           // A source-owned Python continuation never admits external pause/seek.
           // harness.authoring.run resolves only after its final Rust execution
           // lease has returned and the final retained publication was presented.
