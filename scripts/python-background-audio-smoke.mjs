@@ -115,6 +115,8 @@ const sceneControls = { previous: -3.6, play: -1.8, next: 0, restart: 1.8, mute:
 async function scenePosition(x, y = -3.45) {
   const canvas = page.locator("#scene");
   await canvas.scrollIntoViewIfNeeded();
+  assert.notEqual(await canvas.evaluate(element => getComputedStyle(element).pointerEvents), "none",
+    "physical interaction qualification requires the canvas's normal pointer-event policy");
   const box = await canvas.boundingBox();
   assert.ok(box, "scene canvas must have a visible surface");
   return { x: box.x + box.width / 2 + x * box.height / 8,
@@ -405,6 +407,10 @@ try {
   await record("exact seek preserves native input/output bindings and a real gallery poster", async () => {
     const starts = (await state()).starts.length;
     const canvas = page.locator("#scene");
+    const pointerPolicy = await canvas.evaluate(element => ({
+      value: element.style.getPropertyValue("pointer-events"),
+      priority: element.style.getPropertyPriority("pointer-events"),
+    }));
     await page.getByRole("slider", { name: "Animation playhead", exact: true }).fill("8");
     await waitForBrowserObservation(page, async () => {
       const result = await audioQualification.execution.state();
@@ -446,6 +452,12 @@ try {
     assertRetainedPoster(entry, posterRecord, source, poster, report.runtimeBuildIdentity);
     assert.equal((await state()).starts.length, starts, "paused seeks must not start device sources");
     await quiet();
+    // The capture-only layout intentionally disables hit testing. Restore the
+    // exact prior policy before subsequent real scene-button qualification.
+    await canvas.evaluate((element, policy) => {
+      if (policy.value) element.style.setProperty("pointer-events", policy.value, policy.priority);
+      else element.style.removeProperty("pointer-events");
+    }, pointerPolicy);
     return {
       samples, forwardSamples,
       held: { time: 30, points: held.points, pngSha256: hash(held.bytes),
@@ -852,6 +864,11 @@ for name in ["First", "Second", "Third"]:
   if (hasExecution) {
     report.failureFrame = await command("debugFrame").catch(error => ({ unavailable: String(error) }));
     report.failureMetrics = await command("metrics").catch(error => ({ unavailable: String(error) }));
+    report.failurePointerInput = await page.evaluate(() => ({
+      inputs: audioQualification.pointerInputs,
+      presentation: audioQualification.pointerPlayer?.pointerPresentation ?? null,
+      canvasPointerEvents: getComputedStyle(document.querySelector("#scene")).pointerEvents,
+    })).catch(error => ({ unavailable: String(error) }));
   }
   await page?.screenshot({ path: path.join(artifacts, "failure.png"), fullPage: true }).catch(() => {});
 } finally {
