@@ -1036,6 +1036,47 @@ test("pause cancels pending scene Play by exact sequence and its delayed unlock 
   } finally { client.terminate(); }
 });
 
+test("focus loss settles pending scene Play before its held audio unlock resolves", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  let finishUnlock, released;
+  const unlocked = new Promise(resolve => { finishUnlock = resolve; });
+  const anchors = [];
+  t.mock.method(WorkerAudioDevice.prototype, "unlock", () => unlocked);
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", anchor => anchors.push(anchor));
+  const { client, engine } = await startClient();
+  let clicked;
+  try {
+    clicked = client.submitBrowserPointerInput({ ...pointerInput, kind: "release" });
+    void clicked.then(result => { released = result; }, () => {});
+    const input = await waitForRequest(engine, "browser_pointer_input");
+    engine.emitMessage(engineMessage(input.type, { requestId: input.requestId, time: 0, playing: false,
+      pointerInputAccepted: true, sceneControl: { sequence: "8", action: "toggle_playback" } }));
+    await Promise.resolve();
+    await Promise.resolve();
+    const lostFocus = client.submitBrowserPointerInput({ ...pointerInput, kind: "focus_lost" });
+    const lost = await waitForRequest(engine, "browser_pointer_input", 2);
+    engine.emitMessage(engineMessage(lost.type, { requestId: lost.requestId, time: 0, playing: false,
+      pointerInputAccepted: true }));
+    await lostFocus;
+    assert.equal(released?.sceneControlApplied, false,
+      "the old release must settle without waiting for the audio unlock");
+    assert.equal(released.pointerInputAccepted, true);
+    const cancel = await waitForRequest(engine, "scene_control");
+    assert.equal(cancel.sequence, "8");
+    assert.equal(cancel.cancel, true);
+    engine.emitMessage(engineMessage(cancel.type, { requestId: cancel.requestId, sceneControlApplied: false }));
+    finishUnlock();
+    await clicked;
+    await Promise.resolve();
+    assert.deepEqual(anchors, []);
+    assert.equal(engine.messages.filter(message => message.type === "scene_control" && !message.cancel).length, 0);
+  } finally {
+    finishUnlock();
+    client.terminate();
+    await clicked?.catch(() => {});
+  }
+});
+
 test("a new committed scene action retires an older external Play unlock", async t => {
   const { WorkerAudioDevice } = await import("./worker-audio-device.js");
   let finishUnlock;

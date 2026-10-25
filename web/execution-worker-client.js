@@ -747,7 +747,7 @@ export class ExecutionWorkerClient {
   // or delivery yields. A later acknowledgement never relabels this occurrence.
   async submitBrowserPointerInput(input) {
     this.#requireStarted();
-    if (["press", "cancel", "capture_lost"].includes(input.kind)) {
+    if (["press", "cancel", "capture_lost", "focus_lost"].includes(input.kind)) {
       this.#invalidateSceneControl();
     }
     const admission = {
