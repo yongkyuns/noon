@@ -106,6 +106,15 @@ async function seekSealed(page, time) {
     return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t;
   }, time);
 }
+async function selectGalleryExample(page, id) {
+  // The production picker keeps cards hidden until its trigger opens the dialog.
+  // Use ordinary DOM clicks; do not force a hidden click or bypass selection.
+  const layer = page.locator(".example-browser-layer");
+  await page.locator("#example-browser-trigger").click();
+  await layer.waitFor({ state: "visible" });
+  await layer.locator(`.example-card[data-example-id="${id}"]`).click();
+  await layer.waitFor({ state: "hidden" });
+}
 async function pixels(page, name) {
   await page.waitForFunction(async () => {
     const metrics = (await __noonExampleGallery.executionMetrics())?.metrics;
@@ -175,7 +184,7 @@ try {
 
         // Select another source while preparation is demand-paused. This uses
         // normal cooperative cancellation and the gallery's generation gates.
-        await page.locator('.example-card[data-example-id="prepared-failure"]').click();
+        await selectGalleryExample(page, "prepared-failure");
         await page.waitForFunction(() => __noonExampleGallery.selectedExampleId === "prepared-failure");
         await openReady(page); await pause(page); await seekOpen(page, 29.5);
         await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
@@ -185,7 +194,7 @@ try {
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
         assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-partial-history`)));
         entry.checks.push("gallery-selection-cancels-demand-wait", "source-error-retains-open-seekable-history");
-        await page.locator('.example-card[data-example-id="prepared-lifecycle"]').click();
+        await selectGalleryExample(page, "prepared-lifecycle");
         await page.waitForFunction(() => __noonExampleGallery.selectedExampleId === "prepared-lifecycle");
         await openReady(page); await pause(page);
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
