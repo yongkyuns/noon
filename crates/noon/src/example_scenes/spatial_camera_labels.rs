@@ -171,7 +171,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             movement.node_id(),
             AnimationOptions::new(),
         )

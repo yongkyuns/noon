@@ -189,8 +189,12 @@ pub(crate) fn stage_effect_copy(
     match (node.effect_ids(), observed.object.glow.as_deref()) {
         ([], None) => Ok(()),
         ([attachment], Some(glow)) if *attachment == glow.attachment => {
-            let effect = store.semantic_effect_state(*attachment)?;
-            transaction.create_effect(target, effect.name(), glow.definition);
+            store.copy_effect_into_with_definition(
+                *attachment,
+                target,
+                glow.definition,
+                transaction,
+            )?;
             Ok(())
         }
         // Never rebind a stale generation by name or silently lose an effect.

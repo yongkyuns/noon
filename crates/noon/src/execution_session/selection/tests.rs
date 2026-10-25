@@ -558,7 +558,7 @@ fn animated_geometry_is_repicked_at_release_and_highlight_follows_effective_tran
     let mut session = session(&store, root);
     session
         .activate_animation_segment(
-            &store,
+            &mut store,
             animation,
             AnimationOptions::new()
                 .run_time(2.0)
@@ -923,7 +923,7 @@ fn stationary_hover_tracks_presented_geometry_and_cancellation_without_input_rep
     let mut session = session(&store, root);
     session
         .activate_animation_segment(
-            &store,
+            &mut store,
             animation,
             AnimationOptions::new()
                 .run_time(2.0)

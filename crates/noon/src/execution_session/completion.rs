@@ -229,6 +229,17 @@ impl ExecutionSession {
             object_entries: entries,
             scalar_entries,
         } = &pending.kind;
+        // Supersession records only the affected exact TrackIds during the live
+        // edit. Prune their completion work at this existing segment-wide barrier,
+        // preserving the declaration order of every surviving endpoint.
+        let surviving_entries = (!pending.superseded_glow_pulse_tracks.is_empty()).then(|| {
+            entries
+                .iter()
+                .filter(|entry| !pending.superseded_glow_pulse_tracks.contains(&entry.track))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let entries = surviving_entries.as_deref().unwrap_or(entries);
 
         for entry in scalar_entries {
             if entry.end_time != actual_time {
@@ -444,7 +455,17 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
-        stage_glow_completions(entries, &mut semantic);
+        // Child endpoints restore intensity through ordinary track evaluation.
+        // Keep a temporary neutral identity until this enclosing segment barrier
+        // so a reversing composition can reopen its child without reallocating.
+        let removed_glow = pending
+            .glow_pulse_attachments
+            .iter()
+            .filter_map(|(attachment, ownership)| {
+                ownership.remove_on_completion.then_some(*attachment)
+            })
+            .collect::<BTreeSet<_>>();
+        stage_glow_completions(entries, &removed_glow, &mut semantic);
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -600,6 +621,11 @@ impl ExecutionSession {
                 )
             })?;
 
+        // Node removals form the transaction's suffix. Property completion for
+        // this or another source must be staged before retiring temporary IDs.
+        for attachment in removed_glow {
+            semantic.remove_node(attachment);
+        }
         let prepared = semantic.prepare(store).map_err(|error| {
             ExecutionSegmentCompletionError::Publication(
                 ExecutionSessionPublicationError::Semantic(error),
@@ -789,6 +815,7 @@ fn has_ancestor_in(
 
 fn stage_glow_completions(
     entries: &[crate::execution_segment::SegmentCompletionEntry],
+    removed: &BTreeSet<SemanticNodeId>,
     semantic: &mut SemanticMutationTransaction,
 ) {
     let final_entries = entries
@@ -804,7 +831,9 @@ fn stage_glow_completions(
         .collect::<HashMap<_, _>>();
     for (index, entry) in entries.iter().enumerate() {
         if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
-            if final_entries.get(&(*attachment, value.property())) == Some(&index) {
+            if !removed.contains(attachment)
+                && final_entries.get(&(*attachment, value.property())) == Some(&index)
+            {
                 semantic.update_effect(*attachment, value.update());
             }
         }
@@ -880,7 +909,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -951,7 +980,7 @@ mod tests {
             let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
             let segment = session
                 .activate_animation_segment(
-                    &store,
+                    &mut store,
                     animation,
                     AnimationOptions::new()
                         .run_time(2.0)
@@ -1023,7 +1052,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(2.0)
@@ -1103,7 +1132,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(2.0)
@@ -1155,7 +1184,12 @@ mod tests {
             )
             .unwrap();
 
-        let mut opacity_target = store.semantic_object_state_checked(object).unwrap().clone();
+        // A full Transform names an absolute destination. Preserve the first
+        // child's complete fill state so this second target owns only opacity.
+        let mut opacity_target = store
+            .semantic_object_state_checked(fill_target)
+            .unwrap()
+            .clone();
         opacity_target.style.object_opacity = 0.5;
         let opacity_target = store.insert_semantic_object(opacity_target);
         let opacity = store
@@ -1182,7 +1216,7 @@ mod tests {
             .clone();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 sequence,
                 AnimationOptions::new()
                     .run_time(2.0)
@@ -1302,7 +1336,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 parallel,
                 // Keep the root's authored ThereAndBack rate function; a play
                 // rate override would intentionally replace that mapping.
@@ -1424,7 +1458,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1475,7 +1509,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1560,7 +1594,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new().rate_func(RateFunction::Linear),
             )
@@ -1634,7 +1668,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1730,7 +1764,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1794,7 +1828,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1935,7 +1969,7 @@ mod glow_completion_tests {
             entry(&source, attachment, GlowTrackValue::Intensity(0.7), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
-        stage_glow_completions(&entries, &mut tx);
+        stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);
         assert_eq!(tx.mutations().len(), 1);
         let mut store = scene.integration_store().borrow_mut();
         let revision = store.scene_revision();
@@ -1967,7 +2001,7 @@ mod glow_completion_tests {
             entry(&source, old, GlowTrackValue::Intensity(7.0), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
-        stage_glow_completions(&entries, &mut tx);
+        stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);
         let mut store = scene.integration_store().borrow_mut();
         let revision = store.scene_revision();
         let before = definition(&store, new);

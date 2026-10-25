@@ -17,8 +17,9 @@ pub(super) fn effect_snapshot(
                 if preflight.removed_existing.contains(&effect.attachment) {
                     return None;
                 }
-                if let Some(&definition) = preflight.staged_effects.get(&effect.attachment) {
-                    effect.definition = definition;
+                if let Some(state) = preflight.staged_effects.get(&effect.attachment) {
+                    effect.definition = state.definition();
+                    effect.copy_provenance = state.copy_provenance();
                 }
                 Some(effect)
             })
@@ -33,7 +34,10 @@ pub(super) fn effect_snapshot(
         .flatten()
     {
         let SemanticNodeCreation::Effect {
-            name, definition, ..
+            name,
+            definition,
+            copy_provenance,
+            ..
         } = &preflight.pending_creations[token]
         else {
             unreachable!("indexed effect creation");
@@ -42,6 +46,7 @@ pub(super) fn effect_snapshot(
             attachment: planned_nodes[token],
             name: name.clone(),
             definition: *definition,
+            copy_provenance: *copy_provenance,
         });
     }
     result

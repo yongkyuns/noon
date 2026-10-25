@@ -330,7 +330,7 @@ fn independent_and_cloned_stores_cannot_alias_publication_queries_or_animation()
             Err(ExecutionSessionPublicationError::ForeignSemanticStore)
         ));
         assert!(matches!(
-            session.activate_animation_segment(&foreign, nodes[0], AnimationOptions::new()),
+            session.activate_animation_segment(&mut foreign, nodes[0], AnimationOptions::new()),
             Err(super::super::super::ExecutionSessionAnimationError::ForeignSemanticStore)
         ));
     }
@@ -414,7 +414,7 @@ fn completed_effective_query_can_author_and_activate_the_next_segment() {
             panic!("animation expected")
         };
         let segment = session
-            .activate_animation_segment(&store, *animation, options)
+            .activate_animation_segment(&mut store, *animation, options)
             .unwrap();
         session
             .advance_segment_to(segment, segment.start_time() + 0.5)
@@ -734,7 +734,7 @@ fn authored_value_change_during_animation_is_rejected_before_publication() {
         panic!()
     };
     let segment = session
-        .activate_animation_segment(&store, *animation, options)
+        .activate_animation_segment(&mut store, *animation, options)
         .unwrap();
     session.seek(1.0).unwrap();
     let store_revision = store.scene_revision();
@@ -1040,7 +1040,7 @@ fn callback_release_persists_owned_camera_channels_and_leaves_active_targets_alo
         panic!("Restore animation declaration")
     };
     let segment = session
-        .activate_animation_segment(&store, *restore_animation, restore_options)
+        .activate_animation_segment(&mut store, *restore_animation, restore_options)
         .unwrap();
     callbacks
         .advance_segment_to(&mut session, segment, segment.start_time())

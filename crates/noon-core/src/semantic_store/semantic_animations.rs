@@ -347,6 +347,12 @@ pub enum SemanticAnimationIntent {
         color: Color,
         scale_center: SemanticVec3,
     },
+    /// Temporarily drive only glow intensity from its activation-effective value.
+    /// Attachment enrollment and restoration belong to shared activation/completion.
+    GlowPulse {
+        target: SemanticNodeId,
+        intensity: f64,
+    },
     /// Reveal one vector outline, then restore its activation-effective style.
     DrawBorderThenFill {
         target: SemanticNodeId,
@@ -425,6 +431,7 @@ impl SemanticAnimationIntent {
             | Self::WorldTransformTo { target, .. }
             | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
+            | Self::GlowPulse { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -448,6 +455,7 @@ impl SemanticAnimationIntent {
             | Self::MoveAlongPath { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
+            | Self::GlowPulse { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -491,6 +499,7 @@ impl SemanticAnimationIntent {
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
+            | Self::GlowPulse { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -515,6 +524,7 @@ impl SemanticAnimationIntent {
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
+            | Self::GlowPulse { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -583,6 +593,7 @@ pub enum SemanticAnimationError {
     SameTargetAndTargetState(SemanticNodeId),
     InvalidRotationAngle(f64),
     InvalidIndicateEndpoint,
+    InvalidGlowPulseIntensity,
     InvalidDrawBorderThenFillOutline,
     InvalidPassingFlash,
     InvalidSubsetDisplayMember,
@@ -630,6 +641,9 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidIndicateEndpoint => formatter.write_str(
                 "Indicate scale, color, and shared scale center must be finite 2D values",
             ),
+            Self::InvalidGlowPulseIntensity => {
+                formatter.write_str("GlowPulse intensity must be finite and in [0, 8]")
+            }
             Self::InvalidDrawBorderThenFillOutline => {
                 formatter.write_str("DrawBorderThenFill outline width and color must be finite")
             }
@@ -930,6 +944,26 @@ impl SemanticStore {
             SemanticTransformInterpolation::Affine,
             false,
             options,
+        )
+    }
+
+    /// Declare an inert pulse. Values and attachment identity are captured at activation.
+    pub fn insert_semantic_glow_pulse_animation(
+        &mut self,
+        target: SemanticNodeId,
+        intensity: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        crate::Glow::new(crate::GlowUpdate::default().intensity(intensity))
+            .map_err(|_| SemanticAnimationError::InvalidGlowPulseIntensity)?;
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::GlowPulse { target, intensity },
+                options,
+            )),
         )
     }
 
@@ -1568,6 +1602,81 @@ mod tests {
         store
             .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
             .unwrap()
+    }
+
+    #[test]
+    fn glow_pulse_declaration_is_inert_and_keeps_only_authored_intent() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let mut tx = crate::SemanticMutationTransaction::new();
+        let pulse = tx.create_glow_pulse_animation(target, 2.0, AnimationOptions::new());
+        let result = tx.apply(&mut store).unwrap();
+        let pulse = result.resolve(pulse).unwrap();
+        let declaration = store.semantic_animation_state(pulse).unwrap();
+        assert_eq!(
+            declaration.intent(),
+            &SemanticAnimationIntent::GlowPulse {
+                target,
+                intensity: 2.0
+            }
+        );
+        assert_eq!(declaration.options(), AnimationOptions::new());
+        assert!(store.node(target).unwrap().effect_ids().is_empty());
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn invalid_glow_pulse_inputs_leave_identity_revision_and_attachments_untouched() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let before = (
+            store.len(),
+            store.scene_revision(),
+            store.preview_node_allocations().next(),
+        );
+        for intensity in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.01, 8.01] {
+            assert_eq!(
+                store.insert_semantic_glow_pulse_animation(
+                    target,
+                    intensity,
+                    AnimationOptions::new()
+                ),
+                Err(SemanticAnimationError::InvalidGlowPulseIntensity)
+            );
+            let mut tx = crate::SemanticMutationTransaction::new();
+            tx.create_effect(target, "glow", crate::Glow::default());
+            tx.create_glow_pulse_animation(target, intensity, AnimationOptions::new());
+            assert!(matches!(
+                tx.apply(&mut store),
+                Err(crate::SemanticMutationTransactionError::InvalidGlowPulseIntensity { .. })
+            ));
+            assert_eq!(
+                before,
+                (
+                    store.len(),
+                    store.scene_revision(),
+                    store.preview_node_allocations().next()
+                )
+            );
+        }
+        for duration in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            let mut tx = crate::SemanticMutationTransaction::new();
+            tx.create_effect(target, "glow", crate::Glow::default());
+            tx.create_glow_pulse_animation(target, 2.0, AnimationOptions::new().run_time(duration));
+            assert!(matches!(
+                tx.apply(&mut store),
+                Err(crate::SemanticMutationTransactionError::InvalidAnimationRunTime { .. })
+            ));
+            assert_eq!(
+                before,
+                (
+                    store.len(),
+                    store.scene_revision(),
+                    store.preview_node_allocations().next()
+                )
+            );
+        }
+        assert!(store.node(target).unwrap().effect_ids().is_empty());
     }
 
     #[test]

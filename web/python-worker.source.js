@@ -31,6 +31,7 @@ import initNoonWeb, {
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
   resolveCreateAnimationOptions,
+  resolveGlowPulseAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
@@ -478,6 +479,7 @@ async function initializePyodide() {
     : authoringStore.createFamily(batch, zIndex, drawEnabled);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveCreateAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveCreateAnimationOptions, ...args);
+  self.noonResolveGlowPulseAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveGlowPulseAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>
     resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);
   const bindingsReadyAt = performance.now();

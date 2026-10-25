@@ -71,7 +71,7 @@ fn moving_fixture() -> ExecutionSession {
     session.enable_pointer_fill_selection(4.0).unwrap();
     session
         .activate_animation_segment(
-            &store,
+            &mut store,
             animation,
             AnimationOptions::new()
                 .run_time(2.0)

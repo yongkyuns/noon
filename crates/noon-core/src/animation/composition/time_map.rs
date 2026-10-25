@@ -376,6 +376,25 @@ pub fn mapped_continuous_progress_f64(
     time_map: &CompositionTimeMap,
     time: f64,
 ) -> Option<f64> {
+    let raw = mapped_continuous_raw_progress_f64(timing, time_map, time)?;
+    Some(if timing.is_instant() {
+        1.0
+    } else {
+        timing.evaluate_progress_f64(raw)
+    })
+}
+
+/// Leaf-local progress before its rate function, using the ordinary nested map.
+///
+/// `None` means this leaf has not begun. Exact root completion finishes every
+/// child at alpha one, including under reversing parent rates. A restoring
+/// channel can distinguish a finished leaf from an amplitude that merely reaches
+/// one early; a reversing parent may later reopen the same leaf before root finish.
+pub fn mapped_continuous_raw_progress_f64(
+    timing: TrackTiming,
+    time_map: &CompositionTimeMap,
+    time: f64,
+) -> Option<f64> {
     if time < timing.start_time {
         return None;
     }
@@ -383,16 +402,24 @@ pub fn mapped_continuous_progress_f64(
         return Some(1.0);
     }
     if time >= timing.start_time + timing.duration {
-        return Some(timing.terminal_progress_f64());
+        return Some(1.0);
     }
     let raw = ((time - timing.start_time) / timing.duration).clamp(0.0, 1.0);
     if time_map.is_identity() {
-        return Some(timing.evaluate_progress_f64(raw));
+        return Some(raw);
     }
     let sample = time_map.evaluate_f64(raw);
-    sample
-        .begun
-        .then(|| timing.evaluate_progress_f64(sample.alpha))
+    sample.begun.then_some({
+        // Normalized child endpoints can lose a few rounding bits when mapped
+        // from authored seconds, e.g. (0.6 - 0.2) / 0.4 at t=1.5 of a 2.5s
+        // composition. Normalize that boundary before applying the leaf rate;
+        // its early amplitude peaks must never be mistaken for completion.
+        if 1.0 - sample.alpha <= 4.0 * f64::EPSILON {
+            1.0
+        } else {
+            sample.alpha
+        }
+    })
 }
 
 #[cfg(test)]
@@ -497,6 +524,80 @@ mod tests {
         assert_eq!(mapped_continuous_progress_f64(timing, &map, 6.0), Some(0.0));
         let midpoint = mapped_continuous_progress(timing, &map, 4.0).unwrap();
         assert!((midpoint - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn raw_leaf_progress_distinguishes_exact_finish_from_an_early_rate_peak() {
+        let timing = TrackTiming::new(2.0, 4.0, RateFunction::Lingering);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.25,
+            RateFunction::Linear,
+        )]);
+        assert_eq!(mapped_continuous_raw_progress_f64(timing, &map, 2.5), None);
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 3.0),
+            Some(0.0)
+        );
+        let plateau = mapped_continuous_raw_progress_f64(timing, &map, 3.9).unwrap();
+        assert!(plateau < 1.0);
+        assert_eq!(mapped_continuous_progress_f64(timing, &map, 3.9), Some(1.0));
+        assert!(!map.evaluate_f64(0.5).finished);
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 4.0),
+            Some(1.0)
+        );
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 4.5),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn raw_leaf_progress_reopens_under_reversing_parent_but_finishes_at_root() {
+        let timing = TrackTiming::new(0.0, 1.0, RateFunction::Linear);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.0,
+            0.5,
+            RateFunction::ThereAndBack,
+        )]);
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 0.5),
+            Some(1.0)
+        );
+        let reopened = mapped_continuous_raw_progress_f64(timing, &map, 0.9).unwrap();
+        assert!(reopened > 0.0 && reopened < 1.0);
+        assert_eq!(map.evaluate_f64(1.0).alpha, 0.0);
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 1.0),
+            Some(1.0)
+        );
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 2.0),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn raw_leaf_progress_normalizes_fractional_composition_endpoint_roundoff() {
+        let timing = TrackTiming::new(0.0, 2.5, RateFunction::Linear);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.2,
+            0.4,
+            RateFunction::Linear,
+        )]);
+        // wait(0.5), pulse(1), wait(1): (0.6 - 0.2) / 0.4 is slightly
+        // below one in f64 although t=1.5 is the authored child endpoint.
+        assert!(map.evaluate_f64(0.6).alpha < 1.0);
+        assert!(mapped_continuous_raw_progress_f64(timing, &map, 1.5 - 1e-8).unwrap() < 1.0);
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 1.5),
+            Some(1.0)
+        );
+        assert_eq!(
+            mapped_continuous_raw_progress_f64(timing, &map, 1.6),
+            Some(1.0)
+        );
     }
 
     #[test]

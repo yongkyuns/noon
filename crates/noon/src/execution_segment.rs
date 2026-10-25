@@ -3,6 +3,7 @@ use crate::{EvaluationError, ExecutionSession, ExecutionSessionCallbackError};
 use noon_compile::SemanticAnimationCompletion;
 use noon_core::{ObjectId, Property, SemanticNodeId, TrackId};
 use noon_runtime::{FrameState, RuntimeIdentity, TimelineWakeState};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExecutionSegmentSequence(u64);
@@ -87,7 +88,25 @@ pub(crate) struct PendingSegmentCompletion {
     pub end_time: f64,
     pub activation_scene_revision: noon_core::SceneRevision,
     pub kind: PendingSegmentCompletionKind,
+    /// Exact attachment generations and ordinary tracks owned by this segment's
+    /// restoring pulses. This is completion metadata, not an effect runtime.
+    pub glow_pulse_attachments: BTreeMap<SemanticNodeId, GlowPulseAttachmentCompletion>,
+    /// Sparse completion tombstones keep a local superseding write independent
+    /// of the number of other tracks in a large composition.
+    pub superseded_glow_pulse_tracks: BTreeSet<TrackId>,
     affected_objects: std::collections::HashSet<SemanticNodeId>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GlowPulseAttachmentCompletion {
+    pub owner: SemanticNodeId,
+    pub tracks: BTreeSet<TrackId>,
+    /// Parameters still owned by ordinary non-pulse tracks in this composition.
+    pub ordinary_parameters: u8,
+    /// Keep a temporary neutral attachment throughout the enclosing composition:
+    /// a reversing parent may reopen a child after its intensity has restored.
+    /// Only the segment completion barrier removes an unadopted exact identity.
+    pub remove_on_completion: bool,
 }
 
 impl PendingSegmentCompletion {
@@ -107,8 +126,18 @@ impl PendingSegmentCompletion {
             end_time,
             activation_scene_revision,
             kind,
+            glow_pulse_attachments: BTreeMap::new(),
+            superseded_glow_pulse_tracks: BTreeSet::new(),
             affected_objects,
         }
+    }
+
+    pub(crate) fn with_glow_pulse_attachments(
+        mut self,
+        attachments: BTreeMap<SemanticNodeId, GlowPulseAttachmentCompletion>,
+    ) -> Self {
+        self.glow_pulse_attachments = attachments;
+        self
     }
 
     /// Indexed admission for a local edit beneath an unrelated animation. Structural
@@ -626,7 +655,7 @@ mod tests {
         session.take_frame_changes();
         session
             .activate_animation(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -748,7 +777,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -799,7 +828,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)

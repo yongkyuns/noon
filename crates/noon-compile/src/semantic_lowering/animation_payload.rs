@@ -1,4 +1,5 @@
 mod affine;
+mod glow_pulse;
 mod glow_target;
 pub use glow_target::GlowTargetLoweringError;
 mod family_transform;

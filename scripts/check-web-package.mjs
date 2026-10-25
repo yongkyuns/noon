@@ -189,6 +189,7 @@ const expectedJavascriptSurface = [
   "appendBoundRotate(",
   "appendWait(",
   "appendFamilyTransformTo(",
+  "appendGlowPulseMobject(",
   "appendIndicateMobject(",
   "appendIndicateFamily(",
   "appendFocusOn(",
@@ -293,6 +294,7 @@ const expectedJavascriptSurface = [
   "appendRotate(",
   "export function resolveAnimationOptions(",
   "export function resolveCreateAnimationOptions(",
+  "export function resolveGlowPulseAnimationOptions(",
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
@@ -448,6 +450,7 @@ const expectedTypeSurface = [
   "callbackLayoutReplace(source: WasmLayoutAnchor, target: WasmLayoutAnchor, revision: string, keys: Uint32Array, rows: Float64Array, dimension: number, stretch: boolean): Float64Array",
   "appendValueTracker(",
   "appendFamilyTransformTo(",
+  "appendGlowPulseMobject(",
   "appendIndicateMobject(",
   "appendIndicateFamily(",
   "appendFocusOn(",
@@ -599,6 +602,7 @@ const expectedTypeSurface = [
   "manimMoveToPoint(",
   "export function resolveAnimationOptions(",
   "export function resolveCreateAnimationOptions(",
+  "export function resolveGlowPulseAnimationOptions(",
   "export function resolveTransformAnimationOptions(",
 ];
 
@@ -632,6 +636,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectMixedScalarCompositionSmokeRenderer(",
     "export function createDirectFamilyStateSmokeRenderer(",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
+    "export function createDirectGlowPulseSmokeRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(",
     "export function createDirectBackEasingsRenderer(",
@@ -722,6 +727,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectMixedScalarCompositionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyStateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectGlowPulseSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyArrangementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectBackEasingsRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

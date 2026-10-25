@@ -4,6 +4,7 @@ mod effective_content;
 mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
+mod glow_pulse;
 mod input;
 mod inspection;
 #[cfg(test)]
@@ -64,14 +65,12 @@ use noon_compile::{
     lower_prepared_family_transform_channels, lower_prepared_matching_family_transform_payload,
     lower_prepared_path_motion_tracks, lower_prepared_scalar_signal_timeline_entries_with_resolver,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_schedule,
-    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, lower_semantic_execution_root,
-    lower_semantic_execution_root_with_animation_root_at, lower_semantic_path_motion_tracks,
-    prepare_family_transform_activations, prepare_matching_family_transform_activation,
-    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
-    PathMotionActivationProperties, PreparedScalarAnimationTrackError,
-    PreparedScalarSignalTimelineError, PreparedSemanticAnimationLoweringError,
-    PreparedSemanticAnimationScheduleError, SemanticAffineAnimationTrackError,
+    lower_semantic_execution_root_with_animation_root_at, prepare_family_transform_activations,
+    prepare_matching_family_transform_activation, CompilePatchError, EffectiveAnimationProperties,
+    ExecutionPatch, PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
+    PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
+    PreparedSemanticScheduledAnimationPayload, SemanticAffineAnimationTrackError,
     SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
@@ -248,6 +247,11 @@ pub(crate) enum SemanticCompositionRequest {
         scale_center: noon_core::SemanticVec3,
         options: AnimationOptions,
     },
+    GlowPulse {
+        target: SemanticNodeId,
+        intensity: f64,
+        options: AnimationOptions,
+    },
     FamilyIndicate {
         target: SemanticNodeId,
         indication: IndicateOptions,
@@ -366,6 +370,7 @@ impl SemanticCompositionRequest {
             | Self::ResolvedLayoutReplace { target, .. } => Some(*target),
             Self::MoveAlongPath { target, .. } => Some(*target),
             Self::Indicate { target, .. }
+            | Self::GlowPulse { target, .. }
             | Self::FamilyIndicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::FamilyDrawBorderThenFill { target, .. }
@@ -1646,7 +1651,7 @@ impl ExecutionSession {
     /// duration in an authoring facade.
     pub fn activate_animation(
         &mut self,
-        store: &SemanticStore,
+        store: &mut SemanticStore,
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<&FrameState, ExecutionSessionAnimationError> {
@@ -1660,122 +1665,24 @@ impl ExecutionSession {
     /// declaration once; the segment is constructed directly from that resolved projection's
     /// `start_time` / `run_time`; affine payload lowering captures each target's effective
     /// runtime transform at most once; and the session attaches execution-local track identity.
-    /// All emitted tracks are preflighted and published as one execution transaction,
-    /// so a failed activation cannot expose a partial timeline or continuation boundary.
+    /// Required neutral effect attachments and emitted tracks are prepared together
+    /// through the same semantic/execution publication as live declarations. The
+    /// supplied declaration retains its identity; a failed activation publishes no
+    /// partial attachment, timeline, or continuation boundary.
     pub fn activate_animation_segment(
         &mut self,
-        store: &SemanticStore,
+        store: &mut SemanticStore,
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
-        let schedule = lower_semantic_animation_schedule(
+        self.declare_and_activate_prepared_animation(
             store,
-            &self.execution_index,
+            SemanticMutationTransaction::new(),
             root,
-            self.runtime.frame().time,
             play_options,
-        )?;
-        let mut segment =
-            ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
-        let mut tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
-            let index = self.runtime.frame_index_for_object(object)?;
-            let frame = self.runtime.frame();
-            let row = frame.objects.get(index)?;
-            Some(EffectiveAnimationProperties {
-                glow: row.glow.as_deref().copied(),
-                z_index: row.z_index,
-                transform: row.transform,
-                style: row.style,
-                appearance: row.appearance,
-                reveal: *frame.reveals.get(index)?,
-                world_transform: row.world_transform(),
-                camera_profile: row.camera_profile(),
-            })
-        })?;
-        let path_tracks =
-            lower_semantic_path_motion_tracks(store, &schedule, tracks.tracks(), |object| {
-                if self.runtime.object_has_effective_driver(object) {
-                    return None;
-                }
-                let index = self.runtime.frame_index_for_object(object)?;
-                let row = self.runtime.frame().objects.get(index)?;
-                let bounds_center = self.runtime.effective_object_bounds(object)?.center();
-                Some(PathMotionActivationProperties {
-                    transform: row.transform,
-                    bounds_center,
-                })
-            })?;
-        tracks.append(path_tracks);
-        let family_animations = noon_compile::lower_semantic_text_glyph_animations_with_tracks(
-            store,
-            &schedule,
-            tracks.tracks(),
+            None,
         )
-        .map_err(ExecutionSessionAnimationError::TextGlyph)?;
-        if tracks.is_empty() && family_animations.is_empty() {
-            return Ok(segment);
-        }
-
-        let mut next_track_id = self.next_activation_track_id;
-        let mut definitions = Vec::with_capacity(tracks.len());
-        let mut completions = Vec::with_capacity(tracks.len());
-        for track in tracks.tracks() {
-            let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
-            let track_id = TrackId::new(raw_id);
-            let definition = track.with_track_id(track_id)?;
-            let end_time = execution_track_end_time(&definition)
-                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
-            completions.push(SegmentCompletionEntry {
-                semantic_object: track.target,
-                completion: track.completion.clone(),
-                execution_object: track.execution_object_id,
-                property: track.property,
-                track: track_id,
-                end_time,
-                retain_effective: false,
-            });
-            definitions.push(definition);
-            next_track_id = raw_id.checked_add(1);
-        }
-
-        self.runtime
-            .preflight_reconcilable_track_additions(&definitions)
-            .map_err(ExecutionSessionAnimationError::Publication)?;
-        let raw_sequence = self
-            .next_segment_sequence
-            .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
-        let next_segment_sequence = raw_sequence.checked_add(1);
-        let transaction = ExecutionMutationTransaction::from_mutations(
-            definitions.into_iter().map(ExecutionPatch::AddTrack).chain(
-                family_animations
-                    .into_iter()
-                    .map(ExecutionPatch::AddFamilyAnimation),
-            ),
-        );
-        self.runtime.apply_execution_transaction(&transaction)?;
-        let token = ExecutionSegmentToken::new(
-            self.runtime.runtime_identity(),
-            ExecutionSegmentSequence::new(raw_sequence),
-        );
-        self.next_segment_sequence = next_segment_sequence;
-        segment = segment.with_completion_token(token);
-        self.pending_segment_completion = Some(PendingSegmentCompletion::new(
-            token,
-            segment.end_time(),
-            store.scene_revision(),
-            PendingSegmentCompletionKind {
-                lifecycle_root: None,
-                lifecycle_removals: Vec::new(),
-                family_transform: None,
-                family_colors: Vec::new(),
-                family_styles: Vec::new(),
-                object_entries: completions,
-                scalar_entries: Vec::new(),
-            },
-        ));
-        self.next_activation_track_id = next_track_id;
-        Ok(segment)
     }
 
     /// Declare and activate one supported transform/style animation against this session.
@@ -2706,6 +2613,11 @@ impl ExecutionSession {
             } => {
                 self.stage_indicate_leaf(*target, *indication, *scale_center, *options, declaration)
             }
+            SemanticCompositionRequest::GlowPulse {
+                target,
+                intensity,
+                options,
+            } => self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration),
             SemanticCompositionRequest::FamilyIndicate {
                 target,
                 indication,
@@ -3331,6 +3243,9 @@ impl ExecutionSession {
                     });
                 }
                 Ok(declaration.create_move_along_path_animation(*target, *path, *options))
+            }
+            SemanticCompositionRequest::GlowPulse { target, intensity, options } => {
+                self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration)
             }
             SemanticCompositionRequest::WorldTransform { target, transform, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -4109,7 +4024,7 @@ impl ExecutionSession {
             .clone();
         let copy = declaration.create_node(SemanticNodeCreation::object(state));
         store
-            .copy_effects_into(target, copy, declaration)
+            .snapshot_effects_into(target, copy, declaration)
             .map_err(|error| ExecutionSessionAnimationError::TargetState {
                 target,
                 error: error.into(),
@@ -4178,18 +4093,19 @@ impl ExecutionSession {
         &mut self,
         store: &mut SemanticStore,
         mut declaration: SemanticMutationTransaction,
-        root: noon_core::SemanticLocalNodeToken,
+        root: impl Into<SemanticTransactionNodeRef>,
         play_options: AnimationOptions,
         lifecycle: Option<PreparedAnimationLifecycle>,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        let root = root.into();
         let callback_markers = match lifecycle.as_ref() {
             Some(PreparedAnimationLifecycle::Composition {
                 callback_intervals, ..
             }) => callback_intervals.as_slice(),
             _ => &[],
         };
-        // Ordinary animation keeps its single preparation path. Only finite
-        // host-callback children need this schedule-derived interval preflight.
+        // Finite host-callback children use this schedule-derived interval
+        // preflight before the ordinary attachment and track preparation below.
         if !callback_markers.is_empty() {
             let (callback_timings, recovered_declaration) = {
                 let preliminary = declaration.prepare(store).map_err(|error| {
@@ -4241,18 +4157,77 @@ impl ExecutionSession {
                 );
             }
         }
-        let prepared = declaration.prepare(store).map_err(|error| {
+        let mut prepared = declaration.prepare(store).map_err(|error| {
             ExecutionSessionAnimationError::AuthoredPublication(
                 ExecutionSessionPublicationError::Semantic(error),
             )
         })?;
-        let schedule = lower_prepared_semantic_animation_schedule(
+        let mut schedule = lower_prepared_semantic_animation_schedule(
             &prepared,
             &self.execution_index,
             root,
             self.runtime.frame().time,
             play_options,
         )?;
+        if lifecycle.is_none() {
+            // The prepared payload lowerer also serves root-aware introducing
+            // and removing activations. A generic existing declaration still
+            // needs that lifecycle proof before it may change membership.
+            if let Some(leaf) = schedule.leaves().iter().find(|leaf| {
+                matches!(
+                    leaf.payload,
+                    PreparedSemanticScheduledAnimationPayload::Fade { .. }
+                        | PreparedSemanticScheduledAnimationPayload::AffineLifecycle { .. }
+                        | PreparedSemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
+                        | PreparedSemanticScheduledAnimationPayload::Create
+                        | PreparedSemanticScheduledAnimationPayload::Add
+                )
+            }) {
+                return Err(if let Some(animation) = leaf.animation.existing() {
+                    SemanticAffineAnimationTrackError::UnsupportedLifecycle {
+                        animation,
+                        remover: leaf.options.remover,
+                        introducer: leaf.options.introducer,
+                    }
+                    .into()
+                } else {
+                    PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                        animation: leaf.animation,
+                        remover: leaf.options.remover,
+                        introducer: leaf.options.introducer,
+                    }
+                    .into()
+                });
+            }
+        }
+        let missing_glow = self.missing_glow_pulse_attachments(&prepared, &schedule)?;
+        let mut temporary_glow = std::collections::BTreeSet::new();
+        if !missing_glow.is_empty() {
+            let mut declaration = prepared.into_transaction();
+            let neutral = noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+                .expect("zero intensity is a valid neutral glow");
+            let attachments = missing_glow
+                .into_iter()
+                .map(|owner| declaration.create_effect(owner, "glow", neutral))
+                .collect::<Vec<_>>();
+            prepared = declaration.prepare(store).map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(error),
+                )
+            })?;
+            temporary_glow.extend(attachments.into_iter().map(|token| {
+                prepared
+                    .planned_node_id(token)
+                    .expect("prepared temporary attachment has an allocator-proven identity")
+            }));
+            schedule = lower_prepared_semantic_animation_schedule(
+                &prepared,
+                &self.execution_index,
+                root,
+                self.runtime.frame().time,
+                play_options,
+            )?;
+        }
         let scalar_tracks = derive_prepared_scalar_animation_tracks(&prepared, &schedule)?;
         let prepared = prepared
             .with_scalar_signal_tracks(scalar_tracks)
@@ -4529,6 +4504,7 @@ impl ExecutionSession {
             .saturating_add(family_transform_tracks.len());
         let mut definitions = Vec::with_capacity(track_capacity);
         let mut completions = Vec::with_capacity(track_capacity);
+        let mut glow_pulse_attachments = BTreeMap::new();
         for track in &activation_tracks {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
@@ -4537,6 +4513,12 @@ impl ExecutionSession {
                 .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
             let end_time = execution_track_end_time(&definition)
                 .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
+            glow_pulse::record_attachment_completion(
+                &mut glow_pulse_attachments,
+                track.target,
+                &definition,
+                &temporary_glow,
+            );
             completions.push((
                 track.target,
                 track.completion.clone(),
@@ -4570,6 +4552,8 @@ impl ExecutionSession {
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
         }
+
+        glow_pulse::adopt_ordinary_parameter_tracks(&mut glow_pulse_attachments, &definitions);
 
         // Staged effect enrollment is not yet resident while this preflight
         // runs. Pass only the exact allocator-proven new attachment generations
@@ -4694,7 +4678,10 @@ impl ExecutionSession {
             )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
         self.commit_scalar_timeline_append(scalar_timeline);
-        debug_assert!(result.resolve(root).is_some());
+        debug_assert!(match root {
+            SemanticTransactionNodeRef::Existing(node) => store.node(node).is_some(),
+            SemanticTransactionNodeRef::Pending(token) => result.resolve(token).is_some(),
+        });
         let activation_scene_revision = self.publication_context().scene_revision();
         let family_transform_completion =
             schedule.family_transforms().first().and_then(|transform| {
@@ -4773,30 +4760,37 @@ impl ExecutionSession {
                 segment = segment.with_family_replacement(root, source, target);
             }
             self.next_segment_sequence = next_segment_sequence;
-            self.pending_segment_completion = Some(PendingSegmentCompletion::new(
-                token,
-                segment.end_time(),
-                activation_scene_revision,
-                PendingSegmentCompletionKind {
-                    lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
-                    lifecycle_removals: match lifecycle.as_ref() {
-                        Some(PreparedAnimationLifecycle::Composition { removals, .. }) => removals
-                            .iter()
-                            .map(|(root, target)| (*root, resolve_committed_node(*target, &result)))
-                            .collect(),
-                        _ => lifecycle
-                            .as_ref()
-                            .and_then(|lifecycle| lifecycle.removal())
-                            .into_iter()
-                            .collect(),
+            self.pending_segment_completion = Some(
+                PendingSegmentCompletion::new(
+                    token,
+                    segment.end_time(),
+                    activation_scene_revision,
+                    PendingSegmentCompletionKind {
+                        lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
+                        lifecycle_removals: match lifecycle.as_ref() {
+                            Some(PreparedAnimationLifecycle::Composition { removals, .. }) => {
+                                removals
+                                    .iter()
+                                    .map(|(root, target)| {
+                                        (*root, resolve_committed_node(*target, &result))
+                                    })
+                                    .collect()
+                            }
+                            _ => lifecycle
+                                .as_ref()
+                                .and_then(|lifecycle| lifecycle.removal())
+                                .into_iter()
+                                .collect(),
+                        },
+                        family_transform: family_transform_completion,
+                        family_colors,
+                        family_styles,
+                        object_entries: entries,
+                        scalar_entries: scalar_completions.into_values().collect(),
                     },
-                    family_transform: family_transform_completion,
-                    family_colors,
-                    family_styles,
-                    object_entries: entries,
-                    scalar_entries: scalar_completions.into_values().collect(),
-                },
-            ));
+                )
+                .with_glow_pulse_attachments(glow_pulse_attachments),
+            );
         }
         Ok(segment)
     }
@@ -5122,7 +5116,7 @@ mod tests {
         session.take_frame_changes();
 
         let segment = session
-            .activate_animation_segment(&store, animation, linear_second())
+            .activate_animation_segment(&mut store, animation, linear_second())
             .unwrap();
         assert_eq!(
             session.wake_state().timeline(),
@@ -5164,7 +5158,7 @@ mod tests {
 
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.5)
@@ -5241,7 +5235,7 @@ mod tests {
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
-            .activate_animation_segment(&store, sequence, AnimationOptions::new())
+            .activate_animation_segment(&mut store, sequence, AnimationOptions::new())
             .unwrap();
         assert_eq!(segment.start_time(), 0.0);
         assert_eq!(segment.end_time(), 3.0);
@@ -5279,7 +5273,7 @@ mod tests {
         let before = session.publication_context();
 
         assert_eq!(
-            session.activate_animation_segment(&store, animation, linear_second()),
+            session.activate_animation_segment(&mut store, animation, linear_second()),
             Err(ExecutionSessionAnimationError::Payload(
                 SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation,
@@ -5348,7 +5342,7 @@ mod tests {
         let before = session.frame().clone();
 
         assert_eq!(
-            session.activate_animation_segment(&store, animation, linear_second()),
+            session.activate_animation_segment(&mut store, animation, linear_second()),
             Err(ExecutionSessionAnimationError::Segment(
                 ExecutionSegmentError::EndTimeOverflow {
                     start_time: f64::MAX,
@@ -5518,7 +5512,7 @@ mod tests {
         );
 
         session
-            .activate_animation(&store, animation, linear_second())
+            .activate_animation(&mut store, animation, linear_second())
             .unwrap();
         session.seek(0.5).unwrap();
         assert_eq!(
@@ -5554,7 +5548,7 @@ mod tests {
         transaction.apply(&mut store).unwrap();
 
         assert_eq!(
-            session.activate_animation_segment(&store, animation, linear_second()),
+            session.activate_animation_segment(&mut store, animation, linear_second()),
             Err(ExecutionSessionAnimationError::StaleSceneRevision {
                 expected: context.scene_revision(),
                 actual: store.scene_revision(),
@@ -6046,7 +6040,7 @@ mod tests {
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let first_segment = session
-            .activate_animation_segment(&store, first, linear_second())
+            .activate_animation_segment(&mut store, first, linear_second())
             .unwrap();
         session.seek(1.0).unwrap();
         assert_eq!(
@@ -6060,7 +6054,7 @@ mod tests {
         session.complete_segment(&mut store, first_segment).unwrap();
 
         session
-            .activate_animation_segment(&store, second, linear_second())
+            .activate_animation_segment(&mut store, second, linear_second())
             .unwrap();
         session.seek(1.5).unwrap();
 

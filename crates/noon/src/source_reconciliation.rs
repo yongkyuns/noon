@@ -726,7 +726,7 @@ mod tests {
         let mut execution = scene.execution_session().unwrap();
         let segment = execution
             .activate_animation_segment(
-                &store.borrow(),
+                &mut store.borrow_mut(),
                 animation,
                 AnimationOptions::new().run_time(1.0),
             )

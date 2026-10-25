@@ -145,6 +145,7 @@ pub enum SemanticNodeCreation {
         owner: super::SemanticTransactionNodeRef,
         name: std::sync::Arc<str>,
         definition: crate::EffectDefinition,
+        copy_provenance: Option<crate::SemanticEffectCopyProvenance>,
     },
     /// Audio declaration outside painter membership. A pending family scope
     /// must precede this clip in the transaction.
@@ -475,12 +476,16 @@ pub(super) fn commit_add_node(
             owner,
             name,
             definition,
+            copy_provenance,
         } => {
             let owner = match owner {
                 super::SemanticTransactionNodeRef::Existing(id) => id,
                 super::SemanticTransactionNodeRef::Pending(token) => committed[&token],
             };
-            (store.insert_semantic_effect(owner, name, definition), None)
+            (
+                store.insert_semantic_effect(owner, name, definition, copy_provenance),
+                None,
+            )
         }
     }
 }

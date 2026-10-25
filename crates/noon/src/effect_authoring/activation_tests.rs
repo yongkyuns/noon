@@ -86,6 +86,69 @@ fn glow(runtime: &SceneInstance, object: ObjectId) -> Glow {
 }
 
 #[test]
+fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
+    let (scene, source) = fixture();
+    let pulse = scene
+        .declare_glow_pulse(&source, 2.0, AnimationOptions::new())
+        .unwrap();
+    let (mut runtime, index) = runtime(&scene);
+    let object = index.execution_object_id(source.node_id()).unwrap();
+    let base = effective(&runtime, object).glow.unwrap();
+    let [(property, values)] = base
+        .parameter_channels(GlowUpdate::default().intensity(1.2))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    runtime
+        .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations(vec![
+            ExecutionPatch::AddTrack(noon_core::TrackDefinition {
+                id: TrackId::new(1),
+                object,
+                property,
+                values,
+                timing: noon_core::TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: noon_core::CompositionTimeMap::identity(),
+            }),
+        ]))
+        .unwrap();
+    runtime.evaluate(1.0).unwrap();
+    let projection = lower(&scene, &runtime, &index, &pulse).unwrap();
+    let [track] = projection.tracks() else {
+        panic!("pulse owns exactly one channel");
+    };
+    assert_eq!(track.property, Property::GlowIntensity);
+    assert_eq!(track.timing.duration, 1.0);
+    assert_eq!(track.timing.easing, RateFunction::ThereAndBack);
+    assert!(matches!(
+        track.values,
+        TrackValues::Glow {
+            from: noon_core::GlowTrackValue::Intensity(1.2),
+            to: noon_core::GlowTrackValue::Intensity(2.0),
+            end_behavior: noon_core::GlowTrackEndBehavior::RestoreSource,
+            ..
+        }
+    ));
+    assert_eq!(
+        track.completion,
+        SemanticAnimationCompletion::Glow {
+            attachment: base.attachment,
+            value: noon_core::GlowTrackValue::Intensity(1.2),
+        }
+    );
+    runtime
+        .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations(vec![
+            ExecutionPatch::AddTrack(track.with_track_id(TrackId::new(2)).unwrap()),
+        ]))
+        .unwrap();
+    runtime.evaluate(1.5).unwrap();
+    assert_eq!(glow(&runtime, object).intensity(), 2.0);
+    assert_eq!(glow(&runtime, object).radius(), base.definition.radius());
+    assert_eq!(glow(&runtime, object).color(), base.definition.color());
+    runtime.evaluate(2.0).unwrap();
+    assert_eq!(glow(&runtime, object).intensity(), 1.2);
+}
+
+#[test]
 fn declaration_activates_motion_and_glow_from_exact_effective_values() {
     let (scene, source) = fixture();
     let original = source.get_effect("glow").unwrap().node_id();

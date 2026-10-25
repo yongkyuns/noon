@@ -432,12 +432,12 @@ mod tests {
         let mut direct = scene.execution_session().unwrap();
         let mut forward = scene.execution_session().unwrap();
         {
-            let store = scene.integration_store().borrow();
+            let mut store = scene.integration_store().borrow_mut();
             direct
-                .activate_animation(&store, animation.node_id(), AnimationOptions::new())
+                .activate_animation(&mut store, animation.node_id(), AnimationOptions::new())
                 .unwrap();
             forward
-                .activate_animation(&store, animation.node_id(), AnimationOptions::new())
+                .activate_animation(&mut store, animation.node_id(), AnimationOptions::new())
                 .unwrap();
         }
         direct.seek(1.0).unwrap();

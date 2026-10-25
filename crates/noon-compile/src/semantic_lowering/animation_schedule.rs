@@ -95,6 +95,9 @@ pub enum SemanticScheduledAnimationPayload {
     CameraProfileTo {
         profile: noon_core::ManimCamera3DProfile,
     },
+    GlowPulse {
+        intensity: f64,
+    },
     Indicate {
         scale_factor: f64,
         color: noon_core::Color,
@@ -262,6 +265,9 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     },
     CameraProfileTo {
         profile: noon_core::ManimCamera3DProfile,
+    },
+    GlowPulse {
+        intensity: f64,
     },
     Indicate {
         scale_factor: f64,
@@ -865,6 +871,9 @@ fn published_payload(
         ScheduledAnimationPayload::Rotate { angle, hold_origin } => {
             SemanticScheduledAnimationPayload::Rotate { angle, hold_origin }
         }
+        ScheduledAnimationPayload::GlowPulse { intensity } => {
+            SemanticScheduledAnimationPayload::GlowPulse { intensity }
+        }
         ScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -948,6 +957,9 @@ fn prepared_payload(
         ScheduledAnimationPayload::Rotate { angle, hold_origin } => {
             PreparedSemanticScheduledAnimationPayload::Rotate { angle, hold_origin }
         }
+        ScheduledAnimationPayload::GlowPulse { intensity } => {
+            PreparedSemanticScheduledAnimationPayload::GlowPulse { intensity }
+        }
         ScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -1028,6 +1040,10 @@ enum AnimationDeclarationIntent<R> {
     CameraProfileTo {
         target: R,
         profile: noon_core::ManimCamera3DProfile,
+    },
+    GlowPulse {
+        target: R,
+        intensity: f64,
     },
     Indicate {
         target: R,
@@ -1223,6 +1239,15 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::CameraProfileTo {
                     target: *target,
                     profile: *profile,
+                }
+            }
+            SemanticAnimationIntent::GlowPulse { target, intensity } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::GlowPulse {
+                    target: *target,
+                    intensity: *intensity,
                 }
             }
             SemanticAnimationIntent::Indicate {
@@ -1490,6 +1515,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             profile: *profile,
                         }
                     }
+                    SemanticAnimationIntent::GlowPulse { target, intensity } => {
+                        AnimationDeclarationIntent::GlowPulse {
+                            target: (*target).into(),
+                            intensity: *intensity,
+                        }
+                    }
                     SemanticAnimationIntent::Indicate {
                         target,
                         scale_factor,
@@ -1642,6 +1673,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             profile: *profile,
                         }
                     }
+                    SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
+                        AnimationDeclarationIntent::GlowPulse {
+                            target: *target,
+                            intensity: *intensity,
+                        }
+                    }
                     SemanticTransactionAnimationIntent::Indicate {
                         target,
                         scale_factor,
@@ -1777,6 +1814,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
             AnimationDeclarationIntent::Rotate { target, .. }
             | AnimationDeclarationIntent::PassingFlash { target, .. }
             | AnimationDeclarationIntent::Indicate { target, .. }
+            | AnimationDeclarationIntent::GlowPulse { target, .. }
             | AnimationDeclarationIntent::DrawBorderThenFill { target, .. }
             | AnimationDeclarationIntent::SubsetDisplayMember { target, .. } => {
                 self.prepared
@@ -1906,6 +1944,9 @@ enum ScheduledAnimationPayload<R> {
     },
     CameraProfileTo {
         profile: noon_core::ManimCamera3DProfile,
+    },
+    GlowPulse {
+        intensity: f64,
     },
     Indicate {
         scale_factor: f64,
@@ -2221,6 +2262,31 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::CameraProfileTo { profile },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::GlowPulse { target, intensity } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = noon_core::resolve_glow_pulse_animation_options(
+                AnimationDefaults {
+                    rate_func: RateFunction::ThereAndBack,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::GlowPulse { intensity },
                     options,
                 },
             })

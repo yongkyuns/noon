@@ -10,6 +10,7 @@ pub struct SemanticAnimationEffectSnapshot {
     pub attachment: SemanticNodeId,
     pub name: Arc<str>,
     pub definition: EffectDefinition,
+    pub copy_provenance: Option<crate::SemanticEffectCopyProvenance>,
 }
 
 /// Frozen attachment generations for the two ordinary TransformTo endpoints.
@@ -53,6 +54,7 @@ impl SemanticStore {
                     attachment: id,
                     name: Arc::clone(effect.shared_name()),
                     definition: effect.definition(),
+                    copy_provenance: effect.copy_provenance(),
                 })
             })
             .collect()

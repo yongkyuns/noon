@@ -876,7 +876,7 @@ fn world_center_uses_transformed_local_bounds_for_offset_meshes() {
     let mut session = scene.execution_session().unwrap();
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             root,
             AnimationOptions::new(),
         )
@@ -1033,7 +1033,7 @@ fn family_world_center_uses_authored_and_effective_leaf_bounds() {
     let mut session = scene.execution_session().unwrap();
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             root,
             AnimationOptions::new(),
         )
@@ -1109,7 +1109,7 @@ fn mesh_creation_motion_and_residency_use_ordinary_scene_publication() {
         let mut session = scene.execution_session().unwrap();
         session
             .activate_animation_segment(
-                &scene.integration_store().borrow(),
+                &mut scene.integration_store().borrow_mut(),
                 animation.node_id(),
                 AnimationOptions::new(),
             )

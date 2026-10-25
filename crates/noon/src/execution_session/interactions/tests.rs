@@ -399,7 +399,7 @@ fn click_action_runs_while_an_unrelated_source_segment_is_pending() {
     session.configure_native_pointer_input(POINTER, 1).unwrap();
     let segment = session
         .activate_animation_segment(
-            &store,
+            &mut store,
             animation,
             AnimationOptions::new()
                 .run_time(1.0)
@@ -468,7 +468,7 @@ fn overlapping_source_scale_supersedes_click_effect_while_unrelated_track_contin
     assert!(session.interactions_active());
     let segment = session
         .activate_animation_segment(
-            &store,
+            &mut store,
             parallel,
             AnimationOptions::new()
                 .run_time(1.0)

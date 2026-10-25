@@ -32,6 +32,7 @@ pub mod family_transform_indicate;
 pub mod following_graph_camera;
 pub mod foreground_matching;
 pub mod foreground_membership;
+pub mod glow_pulse;
 pub mod graph_queries;
 pub mod image_glow;
 pub mod line_passing_flash;

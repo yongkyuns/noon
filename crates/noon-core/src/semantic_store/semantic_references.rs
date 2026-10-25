@@ -652,6 +652,7 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             | SemanticAnimationIntent::WorldTransformTo { target, .. }
             | SemanticAnimationIntent::CameraProfileTo { target, .. }
             | SemanticAnimationIntent::Indicate { target, .. }
+            | SemanticAnimationIntent::GlowPulse { target, .. }
             | SemanticAnimationIntent::DrawBorderThenFill { target, .. }
             | SemanticAnimationIntent::PassingFlash { target, .. }
             | SemanticAnimationIntent::SubsetDisplayMember { target, .. }

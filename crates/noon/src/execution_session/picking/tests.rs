@@ -365,7 +365,7 @@ fn animated_object_is_picked_at_its_current_effective_position_only() {
     let mut session = session(&store);
     session
         .activate_animation_segment(
-            &store,
+            &mut store,
             animation,
             AnimationOptions::new()
                 .run_time(2.0)
@@ -419,7 +419,7 @@ fn overlapping_animated_target_is_precisely_repicked_at_each_effective_position(
     );
     let bottom_segment = session
         .activate_animation_segment(
-            &store,
+            &mut store,
             bottom_animation,
             AnimationOptions::new()
                 .run_time(2.0)
@@ -436,7 +436,7 @@ fn overlapping_animated_target_is_precisely_repicked_at_each_effective_position(
     );
     session
         .activate_animation_segment(
-            &store,
+            &mut store,
             top_animation,
             AnimationOptions::new()
                 .run_time(2.0)
