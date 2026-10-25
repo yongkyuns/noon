@@ -101,9 +101,10 @@ impl DirectPointerPresentation {
         self.refresh_pending
             || (session.has_native_pointer_subscribers()
                 && self.presented.as_ref().is_some_and(|frame| {
-                    frame
-                        .validate_current(session, frame.view())
-                        .is_err_and(|error| recoverable_frame_error(&error))
+                    frame.needs_input_refresh(session)
+                        || frame
+                            .validate_current(session, frame.view())
+                            .is_err_and(|error| recoverable_frame_error(&error))
                 }))
     }
 
@@ -114,14 +115,14 @@ impl DirectPointerPresentation {
 
     pub(crate) fn capture(
         &self,
-        session: &ExecutionSession,
+        target: &mut (impl BrowserPointerTarget + ?Sized),
         camera: Camera2DState,
     ) -> Result<Option<PointerFrameSnapshot>, PointerFrameError> {
         let Some(viewport) = self.view else {
             return Ok(None);
         };
         let view = PointerFrameView::new(self.revision, viewport, camera)?;
-        match session.capture_pointer_frame(view) {
+        match target.capture_pointer_frame(view) {
             Ok(frame) => Ok(Some(frame)),
             // A low-level manual camera override may render, but must not grant
             // positional input against a different effective execution camera.

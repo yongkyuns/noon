@@ -1,8 +1,11 @@
 //! Genuine worker input envelope; the collection receipt is never refreshed here.
-use crate::browser_pointer_input::{BrowserPointerInput, BrowserPointerTarget};
+use crate::browser_pointer_input::{
+    BrowserPointerAdmissionError, BrowserPointerInput, BrowserPointerTarget,
+};
 use crate::worker_pointer_presentation::WorkerPointerReceipt;
 use noon::integration::{
-    NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
+    NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
+    PointerFrameSnapshot, PointerFrameView,
 };
 use noon::ExecutionSession;
 use noon_core::{NativePointerId, NativePointerInput, Vec2};
@@ -38,6 +41,35 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
     }
     fn session(&self) -> &ExecutionSession {
         self.session
+    }
+
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+        self.session.capture_pointer_frame(view)
+    }
+
+    fn validate_pointer_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), BrowserPointerAdmissionError> {
+        frame
+            .validate_position(self.session, view, surface)
+            .map_err(Into::into)
+    }
+
+    fn pointer_frame_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+        frame
+            .input_token_at(self.session, view, surface)
+            .map_err(Into::into)
     }
 
     fn configure_pointer(
@@ -127,7 +159,6 @@ fn submit_test_frame(
     )
     .map_err(|e| e.to_string())?;
     let frame = target
-        .session()
         .capture_pointer_frame(view)
         .map_err(|e| e.to_string())?;
     submit_presented_browser_pointer_input(target, binding, sequence, input, &frame)

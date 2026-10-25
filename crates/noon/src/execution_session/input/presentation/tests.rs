@@ -161,7 +161,7 @@ fn snapshot_can_be_captured_before_any_pointer_is_configured() {
 
 #[test]
 fn mapping_preserves_surface_pixels_and_supports_outside_capture_positions() {
-    let (_, _, session) = fixture();
+    let (_, _, mut session) = fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     for (surface, world) in [
         (CENTER, Vec2::ZERO),
@@ -181,7 +181,7 @@ fn mapping_uses_the_captured_translated_zoomed_camera() {
     let mut camera = scene.camera_frame().unwrap();
     camera.set_translation(5.0, -3.0).unwrap();
     camera.set_scale(0.5, 0.5).unwrap();
-    let session = scene.execution_session().unwrap();
+    let mut session = scene.execution_session().unwrap();
     let camera = session.camera().unwrap();
     let frame = session
         .capture_pointer_frame(PointerFrameView::new(VIEW, SIZE, camera).unwrap())
@@ -198,7 +198,7 @@ fn mapping_uses_the_captured_translated_zoomed_camera() {
 
 #[test]
 fn manual_render_camera_cannot_be_mislabelled_as_the_execution_camera() {
-    let (_, _, session) = fixture();
+    let (_, _, mut session) = fixture();
     let camera = Camera2DState {
         center: Vec2::new(1.0, 0.0),
         height: 8.0,
@@ -211,7 +211,7 @@ fn manual_render_camera_cannot_be_mislabelled_as_the_execution_camera() {
 
 #[test]
 fn projection_rejects_nonfinite_input_and_unrepresentable_output() {
-    let (_, _, session) = fixture();
+    let (_, _, mut session) = fixture();
     let mut frame = session.capture_pointer_frame(view()).unwrap();
     for point in [Vec2::new(f32::NAN, 0.0), Vec2::new(0.0, f32::INFINITY)] {
         assert_eq!(
@@ -237,7 +237,7 @@ fn projection_rejects_nonfinite_input_and_unrepresentable_output() {
 
 #[test]
 fn widened_projection_avoids_intermediate_overflow_for_a_finite_result() {
-    let (_, _, session) = fixture();
+    let (_, _, mut session) = fixture();
     let mut frame = session.capture_pointer_frame(view()).unwrap();
     frame.view = PointerFrameView::new(
         VIEW,
@@ -300,7 +300,7 @@ fn advancing_after_token_capture_is_rejected_by_both_picking_and_admission() {
 
 #[test]
 fn view_revision_size_and_camera_changes_are_all_rejected() {
-    let (_, _, session) = fixture();
+    let (_, _, mut session) = fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     for changed in [
         PointerFrameView::new(VIEW + 1, SIZE, Camera2DState::default()).unwrap(),
@@ -354,7 +354,7 @@ fn same_view_source_rebinding_does_not_reanimate_an_old_contact_token() {
 
 #[test]
 fn moving_execution_preserves_receipts_but_cloning_never_does() {
-    let (_, _, session) = fixture();
+    let (_, _, mut session) = fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let moved = session;
     assert!(frame.input_token(&moved, view()).is_ok());
@@ -487,7 +487,7 @@ impl LiveContinuation for Finish {
 fn finished_program_accepts_frame_qualified_input_without_advancing_time() {
     let (scene, _, _) = fixture();
     let mut program = scene.into_live_program(Finish).unwrap();
-    let frame = program.session().capture_pointer_frame(view()).unwrap();
+    let frame = program.capture_pointer_frame(view()).unwrap();
     program
         .configure_native_pointer_input(POINTER, VIEW)
         .unwrap();
@@ -566,7 +566,7 @@ fn a_frame_snapshot_does_not_bypass_the_live_program_terminal_barrier() {
     program
         .configure_native_pointer_input(POINTER, VIEW)
         .unwrap();
-    let frame = program.session().capture_pointer_frame(view()).unwrap();
+    let frame = program.capture_pointer_frame(view()).unwrap();
     let token = frame.input_token(program.session(), view()).unwrap();
     assert!(program.resume().is_err());
     let before = program.session().frame().clone();

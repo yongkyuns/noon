@@ -144,12 +144,14 @@ impl ExecutionSession {
             max_movement: Some(max_movement),
             ..PointerSelectionState::default()
         };
+        self.pointer_frame_damage.invalidate();
         Ok(())
     }
 
     pub fn disable_pointer_fill_selection(&mut self) -> Result<(), ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
         self.pointer_selection = PointerSelectionState::default();
+        self.pointer_frame_damage.invalidate();
         Ok(())
     }
 

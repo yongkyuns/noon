@@ -83,6 +83,7 @@ pub enum LiveProgramError<E> {
     CompletedSegment(ExecutionSegment),
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
+    PointerFrame(crate::integration::PointerFrameError),
     TranslationDrag(TranslationDragError),
     Inspection(crate::InspectionNavigationError),
     Segment(ExecutionSegmentAdvanceError),
@@ -114,6 +115,7 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
             ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::PointerFrame(error) => error.fmt(formatter),
             Self::TranslationDrag(error) => error.fmt(formatter),
             Self::Inspection(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
@@ -128,6 +130,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
         match self {
             Self::Callback(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::PointerFrame(error) => Some(error),
             Self::TranslationDrag(error) => Some(error),
             Self::Inspection(error) => Some(error),
             Self::Segment(error) => Some(error),
@@ -244,6 +247,42 @@ impl<C: LiveContinuation> LiveProgram<C> {
         self.scene
             .owned_execution_mut()
             .refresh_pointer_hover(frame, frame.view())
+    }
+
+    /// Checkpoint the coherent frame's picking evidence before host rendering.
+    /// This admits no input and leaves continuation/publication barriers intact.
+    pub fn capture_pointer_frame(
+        &mut self,
+        view: crate::integration::PointerFrameView,
+    ) -> Result<crate::integration::PointerFrameSnapshot, crate::integration::PointerFrameError>
+    {
+        self.scene.owned_execution_mut().capture_pointer_frame(view)
+    }
+
+    /// Validate an original displayed point without exposing mutable authority.
+    pub fn validate_pointer_frame_position(
+        &mut self,
+        frame: &crate::integration::PointerFrameSnapshot,
+        view: crate::integration::PointerFrameView,
+        surface: noon_core::Vec2,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("validate displayed pointer position")?;
+        frame
+            .validate_position(self.scene.owned_execution_mut(), view, surface)
+            .map_err(LiveProgramError::PointerFrame)
+    }
+
+    /// Prove the collected point for this transaction, preserving its publication.
+    pub fn pointer_frame_input_token(
+        &mut self,
+        frame: &crate::integration::PointerFrameSnapshot,
+        view: crate::integration::PointerFrameView,
+        surface: noon_core::Vec2,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("capture displayed pointer input")?;
+        frame
+            .input_token_at(self.scene.owned_execution_mut(), view, surface)
+            .map_err(LiveProgramError::PointerFrame)
     }
 
     /// Configure transient selection without exposing a mutable execution session.

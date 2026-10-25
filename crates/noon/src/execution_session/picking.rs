@@ -87,11 +87,12 @@ impl ExecutionSession {
     /// caller's declared targets. Returning false permits picking through that
     /// candidate. It must not stand in for host-language scene traversal/policy.
     ///
-    /// The token must belong to this runtime, current binding/view and effective
-    /// publication. Stale input is rejected, never retagged. This does not pin a
-    /// historical displayed frame or prove that a current frame was presented.
-    /// The host must preserve that association; delayed displayed-frame picking
-    /// is not implemented by this current-publication query.
+    /// The token must belong to this runtime and current binding/view. It either
+    /// names the current publication or carries a session-issued compatibility
+    /// proof for this exact collected point and current transaction. That proof
+    /// retains the original occurrence context; unproved stale input is rejected.
+    /// The query always uses the current authoritative index. The host remains
+    /// responsible for associating collected input with an actual presentation.
     ///
     /// No sequence is acknowledged and no reactive input is published here.
     /// Input submission and any later native action still use the existing

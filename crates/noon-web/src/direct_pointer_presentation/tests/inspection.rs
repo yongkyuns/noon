@@ -9,10 +9,8 @@ fn scroll(f: &mut Fixture, point: Vec2, delta: f64) -> Result<Option<bool>, Stri
         .scroll(&mut f.session, &mut f.binding, 1, SIZE, point, delta)
 }
 fn present(f: &mut Fixture) {
-    let frame = f
-        .host
-        .capture(&f.session, f.session.inspection_camera().unwrap())
-        .unwrap();
+    let camera = f.session.inspection_camera().unwrap();
+    let frame = f.host.capture(&mut f.session, camera).unwrap();
     f.session.take_renderer_publication();
     f.host.did_present(frame);
 }
@@ -111,10 +109,8 @@ fn direct_inspection_aba_and_old_surface_geometry_do_not_authorize_zoom() {
     assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
     assert_eq!(f.session.inspection_view_revision(), 2);
     f.host.set_view(2, SIZE).unwrap();
-    let frame = f
-        .host
-        .capture(&f.session, f.session.inspection_camera().unwrap())
-        .unwrap();
+    let camera = f.session.inspection_camera().unwrap();
+    let frame = f.host.capture(&mut f.session, camera).unwrap();
     f.host.did_present(frame);
     assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
     assert_eq!(f.session.inspection_view_revision(), 2);
@@ -205,9 +201,8 @@ fn direct_inspection_and_real_indicate_restore_independently() {
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
-    let frame = host
-        .capture(&session, session.inspection_camera().unwrap())
-        .unwrap();
+    let camera = session.inspection_camera().unwrap();
+    let frame = host.capture(&mut session, camera).unwrap();
     host.did_present(frame);
     assert_eq!(
         host.scroll(&mut session, &mut None, 1, SIZE, CENTER, -100.0)

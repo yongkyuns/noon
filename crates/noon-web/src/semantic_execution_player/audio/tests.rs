@@ -199,8 +199,14 @@ fn transport_and_view_cancellation_retire_delayed_controls() {
 }
 
 #[test]
-fn unpresented_stale_dragged_cancelled_and_background_input_has_no_command() {
-    for mode in ["unpresented", "stale", "drag", "cancel", "background"] {
+fn unpresented_seek_retired_dragged_cancelled_and_background_input_has_no_command() {
+    for mode in [
+        "unpresented",
+        "seek-retired",
+        "drag",
+        "cancel",
+        "background",
+    ] {
         let mut p = player(PlaybackControl::NextSection, false, true);
         let receipt = present(&mut p, 1);
         let supplied = (mode != "unpresented").then_some(receipt);
@@ -210,8 +216,8 @@ fn unpresented_stale_dragged_cancelled_and_background_input_has_no_command() {
             assert!(pressed);
         }
         match mode {
-            "stale" => {
-                p.session.advance_to(0.25).unwrap();
+            "seek-retired" => {
+                p.session.seek(0.25).unwrap();
             }
             "drag" => {
                 assert!(input(&mut p, supplied, "move", 1, 480.0));
@@ -227,6 +233,36 @@ fn unpresented_stale_dragged_cancelled_and_background_input_has_no_command() {
             input(&mut p, supplied, "release", 1, x);
         }
         assert!(p.pending_scene_control_json().is_none(), "{mode}");
+    }
+}
+
+#[test]
+fn compatible_collected_click_dispatches_once_against_its_actual_commit_publication() {
+    for canonical in [false, true] {
+        let mut p = player(PlaybackControl::NextSection, true, canonical);
+        let receipt = present(&mut p, 1);
+        let collected = p.session.publication_context();
+        p.session.advance_to(0.25).unwrap();
+        assert!(input(&mut p, Some(receipt), "press", 1, 400.0));
+        p.session.advance_to(0.5).unwrap();
+        let unpresented = p.drain_delta_json().unwrap().unwrap();
+        let unpresented: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&unpresented).unwrap();
+        assert!(unpresented.retained.sequence > receipt.sequence);
+        assert!(input(&mut p, Some(receipt), "release", 1, 400.0));
+        let request = p.pending_scene_control.expect("committed shared click");
+        assert_ne!(request.publication, collected);
+        assert_eq!(request.publication, p.session.publication_context());
+        assert_eq!(p.time(), 0.5);
+        assert!(
+            !p.is_playing(),
+            "input does not dispatch or reanchor playback"
+        );
+        assert_eq!(
+            p.take_scene_control(request.sequence).unwrap().as_deref(),
+            Some("next_section")
+        );
+        assert_eq!(p.take_scene_control(request.sequence).unwrap(), None);
     }
 }
 

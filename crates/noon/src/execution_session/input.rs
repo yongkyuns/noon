@@ -15,6 +15,7 @@ use noon_runtime::{EffectivePropertyWrite, EvaluationError, FrameState, RuntimeI
 use super::ExecutionSession;
 
 mod presentation;
+pub(super) use presentation::PointerFrameDamage;
 pub use presentation::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
 
 pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
@@ -29,6 +30,7 @@ pub enum ExecutionSessionInputError {
     ForeignPointerRuntime,
     StalePointerBinding,
     PointerContextMismatch,
+    StalePointerPositionProof,
     StalePointerPublication {
         expected: PublicationContext,
         actual: PublicationContext,
@@ -67,6 +69,7 @@ impl std::fmt::Display for ExecutionSessionInputError {
             Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
             Self::StalePointerBinding => formatter.write_str("pointer binding has been replaced"),
             Self::PointerContextMismatch => formatter.write_str("pointer record does not match its captured view/publication context"),
+            Self::StalePointerPositionProof => formatter.write_str("pointer position compatibility must be validated again"),
             Self::StalePointerPublication { expected, actual } => write!(formatter, "pointer publication {actual:?} is not the current publication {expected:?}"),
             Self::WrongPointer { expected, actual } => write!(formatter, "pointer {actual:?} is not the configured pointer {expected:?}"),
             Self::PointerBindingSequenceExhausted => formatter.write_str("pointer binding sequence is exhausted"),
@@ -132,12 +135,13 @@ impl From<EvaluationError> for ExecutionSessionInputError {
 /// The runtime identity and binding generation cannot be supplied by a caller.
 /// Capture this token when converting an occurrence's coordinates, not when later
 /// draining it. Moving a session preserves tokens; cloning/replacing it does not.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NativePointerInputToken {
     runtime: RuntimeIdentity,
     generation: u64,
     pointer: NativePointerId,
     context: NativePointerContext,
+    position_proof: Option<presentation::PointerPositionProof>,
 }
 
 impl NativePointerInputToken {
@@ -346,6 +350,7 @@ impl ExecutionSession {
                 publication: self.publication_context(),
                 view_revision: binding.view_revision,
             },
+            position_proof: None,
         })
     }
 
@@ -356,8 +361,10 @@ impl ExecutionSession {
     /// Required callbacks must be resolved through their existing session path;
     /// this entry point neither queues around nor bypasses that barrier.
     ///
-    /// Positional input currently requires the exact current publication. A stale
-    /// record must be rejected or explicitly cancelled, not retagged as current.
+    /// Positional input requires the current publication or a session-issued
+    /// proof for the exact collected point. The latter preserves its original
+    /// context and expires before a later transaction. Unproved stale input is
+    /// rejected or explicitly cancelled, never retagged as current.
     /// Cancellation has no coordinates and may clear buttons after frame advance,
     /// but still requires the same runtime, pointer and binding generation.
     /// Native event subscribers observe every accepted down/up occurrence; cancel
@@ -524,11 +531,25 @@ impl ExecutionSession {
             return Err(ExecutionSessionInputError::PointerContextMismatch);
         }
         let previous = self.publication_context();
-        if input.position().is_some() && input.context().publication != previous {
-            return Err(ExecutionSessionInputError::StalePointerPublication {
-                expected: previous,
-                actual: input.context().publication,
-            });
+        if let Some(position) = input.position() {
+            if let Some(proof) = &token.position_proof {
+                if proof.position != position {
+                    return Err(ExecutionSessionInputError::PointerContextMismatch);
+                }
+                if proof.publication != previous
+                    || proof.damage_stamp != self.pointer_frame_damage.stamp()
+                    || proof.inspection_revision != self.inspection_view_revision()
+                    || self.derived_display_plan.is_some()
+                    || !self.derived_display_objects.is_empty()
+                {
+                    return Err(ExecutionSessionInputError::StalePointerPositionProof);
+                }
+            } else if input.context().publication != previous {
+                return Err(ExecutionSessionInputError::StalePointerPublication {
+                    expected: previous,
+                    actual: input.context().publication,
+                });
+            }
         }
         self.require_native_event_sequence(input.sequence())?;
 

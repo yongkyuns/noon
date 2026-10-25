@@ -1,8 +1,9 @@
 //! Winit pointer collection against the last successfully presented frame.
 //!
 //! One window's logical cursor feeds the shared typed session input boundary.
-//! Positional input never substitutes current execution for an older displayed
-//! frame. Stale input cancels the contact and waits for a fresh presentation and
+//! Positional input retains its collected view and publication. Shared Rust may
+//! prove that later effective frames preserve picking at that exact point.
+//! Incompatible input cancels the contact and waits for a fresh presentation and
 //! cursor sample; cancellation itself does not depend on a positional receipt.
 //! The collector owns no geometry, picking index, gesture recognizer or OS grab.
 
@@ -96,15 +97,12 @@ impl NativeApp {
     }
 
     pub(super) fn capture_pointer_presentation(
-        &self,
+        &mut self,
         size: PhysicalSize<u32>,
         scale: f64,
     ) -> Result<PointerFrameSnapshot, NativeHostError> {
         let view = self.pointer_frame_view(logical_size(size, scale)?)?;
-        self.execution
-            .session()
-            .capture_pointer_frame(view)
-            .map_err(|error| NativeHostError::Platform(error.to_string()))
+        self.execution.capture_pointer_frame(view)
     }
 
     fn pointer_frame_view(&self, logical: Vec2) -> Result<PointerFrameView, NativeHostError> {
@@ -122,6 +120,7 @@ impl NativeApp {
         match error {
             PointerFrameError::ViewChanged
             | PointerFrameError::CameraMismatch
+            | PointerFrameError::PickingChanged
             | PointerFrameError::Input(
                 ExecutionSessionInputError::ForeignPointerRuntime
                 | ExecutionSessionInputError::StalePointerPublication { .. },
@@ -155,8 +154,14 @@ impl NativeApp {
         };
         let view = self.pointer_frame_view(logical)?;
         // Validate before configuration: resetting a binding can mutate signals.
-        if let Err(error) = frame.validate_current(self.execution.session(), view) {
-            return self.reject_pointer_frame(error);
+        if let Err(error) = self
+            .execution
+            .validate_pointer_frame_position(&frame, view, surface)
+        {
+            return match error {
+                NativeHostError::PointerFrame(error) => self.reject_pointer_frame(error),
+                error => Err(error),
+            };
         }
         let position = frame
             .position(surface)
@@ -169,9 +174,13 @@ impl NativeApp {
         if !self.ensure_pointer_input()? {
             return Ok(PointerDispatch::Unsubscribed);
         }
-        let token = match frame.input_token(self.execution.session(), view) {
+        let token = match self
+            .execution
+            .pointer_frame_input_token(&frame, view, surface)
+        {
             Ok(token) => token,
-            Err(error) => return self.reject_pointer_frame(error),
+            Err(NativeHostError::PointerFrame(error)) => return self.reject_pointer_frame(error),
+            Err(error) => return Err(error),
         };
         self.admit_pointer_kind(&token, kind(position))?;
         // A pointer move over unchanged content needs no repaint. Geometry

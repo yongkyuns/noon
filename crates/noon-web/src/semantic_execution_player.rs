@@ -4167,7 +4167,9 @@ impl SemanticExecutionPlayer {
             .inspection_camera()
             .map_err(|e| e.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
-        let pointer_frame = self.worker_pointer_presentation.capture(&self.session)?;
+        let pointer_frame = self
+            .worker_pointer_presentation
+            .capture(&mut self.session)?;
         #[cfg(any(target_arch = "wasm32", test))]
         let pointer_refresh = self.worker_pointer_presentation.needs_delta(&self.session);
         #[cfg(not(any(target_arch = "wasm32", test)))]

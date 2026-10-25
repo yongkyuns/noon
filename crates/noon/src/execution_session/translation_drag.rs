@@ -147,6 +147,7 @@ impl ExecutionSession {
         }
         self.cancel_translation_drag()?;
         self.translation_drag.targets = Arc::new(targets.into_iter().collect());
+        self.pointer_frame_damage.invalidate();
         if self.translation_drag.has_targets() {
             self.runtime.invalidate_replay_domain();
         }

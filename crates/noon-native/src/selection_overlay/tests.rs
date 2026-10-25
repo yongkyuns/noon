@@ -247,7 +247,7 @@ fn native_surface_smoke_presents_paused_click_selection_and_clear() {
 }
 
 #[test]
-fn rejected_motion_cancels_click_even_after_fresh_display_and_return_to_press_point() {
+fn seek_rejection_cannot_revive_press_after_fresh_display_and_return_to_press_point() {
     let mut app = app();
     app.static_session_mut().take_renderer_publication();
     app.pointer.presented = Some(app.capture_pointer_presentation(SIZE, 1.0).unwrap());
@@ -255,23 +255,35 @@ fn rejected_motion_cancels_click_even_after_fresh_display_and_return_to_press_po
         .unwrap();
     app.dispatch_pointer_button(MouseButton::Left, ElementState::Pressed, SIZE, 1.0)
         .unwrap();
-    app.static_session_mut().evaluate(0.25).unwrap();
-    // The movement threshold must not accidentally supply the cancellation:
-    // this excursion is rejected before it reaches the session gesture state.
+    app.static_session_mut().seek(0.25).unwrap();
+    let sequence = app.next_input_sequence;
+    // Seek retires the gesture and its displayed input evidence. The offered
+    // excursion is rejected before it can enter the session's movement history.
     assert!(matches!(
         app.dispatch_pointer_position(PhysicalPosition::new(260.0, 90.0), SIZE, 1.0)
             .unwrap(),
         crate::pointer_input::PointerDispatch::RejectedFrame(_)
     ));
+    assert_eq!(
+        app.next_input_sequence,
+        sequence + 1,
+        "only cleanup is accepted"
+    );
     app.pointer.presented = Some(app.capture_pointer_presentation(SIZE, 1.0).unwrap());
+    app.static_session_mut().take_renderer_publication();
     app.pointer.refresh_pending = false;
+    assert_eq!(
+        app.next_input_sequence,
+        sequence + 1,
+        "presentation does not replay input"
+    );
     app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0)
         .unwrap();
     app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0)
         .unwrap();
     assert!(
         app.session().selected_pointer_target().is_none(),
-        "rejected motion must retire the prior press"
+        "fresh presentation must not revive the press retired by seek"
     );
     click(&mut app, 160.0);
     assert!(
@@ -279,10 +291,15 @@ fn rejected_motion_cancels_click_even_after_fresh_display_and_return_to_press_po
         "fresh click must recover"
     );
     assert_eq!(app.session().frame().time, 0.25);
+    assert!(app
+        .static_session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
 }
 
 #[test]
-fn same_time_selection_clear_keeps_an_unchanged_effective_frame_receipt_compatible() {
+fn same_time_seek_clears_overlay_and_requires_fresh_input_evidence_without_replay() {
     let mut app = app();
     app.static_session_mut().take_renderer_publication();
     // Model the displayed scene and selection without an actual window here.
@@ -291,6 +308,7 @@ fn same_time_selection_clear_keeps_an_unchanged_effective_frame_receipt_compatib
     app.last_selection_presentation = app.session().pointer_selection_presentation();
     let displayed = app.pointer.presented.clone();
     let before = app.session().publication_context();
+    let before_frame = app.session().frame().clone();
     assert!(app.session().selected_pointer_target().is_some());
     app.static_session_mut().seek(0.0).unwrap();
     assert_eq!(app.session().publication_context(), before);
@@ -299,12 +317,44 @@ fn same_time_selection_clear_keeps_an_unchanged_effective_frame_receipt_compatib
         app.publication_pending(),
         "selection clear still needs its own redraw"
     );
-    // A session overlay is not a new effective scene or a picking target.
+    let sequence = app.next_input_sequence;
+    // The scene and publication are unchanged, but seek retired the old input
+    // evidence independently of the overlay that still needs to be erased.
     assert_eq!(
         app.dispatch_pointer_position(PhysicalPosition::new(160.0, 90.0), SIZE, 1.0)
             .unwrap(),
-        crate::pointer_input::PointerDispatch::Admitted
+        crate::pointer_input::PointerDispatch::RejectedFrame(
+            noon::integration::PointerFrameError::PickingChanged
+        )
     );
+    assert_eq!(app.next_input_sequence, sequence + 1);
     assert_eq!(app.pointer.presented, displayed);
+    assert!(app.last_selection_presentation.is_some());
+    assert_eq!(app.session().frame(), &before_frame);
+
+    app.pointer.presented = Some(app.capture_pointer_presentation(SIZE, 1.0).unwrap());
+    app.static_session_mut().take_renderer_publication();
+    app.pointer.refresh_pending = false;
+    app.last_selection_presentation = app.session().pointer_selection_presentation();
+    assert!(!app.publication_pending());
+    assert_eq!(app.next_input_sequence, sequence + 1);
+    assert!(app.session().selected_pointer_target().is_none());
+    assert_eq!(
+        app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0)
+            .unwrap(),
+        crate::pointer_input::PointerDispatch::Cancelled
+    );
+    assert!(app.session().selected_pointer_target().is_none());
+
+    click(&mut app, 160.0);
+    assert!(app.session().selected_pointer_target().is_some());
+    assert!(app.selection_overlay_pending());
+    assert_eq!(app.session().publication_context(), before);
+    assert_eq!(app.session().frame(), &before_frame);
+    assert!(app
+        .static_session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     assert_eq!(app.session().frame().time, 0.0);
 }
