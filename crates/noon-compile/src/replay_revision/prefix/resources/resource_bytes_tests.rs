@@ -16,15 +16,16 @@ fn image_resource(
             id: RasterImageResourceId::new(handle),
             version: 0,
         },
-        Arc::new(
-            RasterImageResource::from_rgba8(width, 1, vec![0; width as usize * 4]).unwrap(),
-        ),
+        Arc::new(RasterImageResource::from_rgba8(width, 1, vec![0; width as usize * 4]).unwrap()),
     )
 }
 
 #[test]
 fn empty_projection_has_no_resource_charge() {
-    assert_eq!(CompiledResources::default().prefix_resource_bytes(), Some(0));
+    assert_eq!(
+        CompiledResources::default().prefix_resource_bytes(),
+        Some(0)
+    );
 }
 
 #[test]
@@ -34,10 +35,16 @@ fn payload_size_not_entry_count_controls_resource_byte_charge() {
     let mut resources = CompiledResources::default();
     resources.images.insert(handle, small.clone());
     assert_eq!(resources.prefix_payload_count(), 1);
-    assert_eq!(resources.prefix_resource_bytes(), Some(small.retained_bytes()));
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(small.retained_bytes())
+    );
     resources.images.insert(handle, large.clone());
     assert_eq!(resources.prefix_payload_count(), 1);
-    assert_eq!(resources.prefix_resource_bytes(), Some(large.retained_bytes()));
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(large.retained_bytes())
+    );
     assert_eq!(large.retained_bytes() - small.retained_bytes(), 4092);
 }
 
@@ -87,9 +94,15 @@ fn repeated_handle_does_not_recharge_but_distinct_handles_are_conservative() {
     let mut duplicate = CompiledResources::default();
     duplicate.images.insert(first, image.clone());
     resources.extend_prefix_knowledge(&duplicate);
-    assert_eq!(resources.prefix_resource_bytes(), Some(image.retained_bytes()));
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(image.retained_bytes())
+    );
     resources.images.insert(second, image.clone());
-    assert_eq!(resources.prefix_resource_bytes(), Some(2 * image.retained_bytes()));
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(2 * image.retained_bytes())
+    );
 }
 
 #[test]
@@ -112,7 +125,10 @@ fn text_resource_payload_is_included() {
         version: 0,
     };
     resources.texts.insert(handle, text.clone());
-    assert_eq!(resources.prefix_resource_bytes(), Some(text.retained_bytes()));
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(text.retained_bytes())
+    );
     assert_eq!(
         text.retained_bytes(),
         std::mem::size_of::<TextResource>() + text.source.len()

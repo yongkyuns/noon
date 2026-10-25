@@ -138,9 +138,21 @@ impl CompiledResources {
         self.images
             .values()
             .map(|resource| resource.retained_bytes())
-            .chain(self.texts.values().map(|resource| resource.retained_bytes()))
-            .chain(self.fonts.values().map(|resource| resource.retained_bytes()))
-            .chain(self.geometries.values().map(|resource| resource.retained_bytes()))
+            .chain(
+                self.texts
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
+            .chain(
+                self.fonts
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
+            .chain(
+                self.geometries
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
             .try_fold(0_usize, |total, bytes| {
                 (bytes != usize::MAX).then_some(())?;
                 total.checked_add(bytes)

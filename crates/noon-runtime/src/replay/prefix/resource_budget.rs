@@ -42,7 +42,10 @@ mod tests {
         let budget = ResourceBudget::new(7).with_additional(7).unwrap();
         assert_eq!(budget.bytes(), 7);
         assert_eq!(budget.with_additional(0).unwrap(), budget);
-        assert_eq!(ResourceBudget::new(0).with_additional(0).unwrap().bytes(), 0);
+        assert_eq!(
+            ResourceBudget::new(0).with_additional(0).unwrap().bytes(),
+            0
+        );
     }
 
     #[test]
