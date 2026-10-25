@@ -1,5 +1,5 @@
 //! First-glow API review witnesses using the actual shared Rust owners.
-//! These qualify authored declarations/options, not enabled effect playback.
+//! These qualify authored declarations/options and shared execution admission.
 use super::*;
 use noon_core::{
     resolve_animation_options, AnimationDefaults, AnimationOptionsError, RateFunction,
@@ -285,5 +285,55 @@ fn mixed_text_path_image_and_nested_alias_copy_preserve_leaf_effect_meaning() {
         .unwrap()
         .effect_ids()
         .is_empty());
-    assert!(scene.execution_session().is_err());
+    let revision = scene.revision();
+    let session = scene.execution_session().unwrap();
+    // The repeated path alias is one execution source; detached family copies
+    // keep their independent effects without enrolling additional source rows.
+    assert_eq!(session.frame().objects.len(), leaves.len());
+    for leaf in leaves {
+        let id = session.execution_object_id(leaf.node_id()).unwrap();
+        let row = session
+            .frame()
+            .objects
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap();
+        let effect = leaf.get_effect("accent").unwrap();
+        let glow = row.glow.as_ref().unwrap();
+        assert_eq!(glow.attachment, effect.node_id());
+        assert_eq!(glow.definition, value(&effect));
+        let copied = copy.mobject(leaf).unwrap();
+        assert!(session.execution_object_id(copied.node_id()).is_none());
+    }
+    let image_id = session.execution_object_id(image.node_id()).unwrap();
+    let retained_image = session
+        .frame()
+        .objects
+        .iter()
+        .find(|row| row.id == image_id)
+        .unwrap()
+        .content
+        .image()
+        .unwrap();
+    let authored_image = image.state().unwrap().content.image().unwrap();
+    assert_eq!(retained_image.semantic_content(), authored_image);
+    assert_eq!((retained_image.width(), retained_image.height()), (2, 2));
+    assert_eq!(
+        copy.mobject(&image)
+            .unwrap()
+            .state()
+            .unwrap()
+            .content
+            .image(),
+        Some(authored_image)
+    );
+    assert_eq!(
+        session
+            .raster_image_resources()
+            .get(retained_image.resource())
+            .unwrap()
+            .rgba8(),
+        &[255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 128, 255, 255, 255, 255]
+    );
+    assert_eq!(scene.revision(), revision);
 }
