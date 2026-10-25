@@ -1207,3 +1207,159 @@ test("hiding the page pauses a worker resume whose acknowledgement has not updat
     assert.deepEqual(anchors, [], "an in-flight resume cannot re-enable output after page suspension");
   } finally { client.terminate(); }
 });
+
+
+const viewerGainChanges = [
+  { name: "volume", apply: client => client.setAudioVolume(0.25), volume: 0.25, muted: false },
+  { name: "mute", apply: client => client.setAudioMuted(true), volume: 1, muted: true },
+];
+
+for (const gain of viewerGainChanges) {
+  for (const action of [
+    { name: "Pause", action: "toggle_playback", time: 1, playing: false },
+    { name: "section seek", action: "next_section", time: 2, playing: true },
+  ]) {
+    test(`explicit viewer ${gain.name} preserves a committed scene ${action.name} anchor`, async t => {
+      const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+      const anchors = [], appliedGains = [];
+      t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", function(anchor) {
+        anchors.push(anchor);
+        appliedGains.push({ volume: this.volume, muted: this.muted });
+      });
+      const { client, engine } = await startClient();
+      try {
+        const clicked = client.submitBrowserPointerInput({ ...pointerInput, kind: "release" });
+        const request = await waitForRequest(engine, "browser_pointer_input");
+        gain.apply(client);
+        const anchor = { session: 1, time: action.time, playing: action.playing, sampledEpochMs: 1234 };
+        engine.emitMessage(engineMessage(request.type, { requestId: request.requestId,
+          time: action.time, playing: action.playing, pointerInputAccepted: true,
+          sceneControlApplied: true, sceneControlAction: action.action, audioAnchor: anchor }));
+        const result = await clicked;
+        assert.deepEqual(anchors, [anchor], "gain changes cannot discard a committed transport action");
+        assert.equal(result.sceneControlApplied, true);
+        assert.equal(result.playing, action.playing);
+        assert.equal(result.time, action.time);
+        assert.deepEqual(appliedGains, [{ volume: gain.volume, muted: gain.muted }]);
+      } finally { client.terminate(); }
+    });
+  }
+
+  test(`explicit viewer ${gain.name} preserves an external Play anchor after worker dispatch`, async t => {
+    const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+    const anchors = [], appliedGains = [];
+    t.mock.method(WorkerAudioDevice.prototype, "unlock", () => Promise.resolve());
+    t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", function(anchor) {
+      anchors.push(anchor);
+      appliedGains.push({ volume: this.volume, muted: this.muted });
+    });
+    const { client, engine } = await startClient();
+    try {
+      const playing = client.resume();
+      const request = await waitForRequest(engine, "resume");
+      gain.apply(client);
+      const anchor = { session: 1, time: 1, playing: true, sampledEpochMs: 1234 };
+      engine.emitMessage(engineMessage(request.type, { requestId: request.requestId,
+        time: 1, playing: true, audioAnchor: anchor }));
+      const result = await playing;
+      assert.deepEqual(anchors, [anchor], "a sent transport command must retain its device acknowledgement");
+      assert.equal(result.playing, true);
+      assert.deepEqual(appliedGains, [{ volume: gain.volume, muted: gain.muted }]);
+    } finally { client.terminate(); }
+  });
+
+  test(`explicit viewer ${gain.name} cancels a held scene Play before unlock`, async t => {
+    const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+    let finishUnlock, released;
+    const unlocked = new Promise(resolve => { finishUnlock = resolve; });
+    const anchors = [];
+    t.mock.method(WorkerAudioDevice.prototype, "unlock", () => unlocked);
+    t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", anchor => anchors.push(anchor));
+    const { client, engine } = await startClient();
+    let clicked;
+    try {
+      clicked = client.submitBrowserPointerInput({ ...pointerInput, kind: "release" });
+      void clicked.then(result => { released = result; }, () => {});
+      const input = await waitForRequest(engine, "browser_pointer_input");
+      engine.emitMessage(engineMessage(input.type, { requestId: input.requestId, time: 0, playing: false,
+        pointerInputAccepted: true, sceneControl: { sequence: "41", action: "toggle_playback" } }));
+      await Promise.resolve();
+      await Promise.resolve();
+      gain.apply(client);
+      const cancel = await waitForRequest(engine, "scene_control");
+      assert.equal(cancel.sequence, "41");
+      assert.equal(cancel.cancel, true);
+      engine.emitMessage(engineMessage(cancel.type, { requestId: cancel.requestId, sceneControlApplied: false }));
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(released?.sceneControlApplied, false,
+        "the release must settle nonfatally before its device unlock completes");
+      assert.equal(released.pointerInputAccepted, true);
+      finishUnlock();
+      await clicked;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(anchors, []);
+      assert.equal(engine.messages.filter(message => message.type === "scene_control" && !message.cancel).length, 0);
+      assert.equal(engine.messages.some(message => message.type === "resume"), false);
+    } finally {
+      finishUnlock();
+      client.terminate();
+      await clicked?.catch(() => {});
+    }
+  });
+}
+
+for (const later of [
+  { name: "press", apply: client => client.submitBrowserPointerInput(pointerInput), volume: 1, muted: false },
+  ...viewerGainChanges,
+]) {
+  for (const applied of [true, false]) {
+    test(`${applied ? "committed" : "unapplied"} scene Play survives a later ${later.name} after worker dispatch`, async t => {
+      const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+      const anchors = [], appliedGains = [];
+      t.mock.method(WorkerAudioDevice.prototype, "unlock", () => Promise.resolve());
+      t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", function(anchor) {
+        anchors.push(anchor);
+        appliedGains.push({ volume: this.volume, muted: this.muted });
+      });
+      const { client, engine } = await startClient();
+      let clicked, pressed;
+      try {
+        clicked = client.submitBrowserPointerInput({ ...pointerInput, kind: "release" });
+        const input = await waitForRequest(engine, "browser_pointer_input");
+        engine.emitMessage(engineMessage(input.type, { requestId: input.requestId, time: 0, playing: false,
+          pointerInputAccepted: true, sceneControl: { sequence: "42", action: "toggle_playback" } }));
+        const completion = await waitForRequest(engine, "scene_control");
+        assert.equal(completion.sequence, "42");
+        assert.notEqual(completion.cancel, true);
+        pressed = later.apply(client);
+        const cancel = await waitForRequest(engine, "scene_control", 2);
+        assert.equal(cancel.sequence, "42");
+        assert.equal(cancel.cancel, true);
+        const anchor = { session: 1, time: 0, playing: true, sampledEpochMs: 1234 };
+        engine.emitMessage(engineMessage(completion.type, { requestId: completion.requestId,
+          time: 0, playing: applied, sceneControlApplied: applied,
+          ...(applied ? { sceneControlAction: "toggle_playback", audioAnchor: anchor } : {}) }));
+        engine.emitMessage(engineMessage(cancel.type, { requestId: cancel.requestId,
+          time: 0, playing: applied, sceneControlApplied: false }));
+        if (later.name === "press") {
+          const press = await waitForRequest(engine, "browser_pointer_input", 2);
+          engine.emitMessage(engineMessage(press.type, { requestId: press.requestId,
+            time: 0, playing: applied, pointerInputAccepted: true }));
+          await pressed;
+        }
+        const result = await clicked;
+        assert.deepEqual(anchors, applied ? [anchor] : [],
+          "the worker's committed result decides whether this reply applies a device anchor");
+        assert.equal(result.type, "browser_pointer_input");
+        assert.equal(result.pointerInputAccepted, true);
+        assert.equal(result.sceneControlApplied, applied);
+        assert.equal(result.playing, applied);
+        assert.deepEqual(appliedGains, applied ? [{ volume: later.volume, muted: later.muted }] : []);
+      } finally {
+        client.terminate();
+        await clicked?.catch(() => {});
+        await pressed?.catch(() => {});
+      }
+    });
+  }
+}

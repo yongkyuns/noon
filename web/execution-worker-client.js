@@ -67,6 +67,9 @@ export class ExecutionWorkerClient {
   #playing = true;
   #audioDevice = new WorkerAudioDevice(() => this.#audioInterrupted());
   #audioControlGeneration = 0;
+  // Explicit viewer gain supersedes older gain toggles, not an already
+  // committed worker transport acknowledgement.
+  #audioGainGeneration = 0;
   // Scene acknowledgements arrive in worker order. Retire older external
   // command completions without suppressing a later admitted scene action.
   #audioCommandGeneration = 0;
@@ -607,12 +610,12 @@ export class ExecutionWorkerClient {
 
   setAudioVolume(volume) {
     this.#audioDevice.setVolume(volume);
-    this.#audioControlGeneration += 1;
+    this.#audioGainGeneration += 1;
     this.#invalidateSceneControl();
   }
   setAudioMuted(muted) {
     this.#audioDevice.setMuted(muted);
-    this.#audioControlGeneration += 1;
+    this.#audioGainGeneration += 1;
     this.#invalidateSceneControl();
   }
 
@@ -753,6 +756,7 @@ export class ExecutionWorkerClient {
     const admission = {
       generation: this.#sceneControlGeneration,
       audioGeneration: this.#audioControlGeneration,
+      gainGeneration: this.#audioGainGeneration,
       lifecycle: this.#lifecycleGeneration, session: this.#session,
       worker: this.#engineWorker,
     };
@@ -779,6 +783,10 @@ export class ExecutionWorkerClient {
     }
     if (result.sceneControlApplied === true) {
       this.#invalidateSceneControl();
+      if (result.sceneControlAction === "toggle_audio_muted" &&
+          admission.gainGeneration !== this.#audioGainGeneration) {
+        return this.#audioState({ ...result, sceneControlApplied: false });
+      }
       return this.#applySceneControlResult(result);
     }
     if (result.sceneControl === undefined) return result;
@@ -808,10 +816,13 @@ export class ExecutionWorkerClient {
     }
     try {
       const completed = await this.#requestNativeInput("scene_control", { sequence });
-      if (this.#pendingSceneControl !== pending || !this.#sceneControlOwnerCurrent(pending)) {
+      // Once sent, the worker's ordered result decides whether Play committed.
+      // A later press or gain change may retire an unconsumed receipt but cannot
+      // undo a transport action the worker has already applied.
+      if (!this.#sceneControlOwnerCurrent(pending)) {
         return { ...result, sceneControlApplied: false };
       }
-      this.#pendingSceneControl = null;
+      if (this.#pendingSceneControl === pending) this.#pendingSceneControl = null;
       return this.#applySceneControlResult({ ...result, ...completed,
         type: result.type, pointerInputAccepted: result.pointerInputAccepted });
     } finally {
