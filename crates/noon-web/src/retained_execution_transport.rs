@@ -2427,6 +2427,7 @@ mod tests {
                 frame.objects[0].content = image.into();
                 frame.objects[0].style = Style {
                     fill: Some(Color::rgba(1.0, 1.0, 1.0, 0.4)),
+                    stroke_width: 0.0,
                     opacity: 0.7,
                     ..Style::default()
                 };
