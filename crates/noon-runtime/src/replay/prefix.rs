@@ -7,7 +7,12 @@ use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
 use noon_core::{GeometryRef, ObjectId, SemanticClickIndicate};
 use std::sync::Arc;
 
+mod resource_budget;
 mod storage;
+use resource_budget::ResourceBudget;
+
+#[cfg(test)]
+mod resource_budget_tests;
 
 #[derive(Debug, PartialEq)]
 pub enum PrefixError {
@@ -32,6 +37,13 @@ pub enum PrefixError {
     Allocation,
     CapacityRequired {
         object_slots: usize,
+    },
+    /// Logical immutable-resource payloads exceed this stream's explicit cap.
+    /// Existing history remains valid; this never evicts promised past resources.
+    ResourceBudgetExceeded {
+        retained_bytes: usize,
+        additional_bytes: usize,
+        limit_bytes: usize,
     },
     Resources(CompiledResourceError),
     Interaction(String),
@@ -82,9 +94,19 @@ pub struct PrefixPublisher {
     finished: bool,
     object_slots: usize,
     resources: CompiledResources,
+    resource_budget: ResourceBudget,
 }
 
 impl PrefixPublisher {
+    /// Resource payload bytes extracted for this stream, including pending output.
+    /// This is not a delivery receipt or process/allocator/GPU memory measurement.
+    pub fn extracted_resource_bytes(&self) -> usize {
+        self.resource_budget.bytes()
+    }
+    pub fn resource_budget_bytes(&self) -> usize {
+        self.resource_budget.limit()
+    }
+
     /// The last extracted frontier, not a displayed time or proof of delivery.
     pub fn frontier(&self) -> f64 {
         self.frontier
@@ -106,8 +128,14 @@ pub struct PrefixBatch {
     from_object_slots: usize,
     new_objects: Vec<CompiledObject>,
     resources: CompiledResources,
+    resource_bytes: usize,
 }
 impl PrefixBatch {
+    /// Newly introduced immutable payload bytes; known resource handles cost zero.
+    pub fn resource_bytes(&self) -> usize {
+        self.resource_bytes
+    }
+
     /// Reserve explicitly before append when additional object storage is needed.
     pub fn required_object_capacity(&self) -> usize {
         self.from_object_slots + self.new_objects.len()
@@ -153,8 +181,18 @@ pub struct PrefixReceiver {
     limits: ReplayLimits,
     object_capacity: usize,
     initial_object_slots: usize,
+    resource_budget: ResourceBudget,
 }
 impl PrefixReceiver {
+    /// Logical immutable-resource bytes pinned by the adopted history, not heap/VRAM.
+    /// Future resources remain charged even while an older frame is displayed.
+    pub fn retained_resource_bytes(&self) -> usize {
+        self.resource_budget.bytes()
+    }
+    pub fn resource_budget_bytes(&self) -> usize {
+        self.resource_budget.limit()
+    }
+
     fn validate_runtime(&self, runtime: &SceneInstance) -> Result<(), PrefixError> {
         let valid = runtime.runtime_identity() == self.runtime
             && runtime.replay_history.as_ref().is_some_and(|history| {
@@ -318,7 +356,7 @@ impl PrefixReceiver {
         &self,
         runtime: &SceneInstance,
         batch: &PrefixBatch,
-    ) -> Result<(usize, usize), PrefixError> {
+    ) -> Result<(usize, usize, ResourceBudget), PrefixError> {
         self.validate_runtime(runtime)?;
         if self.finished
             || !Arc::ptr_eq(&self.stream, &batch.stream)
@@ -332,6 +370,7 @@ impl PrefixReceiver {
         if batch.from_object_slots != runtime.compiled.objects().len() {
             return Err(PrefixError::UnexpectedBatch);
         }
+        let resource_budget = self.resource_budget.with_additional(batch.resource_bytes)?;
         let required = batch.required_object_capacity();
         if required > self.object_capacity {
             return Err(PrefixError::CapacityRequired {
@@ -359,7 +398,7 @@ impl PrefixReceiver {
         if count > self.limits.revisions || payloads > self.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
         }
-        Ok((count, payloads))
+        Ok((count, payloads, resource_budget))
     }
 
     /// Install only future history. The displayed frame, runtime identity,
@@ -372,7 +411,7 @@ impl PrefixReceiver {
         runtime: &mut SceneInstance,
         batch: PrefixBatch,
     ) -> Result<PrefixBatchStats, PrefixError> {
-        let (count, payloads) = self.validate_append(runtime, &batch)?;
+        let (count, payloads, resource_budget) = self.validate_append(runtime, &batch)?;
         let history = runtime
             .replay_history
             .as_mut()
@@ -387,6 +426,7 @@ impl PrefixReceiver {
         history.stats.revisions_retained = count;
         history.stats.payloads_retained = payloads;
         history.end = Some(batch.frontier);
+        self.resource_budget = resource_budget;
         self.received_revisions = count;
         self.frontier = batch.frontier;
         self.finished = batch.terminal;
@@ -395,6 +435,11 @@ impl PrefixReceiver {
 }
 
 impl SceneInstance {
+    /// Provisional experimental cap for logical immutable-resource payloads.
+    /// Not a total memory limit: revisions, object/storage capacity, allocator
+    /// overhead, source allocations and renderer residency require separate caps.
+    pub const DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+
     /// Low-level bootstrap. The owning ExecutionSession must additionally prove
     /// its source segment and callback completion BEFORE invoking this method.
     /// This experimental path excludes native-reactive bindings and external
@@ -402,6 +447,19 @@ impl SceneInstance {
     #[doc(hidden)]
     pub fn create_prefix_projection(
         &self,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_with_resource_budget(
+            Self::DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES,
+        )
+    }
+
+    /// Same bootstrap with an explicit logical immutable-resource byte cap.
+    /// Admission happens before cloning the projection or reserving its history.
+    /// Zero permits resource-free scenes. No history is evicted to meet the cap.
+    #[doc(hidden)]
+    pub fn create_prefix_projection_with_resource_budget(
+        &self,
+        resource_budget_bytes: usize,
     ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
         let history = self
             .replay_history
@@ -423,6 +481,13 @@ impl SceneInstance {
         {
             return Err(ReplayError::UnsupportedDomain.into());
         }
+        let resource_bytes = self
+            .compiled
+            .resources()
+            .prefix_resource_bytes()
+            .ok_or(ReplayError::RetentionLimit)?;
+        let resource_budget =
+            ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
         let stream = Arc::new(());
         let publisher = PrefixPublisher {
             source: self.runtime_identity(),
@@ -433,6 +498,7 @@ impl SceneInstance {
             finished: false,
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
+            resource_budget,
         };
         let mut runtime = self.clone();
         let copied = runtime
@@ -462,6 +528,7 @@ impl SceneInstance {
             limits: history.limits,
             object_capacity: self.compiled.objects().len(),
             initial_object_slots: self.compiled.objects().len(),
+            resource_budget,
         };
         Ok((publisher, runtime, receiver))
     }
@@ -578,6 +645,12 @@ impl SceneInstance {
         let resources = self
             .compiled
             .prefix_resource_delta(&forward, &publisher.resources)?;
+        // Measure only the new dependency closure, never the retained arena.
+        // Reject before moving the cursor or retaining new publisher pins.
+        let resource_bytes = resources
+            .prefix_resource_bytes()
+            .ok_or(ReplayError::RetentionLimit)?;
+        let resource_budget = publisher.resource_budget.with_additional(resource_bytes)?;
         stats.new_object_slots = new_objects.len();
         stats.resource_payloads = resources.prefix_payload_count();
         stats.payloads = stats
@@ -607,10 +680,12 @@ impl SceneInstance {
             from_object_slots: publisher.object_slots,
             new_objects,
             resources,
+            resource_bytes,
         };
         publisher
             .resources
             .extend_prefix_knowledge(&batch.resources);
+        publisher.resource_budget = resource_budget;
         publisher.object_slots = self.compiled.objects().len();
         publisher.next_revision = history.revisions.len();
         publisher.frontier = self.frame.time;

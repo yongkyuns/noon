@@ -236,6 +236,8 @@ jobs:
           fallback: none
       - name: Test bounded prepared canvas lifecycle
         run: |
+          cargo test --locked -p noon-compile --features prepared-prefix --lib replay_revision::prefix
+          cargo test --locked -p noon-runtime --features prepared-prefix --lib replay::prefix
           cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
           cargo test --locked -p noon-web --all-features --lib prepared_worker
           cargo test --locked -p noon-web --all-features --lib interpreter_prefix
