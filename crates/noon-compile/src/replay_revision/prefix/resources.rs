@@ -128,11 +128,45 @@ impl CompiledResources {
     pub fn prefix_payload_count(&self) -> usize {
         self.images.len() + self.texts.len() + self.fonts.len() + self.geometries.len()
     }
+    /// Logical payload bytes for this immutable dependency closure, once per handle.
+    /// Uses the resource types' existing retained-byte estimates. Alias maps do
+    /// not duplicate payloads; distinct handles sharing an allocation are charged
+    /// conservatively. Excludes allocator overhead, spare capacity and GPU state.
+    /// Call once for bootstrap and only on new suffix closures thereafter.
+    /// Overflow, including a saturated resource estimate, fails closed.
+    pub fn prefix_resource_bytes(&self) -> Option<usize> {
+        self.images
+            .values()
+            .map(|resource| resource.retained_bytes())
+            .chain(
+                self.texts
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
+            .chain(
+                self.fonts
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
+            .chain(
+                self.geometries
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
+            .try_fold(0_usize, |total, bytes| {
+                (bytes != usize::MAX).then_some(())?;
+                total.checked_add(bytes)
+            })
+    }
+
     /// Record delivered handles using the existing resource projection type.
     pub fn extend_prefix_knowledge(&mut self, delta: &Self) {
         self.merge(delta.clone());
     }
 }
+
+#[cfg(test)]
+mod resource_bytes_tests;
 
 #[cfg(test)]
 mod tests {

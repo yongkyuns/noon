@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
 import playwright from "playwright";
+import {
+  startCallbackProof, finishCallbackProof, disposeCallbackProof,
+} from "./callback-continuation-proof.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -2614,225 +2617,78 @@ class SelectedAlignment(Scene):
     window.sharedAuthoringSmoke.compositionContinuation = null;
   });
 
-  // A required callback phase is delivered to the already-suspended async
-  // source stack. Rust selects the phase and timing; Python returns one exact
-  // batch before the endpoint drives the same segment again. The user source
-  // remains pending until the completed player is returned.
+  // Exact-time callback pixels and autonomous progress are separate proofs.
+  // Both profiles run the unchanged Python fixtures once; neither is a retry or
+  // fallback for the other. External samples traverse the ordinary callback
+  // barriers, not rewind or prepared-prefix playback.
   const callbackContinuationSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_affine_callback_continuation.py"),
     "utf8",
   );
-  const callbackContinuation = await page.evaluate(async (source) => {
-    const harness = window.sharedAuthoringSmoke;
-    const canvas = document.createElement("canvas");
-    canvas.id = "scene-ordinary-affine-callback-continuation";
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.append(canvas);
-    let execution = null;
-    let registration = null;
-    let settled = false;
-    let authoringFailure = null;
-    const authoredPromise = harness.authoring.run(source, {}, {
-      async onSemanticContinuation(next) {
-        if (registration !== null) {
-          throw new Error("callback continuation source registered more than one semantic context");
-        }
-        registration = next;
-        execution = new harness.AuthoringExecutionClient(canvas);
-        harness.callbackContinuationExecution = execution;
-        await execution.startSemanticExecution(next.semanticExecution, {
-          authoringClient: harness.authoring,
-          loopDurationSeconds: Math.max(1, next.duration),
-          transportMode: "transferable",
-        });
-      },
+  for (const pacing of ["external_samples", "realtime"]) {
+    const observed = await page.evaluate(startCallbackProof, {
+      source: callbackContinuationSource,
+      canvasId: `scene-ordinary-affine-callback-continuation-${pacing}`,
+      pacing, sampleTime: pacing === "external_samples" ? 0.5 : null,
     });
-    authoredPromise.then(() => { settled = true; }, (error) => {
-      settled = true;
-      authoringFailure = String(error?.message ?? error);
-    });
-    harness.callbackContinuationAuthoredPromise = authoredPromise;
-
-    let midpoint = null;
-    for (let attempt = 0; attempt < 150; attempt += 1) {
-      if (execution !== null && !settled) {
-        try {
-          const state = await execution.state();
-          if (state.time > 0.15 && state.time < 0.8) {
-            midpoint = state;
-            break;
-          }
-        } catch {
-          // The player may be returned only after a coherent segment endpoint.
-        }
+    try {
+      if (pacing === "external_samples") {
+        const pixels = visiblePixelStats(
+          await page.locator(`#${observed.canvasId}`).screenshot(),
+          (red, green, blue) => blue > red + 20 && blue > green + 10,
+        );
+        assert.ok(pixels.count > 100, "callback continuation midpoint was blank");
+        assert.ok(Math.abs(pixels.centerX - 365) < 5,
+          `callback continuation exact midpoint x: ${JSON.stringify(pixels)}`);
+        assert.ok(Math.abs(pixels.centerY - 135) < 5,
+          "ordered callback did not lift the continuation circle");
       }
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const result = await page.evaluate(finishCallbackProof, 1);
+      assert.equal(result.metrics.objectCount, 1);
+      const pixels = visiblePixelStats(
+        await page.locator(`#${observed.canvasId}`).screenshot(),
+        (red, green, blue) => blue > red + 20 && blue > green + 10,
+      );
+      assert.ok(pixels.count > 100, `${pacing} callback continuation endpoint was blank`);
+      assert.ok(Math.abs(pixels.centerX - 410) < 5, `${pacing} callback endpoint x`);
+      assert.ok(Math.abs(pixels.centerY - 135) < 5, `${pacing} callback ordered lift`);
+    } finally {
+      await page.evaluate(disposeCallbackProof);
     }
-    if (midpoint === null || settled) {
-      throw new Error(authoringFailure ?? "callback continuation source did not remain suspended at a live midpoint");
-    }
-    return { canvasId: canvas.id, midpoint, registration };
-  }, callbackContinuationSource);
-  const callbackContinuationMidpointPixels = visiblePixelStats(
-    await page.locator(`#${callbackContinuation.canvasId}`).screenshot(),
-    (red, green, blue) => blue > red + 20 && blue > green + 10,
-  );
-  assert.ok(callbackContinuationMidpointPixels.count > 100, "callback continuation midpoint was blank");
-  assert.ok(
-    callbackContinuationMidpointPixels.centerX > 325 && callbackContinuationMidpointPixels.centerX < 410,
-    `callback continuation did not show a live affine midpoint: ${JSON.stringify(callbackContinuationMidpointPixels)}`,
-  );
-  assert.ok(
-    Math.abs(callbackContinuationMidpointPixels.centerY - 135) < 5,
-    "ordered callback did not lift the continuation circle",
-  );
-  const callbackContinuationResult = await page.evaluate(async () => {
-    const harness = window.sharedAuthoringSmoke;
-    const authored = await harness.callbackContinuationAuthoredPromise;
-    const metrics = (await harness.callbackContinuationExecution.metrics()).metrics;
-    return { authored, metrics };
-  });
-  assert.equal(callbackContinuationResult.authored.duration, 1);
-  assert.equal(
-    callbackContinuationResult.authored.semanticExecution.contextId,
-    callbackContinuation.registration.semanticExecution.contextId,
-    "callback continuation must retain the early canonical context",
-  );
-  assert.equal(
-    callbackContinuationResult.authored.semanticExecution.continuationGeneration,
-    callbackContinuation.registration.generation,
-    "callback continuation must retain its one source-run lease generation",
-  );
-  assert.ok(
-    Number.isSafeInteger(callbackContinuationResult.authored.semanticExecution.callbackSessionId),
-    "callback continuation must retain the existing host callable session",
-  );
-  assert.equal(callbackContinuationResult.metrics.objectCount, 1);
-  const callbackContinuationFinalPixels = visiblePixelStats(
-    await page.locator(`#${callbackContinuation.canvasId}`).screenshot(),
-    (red, green, blue) => blue > red + 20 && blue > green + 10,
-  );
-  assert.ok(callbackContinuationFinalPixels.count > 100, "callback continuation endpoint was blank");
-  assert.ok(Math.abs(callbackContinuationFinalPixels.centerX - 410) < 5, "callback continuation endpoint x");
-  assert.ok(Math.abs(callbackContinuationFinalPixels.centerY - 135) < 5, "callback continuation ordered lift");
-  await page.evaluate(() => {
-    window.sharedAuthoringSmoke.callbackContinuationExecution.terminate();
-    window.sharedAuthoringSmoke.callbackContinuationExecution = null;
-    window.sharedAuthoringSmoke.callbackContinuationAuthoredPromise = null;
-  });
+  }
 
-  // Sparse callback reads suspend only the active callback invocation. Rust
-  // supplies the active circle eagerly, while the Python callback requests its
-  // scoped scalar and an inactive anchor object through the exact phase token.
+  // The scalar track follows the .25s wait; at .75s its value is exactly 1.
+  // Source assertions still prove once-per-phase invocation and sparse reads.
   const callbackSparseReadsSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_callback_sparse_reads.py"),
     "utf8",
   );
-  const callbackSparseReads = await page.evaluate(async (source) => {
-    const harness = window.sharedAuthoringSmoke;
-    const canvas = document.createElement("canvas");
-    canvas.id = "scene-ordinary-callback-sparse-reads";
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.append(canvas);
-    let execution = null;
-    let registration = null;
-    let settled = false;
-    let authoringFailure = null;
-    const authoredPromise = harness.authoring.run(source, {}, {
-      async onSemanticContinuation(next) {
-        if (registration !== null) {
-          throw new Error("sparse callback source registered more than one semantic context");
-        }
-        registration = next;
-        execution = new harness.AuthoringExecutionClient(canvas);
-        harness.callbackSparseReadsExecution = execution;
-        await execution.startSemanticExecution(next.semanticExecution, {
-          authoringClient: harness.authoring,
-          loopDurationSeconds: Math.max(1, next.duration),
-          transportMode: "transferable",
-        });
-      },
+  for (const pacing of ["external_samples", "realtime"]) {
+    const observed = await page.evaluate(startCallbackProof, {
+      source: callbackSparseReadsSource,
+      canvasId: `scene-ordinary-callback-sparse-reads-${pacing}`,
+      pacing, sampleTime: pacing === "external_samples" ? 0.75 : null,
     });
-    authoredPromise.then(() => { settled = true; }, (error) => {
-      settled = true;
-      authoringFailure = String(error?.message ?? error);
-    });
-    harness.callbackSparseReadsAuthoredPromise = authoredPromise;
-
-    let trackMidpoint = null;
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      if (execution !== null && !settled) {
-        try {
-          const state = await execution.state();
-          // The scalar track begins after the first .25s callback wait.
-          if (state.time > 0.55 && state.time < 0.95) {
-            trackMidpoint = state;
-            break;
-          }
-        } catch {
-          // The endpoint briefly returns the player to the suspended source.
-        }
+    try {
+      if (pacing === "external_samples") {
+        const pixels = await page.locator(`#${observed.canvasId}`).screenshot();
+        const x = -1 + 2 * (observed.midpoint.time - 0.25);
+        const pixel = renderedWorldPixel(pixels, x, 1);
+        assert.ok(pixel.blue > pixel.red + 20 && pixel.blue > pixel.green + 10,
+          `sparse scalar callback exact midpoint: ${JSON.stringify({ state: observed.midpoint, pixel })}`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const result = await page.evaluate(finishCallbackProof, 1.5);
+      assert.equal(result.metrics.objectCount, 2);
+      const pixels = await page.locator(`#${observed.canvasId}`).screenshot();
+      for (const [label, x] of [["anchor", -1], ["callback circle", 2]]) {
+        const pixel = renderedWorldPixel(pixels, x, 1);
+        assert.ok(pixel.blue > pixel.red + 20 && pixel.blue > pixel.green + 10,
+          `${pacing} sparse callback ${label} endpoint: ${JSON.stringify(pixel)}`);
+      }
+    } finally {
+      await page.evaluate(disposeCallbackProof);
     }
-    if (trackMidpoint === null || settled) {
-      throw new Error(authoringFailure ?? "sparse callback source did not remain suspended during its scalar track");
-    }
-    return { canvasId: canvas.id, trackMidpoint, registration };
-  }, callbackSparseReadsSource);
-  const callbackSparseTrackPixels = await page.locator(
-    `#${callbackSparseReads.canvasId}`,
-  ).screenshot();
-  const sparseTrackX = -1 + 2 * (callbackSparseReads.trackMidpoint.time - 0.25);
-  const sparseTrackPixel = renderedWorldPixel(callbackSparseTrackPixels, sparseTrackX, 1);
-  assert.ok(
-    sparseTrackPixel.blue > sparseTrackPixel.red + 20 &&
-      sparseTrackPixel.blue > sparseTrackPixel.green + 10,
-    `sparse scalar callback did not move its active circle from the Rust phase value: ${JSON.stringify({ state: callbackSparseReads.trackMidpoint, sparseTrackPixel })}`,
-  );
-  const callbackSparseReadsResult = await page.evaluate(async () => {
-    const harness = window.sharedAuthoringSmoke;
-    const authored = await harness.callbackSparseReadsAuthoredPromise;
-    const metrics = (await harness.callbackSparseReadsExecution.metrics()).metrics;
-    return { authored, metrics };
-  });
-  assert.equal(callbackSparseReadsResult.authored.duration, 1.5);
-  assert.equal(
-    callbackSparseReadsResult.authored.semanticExecution.contextId,
-    callbackSparseReads.registration.semanticExecution.contextId,
-    "sparse callback continuation must retain its one canonical context",
-  );
-  assert.equal(
-    callbackSparseReadsResult.authored.semanticExecution.continuationGeneration,
-    callbackSparseReads.registration.generation,
-    "sparse callback continuation must retain its one source-run lease generation",
-  );
-  assert.ok(
-    Number.isSafeInteger(callbackSparseReadsResult.authored.semanticExecution.callbackSessionId),
-    "sparse callback continuation must retain its existing host callable session",
-  );
-  assert.equal(callbackSparseReadsResult.metrics.objectCount, 2);
-  const callbackSparseFinalPixels = await page.locator(
-    `#${callbackSparseReads.canvasId}`,
-  ).screenshot();
-  const sparseAnchorPixel = renderedWorldPixel(callbackSparseFinalPixels, -1, 1);
-  const sparseCirclePixel = renderedWorldPixel(callbackSparseFinalPixels, 2, 1);
-  for (const [label, pixel] of [["anchor", sparseAnchorPixel], ["callback circle", sparseCirclePixel]]) {
-    assert.ok(
-      pixel.blue > pixel.red + 20 && pixel.blue > pixel.green + 10,
-      `sparse callback ${label} was not rendered from the coherent endpoint: ${JSON.stringify(pixel)}`,
-    );
   }
-  // The Python fixture asserts an accumulating once-per-phase side effect. A
-  // successful source result here therefore proves no exact Rust phase token
-  // restarted its callback while resolving either sparse read.
-  await page.evaluate(() => {
-    window.sharedAuthoringSmoke.callbackSparseReadsExecution.terminate();
-    window.sharedAuthoringSmoke.callbackSparseReadsExecution = null;
-    window.sharedAuthoringSmoke.callbackSparseReadsAuthoredPromise = null;
-  });
 
   // Existing and provisional structural edits publish with effective writes.
   // Derive synchronous JSPI cases from each controlled async fixture so their

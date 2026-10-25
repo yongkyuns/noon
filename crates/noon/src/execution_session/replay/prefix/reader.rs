@@ -43,6 +43,14 @@ impl PrefixReader {
     pub fn replay_stats(&self) -> ReplayStats {
         self.session.replay_stats()
     }
+    /// Logical immutable-resource payloads pinned by this history scope.
+    /// This excludes revision/storage capacity, allocator overhead and GPU state.
+    pub fn retained_resource_bytes(&self) -> usize {
+        self.receiver.retained_resource_bytes()
+    }
+    pub fn resource_budget_bytes(&self) -> usize {
+        self.receiver.resource_budget_bytes()
+    }
 
     /// Explicit seek cancels transient gestures/effects through the same session
     /// policy as ordinary replay. Invalid/unavailable times change nothing.

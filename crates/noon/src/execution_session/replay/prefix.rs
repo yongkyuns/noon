@@ -54,8 +54,24 @@ impl ExecutionSession {
         &self,
         boundary: ExecutionSegment,
     ) -> Result<(PrefixPublisher, PrefixReader), PrefixError> {
+        self.create_prepared_prefix_with_resource_budget(
+            boundary,
+            noon_runtime::SceneInstance::DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES,
+        )
+    }
+
+    /// Bootstrap the same reader with a host-selected immutable-resource byte cap.
+    /// This only bounds retained resource payloads, not total process/GPU memory.
+    /// Source completion/domain admission is identical to the default bootstrap.
+    pub fn create_prepared_prefix_with_resource_budget(
+        &self,
+        boundary: ExecutionSegment,
+        resource_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, PrefixReader), PrefixError> {
         self.ensure_prefix_boundary(boundary)?;
-        let (publisher, runtime, receiver) = self.runtime.create_prefix_projection()?;
+        let (publisher, runtime, receiver) = self
+            .runtime
+            .create_prefix_projection_with_resource_budget(resource_budget_bytes)?;
         // Pin every retained physical identity, including rows not live at the
         // bootstrap time. Selected membership is still proved by the runtime.
         let mut slots = noon_runtime::ExecutionSlotTable::new();
