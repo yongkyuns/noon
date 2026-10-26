@@ -2,11 +2,15 @@
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
 mod glow;
+mod image_paint;
 mod linear_gradient;
 mod paint_transition;
 pub use glow::{
     Glow, GlowParameter, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
     PreparedGlowUpdate,
+};
+pub use image_paint::{
+    ImageAddressMode, ImageFit, ImageMapping, ImagePaint, ImagePaintError, ImageUvTransform,
 };
 pub use linear_gradient::{GradientStop, LinearGradient, LinearGradientError};
 pub use paint_transition::{PaintTransition, PaintTransitionError};
