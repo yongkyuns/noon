@@ -42,8 +42,10 @@ for (const required of [
   "SemanticStore::new()",
   "SemanticObjectRole::Camera2D",
   "session.camera()",
-  "ExecutionSession::from_semantic_store",
-  "create_from_execution_session",
+  "Scene::with_integration_store(Rc::clone(&store))",
+  "scene.execution_session()",
+  ".into_execution_with_session(session)",
+  "create_from_scene_execution",
   "createDirectTypstCanvasRenderer",
   "createDirectSingleTypstCanvasRenderer",
   "noon::example_scenes::spatial_mesh::session()",
@@ -73,7 +75,7 @@ for (const required of [
   "example_scenes::text_family_reveal::program",
   "example_scenes::text_family_write::program",
   "example_scenes::live_native_signals",
-  "create_from_execution_session_with_callbacks",
+  "create_from_scene_execution_with_callbacks",
   "set_native_state_input",
   "emit_native_event",
   "NativeStateSource::PointerPosition",
@@ -87,6 +89,8 @@ for (const forbidden of [
   "ExecutionFrameMirror",
   "initial_delta_json",
   "apply_json",
+  "ExecutionSession::from_semantic_store",
+  "create_from_execution_session",
 ]) {
   assert.equal(
     rustHarness.includes(forbidden),
@@ -120,7 +124,7 @@ for (const required of [
   "program.drive_to",
   "program.admit_publication",
   "direct.drive_to(target_time)",
-  "session.take_renderer_publication()",
+  "session.session_mut().take_renderer_publication()",
   ".admit_rendered_publication(publication_context)",
   "directWakeDirectiveJson",
   "advanceDirectRealtime",
@@ -130,6 +134,21 @@ for (const required of [
     `direct canvas host must consume canonical session authority through ${required}`,
   );
 }
+for (const constructor of [
+  "create_from_scene_execution",
+  "create_from_scene_execution_with_callbacks",
+]) {
+  assert.match(
+    directCanvasHost,
+    new RegExp(`pub async fn ${constructor}\\(\\s*canvas: OffscreenCanvas,\\s*(?:mut )?session: SceneExecution,`),
+    `${constructor} must consume the canonical Scene and its checked execution together`,
+  );
+}
+assert.match(
+  directCanvasHost,
+  /enum DirectSourceAuthority\s*\{\s*Session\s*\{\s*session:\s*SceneExecution,/,
+  "the static direct source must retain the canonical SceneExecution owner",
+);
 assert.equal(
   directCanvasHost.includes("let publication = direct.take_renderer_publication();"),
   true,

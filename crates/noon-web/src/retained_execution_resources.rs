@@ -660,7 +660,8 @@ mod tests {
             .text(noon::Text::new("World").with_font_size(72.0))
             .unwrap();
         scene.add_many(&[(&hello).into(), (&world).into()]).unwrap();
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap()
     }
 
     fn geometry_engine() -> SemanticExecutionPlayer {
@@ -670,7 +671,8 @@ mod tests {
         scene
             .add_many(&[(&first).into(), (&second).into()])
             .unwrap();
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap()
     }
 
     #[test]
@@ -810,7 +812,7 @@ mod tests {
     #[test]
     fn actual_surface_player_binds_mesh_before_worker_install_and_keeps_motion_local() {
         let session = noon::example_scenes::spatial_surface::session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 81).unwrap();
+        let mut player = SemanticExecutionPlayer::from_scene_execution(session, 2.0, 81).unwrap();
         let mut mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(&player.resource_bundle_bytes())
                 .unwrap();

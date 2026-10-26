@@ -1,8 +1,7 @@
 //! Exact authored channels lower once into the shared runtime on native and WASM.
 
 use crate::{
-    AnimationOptions, ExecutionSession, RateFunction, Scene, SemanticAnimationCompositionKind,
-    SemanticVec3,
+    AnimationOptions, RateFunction, Scene, SemanticAnimationCompositionKind, SemanticVec3,
 };
 use noon_core::{
     CompositionTimeMap, SemanticAnimationIntent, SemanticMutationTransaction,
@@ -11,7 +10,7 @@ use noon_core::{
 
 /// A moving, fading red circle above an independently rotating blue square.
 /// Python's paired example expresses the same endpoints with ordinary animation builders.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.75).map_err(|error| error.to_string())?;
     circle
@@ -80,7 +79,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         },
         AnimationOptions::new(),
     )?;
-    scene.execution_session_with_animation_root(&root)
+    scene.into_execution_with_animation_root(&root)
 }
 
 #[cfg(test)]
@@ -92,24 +91,34 @@ mod tests {
         let mut forward = session().unwrap();
         let mut seek = session().unwrap();
         for time in [0.0, 0.25, 1.0, 1.75, 2.0] {
-            forward.advance_to(time).unwrap();
+            forward.session_mut().advance_to(time).unwrap();
             seek.seek(time).unwrap();
-            for (left, right) in forward.frame().objects.iter().zip(&seek.frame().objects) {
+            for (left, right) in forward
+                .session()
+                .frame()
+                .objects
+                .iter()
+                .zip(&seek.session().frame().objects)
+            {
                 assert_eq!(left.transform, right.transform);
                 assert_eq!(left.style, right.style);
             }
-            let circle = &forward.frame().objects[0];
+            let circle = &forward.session().frame().objects[0];
             assert!((circle.transform.translation.x - (-2.0 + 2.0 * time as f32)).abs() < 1e-6);
             assert!((circle.style.opacity - (1.0 - 0.375 * time as f32)).abs() < 1e-6);
-            let square = &forward.frame().objects[1];
+            let square = &forward.session().frame().objects[1];
             assert!(
                 (square.transform.rotation - std::f32::consts::PI * time as f32 / 2.0).abs() < 1e-6
             );
         }
-        forward.take_frame_changes();
-        forward.advance_to(2.0).unwrap();
-        assert!(forward.take_frame_changes().object_indices().is_empty());
+        forward.session_mut().take_frame_changes();
+        forward.session_mut().advance_to(2.0).unwrap();
+        assert!(forward
+            .session_mut()
+            .take_frame_changes()
+            .object_indices()
+            .is_empty());
         seek.seek(0.25).unwrap();
-        assert!((seek.frame().objects[0].transform.translation.x + 1.5).abs() < 1e-6);
+        assert!((seek.session().frame().objects[0].transform.translation.x + 1.5).abs() < 1e-6);
     }
 }

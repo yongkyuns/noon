@@ -19,24 +19,29 @@ function deferred() {
 
 // Exercise the actual Run/retirement functions with an already-completed source
 // that is replaying. No input/edit event occurs before this explicit Run.
-function fixture({ pause = () => Promise.resolve(), started = true } = {}) {
+function fixture({ retire = () => Promise.resolve(), started = true } = {}) {
   const events = [], errors = [];
   const failure = new Error("second run fails");
   const oldCanvas = { style: {} };
   let playing = started, controllable = true, current = true, releases = 0, authorCalls = 0;
+  const temporaryAttachment = {};
+  let activeAttachment = started ? temporaryAttachment : null;
   const oldPlayer = {
     canvas: oldCanvas, terminations: 0,
-    pause() {
-      events.push("pause");
-      assert.equal(oldCanvas.style.visibility, "hidden", "input must not reach stale canvas during pause");
-      return pause().then(() => { playing = false; });
+    retireExecutionSource() {
+      events.push("retire");
+      assert.equal(oldCanvas.style.visibility, "hidden", "input must not reach a retiring source");
+      return retire().then(() => { playing = false; activeAttachment = null; });
     },
     terminate() {
       events.push("terminate"); playing = false; this.terminations += 1;
       this.canvas = { style: {} };
     },
   };
-  const client = { terminated: false, run() { events.push("author"); authorCalls += 1; return Promise.reject(failure); } };
+  const client = { terminated: false, run() {
+    assert.equal(activeAttachment, null, "new source must not mutate the arena before input retirement");
+    events.push("author"); authorCalls += 1; return Promise.reject(failure);
+  } };
   const context = {
     performance, canvas: oldCanvas, player: started ? oldPlayer : null, playerNeedsRestart: false,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
@@ -59,17 +64,19 @@ function fixture({ pause = () => Promise.resolve(), started = true } = {}) {
   return { context, events, errors, failure, oldPlayer, client,
     get playing() { return playing; }, get controllable() { return controllable; },
     get authorCalls() { return authorCalls; }, get releases() { return releases; },
+    get activeAttachment() { return activeAttachment; }, temporaryAttachment,
     supersede() { current = false; } };
 }
 
-test("explicit Run failure stops old playback before authoring behind a frozen preview", async () => {
+test("explicit Run retires active input before authoring while retaining its renderer on source failure", async () => {
   const f = fixture();
   const result = await f.context.runScene();
   assert.equal(result.stale, false);
   assert.equal(f.playing, false, "old replay must not run invisibly behind the frozen error preview");
   assert.equal(f.controllable, false);
-  assert.deepEqual(f.events, ["hold", "pause", "author", "hold"]);
-  assert.equal(f.context.player, f.oldPlayer, "successful pause keeps the warm execution owner");
+  assert.deepEqual(f.events, ["hold", "retire", "author", "hold"]);
+  assert.equal(f.activeAttachment, null);
+  assert.equal(f.context.player, f.oldPlayer, "successful retirement keeps the warm renderer owner");
   assert.equal(f.oldPlayer.terminations, 0);
   assert.equal(f.client.terminated, false);
   assert.deepEqual(f.errors, [f.failure], "the original authoring failure must stay intact");
@@ -78,7 +85,7 @@ test("explicit Run failure stops old playback before authoring behind a frozen p
   assert.equal(f.releases, 1);
 });
 
-test("a first Run still initializes normally without pausing an absent owner", async () => {
+test("a first Run still initializes normally without retiring an absent owner", async () => {
   const f = fixture({ started: false });
   await f.context.runScene();
   assert.deepEqual(f.events, ["hold", "prepare", "author", "hold"]);
@@ -86,28 +93,30 @@ test("a first Run still initializes normally without pausing an absent owner", a
 });
 
 for (const synchronous of [false, true]) {
-  test(`${synchronous ? "synchronous" : "asynchronous"} pause failure retires the old owner before replacement authoring`, async () => {
-    const f = fixture({ pause() {
-      if (synchronous) throw new Error("owner lost");
-      return Promise.reject(new Error("owner lost"));
+  test(`${synchronous ? "synchronous" : "asynchronous"} release rejection preserves the exact source and prevents authoring`, async () => {
+    const rejection = new Error("canonical retirement rejected");
+    const f = fixture({ retire() {
+      if (synchronous) throw rejection;
+      return Promise.reject(rejection);
     } });
     await f.context.runScene();
-    assert.deepEqual(f.events, ["hold", "pause", "terminate", "prepare", "author", "hold"]);
-    assert.equal(f.oldPlayer.terminations, 1);
-    assert.equal(f.playing, false);
-    assert.equal(f.context.player, null);
-    assert.deepEqual(f.errors, [f.failure]);
+    assert.deepEqual(f.events, ["hold", "retire", "hold"]);
+    assert.equal(f.authorCalls, 0);
+    assert.equal(f.oldPlayer.terminations, 0);
+    assert.equal(f.context.player, f.oldPlayer);
+    assert.equal(f.activeAttachment, f.temporaryAttachment);
+    assert.deepEqual(f.errors, [rejection]);
   });
 }
 
 for (const reject of [false, true]) {
-  test(`superseded pause ${reject ? "failure" : "completion"} cannot author old source or retire its successor`, async () => {
+  test(`superseded release ${reject ? "failure" : "completion"} cannot author old source or retire its successor`, async () => {
     const gate = deferred();
-    const f = fixture({ pause: () => gate.promise });
+    const f = fixture({ retire: () => gate.promise });
     const run = f.context.runScene();
     assert.equal(f.authorCalls, 0);
     f.supersede();
-    const successor = { terminate() { assert.fail("obsolete pause must not retire a newer owner"); } };
+    const successor = { terminate() { assert.fail("obsolete release must not retire a newer owner"); } };
     f.context.player = successor;
     if (reject) gate.reject(new Error("retired")); else gate.resolve();
     assert.equal((await run).stale, true);
@@ -119,13 +128,13 @@ for (const reject of [false, true]) {
   });
 }
 
-test("Run waits for the pause acknowledgement and concurrent requests join the same startup", async () => {
+test("Run waits for canonical source-release acknowledgement before authoring and joins concurrent requests", async () => {
   const gate = deferred();
-  const f = fixture({ pause: () => gate.promise });
+  const f = fixture({ retire: () => gate.promise });
   const first = f.context.runScene();
   const second = f.context.runScene();
   await flush();
-  assert.deepEqual(f.events, ["hold", "pause"]);
+  assert.deepEqual(f.events, ["hold", "retire"]);
   assert.equal(f.authorCalls, 0);
   assert.equal(f.controllable, false);
   gate.resolve();

@@ -1,8 +1,7 @@
 //! Paired VectorScene/LinearTransformationScene matrix fixture.
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, LinearTransformationOptions, MobjectTarget,
-    RateFunction, Scene,
+    AnimationOptions, Color, LinearTransformationOptions, MobjectTarget, RateFunction, Scene,
 };
 
 const SWAP_AXES: [f64; 4] = [0.0, 1.0, 1.0, 0.0];
@@ -11,7 +10,7 @@ const SWAP_AXES: [f64; 4] = [0.0, 1.0, 1.0, 0.0];
 /// shared family Transform tracks. The symmetric matrix gives Manim's exact
 /// default `path_arc` of zero, which this fixture can exercise without an
 /// unsupported curved transform payload.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut lts = scene
         .linear_transformation_setup(&LinearTransformationOptions::default())
@@ -89,7 +88,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     // Return at authored time zero so direct and browser consumers see the
     // Arrow entrance before the following matrix transform.
     session.seek(0.0).map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -101,10 +102,10 @@ mod tests {
     fn lts_fixture_uses_smooth_three_second_ordinary_family_transform() {
         let mut forward = session().unwrap();
         assert_eq!(
-            forward.wake_state().timeline(),
+            forward.session().wake_state().timeline(),
             TimelineWakeState::Continuous
         );
-        let initial = forward.frame().clone();
+        let initial = forward.session().frame().clone();
         let yellow = Color::from_hex(0xF7D96F); // ManimCE 0.21 YELLOW_C.
         assert_eq!(
             initial
@@ -114,26 +115,26 @@ mod tests {
                 .count(),
             2,
         );
-        forward.advance_to(0.5).unwrap();
-        let grow_midpoint = forward.frame().clone();
+        forward.session_mut().advance_to(0.5).unwrap();
+        let grow_midpoint = forward.session().frame().clone();
         assert_ne!(grow_midpoint, initial);
-        forward.advance_to(2.5).unwrap();
-        let transform_midpoint = forward.frame().clone();
+        forward.session_mut().advance_to(2.5).unwrap();
+        let transform_midpoint = forward.session().frame().clone();
         assert_ne!(transform_midpoint, grow_midpoint);
-        forward.advance_to(4.0).unwrap();
+        forward.session_mut().advance_to(4.0).unwrap();
         assert_eq!(
-            forward.wake_state().timeline(),
+            forward.session().wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
-        let endpoint = forward.frame().clone();
+        let endpoint = forward.session().frame().clone();
         assert_ne!(endpoint, initial);
 
         let mut sought = session().unwrap();
         sought.seek(0.5).unwrap();
-        assert_eq!(sought.frame(), &grow_midpoint);
+        assert_eq!(sought.session().frame(), &grow_midpoint);
         sought.seek(2.5).unwrap();
-        assert_eq!(sought.frame(), &transform_midpoint);
+        assert_eq!(sought.session().frame(), &transform_midpoint);
         sought.seek(4.0).unwrap();
-        assert_eq!(sought.frame(), &endpoint);
+        assert_eq!(sought.session().frame(), &endpoint);
     }
 }

@@ -20,7 +20,7 @@ pub(super) struct WorkerPointerInput {
 /// ordinary native pointer behavior.
 pub(super) struct PlayerPointerTarget<'a> {
     pub(super) session: &'a mut ExecutionSession,
-    pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    pub(super) semantics: &'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
 }
 
@@ -70,14 +70,8 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, String> {
-        let Some(semantics) = self.semantics.as_ref() else {
-            return self
-                .session
-                .submit_native_pointer_input(token, input)
-                .map_err(|error| error.to_string());
-        };
         self.session
-            .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
+            .submit_translation_drag_input(&mut self.semantics.borrow_mut(), token, input)
             .map(|receipt| {
                 if let Some(undo) = receipt.undo {
                     *self.translation_drag_undo = Some(undo);
@@ -132,8 +126,16 @@ fn submit_test_frame(
 #[cfg(test)]
 impl SemanticExecutionPlayer {
     fn submit_test_frame_input(&mut self, input: BrowserPointerInput) -> Result<(), String> {
+        let mut target = PlayerPointerTarget {
+            session: &mut self.session,
+            semantics: self
+                .semantics
+                .as_ref()
+                .ok_or("execution player lost its semantic store")?,
+            translation_drag_undo: &mut self.translation_drag_undo,
+        };
         submit_test_frame(
-            &mut self.session,
+            &mut target,
             &mut self.browser_pointer_binding,
             &mut self.next_native_event_sequence,
             input,

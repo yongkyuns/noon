@@ -56,8 +56,8 @@ fn point_matching_reuses_content_and_preserves_identity_paint_and_priority() {
 fn paired_point_matching_session_seeks_through_normal_runtime() {
     let mut session = noon::example_scenes::point_matching::session().unwrap();
     session.seek(0.).unwrap();
-    assert_eq!(session.frame().objects.len(), 2);
-    let start = session.frame().objects.clone();
+    assert_eq!(session.session().frame().objects.len(), 2);
+    let start = session.session().frame().objects.clone();
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, start);
+    assert_eq!(session.session().frame().objects, start);
 }

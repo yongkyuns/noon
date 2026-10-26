@@ -111,7 +111,7 @@ fn paired_example_retains_each_completed_priority_interval() {
         (3.125, vec![1, 0]),
     ] {
         session.seek(time).unwrap();
-        assert_eq!(session.painter_order(), expected);
+        assert_eq!(session.session().painter_order(), expected);
     }
 }
 

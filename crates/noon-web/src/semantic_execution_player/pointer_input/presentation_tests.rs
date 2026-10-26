@@ -12,7 +12,8 @@ fn player() -> SemanticExecutionPlayer {
     circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut p =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
+            .unwrap();
     p.pause();
     p.set_pointer_fill_selection(Some(4.0)).unwrap();
     p
@@ -128,7 +129,7 @@ fn old_collected_receipt_is_not_retagged_after_newer_presentation() {
     assert!(input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
     // An unpresented execution round trip changes identity without changing pixels.
     p.session.advance_to(0.25).unwrap();
-    p.session.seek(0.0).unwrap();
+    p.seek_session(0.0).unwrap();
     let b = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, b));
     assert!(!input(&mut p, "release", 1, Some(a), 1, 400.0).unwrap());
@@ -147,7 +148,7 @@ fn old_collected_receipt_is_not_retagged_after_newer_presentation() {
 fn unchanged_geometry_does_not_make_an_unpresented_revision_current() {
     let (mut p, r) = ready();
     p.session.advance_to(0.25).unwrap();
-    p.session.seek(0.0).unwrap();
+    p.seek_session(0.0).unwrap();
     assert!(!input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert!(p.session.selected_pointer_target().is_none());
     assert!(p.drain_delta_json().unwrap().is_some());
@@ -430,7 +431,8 @@ fn dormant_callback_scene_rejects_pointer_sources_without_entering_callback_admi
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut p =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
+            .unwrap();
     assert!(!p.session.has_native_pointer_subscribers());
     register(&mut p, 1);
     let r = receipt(&delta(&mut p), 1);

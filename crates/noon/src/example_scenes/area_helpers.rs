@@ -1,8 +1,5 @@
 //! One shared builder for native, direct-WASM and Python area examples.
-use crate::{
-    ExecutionSession, ManimAxesOptions, RiemannRectangleOptions, RiemannSample, Scene, Text, BLUE,
-    GREEN,
-};
+use crate::{ManimAxesOptions, RiemannRectangleOptions, RiemannSample, Scene, Text, BLUE, GREEN};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -46,7 +43,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let scene = scene().map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }

@@ -181,7 +181,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
 fn paired_code_example_renders_python_and_cuda_in_the_native_engine() {
     let mut session = noon::example_scenes::code_block::session().unwrap();
     let mut raster = pollster::block_on(Raster::with_dimensions(1280, 720));
-    let pixels = raster.capture(&session.take_renderer_publication());
+    let pixels = raster.capture(&session.session_mut().take_renderer_publication());
     let changed = pixels
         .as_chunks::<4>()
         .0
@@ -193,7 +193,7 @@ fn paired_code_example_renders_python_and_cuda_in_the_native_engine() {
         "the paired scene must contain substantial visible text and panels"
     );
     assert_pixels_equal(
-        &raster.capture(&session.take_renderer_publication()),
+        &raster.capture(&session.session_mut().take_renderer_publication()),
         &pixels,
         "paired scene must settle",
     );

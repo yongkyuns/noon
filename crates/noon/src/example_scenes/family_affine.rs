@@ -1,7 +1,7 @@
 //! Paired with ordinary_family_affine.py; native and direct WASM use this session.
-use crate::{ExecutionSession, ManimRotationPivot, Scene};
+use crate::{ManimRotationPivot, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut a = scene.square(0.5).map_err(|error| error.to_string())?;
     let mut b = scene.square(0.5).map_err(|error| error.to_string())?;
@@ -65,5 +65,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }

@@ -78,5 +78,5 @@ fn empty_operand_receives_null_geometry_and_closed_contour_stays_closed() {
 fn paired_alignment_example_runs_through_shared_runtime() {
     let mut session = noon::example_scenes::path_alignment::session().unwrap();
     session.seek(0.1).unwrap();
-    assert_eq!(session.frame().objects.len(), 2);
+    assert_eq!(session.session().frame().objects.len(), 2);
 }

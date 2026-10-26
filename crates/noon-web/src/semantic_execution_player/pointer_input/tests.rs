@@ -1,5 +1,4 @@
 use super::*;
-use noon::ExecutionSession;
 use noon_core::{NativeInputValue, NativeStateSource, ReactiveValue, SemanticNodeId};
 use noon_core::{NativePointerCancellation, NativePointerId};
 
@@ -21,8 +20,14 @@ pub(super) fn pointer_fixture() -> PointerFixture {
 }
 
 fn pointer_fixture_from(fixture: shared_trace::Fixture) -> PointerFixture {
-    let session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
-    let mut player = SemanticExecutionPlayer::from_session(session, 1.0, 1).unwrap();
+    let scene = noon::Scene::with_integration_root(
+        std::rc::Rc::new(std::cell::RefCell::new(fixture.store)),
+        fixture.root,
+    )
+    .unwrap();
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 1)
+            .unwrap();
     player.pause();
     player.set_pointer_fill_selection(Some(4.0)).unwrap();
     PointerFixture {
@@ -588,7 +593,14 @@ fn typed_browser_normalizers_reach_identical_session_input_effects() {
     use super::submit_test_frame;
     let mut worker = pointer_fixture();
     let direct_fixture = pointer_fixture();
-    let mut direct = direct_fixture.player.session;
+    let scene = noon::Scene::with_integration_root(
+        direct_fixture.player.semantics.unwrap(),
+        direct_fixture.player.semantic_root.unwrap(),
+    )
+    .unwrap();
+    let mut direct = scene
+        .into_execution_with_session(direct_fixture.player.session)
+        .unwrap();
     let mut binding = None;
     let mut sequence = 0;
     for (kind, source) in [
@@ -610,14 +622,14 @@ fn typed_browser_normalizers_reach_identical_session_input_effects() {
             (direct_fixture.up, worker.up),
         ] {
             assert_eq!(
-                direct.effective_signal_value(a),
+                direct.session().effective_signal_value(a),
                 worker.player.session.effective_signal_value(b)
             );
         }
         assert_eq!(sequence, worker.player.next_native_event_sequence);
-        assert_eq!(direct.frame().time, 0.0);
+        assert_eq!(direct.session().frame().time, 0.0);
     }
-    let before = direct.publication_context();
+    let before = direct.session().publication_context();
     let rejected_sequence = sequence;
     assert!(submit_test_frame(
         &mut direct,
@@ -627,7 +639,7 @@ fn typed_browser_normalizers_reach_identical_session_input_effects() {
     )
     .is_err());
     assert_eq!(sequence, rejected_sequence);
-    assert_eq!(direct.publication_context(), before);
+    assert_eq!(direct.session().publication_context(), before);
 }
 
 #[test]

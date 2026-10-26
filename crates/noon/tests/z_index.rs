@@ -151,6 +151,7 @@ fn paired_priority_example_uses_the_retained_execution_session() {
     assert_eq!(
         noon::example_scenes::z_index::session()
             .unwrap()
+            .session()
             .frame()
             .objects
             .len(),
