@@ -8,6 +8,7 @@ pub(crate) mod effect_parameters;
 mod glow;
 mod gradient;
 mod linear_gradient;
+mod noise_paint;
 mod paint_transition;
 mod radial_gradient;
 pub use blur::Blur;
@@ -19,6 +20,7 @@ pub use effect_parameters::{
 pub use glow::{Glow, GlowSource};
 pub use gradient::{GradientError, GradientStop};
 pub use linear_gradient::LinearGradient;
+pub use noise_paint::{NoisePaint, NoisePaintError};
 pub use paint_transition::{PaintTransition, PaintTransitionError};
 pub use radial_gradient::RadialGradient;
 mod image_paint;
