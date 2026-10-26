@@ -447,6 +447,11 @@ enum OrdinaryCompositionChild {
         indication: noon::IndicateOptions,
         options: noon_core::AnimationOptions,
     },
+    GlowPulse {
+        target: noon::Mobject,
+        intensity: f64,
+        options: noon_core::AnimationOptions,
+    },
     FamilyIndicate {
         target: noon::MobjectFamily,
         indication: noon::IndicateOptions,
@@ -2280,6 +2285,15 @@ impl CanonicalAuthoringScene {
                     indication: *indication,
                     options: *options,
                 },
+                OrdinaryCompositionChild::GlowPulse {
+                    target,
+                    intensity,
+                    options,
+                } => noon::AnimationCompositionRequest::GlowPulse {
+                    target,
+                    intensity: *intensity,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyIndicate {
                     target,
                     indication,
@@ -2598,6 +2612,7 @@ impl CanonicalAuthoringScene {
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
+                | OrdinaryCompositionChild::GlowPulse { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
                     for child in children {
@@ -3117,6 +3132,17 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::Indicate {
                     target, options, ..
                 } => (None, target, *options),
+                OrdinaryCompositionChild::GlowPulse {
+                    target,
+                    intensity,
+                    options,
+                } => {
+                    noon_core::GlowUpdate::default()
+                        .intensity(*intensity)
+                        .prepare(noon_core::Glow::default())
+                        .map_err(|error| error.to_string())?;
+                    (None, target, *options)
+                }
                 OrdinaryCompositionChild::DrawBorderThenFill {
                     entering_id,
                     target,
@@ -3195,6 +3221,12 @@ impl CanonicalAuthoringScene {
                 )
             } else if matches!(child, OrdinaryCompositionChild::Create { .. }) {
                 noon_core::resolve_create_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
+            } else if matches!(child, OrdinaryCompositionChild::GlowPulse { .. }) {
+                noon_core::resolve_glow_pulse_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
                     noon_core::AnimationOptions::new(),
@@ -5411,6 +5443,25 @@ mod wasm {
                 target: target.semantic_mobject().clone(),
                 indication: noon::IndicateOptions::new(scale_factor, color),
                 options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendGlowPulseMobject)]
+        pub fn append_glow_pulse_mobject(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            intensity: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            self.children.push(OrdinaryCompositionChild::GlowPulse {
+                target: target.semantic_mobject().clone(),
+                intensity,
+                options: Self::family_options(child_run_time, rate_function, lag_ratio)?
+                    .reverse_rate_function(reverse_rate_function),
             });
             Ok(())
         }
@@ -14539,6 +14590,124 @@ mod tests {
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
         );
+    }
+
+    #[test]
+    fn ordinary_glow_pulse_preserves_atomic_options_and_restores_reversed_children() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut persistent = context.scene.circle(0.4).unwrap();
+        persistent.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        persistent
+            .set_glow(noon_core::GlowUpdate::default().intensity(1.2))
+            .unwrap();
+        let mut temporary = context.scene.circle(0.4).unwrap();
+        temporary.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &persistent).unwrap();
+        context.bind_mobject(ObjectId::new(1), &temporary).unwrap();
+        let binding = persistent.get_effect("glow").unwrap();
+        let revision = context.scene.integration_store().borrow().scene_revision();
+
+        for duration in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.5] {
+            for level in 0..3 {
+                let invalid = [OrdinaryCompositionChild::GlowPulse {
+                    target: temporary.clone(),
+                    intensity: 2.0,
+                    options: if level == 0 {
+                        AnimationOptions::new().run_time(duration)
+                    } else {
+                        AnimationOptions::new()
+                    },
+                }];
+                assert!(context
+                    .begin_ordinary_mixed_composition(
+                        noon_core::SemanticAnimationCompositionKind::Parallel,
+                        &invalid,
+                        if level == 1 {
+                            AnimationOptions::new().run_time(duration)
+                        } else {
+                            AnimationOptions::new()
+                        },
+                        if level == 2 {
+                            AnimationOptions::new().run_time(duration)
+                        } else {
+                            AnimationOptions::new()
+                        },
+                    )
+                    .is_err());
+                assert!(context.player_ownership.is_unstarted());
+                assert_eq!(
+                    context.scene.integration_store().borrow().scene_revision(),
+                    revision
+                );
+                assert!(temporary.get_effect("glow").is_err());
+            }
+        }
+
+        let children = [
+            OrdinaryCompositionChild::GlowPulse {
+                target: persistent.clone(),
+                intensity: 2.0,
+                options: AnimationOptions::new(),
+            },
+            OrdinaryCompositionChild::GlowPulse {
+                target: temporary.clone(),
+                intensity: 2.0,
+                options: AnimationOptions::new()
+                    .run_time(0.5)
+                    .rate_func(RateFunction::Linear)
+                    .reverse_rate_function(true),
+            },
+        ];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        let intensity = |context: &mut CanonicalAuthoringScene, object: &noon::Mobject| {
+            let session = context.active_live_player().unwrap().session_mut_for_test();
+            let id = session.execution_object_id(object.node_id()).unwrap();
+            session
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.id == id)
+                .unwrap()
+                .glow
+                .as_ref()
+                .map(|glow| glow.definition.intensity())
+        };
+        for (time, expected) in [(0.125, 1.5), (0.375, 0.5), (0.5, 0.0)] {
+            context
+                .active_live_player()
+                .unwrap()
+                .live_advance_segment_to(time)
+                .unwrap();
+            assert_eq!(intensity(&mut context, &temporary), Some(expected));
+        }
+        assert_eq!(intensity(&mut context, &persistent), Some(2.0));
+        let temporary_binding = temporary.get_effect("glow").unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_advance_segment_to(end)
+            .unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_complete_segment()
+            .unwrap();
+        assert_eq!(
+            persistent.get_effect("glow").unwrap().node_id(),
+            binding.node_id()
+        );
+        assert_eq!(intensity(&mut context, &persistent), Some(1.2));
+        assert_eq!(intensity(&mut context, &temporary), None);
+        assert!(temporary.get_effect("glow").is_err());
+        assert!(temporary_binding.authored_definition().is_err());
     }
 
     #[test]

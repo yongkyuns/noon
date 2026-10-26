@@ -313,4 +313,6 @@ mod bridge_tests;
 #[cfg(test)]
 mod playback_tests;
 #[cfg(test)]
+mod target_intent_tests;
+#[cfg(test)]
 mod tests;

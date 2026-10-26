@@ -219,9 +219,26 @@ fn readback(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture)
 // is a white no-effect source on black; its RGB is painted coverage, not a glow
 // intermediate. These central sources never cross the viewport boundary.
 fn expected(ordinary: &[u8], time: f64) -> Vec<u8> {
+    // RED/BLUE are the authored Manim palette constants, not unit RGB primaries.
+    // Interpolate their endpoint components independently from runtime output.
+    let from = Color::RED;
+    let to = Color::BLUE;
+    let tint = [
+        f64::from(from.red) + f64::from(to.red - from.red) * time,
+        f64::from(from.green) + f64::from(to.green - from.green) * time,
+        f64::from(from.blue) + f64::from(to.blue - from.blue) * time,
+    ];
+    expected_glow(
+        ordinary,
+        3.25 + 3.25 * time,
+        tint,
+        START + (1.4 - START) * time,
+    )
+}
+
+fn expected_glow(ordinary: &[u8], sigma: f64, tint: [f64; 3], intensity: f64) -> Vec<u8> {
     let (width, height) = (SIZE[0] as usize, SIZE[1] as usize);
     assert_eq!(ordinary.len(), width * height * 4);
-    let sigma = 3.25 + 3.25 * time;
     let radius = (3.0 * sigma).ceil() as isize;
     let mut kernel = Vec::new();
     let mut sum = 0.0;
@@ -248,16 +265,6 @@ fn expected(ordinary: &[u8], time: f64) -> Vec<u8> {
         }
     }
     let mut result = ordinary.to_vec();
-    let intensity = START + (1.4 - START) * time;
-    // RED/BLUE are the authored Manim palette constants, not unit RGB primaries.
-    // Interpolate their endpoint components independently from runtime output.
-    let from = Color::RED;
-    let to = Color::BLUE;
-    let tint = [
-        f64::from(from.red) + f64::from(to.red - from.red) * time,
-        f64::from(from.green) + f64::from(to.green - from.green) * time,
-        f64::from(from.blue) + f64::from(to.blue - from.blue) * time,
-    ];
     for (i, rgba) in result.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let a = f64::from(ordinary[i * 4]) / 255.0;
         let halo = (intensity * blurred[i]).min(1.0);
@@ -421,6 +428,168 @@ fn public_scene_glow_pixels_and_lifecycle() {
         assert_eq!(surface.render(&device, &queue, &mut session), last_plain);
         eprintln!("LOGICAL_VIEWPORT_GLOW_PASS logical={logical:?} max_error<=2 neutral_exact=true removal_exact=true");
     }
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn authored_glow_pulse_pixels_restore_and_replay() {
+    let backends = match std::env::var("NOON_GLOW_BACKEND").as_deref() {
+        Ok("vulkan") => wgpu::Backends::VULKAN,
+        Ok("gl") => wgpu::Backends::GL,
+        Ok("metal") => wgpu::Backends::METAL,
+        Ok("dx12") => wgpu::Backends::DX12,
+        Err(std::env::VarError::NotPresent) => wgpu::Backends::PRIMARY,
+        other => panic!("unsupported NOON_GLOW_BACKEND: {other:?}"),
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .unwrap();
+    let info = adapter.get_info();
+    assert_ne!(info.backend, wgpu::Backend::Noop);
+    eprintln!("authored GlowPulse raster adapter: {info:?}");
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+
+    let make_scene = |attached: bool| {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.4).unwrap();
+        source.disable_stroke().unwrap();
+        source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        if attached {
+            source
+                .set_glow(
+                    GlowUpdate::default()
+                        .color(Color::RED)
+                        .radius(Pixels(3.25))
+                        .intensity(START),
+                )
+                .unwrap();
+        }
+        scene.add(&source).unwrap();
+        (scene, source)
+    };
+    let (plain_scene, _) = make_scene(false);
+    let mut plain = plain_scene.execution_session().unwrap();
+    let ordinary = Surface::new(&device, &queue).render(&device, &queue, &mut plain);
+    let times = [0.0, 0.25, 0.5, 0.75, 1.0];
+    // Literal independent samples: ThereAndBack uses smooth(0/.5/1), while
+    // every pulse restores the captured baseline at its raw mapped endpoint.
+    let profiles = [
+        (
+            "default",
+            AnimationOptions::new(),
+            [0.0, 0.5, 1.0, 0.5, 0.0],
+        ),
+        (
+            "linear",
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+            [0.0, 0.25, 0.5, 0.75, 0.0],
+        ),
+        (
+            "reversed linear",
+            AnimationOptions::new()
+                .rate_func(RateFunction::Linear)
+                .reverse_rate_function(true),
+            [1.0, 0.75, 0.5, 0.25, 0.0],
+        ),
+    ];
+    let mut max_error = 0;
+    for attached in [true, false] {
+        let baseline = if attached { START } else { 0.0 };
+        // This Surface has exactly ten physical pixels per world unit.
+        // Missing glow uses the authored defaults: white, scene sigma .15.
+        let sigma = if attached { 3.25 } else { 1.5 };
+        let tint = if attached {
+            [
+                f64::from(Color::RED.red),
+                f64::from(Color::RED.green),
+                f64::from(Color::RED.blue),
+            ]
+        } else {
+            [1.0; 3]
+        };
+        let baseline_oracle = expected_glow(&ordinary, sigma, tint, baseline);
+        for (label, options, amplitudes) in profiles {
+            let (scene, source) = make_scene(attached);
+            let original = source.get_effect("glow").ok();
+            let original_definition = original.as_ref().map(|h| h.authored_definition().unwrap());
+            let mut session = scene.execution_session().unwrap();
+            let mut surface = Surface::new(&device, &queue);
+            let baseline_pixels = surface.render(&device, &queue, &mut session);
+            assert!(error(&baseline_pixels, &baseline_oracle) <= 2);
+            let segment = scene
+                .live(&mut session)
+                .declare_and_activate_glow_pulse(&source, 2.0, options.run_time(1.0))
+                .unwrap();
+            let pulse_binding = source.get_effect("glow").unwrap();
+            let mut frames = Vec::new();
+            for (index, time) in times.into_iter().enumerate() {
+                scene
+                    .live(&mut session)
+                    .advance_segment_to(segment, time)
+                    .unwrap();
+                let actual = surface.render(&device, &queue, &mut session);
+                let intensity = baseline + (2.0 - baseline) * amplitudes[index];
+                let oracle = expected_glow(&ordinary, sigma, tint, intensity);
+                let difference = error(&actual, &oracle);
+                max_error = max_error.max(difference);
+                assert!(
+                    difference <= 2,
+                    "attached={attached} {label} t={time}: full RGBA error {difference}"
+                );
+                if amplitudes[index] == 0.0 {
+                    assert_eq!(
+                        actual, baseline_pixels,
+                        "attached={attached} {label} t={time}: neutral/restored pixels changed"
+                    );
+                } else {
+                    assert!(error(&oracle, &baseline_oracle) > 4,
+                        "attached={attached} {label} t={time}: missing-pulse negative control is ineffective");
+                    assert!(
+                        error(&actual, &baseline_pixels) > 2,
+                        "attached={attached} {label} t={time}: no visible pulse was delivered"
+                    );
+                }
+                assert_eq!(
+                    surface.render(&device, &queue, &mut session),
+                    actual,
+                    "attached={attached} {label} t={time}: repeated publication changed pixels"
+                );
+                frames.push(actual);
+            }
+            for index in [4, 1, 3, 0, 2, 4] {
+                session.seek(times[index]).unwrap();
+                assert_eq!(
+                    surface.render(&device, &queue, &mut session),
+                    frames[index],
+                    "attached={attached} {label}: rewind differs from forward playback"
+                );
+            }
+            scene.live(&mut session).complete_segment(segment).unwrap();
+            assert_eq!(
+                surface.render(&device, &queue, &mut session),
+                baseline_pixels,
+                "attached={attached} {label}: completion changed the baseline image"
+            );
+            if let Some(original) = original {
+                assert_eq!(
+                    source.get_effect("glow").unwrap().node_id(),
+                    original.node_id()
+                );
+                assert_eq!(
+                    original.authored_definition().unwrap(),
+                    original_definition.unwrap()
+                );
+            } else {
+                assert!(source.get_effect("glow").is_err());
+                assert!(pulse_binding.authored_definition().is_err());
+            }
+        }
+    }
+    eprintln!("GLOW_PULSE_PASS profiles=6 samples=30 max_error={max_error} repeated_exact=true rewind_exact=true restoration_exact=true identity=true temporary_retirement=true");
 }
 
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]

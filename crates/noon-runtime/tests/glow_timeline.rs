@@ -4,8 +4,8 @@ use noon_compile::{
 };
 use noon_core::{
     Color, CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Glow, GlowRadius,
-    GlowTrackValue, GlowUpdate, ObjectId, Pixels, Property, RateFunction, SemanticNodeId, Style,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    GlowTrackEndBehavior, GlowTrackValue, GlowUpdate, ObjectId, Pixels, Property, RateFunction,
+    SemanticNodeId, Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 use std::sync::Arc;
@@ -247,6 +247,7 @@ fn wrong_generation_or_units_reject_before_transaction_prefix_commits() {
             attachment: object.glow.as_ref().unwrap().attachment,
             from: GlowTrackValue::Radius(GlowRadius::Scene(1.0)),
             to: GlowTrackValue::Radius(GlowRadius::Scene(2.0)),
+            end_behavior: GlowTrackEndBehavior::Sample,
         },
         timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: Default::default(),
@@ -274,21 +275,25 @@ fn incompatible_parameter_values_and_discrete_updates_fail_admission() {
             attachment: glow.attachment,
             from: GlowTrackValue::Intensity(0.5),
             to: GlowTrackValue::Intensity(f64::NAN),
+            end_behavior: GlowTrackEndBehavior::Sample,
         },
         TrackValues::Glow {
             attachment: glow.attachment,
             from: GlowTrackValue::Intensity(0.5),
             to: GlowTrackValue::Intensity(8.1),
+            end_behavior: GlowTrackEndBehavior::Sample,
         },
         TrackValues::Glow {
             attachment: glow.attachment,
             from: GlowTrackValue::Radius(GlowRadius::Pixels(3.0)),
             to: GlowTrackValue::Radius(GlowRadius::Pixels(4.0)),
+            end_behavior: GlowTrackEndBehavior::Sample,
         },
         TrackValues::Glow {
             attachment: glow.attachment,
             from: GlowTrackValue::Intensity(0.5),
             to: GlowTrackValue::Color(Color::BLUE),
+            end_behavior: GlowTrackEndBehavior::Sample,
         },
     ] {
         let track = TrackDefinition {
@@ -367,6 +372,374 @@ fn leaf_returning_and_reverse_rates_preserve_the_existing_terminal_contract() {
         }
         runtime.evaluate(2.0).unwrap();
         close(value(&runtime).intensity(), 0.35);
+    }
+}
+
+#[test]
+fn restoring_pulse_finishes_inside_longer_parallel_motion_and_matches_direct_seek() {
+    let object = object();
+    let captured_intensity = 0.456789012345678;
+    let peak = 2.0;
+    let mut channels = tracks(
+        &object,
+        GlowUpdate::default().intensity(peak),
+        0.0,
+        RateFunction::Linear,
+    );
+    let TrackValues::Glow {
+        from, end_behavior, ..
+    } = &mut channels[0].values
+    else {
+        panic!("glow parameter channel");
+    };
+    *from = GlowTrackValue::Intensity(captured_intensity);
+    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    // This is the ordinary lowered map for a one-second child at t=1 in a
+    // four-second composition. The parallel motion and radius continue to t=4.
+    channels[0].timing.duration = 4.0;
+    channels[0].time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+        0.25,
+        0.25,
+        RateFunction::Linear,
+    )]);
+    channels.push(TrackDefinition {
+        id: TrackId::new(10),
+        object: object.id,
+        property: Property::Position,
+        values: TrackValues::Vec2 {
+            from: Vec2::ZERO,
+            to: Vec2::new(4.0, 0.0),
+        },
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    let mut radius = tracks(
+        &object,
+        GlowUpdate::default().radius(Pixels(6.5)),
+        0.0,
+        RateFunction::Linear,
+    )
+    .remove(0);
+    radius.id = TrackId::new(11);
+    radius.timing.duration = 4.0;
+    channels.push(radius);
+
+    let compiled = CompiledScene::compile_objects(vec![object], &channels).unwrap();
+    let mut runtime = SceneInstance::new(compiled.clone());
+    for time in [0.0, 0.5, 1.0, 1.5, 1.999999, 2.0, 2.25, 4.0, 0.5, 1.5, 2.0] {
+        runtime.evaluate(time).unwrap();
+        let expected_intensity = if time < 1.0 {
+            0.35
+        } else if time < 2.0 {
+            captured_intensity + (peak - captured_intensity) * (time - 1.0)
+        } else {
+            captured_intensity
+        };
+        close(value(&runtime).intensity(), expected_intensity);
+        close(
+            value(&runtime).radius().value(),
+            3.25 + 3.25 * (time / 4.0).clamp(0.0, 1.0),
+        );
+        assert_eq!(value(&runtime).color(), Color::RED);
+        assert_eq!(
+            runtime.frame().objects[0].transform.translation,
+            Vec2::new(time.clamp(0.0, 4.0) as f32, 0.0)
+        );
+        let mut direct = SceneInstance::new(compiled.clone());
+        direct.seek(time).unwrap();
+        assert_eq!(runtime.frame(), direct.frame(), "at {time}");
+    }
+}
+
+#[test]
+fn restoring_pulse_reopens_with_returning_parent_and_root_finish_still_restores() {
+    let object = object();
+    let mut channels = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Linear,
+    );
+    let TrackValues::Glow { end_behavior, .. } = &mut channels[0].values else {
+        panic!("glow parameter channel");
+    };
+    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    channels[0].time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+        0.0,
+        0.5,
+        RateFunction::ThereAndBack,
+    )]);
+    let compiled = CompiledScene::compile_objects(vec![object], &channels).unwrap();
+    let mut runtime = SceneInstance::new(compiled.clone());
+    for time in [0.0, 0.1, 0.3, 0.5, 0.8, 0.9, 1.0, 2.0, 0.9, 0.5, 0.1] {
+        runtime.evaluate(time).unwrap();
+        let parent = RateFunction::ThereAndBack.evaluate_f64(time.clamp(0.0, 1.0));
+        let expected = if time >= 1.0 || parent >= 0.5 {
+            0.35
+        } else {
+            0.35 + (2.0 - 0.35) * parent / 0.5
+        };
+        close(value(&runtime).intensity(), expected);
+        let mut direct = SceneInstance::new(compiled.clone());
+        direct.seek(time).unwrap();
+        assert_eq!(runtime.frame(), direct.frame(), "at {time}");
+    }
+}
+
+#[test]
+fn restoring_pulse_holds_an_early_easing_peak_until_its_actual_endpoint() {
+    let object = object();
+    let mut channels = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Lingering,
+    );
+    let TrackValues::Glow { end_behavior, .. } = &mut channels[0].values else {
+        panic!("glow parameter channel");
+    };
+    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    let mut runtime =
+        SceneInstance::new(CompiledScene::compile_objects(vec![object], &channels).unwrap());
+    for (time, expected) in [(0.8, 2.0), (0.9, 2.0), (1.0, 0.35), (2.0, 0.35), (0.9, 2.0)] {
+        runtime.evaluate(time).unwrap();
+        close(value(&runtime).intensity(), expected);
+    }
+}
+
+#[test]
+fn restoring_pulse_finishes_at_fractional_child_endpoint_without_losing_pre_end_sample() {
+    let object = object();
+    let mut track = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Linear,
+    )
+    .remove(0);
+    let TrackValues::Glow { end_behavior, .. } = &mut track.values else {
+        panic!("glow parameter channel");
+    };
+    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    track.timing.duration = 2.5;
+    track.time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+        0.2,
+        0.4,
+        RateFunction::Linear,
+    )]);
+    let compiled = CompiledScene::compile_objects(vec![object], &[track]).unwrap();
+    let mut runtime = SceneInstance::new(compiled.clone());
+    for time in [0.0, 0.5, 1.0, 1.5 - 1e-8, 1.5, 2.0, 2.5, 1.0, 1.5] {
+        runtime.evaluate(time).unwrap();
+        let expected = if (0.5..1.5).contains(&time) {
+            0.35 + (2.0 - 0.35) * (time - 0.5)
+        } else {
+            0.35
+        };
+        close(value(&runtime).intensity(), expected);
+        let mut direct = SceneInstance::new(compiled.clone());
+        direct.seek(time).unwrap();
+        assert_eq!(runtime.frame(), direct.frame(), "at {time}");
+    }
+}
+
+#[test]
+fn restoring_pulse_releases_when_returning_parent_moves_before_delayed_child_start() {
+    let object = object();
+    let mut pulse = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Linear,
+    )
+    .remove(0);
+    let TrackValues::Glow { end_behavior, .. } = &mut pulse.values else {
+        panic!("glow parameter channel");
+    };
+    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    pulse.time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+        0.25,
+        0.25,
+        RateFunction::ThereAndBack,
+    )]);
+    let mut radius = tracks(
+        &object,
+        GlowUpdate::default().radius(Pixels(6.5)),
+        0.0,
+        RateFunction::Linear,
+    )
+    .remove(0);
+    radius.id = TrackId::new(2);
+    let compiled = CompiledScene::compile_objects(vec![object], &[pulse, radius]).unwrap();
+    let mut runtime = SceneInstance::new(compiled.clone());
+    for time in [0.0, 0.2, 0.3, 0.5, 0.78, 0.8, 0.85, 0.9, 1.0, 0.78, 0.85] {
+        runtime.evaluate(time).unwrap();
+        let parent = RateFunction::ThereAndBack.evaluate_f64(time);
+        let expected = if (0.25..0.5).contains(&parent) && time < 1.0 {
+            0.35 + (2.0 - 0.35) * (parent - 0.25) / 0.25
+        } else {
+            0.35
+        };
+        close(value(&runtime).intensity(), expected);
+        close(value(&runtime).radius().value(), 3.25 + 3.25 * time);
+        let mut direct = SceneInstance::new(compiled.clone());
+        direct.seek(time).unwrap();
+        assert_eq!(runtime.frame(), direct.frame(), "at {time}");
+    }
+}
+
+#[test]
+fn source_restoration_requires_a_positive_duration_intensity_channel() {
+    let object = object();
+    let mut track = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Linear,
+    )
+    .remove(0);
+    track.timing.duration = 0.0;
+    assert!(noon_core::validate_track_definition(&track).is_ok());
+    let TrackValues::Glow { end_behavior, .. } = &mut track.values else {
+        panic!("glow parameter channel");
+    };
+    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    assert!(matches!(
+        noon_core::validate_track_definition(&track),
+        Err(noon_core::TimelineError::InvalidDuration(0.0))
+    ));
+
+    track.timing.duration = 1.0;
+    track.property = Property::GlowRadius;
+    track.values = TrackValues::Glow {
+        attachment: object.glow.as_ref().unwrap().attachment,
+        from: GlowTrackValue::Radius(GlowRadius::Pixels(3.25)),
+        to: GlowTrackValue::Radius(GlowRadius::Pixels(6.5)),
+        end_behavior: GlowTrackEndBehavior::RestoreSource,
+    };
+    assert!(matches!(
+        noon_core::validate_track_definition(&track),
+        Err(noon_core::TimelineError::InvalidGlowValues(
+            Property::GlowRadius
+        ))
+    ));
+}
+
+#[test]
+fn glow_rejects_overshooting_leaf_rates_but_accepts_bounded_rates_and_mapped_parents() {
+    let object = object();
+    let mut track = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Linear,
+    )
+    .remove(0);
+    for end_behavior in [
+        GlowTrackEndBehavior::Sample,
+        GlowTrackEndBehavior::RestoreSource,
+    ] {
+        let TrackValues::Glow {
+            end_behavior: mode, ..
+        } = &mut track.values
+        else {
+            panic!("glow parameter channel");
+        };
+        *mode = end_behavior;
+        for reverse in [false, true] {
+            track.timing.reverse_rate_function = reverse;
+            for rate in [
+                RateFunction::EaseInElastic,
+                RateFunction::EaseOutElastic,
+                RateFunction::EaseInOutElastic,
+                RateFunction::EaseInBack,
+                RateFunction::EaseOutBack,
+                RateFunction::EaseInOutBack,
+            ] {
+                track.timing.easing = rate;
+                assert_eq!(
+                    noon_core::validate_track_definition(&track),
+                    Err(noon_core::TimelineError::UnsupportedGlowRateFunction(rate))
+                );
+                assert!(CompiledScene::compile_objects(
+                    vec![object.clone()],
+                    std::slice::from_ref(&track)
+                )
+                .is_err());
+            }
+            for rate in [
+                RateFunction::Linear,
+                RateFunction::ThereAndBack,
+                RateFunction::EaseInBounce,
+                RateFunction::EaseOutBounce,
+                RateFunction::EaseInOutBounce,
+                RateFunction::StepStart,
+                RateFunction::StepEnd,
+            ] {
+                track.timing.easing = rate;
+                // Parent time remapping already bounds its child alpha, even
+                // when the parent's own rate has an intentional overshoot.
+                track.time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                    0.0,
+                    1.0,
+                    RateFunction::EaseOutBack,
+                )]);
+                let compiled = CompiledScene::compile_objects(
+                    vec![object.clone()],
+                    std::slice::from_ref(&track),
+                )
+                .unwrap();
+                let mut runtime = SceneInstance::new(compiled);
+                for time in [0.0, 0.1, 0.5, 0.9, 1.0] {
+                    runtime.evaluate(time).unwrap();
+                    assert!((0.35..=2.0).contains(&value(&runtime).intensity()));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_polynomial_glow_normalizes_roundoff_at_the_peak() {
+    let object = object();
+    // powi can round either side of one depending on the evaluation target.
+    // Select an actual positive-roundoff input, then assert the domain boundary
+    // independently instead of prescribing a particular polynomial bit pattern.
+    let overshoot_time = (1..100)
+        .map(|step| 1.0 - f64::from(step) * 0.000001)
+        .find(|&time| RateFunction::Smoothererstep.evaluate_f64(time) > 1.0)
+        .expect("bounded polynomial has near-endpoint positive roundoff");
+    let mut track = tracks(
+        &object,
+        GlowUpdate::default().intensity(2.0),
+        0.0,
+        RateFunction::Smoothererstep,
+    )
+    .remove(0);
+    for (end_behavior, endpoint) in [
+        (GlowTrackEndBehavior::Sample, 2.0),
+        (GlowTrackEndBehavior::RestoreSource, 0.35),
+    ] {
+        let TrackValues::Glow {
+            end_behavior: mode, ..
+        } = &mut track.values
+        else {
+            panic!("glow parameter channel");
+        };
+        *mode = end_behavior;
+        let mut runtime = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object.clone()], std::slice::from_ref(&track))
+                .unwrap(),
+        );
+        for time in [overshoot_time, 0.99999, 1.0, overshoot_time] {
+            runtime.evaluate(time).unwrap();
+            let intensity = value(&runtime).intensity();
+            assert!(intensity <= 2.0);
+            close(intensity, if time == 1.0 { endpoint } else { 2.0 });
+            if time == overshoot_time {
+                assert_eq!(intensity, 2.0);
+            }
+        }
     }
 }
 
@@ -478,6 +851,7 @@ fn raw_overlapping_glow_tracks_follow_the_ordinary_channel_order_not_a_new_lease
                 attachment,
                 from: GlowTrackValue::Intensity(from),
                 to: GlowTrackValue::Intensity(to),
+                end_behavior: GlowTrackEndBehavior::Sample,
             },
             timing,
             time_map: Default::default(),

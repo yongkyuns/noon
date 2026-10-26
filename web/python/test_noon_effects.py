@@ -53,6 +53,23 @@ class EffectFacadeTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             glow.intensity = 1.0
 
+    def test_pulse_constructor_is_inert_and_carries_only_intensity_and_timing(self):
+        pulse = noon.GlowPulse(self.object, intensity=2)
+        self.assertIs(pulse.mobject, self.object)
+        self.assertEqual(pulse.intensity, 2.0)
+        self.assertEqual(pulse.anim_args["run_time"], 1.0)
+        self.assertIs(pulse.anim_args["rate_func"], noon.there_and_back)
+        self.make_update.assert_not_called()
+        self.make_glow.assert_not_called()
+        self.handle.assert_not_called()
+        self.assertFalse(hasattr(pulse, "_handle"))
+        self.assertFalse(hasattr(pulse, "_baseline"))
+        with self.assertRaises(TypeError):
+            noon.GlowPulse(self.object)
+        for intensity in (True, "2", None):
+            with self.subTest(intensity=intensity), self.assertRaises(TypeError):
+                noon.GlowPulse(self.object, intensity=intensity)
+
     def test_setter_returns_receiver_and_passes_only_explicit_fields(self):
         self.assertIs(self.object.set_glow(intensity=1.4), self.object)
         self.make_update.assert_called_once_with((), None, False, 1.4, None)

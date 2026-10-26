@@ -260,7 +260,7 @@ pub fn cairo_cube_prism_session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             movement.node_id(),
             AnimationOptions::new(),
         )
@@ -348,7 +348,7 @@ pub fn cairo_cylinder_cone_caps_session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             movement.node_id(),
             AnimationOptions::new(),
         )

@@ -64,7 +64,8 @@ use noon_compile::{
 };
 use noon_core::{
     continuous_time_map_interval, mapped_continuous_progress, mapped_continuous_progress_f64,
-    FamilyAnimationState, PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
+    mapped_continuous_raw_progress_f64, FamilyAnimationState, PublicationContext,
+    RetainedFamilyAnimationPlan, TrackTiming,
 };
 use noon_core::{
     Color, GeometryRef, ObjectId, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition,
@@ -2823,15 +2824,25 @@ fn apply_glow_channel(
         tracks[..group.cursor]
             .iter()
             .rev()
-            .find_map(|track| world_track_progress(track, time).map(|alpha| (track, alpha)))
+            .find_map(|track| glow_track_progress(track, time).map(|alpha| (track, alpha)))
     };
-    let Some((track, alpha)) = selected else {
-        return false;
+    let (track, alpha, restore_base) = match selected {
+        Some((track, alpha)) => (track, alpha, false),
+        None => {
+            // A returning parent can move every mapped driver back before its
+            // child start. Rebuild this parameter from base, as a fresh seek
+            // would, while retaining independently driven glow parameters.
+            let Some(track) = tracks.first() else {
+                return false;
+            };
+            (track, 0.0, true)
+        }
     };
     let TrackValues::Glow {
         attachment,
         from,
         to,
+        ..
     } = track.values
     else {
         unreachable!("validated glow channel");
@@ -2839,11 +2850,12 @@ fn apply_glow_channel(
     let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
         return false; // an old generation can never control a replacement
     };
-    let patch = if tracks.last().is_some_and(|last| last.id == track.id)
-        && track.reconciled
-        && time >= track.timing.start_time + track.timing.duration
+    let patch = if restore_base
+        || (tracks.last().is_some_and(|last| last.id == track.id)
+            && track.reconciled
+            && time >= track.timing.start_time + track.timing.duration)
     {
-        let Some(base) = base else {
+        let Some(base) = base.filter(|base| base.attachment == attachment) else {
             return false;
         };
         match track.property {
@@ -3301,6 +3313,28 @@ fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
         return Some(track.timing.evaluate_progress_f64(raw));
     }
     mapped_continuous_progress_f64(track.timing, &track.time_map, time)
+}
+
+fn glow_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
+    let progress = if matches!(
+        track.values,
+        TrackValues::Glow {
+            end_behavior: noon_core::GlowTrackEndBehavior::RestoreSource,
+            ..
+        }
+    ) {
+        let raw = mapped_continuous_raw_progress_f64(track.timing, &track.time_map, time)?;
+        if raw >= 1.0 {
+            track.values.terminal_progress_f64(track.timing)
+        } else {
+            track.timing.evaluate_progress_f64(raw)
+        }
+    } else {
+        world_track_progress(track, time)?
+    };
+    // Admission rejects genuinely overshooting leaf rates. Bounded polynomial
+    // rates can still exceed an endpoint by a few f64 rounding bits.
+    Some(progress.clamp(0.0, 1.0))
 }
 
 fn sample_camera_profile(

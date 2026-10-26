@@ -267,6 +267,12 @@ pub enum AnimationCompositionRequest<'a> {
         indication: IndicateOptions,
         options: AnimationOptions,
     },
+    /// Restore only glow intensity captured when this leaf activates.
+    GlowPulse {
+        target: &'a Mobject,
+        intensity: f64,
+        options: AnimationOptions,
+    },
     FamilyIndicate {
         target: &'a MobjectFamily,
         indication: IndicateOptions,
@@ -380,8 +386,11 @@ pub enum AnimationCompositionRequest<'a> {
 }
 
 impl<'a> TransformToRequest<'a> {
-    /// Complete an animated method target, including its exact painter priority.
-    /// Ordinary Transform/MoveToTarget interpolation leaves priority unchanged.
+    /// Complete an animated method target, including its exact painter priority
+    /// and explicitly edited glow parameters. Omitted copied glow parameters
+    /// preserve their activation-effective values, so disjoint edits compose.
+    /// Ordinary Transform/MoveToTarget uses the complete target appearance and
+    /// leaves priority unchanged.
     pub const fn method_target(mut self) -> Self {
         self.complete_priority = true;
         self
@@ -1676,9 +1685,10 @@ impl<'a> LiveSession<'a> {
 
     /// Activate one predeclared animation in this session.
     ///
-    /// This performs no semantic declaration or target creation: the supplied
-    /// handle is replayable authored state, while activation atomically adds
-    /// execution-local tracks and captures the current effective affine source.
+    /// The supplied declaration and target identities remain replayable authored
+    /// state. Activation captures current effective values and atomically adds
+    /// execution-local tracks, including neutral temporary glow enrollment when
+    /// an authored pulse targets a leaf without a canonical attachment.
     /// The returned segment can be driven with [`Self::advance_segment_to`] and
     /// observed with [`Self::segment_state`]. Call [`Self::complete_segment`]
     /// at its coherent endpoint before sequential authoring resumes.
@@ -1689,13 +1699,13 @@ impl<'a> LiveSession<'a> {
         animation
             .require_store(self.store)
             .map_err(LiveSessionError::Animation)?;
-        let store = self.store.borrow();
+        let mut store = self.store.borrow_mut();
         let options = store
             .semantic_animation_state(animation.node_id())
             .map_err(|error| LiveSessionError::Animation(error.to_string()))?
             .options();
         self.session
-            .activate_animation_segment(&store, animation.node_id(), options)
+            .activate_animation_segment(&mut store, animation.node_id(), options)
             .map_err(Into::into)
     }
 
@@ -1803,6 +1813,25 @@ impl<'a> LiveSession<'a> {
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Pulse one leaf's intensity using the ordinary composition clock.
+    /// An absent glow is enrolled neutrally and removed at segment completion,
+    /// unless an explicit persistent edit adopts that exact attachment.
+    pub fn declare_and_activate_glow_pulse(
+        &mut self,
+        target: &Mobject,
+        intensity: f64,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::GlowPulse {
+                target,
+                intensity,
+                options,
+            },
+            AnimationOptions::new(),
+        )
     }
 
     /// Indicate an ordered semantic family and restore every effective source state.
@@ -2373,6 +2402,18 @@ impl<'a> LiveSession<'a> {
                 Request::MatchingSourceFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::GlowPulse {
+                target,
+                intensity,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::GlowPulse {
+                    target: target.node_id(),
+                    intensity: *intensity,
                     options: *options,
                 }
             }

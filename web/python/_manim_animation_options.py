@@ -13,6 +13,11 @@ except ImportError:
     _resolve_create_animation_options = None
 
 try:
+    from js import noonResolveGlowPulseAnimationOptions as _resolve_glow_pulse_animation_options
+except ImportError:
+    _resolve_glow_pulse_animation_options = None
+
+try:
     from js import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
 except ImportError:  # Test doubles predating the Transform-only bridge.
     _resolve_transform_animation_options = None
@@ -53,9 +58,10 @@ def builder_args(builder: object) -> dict[str, Any]:
     return args
 
 
-def _optional_number(args: dict[str, Any], name: str) -> float:
+def _optional_number(args: dict[str, Any], name: str) -> float | None:
+    # Preserve explicit NaN for Rust validation; absence is a typed option.
     if name not in args:
-        return float("nan")
+        return None
     return float(args[name])
 
 
@@ -80,6 +86,7 @@ def resolve(
     play_rate_func: object | None,
     play_lag_ratio: float | None,
     create: bool = False,
+    glow_pulse: bool = False,
 ) -> ResolvedAnimationOptions:
     play_rate_id = ""
     if play_easing is not None:
@@ -88,12 +95,15 @@ def resolve(
         play_rate_id = _rate_functions.easing_from_rate_func(play_rate_func)
 
     resolver = (
-        _resolve_create_animation_options
+        _resolve_glow_pulse_animation_options
+        if glow_pulse
+        else _resolve_create_animation_options
         if create and bool(builder_args.get("reverse_rate_function", False))
         else _resolve_shared_animation_options
     )
     if resolver is None:
-        raise NotImplementedError("Create animation option bridge is unavailable")
+        name = "GlowPulse" if glow_pulse else "Create"
+        raise NotImplementedError(f"{name} animation option bridge is unavailable")
     result = engine_call(
         resolver,
         float(default_lag_ratio),
@@ -102,9 +112,9 @@ def resolve(
         _optional_number(builder_args, "lag_ratio"),
         _optional_number(builder_args, "path_arc"),
         _optional_reverse(builder_args),
-        float("nan") if play_run_time is None else float(play_run_time),
+        None if play_run_time is None else float(play_run_time),
         play_rate_id,
-        float("nan") if play_lag_ratio is None else float(play_lag_ratio),
+        None if play_lag_ratio is None else float(play_lag_ratio),
         operation="animation.options",
     )
 
@@ -171,10 +181,10 @@ def resolve_transform(
         _optional_number(builder_args, "lag_ratio"),
         _optional_number(builder_args, "path_arc"),
         _optional_reverse(builder_args),
-        float("nan") if play_run_time is None else float(play_run_time),
+        None if play_run_time is None else float(play_run_time),
         play_rate_id,
-        float("nan") if play_lag_ratio is None else float(play_lag_ratio),
-        float("nan") if play_path_arc is None else float(play_path_arc),
+        None if play_lag_ratio is None else float(play_lag_ratio),
+        None if play_path_arc is None else float(play_path_arc),
         operation="animation.transform_options",
     )
     return ResolvedAnimationOptions(

@@ -682,7 +682,7 @@ pub struct SemanticMutationTransaction {
 
 pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
-    staged_effects: HashMap<SemanticNodeId, crate::EffectDefinition>,
+    staged_effects: HashMap<SemanticNodeId, crate::SemanticEffectState>,
     animation_effect_snapshots:
         HashMap<SemanticLocalNodeToken, Box<crate::SemanticTransformEffectSnapshot>>,
     pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
@@ -771,6 +771,7 @@ impl SemanticMutationTransaction {
             owner: owner.into(),
             name: name.into(),
             definition: definition.into(),
+            copy_provenance: None,
         })
     }
 
@@ -1820,6 +1821,27 @@ impl SemanticMutationTransaction {
                     scale_factor,
                     color,
                     scale_center,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage an inert intensity pulse without capturing source values or attachments.
+    pub fn create_glow_pulse_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        intensity: f64,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::GlowPulse {
+                    target: target.into(),
+                    intensity,
                 },
                 options,
             ),
@@ -3560,18 +3582,15 @@ impl SemanticMutationTransaction {
                     let state = store
                         .semantic_effect_state(*effect)
                         .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
-                    let previous = staged_effects
-                        .get(effect)
-                        .copied()
-                        .unwrap_or_else(|| state.definition());
-                    let next = previous.update(*update).map_err(|error| {
+                    let previous = staged_effects.get(effect).unwrap_or(state);
+                    let next = previous.updated(*update).map_err(|error| {
                         SemanticMutationTransactionError::EffectParameter {
                             index,
                             effect: *effect,
                             error,
                         }
                     })?;
-                    changed.push(next != previous);
+                    changed.push(&next != previous);
                     staged_effects.insert(*effect, next);
                 }
                 SemanticMutation::AddNode { token, creation } => {
@@ -4734,6 +4753,9 @@ pub enum SemanticMutationTransactionError {
     InvalidIndicateEndpoint {
         index: usize,
     },
+    InvalidGlowPulseIntensity {
+        index: usize,
+    },
     InvalidDrawBorderThenFillOutline {
         index: usize,
     },
@@ -5294,6 +5316,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidIndicateEndpoint { index } => write!(
                 formatter,
                 "semantic mutation {index} has invalid Indicate scale, color, or center"
+            ),
+            Self::InvalidGlowPulseIntensity { index } => write!(
+                formatter,
+                "semantic mutation {index} has GlowPulse intensity outside finite [0, 8]"
             ),
             Self::InvalidDrawBorderThenFillOutline { index } => write!(
                 formatter,

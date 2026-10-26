@@ -668,7 +668,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self.preflight
             .staged_effects
             .iter()
-            .filter_map(|(&effect, &definition)| {
+            .filter_map(|(&effect, state)| {
                 if self.preflight.removed_existing.contains(&effect) {
                     return None;
                 }
@@ -676,10 +676,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .store
                     .semantic_effect_state(effect)
                     .expect("prepared existing effect update retains its validated source");
-                (definition != original.definition()).then_some((
+                (state.definition() != original.definition()).then_some((
                     effect,
                     original.owner(),
-                    definition,
+                    state.definition(),
                 ))
             })
     }
@@ -1468,14 +1468,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .semantic_effect_state(effect)
                         .expect("validated effect");
                     let owner = previous.owner();
+                    let next = previous.updated(update).expect("preflighted effect update");
                     let previous = previous.definition();
-                    let prepared = preflight.staged_effects[&effect];
+                    let prepared = preflight.staged_effects[&effect].definition();
                     // Publish this mutation's disjoint channels in order. The
                     // final value was validated before any semantic commit.
-                    let next = previous.update(update).expect("preflighted effect update");
                     for parameter in update.parameters() {
-                        debug_assert!(!next.parameter_changed(prepared, parameter));
-                        if previous.parameter_changed(next, parameter) {
+                        debug_assert!(!next.definition().parameter_changed(prepared, parameter));
+                        if previous.parameter_changed(next.definition(), parameter) {
                             impacts.push(SemanticMutationImpact::EffectParameter {
                                 owner,
                                 effect,
@@ -1483,7 +1483,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                             });
                         }
                     }
-                    store.replace_effect_definition(effect, next);
+                    store.replace_effect_state(effect, next);
                     written_slots.insert(effect);
                 }
                 SemanticMutation::SetSignal { signal, value } => {

@@ -78,9 +78,9 @@ class SceneFacadeTests(unittest.TestCase):
             bridge = ModuleType("js")
             def resolve(lag, duration, rate, child_lag, arc, reverse, *play):
                 import math
-                return SimpleNamespace(runTime=duration if math.isfinite(duration) else 1.0,
-                    rateFunc=rate, lagRatio=child_lag if math.isfinite(child_lag) else lag,
-                    pathArc=arc if math.isfinite(arc) else 0.0, reverseRateFunction=reverse == 1)
+                return SimpleNamespace(runTime=duration if duration is not None else 1.0,
+                    rateFunc=rate, lagRatio=child_lag if child_lag is not None else lag,
+                    pathArc=arc if arc is not None else 0.0, reverseRateFunction=reverse == 1)
             bridge.noonResolveAnimationOptions = resolve
             sys.modules["js"] = bridge
             from noon import Scene, Circle, Indicate, linear

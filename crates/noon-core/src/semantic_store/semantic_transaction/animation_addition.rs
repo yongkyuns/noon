@@ -55,6 +55,10 @@ pub enum SemanticTransactionAnimationIntent {
         target_state: SemanticTransactionNodeRef,
         mode: SemanticFamilyTransformMode,
     },
+    GlowPulse {
+        target: SemanticTransactionNodeRef,
+        intensity: f64,
+    },
     Indicate {
         target: SemanticTransactionNodeRef,
         scale_factor: f64,
@@ -139,6 +143,7 @@ impl SemanticTransactionAnimationIntent {
             } => Some([Some(*source), Some(*target_state), None]),
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
+            | Self::GlowPulse { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -167,6 +172,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
+            | Self::GlowPulse { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -283,6 +289,12 @@ impl SemanticTransactionAnimation {
                 angle: *angle,
                 hold_origin: *hold_origin,
             },
+            SemanticAnimationIntent::GlowPulse { target, intensity } => {
+                SemanticTransactionAnimationIntent::GlowPulse {
+                    target: (*target).into(),
+                    intensity: *intensity,
+                }
+            }
             SemanticAnimationIntent::Indicate {
                 target,
                 scale_factor,
@@ -447,6 +459,12 @@ impl SemanticTransactionAnimation {
                 angle: *angle,
                 hold_origin: *hold_origin,
             },
+            SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
+                SemanticAnimationIntent::GlowPulse {
+                    target: resolve_node_ref(*target, committed),
+                    intensity: *intensity,
+                }
+            }
             SemanticTransactionAnimationIntent::Indicate {
                 target,
                 scale_factor,
@@ -813,6 +831,13 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidAnimationAngle { index });
             }
         }
+        SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            crate::Glow::new(crate::GlowUpdate::default().intensity(*intensity)).map_err(|_| {
+                SemanticMutationTransactionError::InvalidGlowPulseIntensity { index }
+            })?;
+        }
         SemanticTransactionAnimationIntent::Indicate {
             target,
             scale_factor,
@@ -1065,6 +1090,9 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
             .insert_semantic_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, options)
             .expect("preflighted semantic Rotate insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::GlowPulse { target, intensity } => store
+            .insert_semantic_glow_pulse_animation(*target, *intensity, options)
+            .expect("preflighted GlowPulse insertion remains valid while transaction owns the store"),
         SemanticAnimationIntent::Indicate {
             target,
             scale_factor,

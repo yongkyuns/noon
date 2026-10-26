@@ -7,7 +7,7 @@ use noon_core::{
     SemanticAnimationEffectSnapshot, SemanticNodeId, SemanticStore, SemanticTransactionReadError,
     SemanticTransformEffectSnapshot, TimelineError, TrackTiming, TrackValues,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum GlowTargetLoweringError {
@@ -18,12 +18,18 @@ pub enum GlowTargetLoweringError {
     StaleAttachment,
     MissingEffectiveValue,
     UnsupportedContentChange,
+    UnsupportedPulseOptions,
     Parameter(GlowParameterError),
     Timeline(TimelineError),
 }
 impl std::fmt::Display for GlowTargetLoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "glow target activation rejected: {self:?}")
+        match self {
+            Self::UnsupportedPulseOptions => f.write_str(
+                "GlowPulse does not support introducer/remover flags, nonzero lag, or path arcs",
+            ),
+            _ => write!(f, "glow animation activation rejected: {self:?}"),
+        }
     }
 }
 impl std::error::Error for GlowTargetLoweringError {}
@@ -33,7 +39,26 @@ pub(super) fn channels(
     source: &[SemanticAnimationEffectSnapshot],
     target: &[SemanticAnimationEffectSnapshot],
     effective: Option<crate::CompiledGlow>,
+    method_target: bool,
+    temporary_attachments: &HashSet<SemanticNodeId>,
 ) -> Result<Vec<(Property, TrackValues)>, GlowTargetLoweringError> {
+    // A motion/style target captured before an absent pulse has no authored
+    // effect destination. Only the activation owner's exact candidate-created
+    // generation may account for that additional source attachment.
+    if let [temporary] = source {
+        let EffectDefinition::Glow(definition) = temporary.definition;
+        if target.is_empty()
+            && definition.intensity() == 0.0
+            && temporary_attachments.contains(&temporary.attachment)
+            && effective.is_some_and(|value| value.attachment == temporary.attachment)
+            && snapshot.is_none_or(|snapshot| {
+                snapshot.target.is_empty()
+                    && (snapshot.source.is_empty() || same_identity(&snapshot.source, source))
+            })
+        {
+            return Ok(Vec::new());
+        }
+    }
     let Some(snapshot) = snapshot else {
         return if source.is_empty() && target.is_empty() && effective.is_none() {
             Ok(Vec::new())
@@ -55,6 +80,9 @@ pub(super) fn channels(
         return Err(GlowTargetLoweringError::StaleAttachment);
     }
     let EffectDefinition::Glow(authored_source) = initial.definition;
+    let copy_intent = destination
+        .copy_provenance
+        .filter(|copy| copy.source_attachment() == initial.attachment);
     let initial = effective.definition;
     let EffectDefinition::Glow(destination) = destination.definition;
     // Validate discrete source/radius schema even if only another scalar changes.
@@ -69,13 +97,33 @@ pub(super) fn channels(
         .prepare(authored_source)
         .map_err(GlowTargetLoweringError::Parameter)?;
     let mut update = GlowUpdate::default();
-    if initial.color() != destination.color() {
+    // A copied method target describes edits relative to its captured baseline.
+    // Current effective differences can come from another driver and must not
+    // become additional target writes. The explicit mask also retains writes
+    // whose authored value happens to equal their copied or effective value.
+    let (baseline, writes_color, writes_radius, writes_intensity) = match copy_intent {
+        Some(copy) => {
+            let EffectDefinition::Glow(copied_baseline) = copy.copied_definition();
+            (
+                if method_target {
+                    copied_baseline
+                } else {
+                    initial
+                },
+                copy.writes_parameter(noon_core::GlowParameter::Color),
+                copy.writes_parameter(noon_core::GlowParameter::Radius),
+                copy.writes_parameter(noon_core::GlowParameter::Intensity),
+            )
+        }
+        None => (initial, false, false, false),
+    };
+    if writes_color || baseline.color() != destination.color() {
         update.color = Some(destination.color());
     }
-    if initial.radius() != destination.radius() {
+    if writes_radius || baseline.radius() != destination.radius() {
         update.radius = Some(destination.radius());
     }
-    if initial.intensity() != destination.intensity() {
+    if writes_intensity || baseline.intensity() != destination.intensity() {
         update.intensity = Some(destination.intensity());
     }
     effective
@@ -129,12 +177,13 @@ pub(super) fn completion(
         attachment,
         from,
         to,
+        ..
     } = values
     else {
         unreachable!("glow channel");
     };
     let update = from
-        .sample(*to, timing.terminal_progress_f64())
+        .sample(*to, values.terminal_progress_f64(timing))
         .map_err(GlowTargetLoweringError::Timeline)?;
     let endpoint = update
         .apply_to(noon_core::Glow::default())
@@ -148,6 +197,58 @@ pub(super) fn completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_target_requires_the_exact_candidate_temporary_generation() {
+        let attachment = SemanticNodeId::new(3, 7);
+        let definition = noon_core::Glow::new(GlowUpdate::default().intensity(0.0)).unwrap();
+        let source = [SemanticAnimationEffectSnapshot {
+            attachment,
+            name: "glow".into(),
+            definition: EffectDefinition::Glow(definition),
+            copy_provenance: None,
+        }];
+        let effective = Some(crate::CompiledGlow {
+            attachment,
+            definition,
+        });
+        let proof = HashSet::from([attachment]);
+        let current = SemanticTransformEffectSnapshot {
+            source: vec![attachment].into_boxed_slice(),
+            target: Box::new([]),
+        };
+        let stale = SemanticTransformEffectSnapshot {
+            source: vec![SemanticNodeId::new(3, 6)].into_boxed_slice(),
+            target: Box::new([]),
+        };
+        assert!(channels(None, &source, &[], effective, false, &HashSet::new()).is_err());
+        assert!(channels(None, &source, &[], effective, false, &proof)
+            .unwrap()
+            .is_empty());
+        assert!(
+            channels(Some(&current), &source, &[], effective, false, &proof)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(channels(Some(&stale), &source, &[], effective, false, &proof).is_err());
+        assert!(channels(
+            None,
+            &source,
+            &[],
+            Some(crate::CompiledGlow {
+                attachment: SemanticNodeId::new(3, 6),
+                definition,
+            }),
+            false,
+            &proof,
+        )
+        .is_err());
+        let wrong_proof = HashSet::from([SemanticNodeId::new(3, 6)]);
+        assert!(channels(None, &source, &[], effective, false, &wrong_proof).is_err());
+        let mut non_neutral = source;
+        non_neutral[0].definition = EffectDefinition::Glow(noon_core::Glow::default());
+        assert!(channels(None, &non_neutral, &[], effective, false, &proof).is_err());
+    }
 
     #[test]
     fn glow_driver_ownership_is_parameter_local_and_symmetric_with_umbrella_tracks() {

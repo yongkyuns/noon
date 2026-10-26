@@ -39,6 +39,59 @@ impl EffectDefinition {
     }
 }
 
+/// Weak source correspondence and authored parameter intent for an effect copy.
+/// The source generation is not an owning reference: independent copies survive
+/// source removal. A target animation may use this intent only for that exact
+/// source generation, never by resolving its name again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticEffectCopyProvenance {
+    source_attachment: SemanticNodeId,
+    copied_definition: EffectDefinition,
+    written_parameters: u8,
+}
+
+impl SemanticEffectCopyProvenance {
+    pub(crate) const fn new(
+        source_attachment: SemanticNodeId,
+        copied_definition: EffectDefinition,
+    ) -> Self {
+        Self {
+            source_attachment,
+            copied_definition,
+            written_parameters: 0,
+        }
+    }
+
+    pub const fn source_attachment(self) -> SemanticNodeId {
+        self.source_attachment
+    }
+
+    pub const fn copied_definition(self) -> EffectDefinition {
+        self.copied_definition
+    }
+
+    /// Explicit same-valued writes retain their authored channel meaning.
+    pub const fn writes_parameter(self, parameter: GlowParameter) -> bool {
+        self.written_parameters & effect_parameter_bit(parameter) != 0
+    }
+
+    fn with_update(mut self, update: GlowUpdate) -> Self {
+        for parameter in update.parameters() {
+            self.written_parameters |= effect_parameter_bit(parameter);
+        }
+        self
+    }
+}
+
+const fn effect_parameter_bit(parameter: GlowParameter) -> u8 {
+    match parameter {
+        GlowParameter::Color => 1,
+        GlowParameter::Radius => 2,
+        GlowParameter::Intensity => 4,
+        GlowParameter::Source => 8,
+    }
+}
+
 /// One named attachment. Identity is the containing node's ordinary NodeId.
 /// This first authored slice is leaf-local; composed scopes are not silently
 /// expanded into independent children. The renderer support gate is separate.
@@ -47,6 +100,7 @@ pub struct SemanticEffectState {
     owner: SemanticNodeId,
     name: Arc<str>,
     definition: EffectDefinition,
+    copy_provenance: Option<SemanticEffectCopyProvenance>,
 }
 
 impl SemanticEffectState {
@@ -64,6 +118,17 @@ impl SemanticEffectState {
 
     pub const fn definition(&self) -> EffectDefinition {
         self.definition
+    }
+
+    pub const fn copy_provenance(&self) -> Option<SemanticEffectCopyProvenance> {
+        self.copy_provenance
+    }
+
+    pub(crate) fn updated(&self, update: GlowUpdate) -> Result<Self, GlowParameterError> {
+        let mut next = self.clone();
+        next.definition = self.definition.update(update)?;
+        next.copy_provenance = self.copy_provenance.map(|copy| copy.with_update(update));
+        Ok(next)
     }
 }
 
@@ -119,11 +184,13 @@ impl SemanticStore {
         owner: SemanticNodeId,
         name: Arc<str>,
         definition: EffectDefinition,
+        copy_provenance: Option<SemanticEffectCopyProvenance>,
     ) -> SemanticNodeId {
         let effect = self.insert_kind(SemanticNodeKind::Effect(SemanticEffectState {
             owner,
             name,
             definition,
+            copy_provenance,
         }));
         self.node_mut(owner)
             .expect("preflighted effect owner")
@@ -134,10 +201,10 @@ impl SemanticStore {
         effect
     }
 
-    pub(crate) fn replace_effect_definition(
+    pub(crate) fn replace_effect_state(
         &mut self,
         effect: SemanticNodeId,
-        definition: EffectDefinition,
+        next: SemanticEffectState,
     ) {
         let SemanticNodeKind::Effect(state) = &mut self
             .node_mut(effect)
@@ -146,8 +213,10 @@ impl SemanticStore {
         else {
             unreachable!("preflighted effect kind");
         };
-        // Definition values currently contain no node/resource references.
-        state.definition = definition;
+        // Parameter/copy-intent updates do not change owning reference edges.
+        debug_assert_eq!(state.owner, next.owner);
+        debug_assert_eq!(state.name, next.name);
+        *state = next;
     }
 
     /// Remove only this owner's attachment edge. Called by ordinary node
@@ -180,9 +249,56 @@ impl SemanticStore {
         let target = target.into();
         for &id in node.effect_ids() {
             let effect = self.semantic_effect_state(id)?;
-            transaction.create_effect(target, effect.name.clone(), effect.definition);
+            self.copy_effect_into_with_definition(id, target, effect.definition, transaction)?;
         }
         Ok(())
+    }
+
+    /// Freeze an authored animation target without changing the meaning of its
+    /// existing parameter edits. This creates independent attachment identities
+    /// while preserving the target's weak source correspondence and write mask.
+    pub fn snapshot_effects_into(
+        &self,
+        source: SemanticNodeId,
+        target: impl Into<crate::SemanticTransactionNodeRef>,
+        transaction: &mut crate::SemanticMutationTransaction,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node(source)
+            .ok_or(SemanticStoreError::UnknownNode(source))?;
+        let target = target.into();
+        for &id in node.effect_ids() {
+            let effect = self.semantic_effect_state(id)?;
+            transaction.create_node(crate::SemanticNodeCreation::Effect {
+                owner: target,
+                name: effect.name.clone(),
+                definition: effect.definition,
+                copy_provenance: effect.copy_provenance,
+            });
+        }
+        Ok(())
+    }
+
+    /// Stage one independent copy using a coherent effective definition supplied
+    /// by the shared execution owner. The copied definition is its intent baseline;
+    /// no effect parameter is considered explicitly authored by the copy itself.
+    pub fn copy_effect_into_with_definition(
+        &self,
+        source: SemanticNodeId,
+        target: impl Into<crate::SemanticTransactionNodeRef>,
+        definition: impl Into<EffectDefinition>,
+        transaction: &mut crate::SemanticMutationTransaction,
+    ) -> Result<crate::SemanticLocalNodeToken, SemanticStoreError> {
+        let effect = self.semantic_effect_state(source)?;
+        let definition = definition.into();
+        Ok(
+            transaction.create_node(crate::SemanticNodeCreation::Effect {
+                owner: target.into(),
+                name: effect.name.clone(),
+                definition,
+                copy_provenance: Some(SemanticEffectCopyProvenance::new(source, definition)),
+            }),
+        )
     }
 }
 

@@ -24,6 +24,7 @@ use prepared_value::PreparedPublication;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
+    GlowPulseEdit(crate::execution_segment::ExecutionSegmentToken),
     TranslationDrag(SemanticNodeId),
     Callback(super::CallbackPhaseToken),
 }
@@ -216,6 +217,8 @@ impl ExecutionSession {
         }
         if let Some(pending) = self.pending_segment_completion.as_ref() {
             let admitted = purpose == SemanticPublicationPurpose::SegmentCompletion
+                || matches!(purpose, SemanticPublicationPurpose::GlowPulseEdit(token)
+                    if token == pending.token && !pending.glow_pulse_attachments.is_empty())
                 || matches!(purpose, SemanticPublicationPurpose::TranslationDrag(target)
                     if pending.allows_translation_drag(target));
             if !admitted {
@@ -317,7 +320,17 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        self.require_publication_ready(purpose)?;
+        let admission = if purpose == SemanticPublicationPurpose::AuthoredMutation
+            && execution_prefix.is_empty()
+            && effective.is_none()
+        {
+            self.glow_pulse_edit_token(transaction.mutations())
+                .map(SemanticPublicationPurpose::GlowPulseEdit)
+                .unwrap_or(purpose)
+        } else {
+            purpose
+        };
+        self.require_publication_ready(admission)?;
         self.require_published_store(store)?;
         if !is_semantic_updater_publication(transaction.mutations()) {
             validate_semantic_publication(&transaction)
@@ -463,9 +476,9 @@ impl ExecutionSession {
     pub(super) fn apply_prepared_semantic_transaction_with_execution_contract(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
-        execution_prefix: Vec<ExecutionPatch>,
+        mut execution_prefix: Vec<ExecutionPatch>,
         runtime: PreparedRuntimePublication,
-        purpose: SemanticPublicationPurpose,
+        mut purpose: SemanticPublicationPurpose,
         scalar: Option<PreparedScalarPublicationContract>,
         order_root: Option<SemanticNodeId>,
     ) -> Result<
@@ -475,7 +488,33 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
-        prepared
+        let pulse_edit = if purpose == SemanticPublicationPurpose::AuthoredMutation
+            && self.pending_segment_completion.is_some()
+        {
+            if !execution_prefix.is_empty()
+                || runtime.effective.is_some()
+                || runtime.frame.is_some()
+                || scalar.is_some()
+            {
+                return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+            }
+            let edit = self.prepare_glow_pulse_edit(&prepared)?;
+            purpose = SemanticPublicationPurpose::GlowPulseEdit(edit.token);
+            self.require_publication_ready(purpose)?;
+            // Remove only the pulse-owned intensity tracks before applying the
+            // new persistent base. Value-equal writes may have no compiler patch,
+            // but still supersede their effective driver in this same publication.
+            execution_prefix.extend(
+                edit.removed_tracks
+                    .iter()
+                    .copied()
+                    .map(ExecutionPatch::RemoveTrack),
+            );
+            Some(edit)
+        } else {
+            None
+        };
+        let result = prepared
             .with_pending_geometry_paths(|prepared| {
                 self.publish_materialized_semantic_transaction(
                     prepared,
@@ -494,7 +533,11 @@ impl ExecutionSession {
                     ExecutionSessionPublicationError::Semantic(error)
                 }
                 noon_core::PendingGeometryPublicationError::Publication(error) => error,
-            })
+            })?;
+        if let Some(edit) = pulse_edit {
+            self.commit_glow_pulse_edit(edit);
+        }
+        Ok(result)
     }
 
     // No provisional resource declaration reaches lowering. The outer existing

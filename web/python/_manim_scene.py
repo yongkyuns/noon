@@ -1865,6 +1865,40 @@ def _indicate_parameters(animation: object, play_kwargs: dict[str, object]):
     )
 
 
+def _canonical_glow_pulse_animation(scene: _base.Scene, animation: object):
+    from _noon_effects import GlowPulse
+
+    if not isinstance(animation, GlowPulse):
+        return None
+    target = animation.mobject
+    if _semantic_handles._is_shared_family(target):
+        raise NotImplementedError("GlowPulse supports leaf targets; group scopes are unavailable")
+    if getattr(target, "_scene", None) is not scene:
+        raise ValueError("GlowPulse target must belong to this Scene")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("GlowPulse requires a shared semantic handle")
+    return target
+
+
+def _glow_pulse_parameters(animation: object, play_kwargs: dict[str, object]):
+    resolved = _options.resolve(
+        builder_args=_options.builder_args(animation),
+        default_lag_ratio=0.0,
+        play_run_time=play_kwargs.get("run_time", play_kwargs.get("duration")),
+        play_easing=play_kwargs.get("easing"),
+        play_rate_func=play_kwargs.get("rate_func"),
+        play_lag_ratio=play_kwargs.get("lag_ratio"),
+        glow_pulse=True,
+    )
+    if resolved.path_arc != 0.0:
+        raise NotImplementedError("GlowPulse does not support path options")
+    return (
+        float(animation.intensity), float(resolved.run_time),
+        str(resolved.rate_func), float(resolved.lag_ratio),
+        bool(resolved.reverse_rate_function),
+    )
+
+
 def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Scene:
     """Declare a Rust action; Python callbacks do not participate in playback."""
     if not isinstance(animation, _animate.Indicate):
@@ -2648,6 +2682,12 @@ def _build_canonical_composition_candidate(
                     builder.appendDrawBorderThenFillFamilyEntering(
                         str(reservation.object.id), member._semantic_handle
                     )
+            return
+        pulse = _canonical_glow_pulse_animation(self, animation)
+        if pulse is not None:
+            builder.appendGlowPulseMobject(
+                pulse._semantic_handle, *_glow_pulse_parameters(animation, child_kwargs),
+            )
             return
         indicate = _canonical_indicate_animation(self, animation)
         if indicate is not None:

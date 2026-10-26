@@ -1652,7 +1652,7 @@ mod tests {
         let restart_wall = original_wall + Duration::from_secs(30);
         app.static_session_mut()
             .activate_animation(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1769,7 +1769,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         session
             .activate_animation(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)

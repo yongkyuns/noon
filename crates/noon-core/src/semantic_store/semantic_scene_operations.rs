@@ -205,19 +205,27 @@ impl SemanticStore {
             .expect("validated source")
             .effect_ids()
             .iter()
-            .map(|&effect| {
+            .map(|&attachment| {
                 let effect = self
-                    .semantic_effect_state(effect)
+                    .semantic_effect_state(attachment)
                     .expect("source attachment is live");
                 (
+                    attachment,
                     std::sync::Arc::<str>::from(effect.name()),
                     effect.definition(),
                 )
             })
             .collect::<Vec<_>>();
         let copy = self.insert_semantic_object(state);
-        for (name, definition) in effects {
-            self.insert_semantic_effect(copy, name, definition);
+        for (attachment, name, definition) in effects {
+            self.insert_semantic_effect(
+                copy,
+                name,
+                definition,
+                Some(crate::SemanticEffectCopyProvenance::new(
+                    attachment, definition,
+                )),
+            );
         }
         self.node_mut(copy)
             .expect("newly inserted semantic copy exists")

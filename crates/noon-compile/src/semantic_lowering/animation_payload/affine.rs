@@ -659,6 +659,71 @@ where
             )?;
             continue;
         }
+        if let SemanticScheduledAnimationPayload::GlowPulse { intensity } = leaf.payload {
+            super::glow_pulse::validate_options(leaf.options).map_err(|error| {
+                SemanticAffineAnimationTrackError::GlowTarget {
+                    animation: leaf.animation,
+                    error,
+                }
+            })?;
+            let source = object_state(store, leaf, leaf.target)?;
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+                animation: leaf.animation,
+                error,
+            };
+            let attachments = store
+                .animation_effect_snapshot(leaf.target)
+                .map_err(super::glow_target::GlowTargetLoweringError::Store)
+                .map_err(glow_error)?;
+            let values = super::glow_pulse::values(
+                store,
+                leaf.target,
+                source,
+                &attachments,
+                from.glow,
+                intensity,
+            )
+            .map_err(glow_error)?;
+            super::glow_target::reserve(
+                &mut driven,
+                leaf.execution_object_id,
+                Property::GlowIntensity,
+                leaf.animation,
+            )
+            .map_err(|first_animation| {
+                SemanticAffineAnimationTrackError::GlowDriverConflict {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    property: Property::GlowIntensity,
+                }
+            })?;
+            let mut timing = leaf.timing;
+            timing.reverse_rate_function = leaf.options.reverse_rate_function;
+            tracks.push(SemanticAffineAnimationTrack {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                property: Property::GlowIntensity,
+                completion: super::glow_target::completion(&values, timing).map_err(glow_error)?,
+                values,
+                timing,
+                time_map: leaf.time_map.clone(),
+            });
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -855,6 +920,7 @@ where
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::TextGlyph { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
+            | SemanticScheduledAnimationPayload::GlowPulse { .. }
             | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
@@ -922,9 +988,15 @@ where
             super::glow_target::validate_sources(store, leaf.target, source, target_state, target)
                 .map_err(glow_error)?;
         }
-        let glow_channels =
-            super::glow_target::channels(snapshot, &source_effects, &target_effects, from.glow)
-                .map_err(glow_error)?;
+        let glow_channels = super::glow_target::channels(
+            snapshot,
+            &source_effects,
+            &target_effects,
+            from.glow,
+            complete_priority,
+            &Default::default(),
+        )
+        .map_err(glow_error)?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
             let track = tracks.last_mut().expect("pushed Transform channel");
@@ -1226,6 +1298,15 @@ fn validate_leaf_matches_declaration(
                     angle: *angle,
                     hold_origin: *hold_origin,
                 } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::GlowPulse { target, intensity }
+            if *target == leaf.target
+                && leaf.payload
+                    == SemanticScheduledAnimationPayload::GlowPulse {
+                        intensity: *intensity,
+                    } =>
         {
             Ok(())
         }
