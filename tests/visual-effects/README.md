@@ -102,6 +102,35 @@ work under [#1897](https://github.com/yongkyuns/noon/issues/1897). The following
 sections preserve the original design and declaration-stage evidence; their
 historical execution guards are not a current support matrix.
 
+## Continuous gradient source capture
+
+Ordinary planar circle, rectangle and retained path linear fills can carry the
+same named glow attachment. Paint edits and glow parameter edits use their
+ordinary independent channels, with the existing authored clock, target capture,
+pulse ownership and completion. Gradient text/strokes, image paint, groups and
+effect stacks remain outside this profile.
+
+Painted capture includes interpolated stop alpha and fill opacity. Silhouette
+capture ignores paint while preserving the same geometry and stroke coverage.
+Final object opacity applies once. The retained gradient binding is shared with
+the ordinary draw; its immutable value invalidates source capture on paint-only
+edits. Clean frames upload nothing; warmed intensity edits reuse capture and blur.
+
+The native `gradient_glow_preserves_paint_alpha_seek_and_local_capture` oracle
+uses separate no-effect renders and a slow full 2-D Gaussian, comparing every
+RGBA channel within two bytes. It covers circles, rectangles and stroked paths,
+reflection/rotation/nonuniform scale, both source modes, animated alpha/stops,
+transparent and colored backgrounds, exact seek, neutral/removal output and
+resource reuse. Temporarily disabling the actual gradient capture route must
+make it fail. This qualifies filtering/composition; the separate linear-paint
+oracle qualifies paint rasterization. Neither establishes physical GPU speed.
+
+`linear_gradient::glow_program`, the native `gradient_glow` example and
+`web/python/examples/gradient_glow.py` author the same paint/effect lifecycle.
+`scripts/linear-gradient-qualification.mjs` checks real Rust/WASM–Python image
+pairs on WebGPU and WebGL2, independent interior paint values, a visible halo
+and exact removal. Existing CI owns both native and browser qualification.
+
 ## Historical M0 contract and evidence
 
 M0 work for [#1897](https://github.com/yongkyuns/noon/issues/1897).

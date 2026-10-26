@@ -260,27 +260,45 @@ impl GpuRenderer {
         single_sample: bool,
         binding: &mut Option<GeometryBinding>,
     ) -> Option<DrawStats> {
-        let (id, pipeline_index, buffer) = match primitive {
-            RenderPrimitive::Circle => (
-                *frame.circle_ids.get(index as usize)?,
-                0,
-                &self.circle_buffer,
-            ),
-            RenderPrimitive::Rectangle => (
-                *frame.rectangle_ids.get(index as usize)?,
-                2,
-                &self.rectangle_buffer,
-            ),
-            RenderPrimitive::Path { .. } => (
-                *frame.path_ids.get(index as usize)?,
-                0,
-                &self.path_instance_buffer,
-            ),
+        let id = match primitive {
+            RenderPrimitive::Circle => *frame.circle_ids.get(index as usize)?,
+            RenderPrimitive::Rectangle => *frame.rectangle_ids.get(index as usize)?,
+            RenderPrimitive::Path { .. } => *frame.path_ids.get(index as usize)?,
             _ => return None,
         };
         if !frame.fill_gradients.contains_key(&id) {
             return None;
         }
+        self.draw_gradient_batch(
+            pass,
+            frame,
+            primitive,
+            index..index + 1,
+            single_sample,
+            binding,
+            id,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_gradient_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        frame: &PreparedFrame<'_>,
+        primitive: RenderPrimitive,
+        range: std::ops::Range<u32>,
+        single_sample: bool,
+        binding: &mut Option<GeometryBinding>,
+        id: ObjectId,
+        isolated: Option<wgpu::BufferSlice<'a>>,
+    ) -> Option<DrawStats> {
+        let (pipeline_index, buffer) = match primitive {
+            RenderPrimitive::Circle => (0, &self.circle_buffer),
+            RenderPrimitive::Rectangle => (2, &self.rectangle_buffer),
+            RenderPrimitive::Path { .. } => (0, &self.path_instance_buffer),
+            _ => return None,
+        };
         let gpu = self.fill_gradients.as_ref()?;
         let resident = gpu.residents.get(&id)?;
         if let RenderPrimitive::Path { batch } = primitive {
@@ -289,24 +307,24 @@ impl GpuRenderer {
             pass.set_pipeline(&gpu.path_pipelines[stroke]);
             pass.set_bind_group(1, &resident.binding, &[]);
             pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-            pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
+            pass.set_vertex_buffer(1, isolated.unwrap_or_else(|| buffer.slice(..)));
             pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(path.index_range.clone(), 0, index..index + 1);
+            pass.draw_indexed(path.index_range.clone(), 0, range.clone());
             *binding = None;
             return Some(DrawStats {
                 draw_calls: 1,
-                instances_drawn: 1,
+                instances_drawn: range.len(),
             });
         }
         pass.set_pipeline(&gpu.pipelines[pipeline_index + usize::from(single_sample)]);
         pass.set_bind_group(1, &resident.binding, &[]);
         pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-        pass.set_vertex_buffer(1, buffer.slice(..));
-        pass.draw(0..6, index..index + 1);
+        pass.set_vertex_buffer(1, isolated.unwrap_or_else(|| buffer.slice(..)));
+        pass.draw(0..6, range.clone());
         *binding = None;
         Some(DrawStats {
             draw_calls: 1,
-            instances_drawn: 1,
+            instances_drawn: range.len(),
         })
     }
 }

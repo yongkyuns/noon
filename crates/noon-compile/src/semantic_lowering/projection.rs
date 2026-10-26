@@ -1001,7 +1001,6 @@ pub(super) fn validate_glow_source_profile(
     };
     lower_semantic_style(owner, state)?;
     if !geometry_supported
-        || matches!(state.style.fill, Some(SemanticPaint::LinearGradient(_)))
         || object_requires_spatial_lowering(state, store)
         || !matches!(
             state.role(),
@@ -1014,6 +1013,7 @@ pub(super) fn validate_glow_source_profile(
     {
         return Err(unsupported());
     }
+    super::paint::lower_fill(owner, state, store)?;
     Ok(())
 }
 

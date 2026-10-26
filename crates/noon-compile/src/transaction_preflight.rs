@@ -480,9 +480,7 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay.require_paint_source(
                     scene,
                     index,
-                    crate::continuous_fill_content_supported(content)
-                        && spatial.is_none()
-                        && glow.is_none(),
+                    crate::continuous_fill_content_supported(content) && spatial.is_none(),
                 )?;
                 overlay.objects.insert(
                     *object,
@@ -600,10 +598,9 @@ pub(super) fn preflight_transaction_with_resources(
                 super::validate_z_index(*object, *value)?;
             }
             ExecutionPatch::SetGlow { object, glow } => {
-                let index = overlay
+                overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                overlay.require_paint_source(scene, index, false)?;
                 let previous = overlay.glow(scene, *object);
                 crate::execution_patch::validate_glow_replacement(
                     *object,
@@ -627,7 +624,6 @@ pub(super) fn preflight_transaction_with_resources(
                     *expected,
                     glow.as_deref(),
                 )?;
-                overlay.require_paint_source(scene, index, glow.is_none())?;
                 // Respect staged adds/replacements as well as base tracks. A
                 // retired generation cannot retain drivers or block its successor.
                 for property in crate::CompiledGlow::PARAMETER_PROPERTIES {
@@ -648,8 +644,7 @@ pub(super) fn preflight_transaction_with_resources(
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 crate::execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
                 let supported = overlay.supports_continuous_fill(scene, *object)
-                    && overlay.spatial(scene, *object).is_none()
-                    && overlay.glow(scene, *object).is_none();
+                    && overlay.spatial(scene, *object).is_none();
                 if fill_gradient.is_some() && !supported {
                     return Err(CompilePatchError::InvalidObjectState {
                         object: *object,
@@ -732,8 +727,7 @@ pub(super) fn preflight_transaction_with_resources(
                 let spatial = overlay.spatial(scene, track.object);
                 if matches!(track.values, TrackValues::Paint { .. }) {
                     let supported = overlay.supports_continuous_fill(scene, track.object);
-                    let glow = overlay.glow(scene, track.object).is_some();
-                    crate::validate_paint_track_profile(track, supported, spatial.is_some(), glow)
+                    crate::validate_paint_track_profile(track, supported, spatial.is_some())
                         .map_err(CompilePatchError::InvalidTrack)?;
                 }
                 if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
@@ -783,8 +777,7 @@ pub(super) fn preflight_transaction_with_resources(
                 let spatial = overlay.spatial(scene, track.object);
                 if matches!(track.values, TrackValues::Paint { .. }) {
                     let supported = overlay.supports_continuous_fill(scene, track.object);
-                    let glow = overlay.glow(scene, track.object).is_some();
-                    crate::validate_paint_track_profile(track, supported, spatial.is_some(), glow)
+                    crate::validate_paint_track_profile(track, supported, spatial.is_some())
                         .map_err(CompilePatchError::InvalidTrack)?;
                 }
                 if !crate::valid_track_for_spatial(track, spatial.as_ref()) {

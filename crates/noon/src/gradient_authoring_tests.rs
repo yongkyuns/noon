@@ -216,3 +216,110 @@ fn bounded_returning_and_reversed_paint_tracks_restore_exact_source() {
         ));
     }
 }
+
+#[test]
+fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels() {
+    use crate::effects::GlowUpdate;
+    for paint_first in [false, true] {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.5).unwrap();
+        source.disable_stroke().unwrap();
+        if paint_first {
+            source
+                .set_fill_gradient(gradient(false), Some(0.25))
+                .unwrap();
+        }
+        source
+            .set_glow(GlowUpdate::default().intensity(0.4))
+            .unwrap();
+        if !paint_first {
+            source
+                .set_fill_gradient(gradient(false), Some(0.25))
+                .unwrap();
+        }
+        scene.add(&source).unwrap();
+        let mut target = source.target_editor().unwrap();
+        target
+            .set_fill_gradient(gradient(true), Some(0.75))
+            .unwrap();
+        target
+            .set_glow(GlowUpdate::default().intensity(1.4))
+            .unwrap();
+        let animation = scene
+            .declare_transform_to(&source, &target, options())
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 0.5)
+            .unwrap();
+        let state = row(&session, &source);
+        assert!((state.glow.as_ref().unwrap().definition.intensity() - 0.9).abs() < 1e-12);
+        assert_eq!(state.style.fill.unwrap().alpha, 0.5);
+        assert_eq!(state.fill_gradient.as_ref().unwrap().start(), [0.25, 0.25]);
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 1.0)
+            .unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene
+            .live(&mut session)
+            .set_fill_gradient(&source, gradient(false), None)
+            .unwrap();
+        assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.75);
+        assert_eq!(
+            row(&session, &source)
+                .glow
+                .as_ref()
+                .unwrap()
+                .definition
+                .intensity(),
+            1.4
+        );
+    }
+}
+
+#[test]
+fn gradient_temporary_pulse_restores_exact_paint_and_retires_only_glow() {
+    let mut scene = Scene::new();
+    let mut source = scene.circle(0.5).unwrap();
+    let original = gradient(false);
+    source
+        .set_fill_gradient(original.clone(), Some(0.375))
+        .unwrap();
+    scene.add(&source).unwrap();
+    let pulse = scene
+        .declare_glow_pulse(&source, 2.0, AnimationOptions::new())
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let segment = scene.live(&mut session).play_animation(&pulse).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
+    assert_eq!(
+        row(&session, &source)
+            .glow
+            .as_ref()
+            .unwrap()
+            .definition
+            .intensity(),
+        2.0
+    );
+    assert!(Arc::ptr_eq(
+        row(&session, &source).fill_gradient.as_ref().unwrap(),
+        &original
+    ));
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.0)
+        .unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    assert!(row(&session, &source).glow.is_none());
+    assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.375);
+    assert!(Arc::ptr_eq(
+        row(&session, &source).fill_gradient.as_ref().unwrap(),
+        &original
+    ));
+}

@@ -2653,6 +2653,7 @@ fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
             object.geometry(),
             Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
         ) && object.style.fill.is_some()
+            && object.fill_gradient.is_none()
             && object.style.stroke.is_none()
             && reveal == 1.0)
 }
@@ -6542,6 +6543,7 @@ pub use family_plan_set_prepare::*;
 pub enum RetainedDrawError {
     Text(TextGpuDrawError),
     Image(RasterImageDrawError),
+    GradientNotUploaded,
 }
 
 impl From<TextGpuDrawError> for RetainedDrawError {
@@ -6561,6 +6563,7 @@ impl std::fmt::Display for RetainedDrawError {
         match self {
             Self::Text(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
+            Self::GradientNotUploaded => formatter.write_str("gradient source was not uploaded"),
         }
     }
 }

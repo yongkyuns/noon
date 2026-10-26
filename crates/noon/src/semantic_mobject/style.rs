@@ -622,12 +622,6 @@ pub(crate) fn prepare_fill_gradient(
     let unsupported = || {
         AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::ContinuousPaintProfile)
     };
-    if store
-        .node(object.node_id())
-        .is_some_and(|node| !node.effect_ids().is_empty())
-    {
-        return Err(unsupported());
-    }
     noon_compile::lower_semantic_fill(object.node_id(), &state, &store)
         .map_err(|_| unsupported())?;
     Ok(state)

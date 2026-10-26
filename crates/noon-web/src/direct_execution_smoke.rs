@@ -797,6 +797,15 @@ pub async fn create_direct_linear_gradient_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for continuous paint capture and exact effect removal.
+#[wasm_bindgen(js_name = createDirectGradientGlowSmokeRenderer)]
+pub async fn create_direct_gradient_glow_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::linear_gradient::glow_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for shared authored glow pulses, motion and endpoint restoration.
 #[wasm_bindgen(js_name = createDirectGlowPulseSmokeRenderer)]
 pub async fn create_direct_glow_pulse_smoke_renderer(
