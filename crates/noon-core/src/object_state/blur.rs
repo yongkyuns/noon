@@ -32,6 +32,7 @@ impl EffectValue for Blur {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         for parameter in [
             EffectParameter::Color,
+            EffectParameter::Offset,
             EffectParameter::Intensity,
             EffectParameter::Source,
         ] {
@@ -84,6 +85,10 @@ mod tests {
             (
                 EffectUpdate::default().color(crate::Color::WHITE),
                 EffectParameter::Color,
+            ),
+            (
+                EffectUpdate::default().offset([0.0, 0.0]),
+                EffectParameter::Offset,
             ),
             (
                 EffectUpdate::default().intensity(0.0),

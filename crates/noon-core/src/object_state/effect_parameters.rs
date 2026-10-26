@@ -34,11 +34,11 @@ impl EffectRadius {
         }
     }
 
-    pub(super) fn validate(self) -> Result<(), EffectParameterError> {
+    pub(crate) fn validate(self) -> Result<(), EffectParameterError> {
         nonnegative(self.value(), EffectParameterError::InvalidRadius)
     }
 
-    pub(super) fn same_unit(self, other: Self) -> bool {
+    pub(crate) fn same_unit(self, other: Self) -> bool {
         matches!(
             (self, other),
             (Self::Scene(_), Self::Scene(_)) | (Self::Pixels(_), Self::Pixels(_))
@@ -64,8 +64,70 @@ impl EffectRadius {
         Ok(pixels)
     }
 
-    pub(super) fn interpolate(self, target: Self, alpha: f64) -> Self {
+    pub(crate) fn interpolate(self, target: Self, alpha: f64) -> Self {
         let value = interpolate(self.value(), target.value(), alpha);
+        match self {
+            Self::Scene(_) => Self::Scene(value),
+            Self::Pixels(_) => Self::Pixels(value),
+        }
+    }
+}
+
+/// Offset in the view's +X/right and +Y/up directions, independent of object scale.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum EffectOffset {
+    Scene([f64; 2]),
+    Pixels([f64; 2]),
+}
+impl From<[f64; 2]> for EffectOffset {
+    fn from(value: [f64; 2]) -> Self {
+        Self::Scene(value)
+    }
+}
+impl EffectOffset {
+    pub const fn value(self) -> [f64; 2] {
+        match self {
+            Self::Scene(v) | Self::Pixels(v) => v,
+        }
+    }
+    pub(crate) fn validate(self) -> Result<(), EffectParameterError> {
+        if self.value().into_iter().all(f64::is_finite) {
+            Ok(())
+        } else {
+            Err(EffectParameterError::InvalidOffset)
+        }
+    }
+    pub(crate) fn same_unit(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Scene(_), Self::Scene(_)) | (Self::Pixels(_), Self::Pixels(_))
+        )
+    }
+    pub fn to_output_pixels(
+        self,
+        output_height: u32,
+        world_view_height: f64,
+    ) -> Result<[f64; 2], EffectParameterError> {
+        self.validate()?;
+        if output_height == 0 || !world_view_height.is_finite() || world_view_height <= 0.0 {
+            return Err(EffectParameterError::InvalidView);
+        }
+        let values = match self {
+            Self::Scene(v) => v.map(|c| (c / world_view_height) * f64::from(output_height)),
+            Self::Pixels(v) => v,
+        };
+        if !values.into_iter().all(f64::is_finite) {
+            return Err(EffectParameterError::InvalidOffset);
+        }
+        Ok(values)
+    }
+    pub(crate) fn interpolate(self, other: Self, alpha: f64) -> Self {
+        let a = self.value();
+        let b = other.value();
+        let value = [
+            interpolate(a[0], b[0], alpha),
+            interpolate(a[1], b[1], alpha),
+        ];
         match self {
             Self::Scene(_) => Self::Scene(value),
             Self::Pixels(_) => Self::Pixels(value),
@@ -77,6 +139,7 @@ impl EffectRadius {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EffectParameter {
     Color,
+    Offset,
     Radius,
     Intensity,
     Source,
@@ -85,6 +148,7 @@ pub enum EffectParameter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EffectParameterError {
     InvalidColor,
+    InvalidOffset,
     InvalidRadius,
     InvalidIntensity,
     InvalidProgress,
@@ -100,6 +164,7 @@ impl std::fmt::Display for EffectParameterError {
             Self::InvalidColor => {
                 f.write_str("effect color must have finite RGBA channels in [0, 1]")
             }
+            Self::InvalidOffset => f.write_str("effect offset must contain two finite coordinates"),
             Self::InvalidRadius => f.write_str("effect radius must be finite and non-negative"),
             Self::InvalidIntensity => f.write_str("effect intensity must be finite and in [0, 8]"),
             Self::InvalidProgress => f.write_str("effect progress must be finite and in [0, 1]"),
@@ -135,6 +200,7 @@ impl std::error::Error for EffectParameterError {}
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EffectUpdate {
     pub color: Option<Color>,
+    pub offset: Option<EffectOffset>,
     pub radius: Option<EffectRadius>,
     pub intensity: Option<f64>,
     pub source: Option<GlowSource>,
@@ -144,6 +210,36 @@ impl EffectUpdate {
     pub fn color(mut self, value: Color) -> Self {
         self.color = Some(value);
         self
+    }
+
+    pub fn offset(mut self, value: impl Into<EffectOffset>) -> Self {
+        self.offset = Some(value.into());
+        self
+    }
+
+    /// Validate supplied fields before choosing a finite definition.
+    pub fn validate(self) -> Result<(), EffectParameterError> {
+        if let Some(c) = self.color {
+            if ![c.red, c.green, c.blue, c.alpha]
+                .into_iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
+            {
+                return Err(EffectParameterError::InvalidColor);
+            }
+        }
+        if let Some(r) = self.radius {
+            r.validate()?;
+        }
+        if let Some(o) = self.offset {
+            o.validate()?;
+        }
+        if self
+            .intensity
+            .is_some_and(|v| !v.is_finite() || !(0.0..=8.0).contains(&v))
+        {
+            return Err(EffectParameterError::InvalidIntensity);
+        }
+        Ok(())
     }
 
     pub fn radius(mut self, value: impl Into<EffectRadius>) -> Self {
@@ -166,6 +262,7 @@ impl EffectUpdate {
     pub fn parameters(self) -> impl Iterator<Item = EffectParameter> {
         [
             EffectParameter::Color,
+            EffectParameter::Offset,
             EffectParameter::Radius,
             EffectParameter::Intensity,
             EffectParameter::Source,
@@ -177,6 +274,7 @@ impl EffectUpdate {
     pub const fn writes(self, parameter: EffectParameter) -> bool {
         match parameter {
             EffectParameter::Color => self.color.is_some(),
+            EffectParameter::Offset => self.offset.is_some(),
             EffectParameter::Radius => self.radius.is_some(),
             EffectParameter::Intensity => self.intensity.is_some(),
             EffectParameter::Source => self.source.is_some(),
@@ -242,7 +340,7 @@ impl<T: EffectValue> PreparedEffectUpdate<T> {
     }
 }
 
-pub(super) fn nonnegative(
+pub(crate) fn nonnegative(
     value: f64,
     error: EffectParameterError,
 ) -> Result<(), EffectParameterError> {
@@ -253,7 +351,7 @@ pub(super) fn nonnegative(
     }
 }
 
-pub(super) fn interpolate(from: f64, to: f64, alpha: f64) -> f64 {
+pub(crate) fn interpolate(from: f64, to: f64, alpha: f64) -> f64 {
     if alpha == 0.0 {
         from
     } else if alpha == 1.0 {

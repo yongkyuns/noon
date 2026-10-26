@@ -2,15 +2,17 @@
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
 mod blur;
-mod effect_parameters;
+mod shadow;
+pub use shadow::Shadow;
+pub(crate) mod effect_parameters;
 mod glow;
 mod linear_gradient;
 mod paint_transition;
 pub use blur::Blur;
 pub(crate) use effect_parameters::sealed as effect_value_sealed;
 pub use effect_parameters::{
-    EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Pixels,
-    PreparedEffectUpdate,
+    EffectOffset, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue,
+    Pixels, PreparedEffectUpdate,
 };
 pub use glow::{Glow, GlowSource};
 pub use linear_gradient::{GradientStop, LinearGradient, LinearGradientError};

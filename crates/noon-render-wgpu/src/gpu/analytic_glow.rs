@@ -128,30 +128,36 @@ impl CaptureImage {
 enum ResidentFilter {
     Glow(Box<GlowScope>),
     Blur(Box<super::gaussian_blur::GaussianBlurScope>),
+    Shadow(Box<super::shadow_filter::ShadowScope>),
 }
 impl ResidentFilter {
     fn new(definition: EffectDefinition) -> Self {
         match definition {
             EffectDefinition::Glow(_) => Self::Glow(Box::default()),
             EffectDefinition::Blur(_) => Self::Blur(Default::default()),
+            EffectDefinition::Shadow(_) => Self::Shadow(Default::default()),
         }
     }
     fn matches(&self, definition: EffectDefinition) -> bool {
         matches!(
             (self, definition),
-            (Self::Glow(_), EffectDefinition::Glow(_)) | (Self::Blur(_), EffectDefinition::Blur(_))
+            (Self::Glow(_), EffectDefinition::Glow(_))
+                | (Self::Blur(_), EffectDefinition::Blur(_))
+                | (Self::Shadow(_), EffectDefinition::Shadow(_))
         )
     }
     fn invalidate(&mut self) {
         match self {
             Self::Glow(v) => v.invalidate(),
             Self::Blur(v) => v.invalidate(),
+            Self::Shadow(v) => v.invalidate(),
         }
     }
     fn output_view(&self) -> Option<&wgpu::TextureView> {
         match self {
             Self::Glow(v) => v.output_view(),
             Self::Blur(v) => v.output_view(),
+            Self::Shadow(v) => v.output_view(),
         }
     }
     #[cfg(test)]
@@ -159,6 +165,7 @@ impl ResidentFilter {
         match self {
             Self::Glow(v) => v.output(),
             Self::Blur(v) => v.output(),
+            Self::Shadow(v) => v.output(),
         }
     }
 }
@@ -205,6 +212,7 @@ pub(super) struct EffectCaptureGpu {
     owners: BTreeMap<ObjectId, (u8, usize)>,
     filter: GlowFilter,
     blur: super::gaussian_blur::GaussianBlurFilter,
+    shadow: super::shadow_filter::ShadowFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
 }
@@ -871,6 +879,24 @@ impl GpuRenderer {
                         blur_passes: encoded.blur_passes,
                         composite_passes: encoded.output_passes,
                     }
+                }
+                (ResidentFilter::Shadow(filter), EffectDefinition::Shadow(definition)) => {
+                    glows.shadow.prepare_encode(
+                        &mut glows.blur,
+                        device,
+                        queue,
+                        encoder,
+                        filter,
+                        super::gaussian_blur::GaussianBlurCapture {
+                            source: &scope.source.texture,
+                            revision: scope.revision,
+                        },
+                        definition,
+                        parameters.output_height,
+                        parameters.world_view_height,
+                        opacity,
+                        request.texture_budget_bytes,
+                    )?
                 }
                 _ => unreachable!("validated filter kind"),
             };

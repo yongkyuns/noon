@@ -21,7 +21,7 @@ pub(super) struct ScheduledCaptures {
 impl ScheduledCaptures {
     pub fn get(&self, object: ObjectId) -> Option<EffectiveAnimationProperties> {
         let mut value = self.base.get(&object)?.clone();
-        for slot in 0..=driver_key(object, Property::EffectIntensity).1 {
+        for slot in 0..=driver_key(object, Property::EffectOffset).1 {
             let Some((property, values, at_end)) = self.completed.get(&(object.get(), slot)) else {
                 continue;
             };
@@ -68,7 +68,7 @@ impl ScheduledCaptures {
         {
             return;
         }
-        for slot in 0..=driver_key(object, Property::EffectIntensity).1 {
+        for slot in 0..=driver_key(object, Property::EffectOffset).1 {
             let key = (object.get(), slot);
             let Some(owner) = driven.get(&key).copied() else {
                 continue;
@@ -187,7 +187,10 @@ fn apply_effective_track_endpoint(
 ) -> Option<()> {
     match (property, values) {
         (
-            Property::EffectColor | Property::EffectRadius | Property::EffectIntensity,
+            Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset,
             TrackValues::Effect {
                 attachment,
                 from,

@@ -19,7 +19,7 @@ from _noon_errors import engine_call
 @dataclass(frozen=True, slots=True)
 class Pixels:
     """Gaussian sigma in final output pixels, validated when used in an effect."""
-    value: float
+    value: float | tuple[float, float]
 
 
 def _number(value, name):
@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -50,7 +50,12 @@ def _update(*, color=None, radius=None, intensity=None, source=None):
         from pyodide.ffi import to_js
     except ImportError as error:
         raise RuntimeError("effects require the shared Rust authoring host") from error
-    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source)
+    offset_pixels = isinstance(offset, Pixels)
+    raw_offset = offset.value if offset_pixels else offset
+    packed_offset = [] if raw_offset is None else [_number(v, "offset coordinate") for v in raw_offset]
+    if raw_offset is not None and len(packed_offset) != 2:
+        raise ValueError("effect offset requires two coordinates")
+    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels)
     try:
         yield request
     finally:
@@ -134,6 +139,49 @@ class Blur:
         return Pixels(value) if bool(self._definition.pixels) else value
 
 
+class Shadow:
+    """Colored Gaussian of painted alpha behind the original source.
+
+    Color alpha controls shadow opacity. Radius is Gaussian sigma; radius zero
+    is a hard shadow. Offset uses +X/right and +Y/up, independent of object pose.
+    A tuple uses scene units; Pixels((x, y)) uses final physical output pixels.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, color=None, radius=None, offset=None):
+        with _update(color=color, radius=radius, offset=offset) as update:
+            from js import noonShadow
+            self._definition = engine_call(noonShadow, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def color(self):
+        value = self._definition
+        return _base.Color(float(value.red), float(value.green), float(value.blue), float(value.alpha))
+
+    @property
+    def radius(self):
+        value = float(self._definition.radius)
+        return Pixels(value) if bool(self._definition.pixels) else value
+
+    @property
+    def offset(self):
+        value = (float(self._definition.offsetX), float(self._definition.offsetY))
+        return Pixels(value) if bool(self._definition.offsetPixels) else value
+
+
 class GlowPulse:
     """Temporarily animate one leaf's canonical glow intensity in shared Rust.
 
@@ -185,7 +233,7 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur}[str(definition.kind)]._from_definition(definition)
+        return {"glow": Glow, "blur": Blur, "shadow": Shadow}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -223,8 +271,8 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur)):
-        raise TypeError("this effect profile supports Glow and Blur definitions")
+    if not isinstance(definition, (Glow, Blur, Shadow)):
+        raise TypeError("this effect profile supports Glow, Blur and Shadow definitions")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)
@@ -239,9 +287,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

@@ -204,13 +204,28 @@ impl EffectCaptureTile {
         if parameters.definition.is_neutral() || parameters.scope_opacity == 0.0 {
             return Ok(None);
         }
+        let offset = if let Some(shadow) = parameters.definition.as_shadow() {
+            let [x, y] = shadow
+                .offset()
+                .to_output_pixels(parameters.output_height, parameters.world_view_height)
+                .map_err(EffectPrepareError::Parameter)?;
+            if [x, y]
+                .into_iter()
+                .any(|v| !(v as f32).is_finite() || (f64::from(v as f32) - v).abs() > 1.0 / 256.0)
+            {
+                return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
+            }
+            [x, -y]
+        } else {
+            [0.0; 2]
+        };
         let support_radius = (3.0 * sigma).ceil() as u32;
         let padding = f64::from(support_radius) + 1.0; // analytic AA footprint
         let mut start = [0_i64; 2];
         let mut end = [0_i64; 2];
         for axis in 0..2 {
-            let left = (bounds.min[axis] - padding).floor();
-            let right = (bounds.max[axis] + padding).ceil();
+            let left = (bounds.min[axis] + offset[axis].min(0.0) - padding).floor();
+            let right = (bounds.max[axis] + offset[axis].max(0.0) + padding).ceil();
             if !left.is_finite()
                 || !right.is_finite()
                 || left < f64::from(i32::MIN)
@@ -287,6 +302,7 @@ impl EffectCaptureParameters {
             }
             noon_core::EffectDefinition::Glow(_) => 16,
             noon_core::EffectDefinition::Blur(_) => 32,
+            noon_core::EffectDefinition::Shadow(_) => 36,
         }
     }
 }

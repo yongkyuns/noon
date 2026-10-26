@@ -1148,7 +1148,10 @@ impl SceneInstance {
             };
             if matches!(
                 channel.property,
-                Property::EffectColor | Property::EffectRadius | Property::EffectIntensity
+                Property::EffectColor
+                    | Property::EffectRadius
+                    | Property::EffectIntensity
+                    | Property::EffectOffset
             ) {
                 self.changes.insert(channel.object_index as usize);
             } else {
@@ -1351,6 +1354,7 @@ impl SceneInstance {
                         Property::EffectColor,
                         Property::EffectRadius,
                         Property::EffectIntensity,
+                        Property::EffectOffset,
                     ],
                 );
             }
@@ -1461,7 +1465,10 @@ impl SceneInstance {
         for channel in relevant() {
             let object = &self.compiled.objects()[object_index];
             match channel.property {
-                Property::EffectColor | Property::EffectRadius | Property::EffectIntensity => {
+                Property::EffectColor
+                | Property::EffectRadius
+                | Property::EffectIntensity
+                | Property::EffectOffset => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
                     if let (Some(base), Some(current)) =
@@ -1971,7 +1978,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 18] = [
+const PROPERTY_ORDER: [Property; 19] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -1990,6 +1997,7 @@ const PROPERTY_ORDER: [Property; 18] = [
     Property::EffectColor,
     Property::EffectRadius,
     Property::EffectIntensity,
+    Property::EffectOffset,
 ];
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
@@ -2402,7 +2410,10 @@ fn apply_group_to_row(
 ) -> bool {
     if matches!(
         group.channel.property,
-        Property::EffectColor | Property::EffectRadius | Property::EffectIntensity
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
     ) {
         return apply_effect_channel(
             compiled.objects()[group.channel.object_index as usize]
@@ -2658,6 +2669,7 @@ fn apply_group_to_row(
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectOffset
             | Property::Presence
             | Property::ZIndex
             | Property::Transform => None,

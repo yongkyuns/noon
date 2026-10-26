@@ -62,6 +62,7 @@ on:
       - "crates/noon-render-wgpu/src/gpu/gaussian_blur/**"
       - "scripts/gaussian-blur-*.mjs"
       - "scripts/blur-qualification.mjs"
+      - "scripts/shadow-qualification.mjs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -234,6 +235,9 @@ jobs:
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_shadow_pixels_offset_animation_hard_shadow_and_retirement --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture
       - name: Qualify public Rust animated linear paint on native GPU
         # The linear-paint oracle uses the same public Scene and retained GPU path.
@@ -478,6 +482,8 @@ jobs:
         run: node scripts/gaussian-blur-qualification.mjs
       - name: Qualify paired Rust and Python Blur authoring on WebGPU and WebGL2
         run: node scripts/blur-qualification.mjs
+      - name: Qualify paired Rust and Python Shadow authoring on WebGPU and WebGL2
+        run: node scripts/shadow-qualification.mjs
       - name: Qualify retained worker glow images and recovery
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker

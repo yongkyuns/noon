@@ -222,6 +222,7 @@ const fn parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Radius => 2,
         EffectParameter::Intensity => 4,
         EffectParameter::Source => 8,
+        EffectParameter::Offset => 16,
     }
 }
 

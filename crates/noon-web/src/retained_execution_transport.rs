@@ -23,7 +23,7 @@ pub(crate) mod incremental_render_resources;
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
 // V19 carries a finite tagged effect definition in the genuine execution/render
 // worker envelope. Older readers reject instead of discarding a filter kind.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 19;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +71,11 @@ pub enum TransportEffectDefinition {
     Blur {
         radius: EffectRadius,
     },
+    Shadow {
+        color: Color,
+        radius: EffectRadius,
+        offset: noon_core::EffectOffset,
+    },
 }
 impl From<&noon_compile::CompiledEffect> for TransportEffectState {
     fn from(effect: &noon_compile::CompiledEffect) -> Self {
@@ -80,6 +85,11 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
                 radius: effect.radius(),
                 intensity: effect.intensity(),
                 source: effect.source().into(),
+            },
+            noon_core::EffectDefinition::Shadow(v) => TransportEffectDefinition::Shadow {
+                color: v.color(),
+                radius: v.radius(),
+                offset: v.offset(),
             },
             noon_core::EffectDefinition::Blur(blur) => TransportEffectDefinition::Blur {
                 radius: blur.radius(),
@@ -105,6 +115,18 @@ impl TransportEffectState {
                     .radius(radius)
                     .intensity(intensity)
                     .source(source.into()),
+            )
+            .ok()?
+            .into(),
+            TransportEffectDefinition::Shadow {
+                color,
+                radius,
+                offset,
+            } => noon_core::Shadow::new(
+                EffectUpdate::default()
+                    .color(color)
+                    .radius(radius)
+                    .offset(offset),
             )
             .ok()?
             .into(),
@@ -2263,6 +2285,45 @@ mod tests {
     }
 
     #[test]
+    fn tagged_shadow_roundtrips_signed_subpixel_offsets_and_rejects_foreign_fields() {
+        let mut frame = mixed_frame();
+        let effect = Arc::new(noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(77, 3),
+            definition: noon_core::Shadow::new(
+                EffectUpdate::default()
+                    .radius(noon_core::Pixels(3.25))
+                    .offset(noon_core::EffectOffset::Pixels([-1.000000000000123, 4.5])),
+            )
+            .unwrap()
+            .into(),
+        });
+        frame.objects[0].effect = Some(effect.clone());
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let value = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(value["objects"][0]["effect"]["kind"], "shadow");
+        for field in ["intensity", "source"] {
+            let mut invalid = value.clone();
+            invalid["objects"][0]["effect"][field] = serde_json::json!(0.0);
+            assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(invalid).is_err());
+        }
+        let mut mirror = test_mirror();
+        mirror
+            .apply(serde_json::from_value(value).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effect.as_deref(),
+            Some(effect.as_ref())
+        );
+    }
+
+    #[test]
     fn effective_glow_survives_snapshot_delta_removal_and_json_without_new_identity() {
         let mut frame = mixed_frame();
         let effect = Arc::new(noon_compile::CompiledEffect {
@@ -2284,7 +2345,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 19);
+        assert_eq!(snapshot.protocol_version, 20);
         assert_eq!(
             snapshot.objects[0].effect.unwrap().attachment,
             effect.attachment

@@ -996,7 +996,7 @@ Common capture accounting includes 32 bytes per pixel for Blur's source and
 seven filter textures, plus source MSAA where required. Each warmed scope retains
 one boxed finite filter state. Clean publications upload and encode nothing.
 The same sparse row publication supplies native and direct Rust/WASM hosts.
-The genuine Python worker envelope is generation 19 and carries a checked tagged
+The genuine Python worker envelope is generation 20 and carries a checked tagged
 effect definition; unsupported fields are rejected at that external boundary.
 No compatibility aliases, semantic identity allocator or effect clock is added.
 
@@ -1014,3 +1014,64 @@ pixels on WebGPU and WebGL2, including a visible outside-source Blur witness.
 This slice admits one finite attachment per qualified 2D leaf. Composed groups,
 ordered stacks, shadows, backdrops, HDR/bloom and custom WGSL remain owned by
 #1897 and are not implied by the Blur operator.
+
+### Shared colored soft shadow
+
+`Shadow` attaches through the same finite definition, identity, parameter update,
+ordinary timeline channels, completion and publication as Glow/Blur. Its default
+is black with alpha 0.5, sigma 0.15 scene units and offset (0.1, -0.1) scene units.
+Color alpha controls shadow opacity. `radius` is Gaussian standard deviation;
+zero sigma is a hard shadow, while zero color alpha is neutral. Shadow rejects
+Glow intensity/source fields; Glow and Blur reject offsets. A Shadow named
+`glow` cannot be activated by GlowPulse or edited with Glow conveniences.
+
+```rust
+use noon::effects::{Shadow, EffectOffset, EffectUpdate, Pixels};
+let depth = Shadow::new(EffectUpdate::default()
+    .radius(Pixels(4.0)).offset(EffectOffset::Pixels([12.0, -10.0])))?;
+image.add_effect(depth, "depth")?;
+let mut target = image.target_editor()?;
+target.set_effect("depth", EffectUpdate::default()
+    .offset(EffectOffset::Pixels([-12.0, 12.0])))?;
+```
+
+Python uses `image.add_effect(Shadow(radius=Pixels(4), offset=Pixels((12,-10))),
+name="depth")` and `image.animate.set_effect("depth", offset=Pixels((-12,12)))`.
+A plain offset pair uses scene units. Both unit modes use +X/right and +Y/up in
+the view, independent of object rotation/scale. Unit changes are discrete and
+cannot interpolate. Fractional offsets use transparent bilinear extension;
+the backend rejects offsets that lose more than 1/256 pixel on f32 conversion.
+
+The renderer convolves painted alpha using the existing RGBA Gaussian, then
+composites the original encoded-premultiplied source over its offset colored
+mask. The RGBA8 Gaussian output alpha is quantized before bilinear translation.
+Paint alpha belongs in the captured mask. Final object opacity is removed from
+capture and applied once to the complete result; `set_object_opacity` exercises
+this distinct operation, while `set_opacity` edits paint alpha. Visual padding
+does not change layout or picking. Source/translated Gaussian support use one
+conservative local capture tile, including geometry outside the viewport.
+
+Shadow adds one RGBA8 composition image to Gaussian's seven filter textures.
+Common capture charges 36 bytes per tile pixel, plus MSAA for general sources.
+Programs are lazy/shared. Warm color edits only upload the 32-byte composition
+uniform and reuse source/convolution; clean calls encode/upload/allocate nothing.
+Removal retires the derived resources. Queue submission/recovery remain with
+the normal host; no GPU readback runs during ordinary playback.
+
+`public_shadow_pixels_offset_animation_hard_shadow_and_retirement` compares
+public Scene output with direct 2-D convolution, independent bilinear translation
+and source-over composition. The corpus includes analytic shapes, asymmetric
+image, mirrored stroke, alpha gradient, text/math, scene/pixel units, partial
+object opacity, seek, hard shadows, neutral/removal and retained counters.
+`offscreen_shadow_support_and_foreground_painter_order_match_extended_field`
+uses an independently generated extended RGBA field: entirely offscreen sources
+cast into the viewport behind foreground geometry on a colored background.
+Real RGB-from-alpha and reversed-offset WGSL negative controls must fail this
+oracle before the exact restored shader is requalified.
+
+Paired programs: `noon::example_scenes::shadow::program`, the native `shadow`
+example and `web/python/examples/shadow.py`. `scripts/shadow-qualification.mjs`
+requires identical direct Rust/WASM and Python images on actual WebGPU/WebGL2,
+visible outside-source shadow, animated radius/color/offset, exact neutral/removal
+and idle source completion. These are qualification commands, not a claim of
+physical-device pacing or completion of the remaining M0–M5 scope.

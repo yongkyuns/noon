@@ -2,10 +2,12 @@
 //! ownership. This finite slice does not enroll/remove attachments or create a
 //! separate effect scheduler, runtime state, or completion policy.
 use super::affine::{driver_key, transform_driver_conflict, SemanticAnimationCompletion};
+#[cfg(test)]
+use noon_core::EffectDefinition;
 use noon_core::{
-    EffectDefinition, EffectParameterError, EffectTrackValue, EffectUpdate, ObjectId, Property,
-    SemanticAnimationEffectSnapshot, SemanticNodeId, SemanticStore, SemanticTransactionReadError,
-    SemanticTransformEffectSnapshot, TimelineError, TrackTiming, TrackValues,
+    EffectParameterError, EffectUpdate, ObjectId, Property, SemanticAnimationEffectSnapshot,
+    SemanticNodeId, SemanticStore, SemanticTransactionReadError, SemanticTransformEffectSnapshot,
+    TimelineError, TrackTiming, TrackValues,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -101,7 +103,8 @@ pub(super) fn channels(
     // Current effective differences can come from another driver and must not
     // become additional target writes. The explicit mask also retains writes
     // whose authored value happens to equal their copied or effective value.
-    let (baseline, writes_color, writes_radius, writes_intensity) = match copy_intent {
+    let (baseline, writes_color, writes_radius, writes_intensity, writes_offset) = match copy_intent
+    {
         Some(copy) => {
             let copied_baseline = copy.copied_definition();
             (
@@ -113,18 +116,24 @@ pub(super) fn channels(
                 copy.writes_parameter(noon_core::EffectParameter::Color),
                 copy.writes_parameter(noon_core::EffectParameter::Radius),
                 copy.writes_parameter(noon_core::EffectParameter::Intensity),
+                copy.writes_parameter(noon_core::EffectParameter::Offset),
             )
         }
-        None => (initial, false, false, false),
+        None => (initial, false, false, false, false),
     };
-    if let (EffectDefinition::Glow(baseline), EffectDefinition::Glow(destination)) =
-        (baseline, destination)
-    {
-        if writes_color || baseline.color() != destination.color() {
-            update.color = Some(destination.color());
+    if let (Some(a), Some(b)) = (baseline.color(), destination.color()) {
+        if writes_color || a != b {
+            update.color = Some(b);
         }
-        if writes_intensity || baseline.intensity() != destination.intensity() {
-            update.intensity = Some(destination.intensity());
+    }
+    if let (Some(a), Some(b)) = (baseline.as_glow(), destination.as_glow()) {
+        if writes_intensity || a.intensity() != b.intensity() {
+            update.intensity = Some(b.intensity());
+        }
+    }
+    if let (Some(a), Some(b)) = (baseline.as_shadow(), destination.as_shadow()) {
+        if writes_offset || a.offset() != b.offset() {
+            update.offset = Some(b.offset());
         }
     }
     if writes_radius || baseline.radius() != destination.radius() {
@@ -186,15 +195,12 @@ pub(super) fn completion(
     else {
         unreachable!("glow channel");
     };
-    let update = from
-        .sample(*to, values.terminal_progress_f64(timing))
+    let endpoint = from
+        .sample_value(*to, values.terminal_progress_f64(timing))
         .map_err(EffectTargetLoweringError::Timeline)?;
-    let endpoint = update
-        .apply_to(noon_core::Glow::default())
-        .map_err(EffectTargetLoweringError::Parameter)?;
     Ok(SemanticAnimationCompletion::Effect {
         attachment: *attachment,
-        value: EffectTrackValue::from_definition(from.property(), endpoint).expect("same property"),
+        value: endpoint,
     })
 }
 
@@ -261,6 +267,7 @@ mod tests {
             Property::EffectColor,
             Property::EffectRadius,
             Property::EffectIntensity,
+            Property::EffectOffset,
         ] {
             for umbrella in [
                 Property::Transform,

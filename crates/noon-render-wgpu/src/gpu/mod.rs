@@ -11,6 +11,7 @@ mod source_capture;
 pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
 mod gaussian_blur;
 mod glow_filter;
+mod shadow_filter;
 pub use gaussian_blur::{
     GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurPrepareError,
     GaussianBlurScope, GaussianBlurStats,

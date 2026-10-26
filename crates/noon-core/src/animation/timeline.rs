@@ -455,6 +455,7 @@ pub enum Property {
     EffectColor,
     EffectRadius,
     EffectIntensity,
+    EffectOffset,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -477,7 +478,9 @@ impl Property {
     }
     pub const fn value_kind(self) -> ValueKind {
         match self {
-            Self::EffectColor | Self::EffectRadius | Self::EffectIntensity => ValueKind::Effect,
+            Self::EffectColor | Self::EffectRadius | Self::EffectIntensity | Self::EffectOffset => {
+                ValueKind::Effect
+            }
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -506,6 +509,7 @@ pub enum EffectTrackValue {
     Color(crate::Color),
     Radius(crate::EffectRadius),
     Intensity(f64),
+    Offset(crate::EffectOffset),
 }
 
 impl EffectTrackValue {
@@ -515,9 +519,8 @@ impl EffectTrackValue {
     ) -> Option<Self> {
         let definition = definition.into();
         match property {
-            Property::EffectColor => definition
-                .as_glow()
-                .map(|effect| Self::Color(effect.color())),
+            Property::EffectColor => definition.color().map(Self::Color),
+            Property::EffectOffset => definition.as_shadow().map(|v| Self::Offset(v.offset())),
             Property::EffectRadius => Some(Self::Radius(definition.radius())),
             Property::EffectIntensity => definition
                 .as_glow()
@@ -531,6 +534,7 @@ impl EffectTrackValue {
             Self::Color(_) => Property::EffectColor,
             Self::Radius(_) => Property::EffectRadius,
             Self::Intensity(_) => Property::EffectIntensity,
+            Self::Offset(_) => Property::EffectOffset,
         }
     }
 
@@ -539,24 +543,41 @@ impl EffectTrackValue {
             Self::Color(value) => crate::EffectUpdate::default().color(value),
             Self::Radius(value) => crate::EffectUpdate::default().radius(value),
             Self::Intensity(value) => crate::EffectUpdate::default().intensity(value),
+            Self::Offset(value) => crate::EffectUpdate::default().offset(value),
         }
     }
 
     /// Use the same checked interpolation contract as semantic glow targets.
     /// The returned patch owns only this channel, not the whole definition.
     pub fn sample(self, to: Self, alpha: f64) -> Result<crate::EffectUpdate, TimelineError> {
-        if self.property() != to.property() {
-            return Err(TimelineError::InvalidEffectValues(self.property()));
+        Ok(self.sample_value(to, alpha)?.update())
+    }
+    pub fn sample_value(self, to: Self, alpha: f64) -> Result<Self, TimelineError> {
+        let invalid = || TimelineError::InvalidEffectValues(self.property());
+        if self.property() != to.property() || !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return Err(invalid());
         }
-        let invalid = |_| TimelineError::InvalidEffectValues(self.property());
-        let source = self
-            .update()
-            .apply_to(crate::Glow::default())
-            .map_err(invalid)?;
-        to.update()
-            .prepare(source)
-            .and_then(|prepared| prepared.sample(alpha))
-            .map_err(invalid)
+        self.update().validate().map_err(|_| invalid())?;
+        to.update().validate().map_err(|_| invalid())?;
+        let mix = crate::object_state::effect_parameters::interpolate;
+        let result = match (self, to) {
+            (Self::Color(a), Self::Color(b)) => Self::Color(crate::Color::rgba(
+                mix(f64::from(a.red), f64::from(b.red), alpha) as f32,
+                mix(f64::from(a.green), f64::from(b.green), alpha) as f32,
+                mix(f64::from(a.blue), f64::from(b.blue), alpha) as f32,
+                mix(f64::from(a.alpha), f64::from(b.alpha), alpha) as f32,
+            )),
+            (Self::Radius(a), Self::Radius(b)) if a.same_unit(b) => {
+                Self::Radius(a.interpolate(b, alpha))
+            }
+            (Self::Intensity(a), Self::Intensity(b)) => Self::Intensity(mix(a, b, alpha)),
+            (Self::Offset(a), Self::Offset(b)) if a.same_unit(b) => {
+                Self::Offset(a.interpolate(b, alpha))
+            }
+            _ => return Err(invalid()),
+        };
+        result.update().validate().map_err(|_| invalid())?;
+        Ok(result)
     }
 }
 
