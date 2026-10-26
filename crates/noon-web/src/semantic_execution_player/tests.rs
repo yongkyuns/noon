@@ -726,6 +726,8 @@ fn scalar_live_evaluate_backwards_retires_click_glow_and_commits_clock_after_suc
             .as_ref()
             .unwrap()
             .definition
+            .as_glow()
+            .unwrap()
             .intensity(),
         2.0
     );
