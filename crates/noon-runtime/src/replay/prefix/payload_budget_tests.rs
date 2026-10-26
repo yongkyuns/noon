@@ -106,7 +106,12 @@ fn cumulative_new_slots_reject_before_advancing_the_publisher() {
         receiver.prepare_seek(&mut runtime, time).unwrap();
         runtime.seek(time).unwrap();
         assert_eq!(
-            runtime.frame().presences.iter().filter(|&&live| live).count(),
+            runtime
+                .frame()
+                .presences
+                .iter()
+                .filter(|&&live| live)
+                .count(),
             count
         );
     }

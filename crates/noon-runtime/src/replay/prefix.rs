@@ -653,7 +653,8 @@ impl SceneInstance {
             .ok_or(ReplayError::RetentionLimit)?;
         // Reject the known cumulative cost before forward conversion or cloning
         // new rows. Resource closure entries are added below, once per handle.
-        if history.revisions.len() > history.limits.revisions || payloads > history.limits.payloads {
+        if history.revisions.len() > history.limits.revisions || payloads > history.limits.payloads
+        {
             return Err(ReplayError::RetentionLimit.into());
         }
         let forward = self
