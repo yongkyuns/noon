@@ -11,7 +11,7 @@ use noon_render_wgpu::AnalyticOverlay;
 mod raster_support;
 use raster_support::{Raster, SIZE, WORLD_SIZE};
 
-fn click(session: &mut ExecutionSession, x: f32, sequence: u64) {
+fn click(scene: &Scene, session: &mut ExecutionSession, x: f32, sequence: u64) {
     let position = NativePointerPosition::new(
         Vec2::new(x, 0.0),
         Vec2::new((x / WORLD_SIZE + 0.5) * SIZE as f32, SIZE as f32 * 0.5),
@@ -38,7 +38,9 @@ fn click(session: &mut ExecutionSession, x: f32, sequence: u64) {
             NativeInputModifiers::default(),
             kind,
         );
-        session.submit_native_pointer_input(&token, event).unwrap();
+        session
+            .submit_native_pointer_input(&mut scene.integration_store().borrow_mut(), &token, event)
+            .unwrap();
     }
 }
 
@@ -159,7 +161,7 @@ fn paused_click_overlay_changes_only_exact_fill_pixels_and_never_exports() {
     retain("scene", &original);
 
     for (step, x) in [-1.5, 1.5].into_iter().enumerate() {
-        click(&mut session, x, (step * 2) as u64);
+        click(&scene, &mut session, x, (step * 2) as u64);
         let highlight = session.pointer_selection_highlight().unwrap();
         let projection = overlay(&session);
         let publication = session.take_renderer_publication();
@@ -231,7 +233,7 @@ fn paused_click_overlay_changes_only_exact_fill_pixels_and_never_exports() {
             session.frame().time
         );
     }
-    click(&mut session, 3.8, 4);
+    click(&scene, &mut session, 3.8, 4);
     assert!(session.selected_pointer_target().is_none());
     let cleared = raster.capture_interactive(&session.take_renderer_publication(), None);
     assert_eq!(

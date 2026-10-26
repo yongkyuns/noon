@@ -1,8 +1,8 @@
 //! Ordinary retained BraceText families; native and browser hosts share this scene.
 use crate::{BraceOptions, BraceText, LayoutAnchor, Scene, Text};
 
-pub fn session() -> Result<crate::ExecutionSession, String> {
-    scene().and_then(|scene| scene.execution_session().map_err(|error| error.to_string()))
+pub fn session() -> Result<crate::SceneExecution, String> {
+    scene().and_then(|scene| scene.into_execution().map_err(|error| error.to_string()))
 }
 
 fn scene() -> Result<Scene, String> {

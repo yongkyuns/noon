@@ -12,10 +12,10 @@ pub async fn create_background_audio_renderer(
         .map_err(|error| JsValue::from_str(&error))?;
     let navigation = scene.section_navigation();
     let session = scene
-        .execution_session_with_animation_root(&animation)
+        .into_execution_with_animation_root(&animation)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let mut renderer =
-        crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await?;
+        crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await?;
     renderer.set_section_navigation(navigation);
     Ok(renderer)
 }

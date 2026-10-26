@@ -483,7 +483,7 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
 #[test]
 fn paired_style_example_uses_shared_runtime_with_local_paint_results() {
     let session = noon::example_scenes::style_operations::session().unwrap();
-    let objects = &session.frame().objects;
+    let objects = &session.session().frame().objects;
     assert_eq!(objects.len(), 3);
     let colors: Vec<_> = objects
         .iter()

@@ -109,6 +109,9 @@ class GlowPulse:
     its still-owned channel at the mapped child endpoint. An unadopted temporary
     binding retires at the enclosing segment's completion barrier. Color, radius and source
     remain ordinary persistent glow parameters.
+
+    Scene.on_click(target, GlowPulse(target, ...)) registers the same request for
+    Rust input activation without starting playback or capturing a baseline.
     """
     __slots__ = ("mobject", "intensity", "anim_args")
 

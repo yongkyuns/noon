@@ -245,5 +245,5 @@ fn live_object_copy_captures_graph_dependencies_below_object_roots_and_metadata_
 #[test]
 fn shared_native_and_direct_wasm_example_runs_authored_and_coherent_object_copies() {
     let session = noon::example_scenes::object_membership::session().unwrap();
-    assert_eq!(session.painter_order().len(), 3);
+    assert_eq!(session.session().painter_order().len(), 3);
 }

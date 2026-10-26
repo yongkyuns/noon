@@ -1,11 +1,11 @@
 //! Paired with ordinary_dimension_fitting.py on native and direct Rust/WASM.
 use crate::{
-    ExecutionSession, LayoutAnchor,
+    LayoutAnchor,
     LayoutDimension::{Depth, Height, Width},
     Scene,
 };
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut a = scene
         .rectangle(2.0, 1.0)
@@ -71,5 +71,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }

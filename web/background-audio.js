@@ -156,6 +156,13 @@ function retire() {
   cancelWake();
   detachInputs?.();
   detachInputs = null;
+  try {
+    renderer?.retireExecutionSource();
+  } catch (error) {
+    // Keep the exact owner when shared retirement rejects disposal.
+    fail(error);
+    return;
+  }
   renderer?.disposeAudio();
   renderer?.free();
   renderer = null;
@@ -185,10 +192,9 @@ window.addEventListener("resize", () => { try { resize(); } catch (error) { fail
 try {
   await init();
   const canvas = $("scene").transferControlToOffscreen();
-  const prepared = await createBackgroundAudioRenderer(canvas);
-  if (retired) prepared.free();
+  renderer = await createBackgroundAudioRenderer(canvas);
+  if (retired) retire();
   else {
-    renderer = prepared;
     renderer.setAudioVolume(Number($("volume").value));
     for (let index = 0; index < renderer.sectionCount(); index++) {
       const button = document.createElement("button");

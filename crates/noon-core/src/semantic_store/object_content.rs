@@ -432,6 +432,7 @@ pub enum PlaybackControl {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticClickAction {
     Indicate(SemanticClickIndicate),
+    GlowPulse(SemanticClickGlowPulse),
     Playback(PlaybackControl),
 }
 
@@ -439,8 +440,64 @@ impl SemanticClickAction {
     pub fn is_valid(self) -> bool {
         match self {
             Self::Indicate(indication) => indication.is_valid(),
+            Self::GlowPulse(pulse) => pulse.is_valid(),
             Self::Playback(_) => true,
         }
+    }
+}
+
+/// Typed authored `click -> GlowPulse` declaration for one analytic object.
+///
+/// Registration stores only the requested peak and timing. Activation captures
+/// the current glow through the shared execution session; the declaration owns
+/// no attachment, captured baseline, animation clock, or runtime channel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticClickGlowPulse {
+    intensity: f64,
+    run_time: f64,
+    rate_func: crate::RateFunction,
+    reverse_rate_function: bool,
+}
+
+impl SemanticClickGlowPulse {
+    pub const fn new(
+        intensity: f64,
+        run_time: f64,
+        rate_func: crate::RateFunction,
+        reverse_rate_function: bool,
+    ) -> Self {
+        Self {
+            intensity,
+            run_time,
+            rate_func,
+            reverse_rate_function,
+        }
+    }
+
+    pub const fn intensity(self) -> f64 {
+        self.intensity
+    }
+
+    pub const fn run_time(self) -> f64 {
+        self.run_time
+    }
+
+    pub const fn rate_func(self) -> crate::RateFunction {
+        self.rate_func
+    }
+
+    pub const fn reverse_rate_function(self) -> bool {
+        self.reverse_rate_function
+    }
+
+    pub fn is_valid(self) -> bool {
+        crate::GlowUpdate::default()
+            .intensity(self.intensity)
+            .prepare(crate::Glow::default())
+            .is_ok()
+            && self.run_time.is_finite()
+            && self.run_time > 0.0
+            && self.rate_func.preserves_unit_interval()
     }
 }
 

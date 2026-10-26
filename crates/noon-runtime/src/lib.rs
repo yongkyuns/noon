@@ -22,7 +22,10 @@ mod prepared_frame;
 mod spatial_composition;
 
 mod transient_animation;
-pub use transient_animation::PreparedTransientAnimation;
+pub use transient_animation::{
+    PreparedInteractionAdvance, PreparedInteractionAdvanceMetadata, PreparedTransientAnimation,
+    TransientGlowRetirement,
+};
 mod reactive;
 mod renderer_publication;
 mod replay;
@@ -86,6 +89,8 @@ pub struct EvaluationStats {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluationError {
+    InteractionRetirementRequired,
+    InteractionRevisionExhausted,
     ReplaySealed,
     ForeignScalarTimeline {
         expected: RuntimeIdentity,
@@ -111,6 +116,11 @@ pub enum EvaluationError {
 impl std::fmt::Display for EvaluationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InteractionRetirementRequired => formatter
+                .write_str("temporary input glow requires a seek through its semantic scene owner"),
+            Self::InteractionRevisionExhausted => {
+                formatter.write_str("transient preparation revision is exhausted")
+            }
             Self::ReplaySealed => {
                 formatter.write_str("sealed replay cannot stage live effective mutations")
             }
@@ -219,6 +229,10 @@ pub struct SceneInstance {
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
+    /// Validated neutral attachment lifetimes may advance this initial-projection
+    /// watermark. Once an ordinary execution edit breaks equality, a later
+    /// transient lifetime cannot restore immutable playback admission.
+    immutable_playback_revision: noon_core::ExecutionRevision,
     effective_driver_rows: BTreeSet<usize>,
     effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
     effective_images: BTreeMap<
@@ -272,6 +286,7 @@ impl Clone for SceneInstance {
             reactive: self.reactive.clone(),
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
+            immutable_playback_revision: self.immutable_playback_revision,
             effective_driver_rows: self.effective_driver_rows.clone(),
             effective_content_drivers,
             effective_images: self.effective_images.clone(),
@@ -378,6 +393,7 @@ impl SceneInstance {
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
+            immutable_playback_revision: noon_core::ExecutionRevision::default(),
             effective_driver_rows: BTreeSet::new(),
             effective_content_drivers: BTreeMap::new(),
             effective_images: BTreeMap::new(),
@@ -687,6 +703,9 @@ impl SceneInstance {
             return Err(EvaluationError::InvalidTime(time));
         }
         self.validate_replay_time(time)?;
+        if time < self.frame.time {
+            self.preflight_raw_interaction_seek(time)?;
+        }
         self.select_replay_revision(time);
         if time >= self.frame.time {
             self.advance_unchecked(time);
@@ -702,6 +721,7 @@ impl SceneInstance {
             return Err(EvaluationError::InvalidTime(time));
         }
         self.validate_replay_time(time)?;
+        self.preflight_raw_interaction_seek(time)?;
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
         let had_interaction = self.interactions_active();
@@ -717,6 +737,9 @@ impl SceneInstance {
             return Err(EvaluationError::InvalidTime(time));
         }
         self.validate_replay_time(time)?;
+        if time < self.frame.time {
+            self.preflight_raw_interaction_seek(time)?;
+        }
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
         if time < previous_time {

@@ -129,6 +129,89 @@ class SceneFacadeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_click_glow_pulse_and_clear_use_canonical_rust_methods(self):
+        source = textwrap.dedent("""
+            import math
+            import sys
+            from types import ModuleType, SimpleNamespace
+            bridge = ModuleType("js")
+            resolutions = []
+            def resolve(lag, duration, rate, child_lag, arc, reverse, *play):
+                resolutions.append((duration, rate, reverse))
+                # This double observes wrapper arguments; Rust tests own validation.
+                if duration is not None and (not math.isfinite(duration) or duration <= 0.0):
+                    raise ValueError("shared duration rejection")
+                return SimpleNamespace(runTime=duration if duration is not None else 1.0,
+                    rateFunc=rate, lagRatio=child_lag if child_lag is not None else lag,
+                    pathArc=arc if arc is not None else 0.0, reverseRateFunction=reverse == 1)
+            bridge.noonResolveAnimationOptions = resolve
+            bridge.noonResolveGlowPulseAnimationOptions = resolve
+            sys.modules["js"] = bridge
+            from noon import Scene, Circle, GlowPulse, linear
+            from _typed_geometry_test_support import identity_only_wrapper
+            scene = Scene()
+            calls = []
+            scene._canonical_authoring_context = SimpleNamespace(
+                liveBindClickGlowPulse=lambda *args: calls.append(("pulse", args)),
+                liveClearClickAction=lambda *args: calls.append(("clear", args)))
+            circle = identity_only_wrapper(Circle)
+            circle._scene = scene
+            circle._semantic_handle = object()
+            pulse = GlowPulse(circle, intensity=2.0)
+            assert not calls and not resolutions
+            assert scene.on_click(circle, pulse) is scene
+            assert calls == [("pulse", (circle._semantic_handle, 2.0, 1.0,
+                "there_and_back", 0.0, False))]
+            assert scene.on_click(circle, GlowPulse(circle, intensity=3.0, run_time=0.4,
+                rate_func=linear, reverse_rate_function=True)) is scene
+            assert calls[-1] == ("pulse", (circle._semantic_handle, 3.0, 0.4,
+                "linear", 0.0, True))
+            assert scene.on_click(circle, None) is scene
+            assert calls[-1] == ("clear", (circle._semantic_handle,))
+
+            other = identity_only_wrapper(Circle)
+            other._scene = scene
+            other._semantic_handle = object()
+            for target, animation, exception in [
+                (circle, GlowPulse(other, intensity=2.0), ValueError),
+                (circle, GlowPulse(circle, intensity=2.0, path_arc=0.3), NotImplementedError),
+                (circle, GlowPulse(circle, intensity=2.0, remover=True), NotImplementedError),
+                (circle, GlowPulse(circle, intensity=2.0, introducer=True), NotImplementedError),
+                (object(), None, TypeError),
+            ]:
+                try:
+                    scene.on_click(target, animation)
+                except exception:
+                    pass
+                else:
+                    raise AssertionError("unsupported wrapper shape reached the binding")
+            for duration in [float("nan"), float("inf"), 0.0, -1.0]:
+                try:
+                    scene.on_click(circle, GlowPulse(circle, intensity=2.0, run_time=duration))
+                except ValueError as error:
+                    assert str(error) == "shared duration rejection"
+                else:
+                    raise AssertionError("resolver rejection must propagate")
+                observed = resolutions[-1][0]
+                assert math.isnan(observed) if math.isnan(duration) else observed == duration
+            circle._scene = Scene()
+            for animation in [None, pulse]:
+                try:
+                    scene.on_click(circle, animation)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("foreign target must fail before replacement or clear")
+            assert len(calls) == 3
+        """)
+        python_dir = Path(__file__).resolve().parent
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=python_dir,
+            env={**os.environ, "PYTHONPATH": str(python_dir)},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_drag_targets_declare_bound_handles_without_python_pointer_policy(self):
         source = textwrap.dedent("""
             import sys

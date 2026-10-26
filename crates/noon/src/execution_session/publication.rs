@@ -19,10 +19,12 @@ use super::ExecutionSession;
 
 mod prepared_value;
 use prepared_value::PreparedPublication;
+mod transient_glow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
+    TransientGlowLifecycle,
     SegmentCompletion,
     GlowPulseEdit(crate::execution_segment::ExecutionSegmentToken),
     TranslationDrag(SemanticNodeId),
@@ -58,6 +60,7 @@ pub(super) struct PreparedScalarPublicationContract {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
+    Interaction(String),
     /// The first audio execution profile is a finite, pre-authored plan.
     AudioExecutionImmutable,
     /// Scene controls currently belong to the same finite pre-authored profile.
@@ -83,6 +86,7 @@ pub enum ExecutionSessionPublicationError {
 impl std::fmt::Display for ExecutionSessionPublicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Interaction(message) => f.write_str(message),
             Self::AudioExecutionImmutable => f.write_str(
                 "audio execution currently requires a pre-authored immutable scene; declare all clips and animation before execution (#2263)",
             ),
@@ -133,6 +137,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::Geometry(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
             Self::AudioExecutionImmutable
+            | Self::Interaction(_)
             | Self::PlaybackControlsExecutionImmutable
             | Self::RequiredCallbackPending
             | Self::ReplaySealed
@@ -217,6 +222,7 @@ impl ExecutionSession {
         }
         if let Some(pending) = self.pending_segment_completion.as_ref() {
             let admitted = purpose == SemanticPublicationPurpose::SegmentCompletion
+                || purpose == SemanticPublicationPurpose::TransientGlowLifecycle
                 || matches!(purpose, SemanticPublicationPurpose::GlowPulseEdit(token)
                     if token == pending.token && !pending.glow_pulse_attachments.is_empty())
                 || matches!(purpose, SemanticPublicationPurpose::TranslationDrag(target)
@@ -233,7 +239,9 @@ impl ExecutionSession {
                     .pending_segment_completion
                     .as_ref()
                     .is_some_and(|pending| pending.allows_translation_drag(target));
-            if !independent_completion {
+            if !independent_completion
+                && purpose != SemanticPublicationPurpose::TransientGlowLifecycle
+            {
                 return Err(ExecutionSessionPublicationError::TranslationDragActive);
             }
         }
@@ -477,7 +485,7 @@ impl ExecutionSession {
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
         mut execution_prefix: Vec<ExecutionPatch>,
-        runtime: PreparedRuntimePublication,
+        mut runtime: PreparedRuntimePublication,
         mut purpose: SemanticPublicationPurpose,
         scalar: Option<PreparedScalarPublicationContract>,
         order_root: Option<SemanticNodeId>,
@@ -514,6 +522,8 @@ impl ExecutionSession {
         } else {
             None
         };
+        let transient_glow_edits =
+            self.prepare_transient_glow_edits(&prepared, &execution_prefix, &mut runtime, purpose)?;
         let result = prepared
             .with_pending_geometry_paths(|prepared| {
                 self.publish_materialized_semantic_transaction(
@@ -537,6 +547,7 @@ impl ExecutionSession {
         if let Some(edit) = pulse_edit {
             self.commit_glow_pulse_edit(edit);
         }
+        self.commit_transient_glow_edits(transient_glow_edits);
         Ok(result)
     }
 
@@ -584,6 +595,9 @@ impl ExecutionSession {
 
         self.require_publication_ready(purpose)?;
         self.require_published_store(prepared.store())?;
+        if purpose == SemanticPublicationPurpose::TransientGlowLifecycle {
+            self.validate_transient_glow_lifecycle(&prepared)?;
+        }
         if order_root.is_none() {
             if let Some(SemanticMutation::ReorderMember { family, .. }) = prepared
                 .candidate_mutations()
@@ -741,6 +755,14 @@ impl ExecutionSession {
                 structural_change_possible,
             )
             .map_err(ExecutionSessionPublicationError::Runtime)?;
+        if purpose == SemanticPublicationPurpose::TransientGlowLifecycle {
+            self.runtime
+                .preflight_transient_glow_lifecycle_transaction(
+                    &conservative,
+                    publication.resource_additions(),
+                )
+                .map_err(ExecutionSessionPublicationError::Runtime)?;
+        }
         if let Some(effective) = effective.as_ref() {
             self.runtime
                 .preflight_effective_carry_forward(effective, self.publication_context())
@@ -823,16 +845,29 @@ impl ExecutionSession {
         let (frame, mut completion) = callback.map_or((frame, None), |(frame, completion)| {
             (Some(frame), Some(completion))
         });
-        self.runtime
-            .apply_authored_execution_transaction_with_frame(
-                &execution,
-                resource_additions,
-                effective,
-                frame,
-                self.publication_context(),
-                store.scene_revision(),
-            )
-            .expect("runtime publication was fully preflighted before semantic commit");
+        let expected = self.publication_context();
+        let publication = if purpose == SemanticPublicationPurpose::TransientGlowLifecycle {
+            self.runtime
+                .apply_transient_glow_lifecycle_transaction_with_frame(
+                    &execution,
+                    resource_additions,
+                    effective,
+                    frame,
+                    expected,
+                    store.scene_revision(),
+                )
+        } else {
+            self.runtime
+                .apply_authored_execution_transaction_with_frame(
+                    &execution,
+                    resource_additions,
+                    effective,
+                    frame,
+                    expected,
+                    store.scene_revision(),
+                )
+        };
+        publication.expect("runtime publication was fully preflighted before semantic commit");
         // Publish the frame's schedule preview before reconciling membership.
         // Otherwise that old preview could undo an enter/exit in this batch.
         if let Some(completion) = completion.as_mut() {

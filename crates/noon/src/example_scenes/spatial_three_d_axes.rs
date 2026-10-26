@@ -1,9 +1,8 @@
 //! Shared ThreeDAxes/camera qualification scene for native and direct WASM.
 
 use crate::{
-    AnimationOptions, Color, DeclaredAnimation, ExecutionSession, ManimThreeDAxes,
-    ManimThreeDAxesOptions, RateFunction, Scene, SemanticSpatialCompositionDomain, SemanticVec3,
-    SemanticWorldTransform3D,
+    AnimationOptions, Color, DeclaredAnimation, ManimThreeDAxes, ManimThreeDAxesOptions,
+    RateFunction, Scene, SemanticSpatialCompositionDomain, SemanticVec3, SemanticWorldTransform3D,
 };
 use noon_core::{ManimCamera3DProfile, SemanticRotation3D};
 
@@ -131,7 +130,7 @@ pub fn scene() -> Result<
     Ok((scene, axes, point, camera, movement))
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, _, movement) = scene()?;
     let mut session = scene
         .execution_session()
@@ -143,11 +142,13 @@ pub fn session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Circle screen-stroke qualification under the same finite moving 3D camera.
-pub fn circle_screen_stroke_session() -> Result<ExecutionSession, String> {
+pub fn circle_screen_stroke_session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let camera = scene
         .camera_3d_profile(start_profile(), 0.1, 100.0)
@@ -197,7 +198,9 @@ pub fn circle_screen_stroke_session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -223,11 +226,12 @@ mod tests {
             .len();
         assert_eq!(x_tick_count, 12, "tipless X axis keeps both endpoint ticks");
         let mut session = session().unwrap();
-        assert_eq!(session.frame().objects.len(), 98);
+        assert_eq!(session.session().frame().objects.len(), 98);
         for (time, expected_profile) in [(0.0, start_profile()), (1.0, end_profile())] {
-            session.advance_to(time).unwrap();
+            session.session_mut().advance_to(time).unwrap();
             assert_eq!(
                 session
+                    .session()
                     .effective_camera_profile(camera.node_id())
                     .unwrap()
                     .0,

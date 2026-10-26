@@ -1,11 +1,13 @@
 //! Direct authoring scope over one family in the shared semantic store.
 mod audio;
+mod execution;
 mod image;
 mod sections;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,
 };
+pub use execution::{SceneExecution, SceneExecutionError};
 use noon_core::{
     AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,

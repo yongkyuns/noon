@@ -274,8 +274,14 @@ pub enum AuthoringError {
     },
     /// Grid alignment, sizing or flow options are inconsistent.
     InvalidGridOption(&'static str),
-    /// Click indication has one restoring timing shape; other animation options
-    /// would imply a distinct authored action.
+    /// The declared click animation does not target this same single object or
+    /// does not represent a supported click action.
+    InvalidClickActionDeclaration {
+        target: noon_core::SemanticNodeId,
+        animation: noon_core::SemanticNodeId,
+    },
+    /// Click actions accept only their supported restoring timing and lifecycle
+    /// options.
     InvalidClickActionOptions,
     /// A planar flip needs a nonzero XY axis or a pure Z axis.
     InvalidFlipAxis,
@@ -446,9 +452,13 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("too few grid rows and columns to fit all members")
             }
             Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
-            Self::InvalidClickActionOptions => {
-                f.write_str("click Indicate only accepts there-and-back timing without lag, path arc, reversal, lifecycle options")
-            }
+            Self::InvalidClickActionDeclaration { target, animation } => write!(
+                f,
+                "click action {animation:?} must be an Indicate or GlowPulse declaration for the same single target {target:?}"
+            ),
+            Self::InvalidClickActionOptions => f.write_str(
+                "click actions require supported restoring timing without lag, path arc, or lifecycle options; Indicate also requires there-and-back without reversal"
+            ),
             Self::InvalidFlipAxis => {
                 f.write_str("flip axis must be nonzero and lie in the XY plane or along Z")
             }

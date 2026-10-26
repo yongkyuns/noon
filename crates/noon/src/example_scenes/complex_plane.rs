@@ -1,14 +1,14 @@
 //! ComplexPlane's matching retained grid, curve and marker scene.
 use super::number_plane;
-use crate::{ExecutionSession, Scene};
+use crate::Scene;
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     number_plane::scene_with_tips(false)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     scene()
-        .and_then(|scene| scene.execution_session().map_err(Into::into))
+        .and_then(|scene| scene.into_execution().map_err(Into::into))
         .map_err(|error| error.to_string())
 }
 

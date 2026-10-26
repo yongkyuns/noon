@@ -172,6 +172,18 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                 "stroke_join": object.style.stroke_join, "stroke_cap": object.style.stroke_cap,
                 "style_opacity": object.style.opacity, "appearance": object.appearance,
                 "reveal": frame.reveal(index), "morph": frame.morph(index),
+                "glow": object.glow.as_deref().map(|glow| json!({
+                    "attachment": glow.attachment,
+                    "definition": {
+                        "color": glow.definition.color(),
+                        "radius": glow.definition.radius(),
+                        "intensity": glow.definition.intensity(),
+                        "source": match glow.definition.source() {
+                            noon_core::GlowSource::Painted => "painted",
+                            noon_core::GlowSource::Silhouette => "silhouette",
+                        },
+                    },
+                })),
             })
         })
         .collect::<Vec<_>>();
@@ -188,6 +200,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
         .unwrap_or(Value::Null);
     json!({
         "engine": "noon", "time": frame.time,
+        "interactions_active": session.interactions_active(),
         "publication": session.publication_context(),
         "camera": camera,
         // Resolve the renderer's existing typed inset relation only on this
@@ -208,6 +221,42 @@ mod tests {
         AnimationOptions, LiveProgramStatus, ManimArrowOptions, MobjectTarget, RateFunction,
         RustHostCallbackTable, Scene,
     };
+
+    #[test]
+    fn debug_capture_observes_effective_glow_without_mutating_publication() {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.5).unwrap();
+        source
+            .set_glow(crate::effects::GlowUpdate::default().intensity(0.5))
+            .unwrap();
+        scene.add(&source).unwrap();
+        let attachment = source.get_effect("glow").unwrap().node_id();
+        let mut execution = scene.into_execution().unwrap();
+        let pulse = execution
+            .live()
+            .declare_and_activate_glow_pulse(&source, 2.0, AnimationOptions::new().run_time(1.0))
+            .unwrap();
+        execution.live().advance_segment_to(pulse, 0.25).unwrap();
+        let session = execution.session();
+        let before = session.publication_context();
+        let capture = execution_frame_value(session);
+        assert_eq!(capture["interactions_active"], false);
+        assert_eq!(
+            capture["objects"][0]["glow"]["attachment"],
+            json!(attachment)
+        );
+        assert_eq!(
+            capture["objects"][0]["glow"]["definition"]["intensity"],
+            1.25
+        );
+        let noon_core::EffectDefinition::Glow(authored) = source
+            .get_effect("glow")
+            .unwrap()
+            .authored_definition()
+            .unwrap();
+        assert_eq!(authored.intensity(), 0.5);
+        assert_eq!(session.publication_context(), before);
+    }
 
     #[test]
     fn debug_capture_observes_effective_camera_without_mutating_publication() {
@@ -234,10 +283,11 @@ mod tests {
 
     #[test]
     fn spatial_capture_reads_exact_effective_pose_and_light_material() {
-        let mut session = crate::example_scenes::spatial_surface::lighting_session().unwrap();
-        session.advance_to(0.5).unwrap();
+        let mut execution = crate::example_scenes::spatial_surface::lighting_session().unwrap();
+        execution.session_mut().advance_to(0.5).unwrap();
+        let session = execution.session();
         let before = session.publication_context();
-        let capture = execution_frame_value(&session);
+        let capture = execution_frame_value(session);
         let rows = capture["objects"].as_array().unwrap();
         let light = rows
             .iter()
@@ -255,13 +305,14 @@ mod tests {
 
     #[test]
     fn debug_capture_observes_effective_insets_without_mutating_publication() {
-        let mut session = crate::example_scenes::zoomed_scene::session().unwrap();
+        let mut execution = crate::example_scenes::zoomed_scene::session().unwrap();
         for time in [0.0, 0.5, 1.0] {
-            session.seek(time).unwrap();
+            execution.seek(time).unwrap();
+            let session = execution.session();
             let before = session.publication_context();
             let expected = session.inset_2d_views().unwrap();
             assert_eq!(expected.len(), 1);
-            let capture = execution_frame_value(&session);
+            let capture = execution_frame_value(session);
             assert_eq!(capture["inset_2d_views"], json!(expected));
             assert_eq!(session.publication_context(), before);
         }
@@ -298,11 +349,12 @@ mod tests {
     #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
     #[test]
     fn debug_capture_reports_effective_unwrapped_three_d_camera_profile() {
-        let mut session = crate::example_scenes::spatial_three_d_axes::session().unwrap();
-        session.advance_to(0.5).unwrap();
+        let mut execution = crate::example_scenes::spatial_three_d_axes::session().unwrap();
+        execution.session_mut().advance_to(0.5).unwrap();
+        let session = execution.session();
         let publication = session.publication_context();
 
-        let value = execution_frame_value(&session);
+        let value = execution_frame_value(session);
         assert_eq!(session.publication_context(), publication);
         assert_eq!(value["time"], 0.5);
         let profile = value["objects"]

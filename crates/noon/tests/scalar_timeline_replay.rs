@@ -247,23 +247,30 @@ fn opaque_callbacks_are_not_misclassified_as_replayable_scalar_curves() {
 #[test]
 fn polynomial_rate_scene_uses_shared_tracks_for_forward_and_seek() {
     let mut session = noon::example_scenes::polynomial_rates::session().unwrap();
-    let identity = session.runtime_identity();
+    let identity = session.session().runtime_identity();
     let expected = [0.15625_f64, 0.103515625, 0.070556640625];
-    session.advance_to(0.25).unwrap();
+    session.session_mut().advance_to(0.25).unwrap();
     for (index, quarter) in expected.into_iter().enumerate() {
-        let x = session.frame().objects[index].transform.translation.x;
+        let x = session.session().frame().objects[index]
+            .transform
+            .translation
+            .x;
         assert!((f64::from(x) - (-2.0 + 4.0 * quarter)).abs() < 1e-6);
     }
-    session.advance_to(1.0).unwrap();
+    session.session_mut().advance_to(1.0).unwrap();
     assert!(session
+        .session()
         .frame()
         .objects
         .iter()
         .all(|object| (object.transform.translation.x - 2.0).abs() < 1e-6));
     session.seek(0.25).unwrap();
     for (index, quarter) in expected.into_iter().enumerate() {
-        let x = session.frame().objects[index].transform.translation.x;
+        let x = session.session().frame().objects[index]
+            .transform
+            .translation
+            .x;
         assert!((f64::from(x) - (-2.0 + 4.0 * quarter)).abs() < 1e-6);
     }
-    assert_eq!(session.runtime_identity(), identity);
+    assert_eq!(session.session().runtime_identity(), identity);
 }

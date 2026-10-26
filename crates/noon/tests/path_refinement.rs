@@ -166,8 +166,8 @@ fn cubic_subdivision_preserves_the_polynomial_at_each_new_anchor() {
 fn paired_path_refinement_uses_the_shared_runtime() {
     let mut session = noon::example_scenes::path_refinement::session().unwrap();
     session.seek(0.).unwrap();
-    let initial = session.frame().objects.clone();
+    let initial = session.session().frame().objects.clone();
     assert_eq!(initial.len(), 8);
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, initial);
+    assert_eq!(session.session().frame().objects, initial);
 }

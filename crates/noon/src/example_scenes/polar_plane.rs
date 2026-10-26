@@ -1,7 +1,7 @@
 //! Retained polar coordinates, paired with `web/python/examples/polar_plane.py`.
 use crate::{
-    ExecutionSession, ManimGeometryOptions, ManimPolarPlaneOptions, PolarAzimuthDirection, Scene,
-    SemanticPaint, BLUE, YELLOW,
+    ManimGeometryOptions, ManimPolarPlaneOptions, PolarAzimuthDirection, Scene, SemanticPaint,
+    BLUE, YELLOW,
 };
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
@@ -35,10 +35,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     scene()
         .map_err(|error| error.to_string())?
-        .execution_session()
+        .into_execution()
         .map_err(|error| error.to_string())
 }
 

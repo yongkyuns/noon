@@ -17,7 +17,7 @@ const FAR: f64 = 30.0;
 
 /// A capped Line3D tube, explicit triangle, translucent Prism, and
 /// open/closed Cylinder/Cone meshes plus a bounded partial Sphere patch.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     scene
         .camera_3d(
@@ -191,11 +191,14 @@ pub fn session() -> Result<ExecutionSession, String> {
             animation_root,
         )
     };
-    result.map_err(|error| error.to_string())
+    let session = result.map_err(|error| error.to_string())?;
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Default shaded, translucent Cube and Prism faces under finite camera motion.
-pub fn cairo_cube_prism_session() -> Result<ExecutionSession, String> {
+pub fn cairo_cube_prism_session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let camera = scene
         .camera_3d_profile(
@@ -265,11 +268,13 @@ pub fn cairo_cube_prism_session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Pinned default Cylinder caps and optional Cone base with retained Cairo surfaces.
-pub fn cairo_cylinder_cone_caps_session() -> Result<ExecutionSession, String> {
+pub fn cairo_cylinder_cone_caps_session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let camera = scene
         .camera_3d_profile(
@@ -353,7 +358,9 @@ pub fn cairo_cylinder_cone_caps_session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 fn cairo_cylinder_family(
@@ -504,9 +511,10 @@ mod tests {
     #[test]
     fn public_line_and_explicit_triangle_share_the_native_timeline() {
         let mut session = session().unwrap();
-        assert_eq!(session.frame().objects.len(), 14);
+        assert_eq!(session.session().frame().objects.len(), 14);
         assert_eq!(
             session
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -519,7 +527,7 @@ mod tests {
             6
         );
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().wake_state().timeline(),
             noon_runtime::TimelineWakeState::Continuous
         );
         let rows = |session: &ExecutionSession| {
@@ -540,38 +548,42 @@ mod tests {
                 triangle.world_transform().unwrap(),
             )
         };
-        assert_eq!(rows(&session).0.translation, SemanticVec3::ZERO);
-        assert_eq!(rows(&session).1.translation, SemanticVec3::ZERO);
-        session.advance_to(0.5).unwrap();
-        assert_eq!(rows(&session).0.translation.z, 0.125);
-        assert!((rows(&session).1.rotation.components()[2] - (0.1_f64).sin()).abs() < 1.0e-12);
-        session.advance_to(DURATION).unwrap();
-        assert_eq!(rows(&session).0.translation.z, 0.25);
-        assert!((rows(&session).1.rotation.components()[2] - 0.2_f64.sin()).abs() < 1.0e-12);
-        let forward = session.frame().clone();
+        assert_eq!(rows(session.session()).0.translation, SemanticVec3::ZERO);
+        assert_eq!(rows(session.session()).1.translation, SemanticVec3::ZERO);
+        session.session_mut().advance_to(0.5).unwrap();
+        assert_eq!(rows(session.session()).0.translation.z, 0.125);
+        assert!(
+            (rows(session.session()).1.rotation.components()[2] - (0.1_f64).sin()).abs() < 1.0e-12
+        );
+        session.session_mut().advance_to(DURATION).unwrap();
+        assert_eq!(rows(session.session()).0.translation.z, 0.25);
+        assert!(
+            (rows(session.session()).1.rotation.components()[2] - 0.2_f64.sin()).abs() < 1.0e-12
+        );
+        let forward = session.session().frame().clone();
         session.seek(0.5).unwrap();
         session.seek(DURATION).unwrap();
-        assert_eq!(session.frame(), &forward);
+        assert_eq!(session.session().frame(), &forward);
     }
 
     #[test]
     fn cairo_cylinder_ends_and_capped_cone_share_camera_timeline_and_leaf_count() {
         let mut session = cairo_cylinder_cone_caps_session().unwrap();
-        assert_eq!(session.frame().objects.len(), 710);
+        assert_eq!(session.session().frame().objects.len(), 710);
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().wake_state().timeline(),
             noon_runtime::TimelineWakeState::Continuous
         );
-        let initial = session.frame().clone();
-        session.advance_to(0.5).unwrap();
-        let midpoint = session.frame().clone();
+        let initial = session.session().frame().clone();
+        session.session_mut().advance_to(0.5).unwrap();
+        let midpoint = session.session().frame().clone();
         assert_ne!(midpoint, initial);
-        session.advance_to(DURATION).unwrap();
-        let endpoint = session.frame().clone();
+        session.session_mut().advance_to(DURATION).unwrap();
+        let endpoint = session.session().frame().clone();
         assert_ne!(endpoint, midpoint);
         session.seek(0.5).unwrap();
-        assert_eq!(session.frame(), &midpoint);
+        assert_eq!(session.session().frame(), &midpoint);
         session.seek(0.0).unwrap();
-        assert_eq!(session.frame(), &initial);
+        assert_eq!(session.session().frame(), &initial);
     }
 }

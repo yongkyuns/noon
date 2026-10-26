@@ -29,7 +29,7 @@ mod player_ownership;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) use player_ownership::PlayerReturnError;
 #[cfg(any(target_arch = "wasm32", test))]
-use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
+use player_ownership::{PlayerOwnership, RejectedPlayerDiscard, RejectedPlayerReturn};
 #[cfg(test)]
 mod completed_binding_tests;
 #[cfg(test)]
@@ -807,8 +807,8 @@ impl CanonicalAuthoringScene {
     /// error rather than silently replacing that session.
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_local_player_for_run(&mut self) -> Result<(), String> {
-        self.player_ownership
-            .prepare_for_run(self.scene.integration_store().borrow().scene_revision())
+        let authored = self.scene.integration_store().borrow().scene_revision();
+        self.player_ownership.prepare_for_run(authored)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -826,6 +826,21 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_execution_run(&mut self) -> Result<(), String> {
         self.prepare_local_player_for_run()
+    }
+
+    /// Retire input-owned state before a genuine source release. Recovery
+    /// returns and re-leases the same player without crossing this boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn retire_execution_source(&mut self) -> Result<(), String> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => Ok(()),
+            PlayerOwnership::Active(player) | PlayerOwnership::Returned(player) => {
+                player.retire_execution_source()
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("return the execution player before retiring its source".into())
+            }
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1642,6 +1657,39 @@ impl CanonicalAuthoringScene {
             None => self
                 .scene
                 .on_click_indicate(target, indication, options)
+                .map_err(AuthoringFailure::from),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_click_glow_pulse(
+        &mut self,
+        target: &noon::Mobject,
+        intensity: f64,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.player_ownership.local_mut() {
+            Some(player) => player.live_bind_click_glow_pulse(target, intensity, options),
+            None => self
+                .scene
+                .on_click_glow_pulse(target, intensity, options)
+                .map_err(AuthoringFailure::from),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn clear_click_action(&mut self, target: &noon::Mobject) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.player_ownership.local_mut() {
+            Some(player) => player.live_clear_click_action(target),
+            None => self
+                .scene
+                .on_click(target, None)
                 .map_err(AuthoringFailure::from),
         }
     }
@@ -4020,6 +4068,29 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
+    /// Abort an incomplete source using its exact outstanding player lease.
+    /// Failed validation or retirement returns ownership without replacing it.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn discard_execution_player(
+        &mut self,
+        mut player: crate::SemanticExecutionPlayer,
+    ) -> Result<(), RejectedPlayerDiscard> {
+        if let Err(reason) = self.validate_execution_player_return(&player) {
+            return Err(RejectedPlayerDiscard {
+                failure: reason.into(),
+                player: Box::new(player),
+            });
+        }
+        if let Err(error) = player.retire_execution_source() {
+            return Err(RejectedPlayerDiscard {
+                failure: error.into(),
+                player: Box::new(player),
+            });
+        }
+        self.player_ownership = PlayerOwnership::Unstarted;
+        Ok(())
+    }
+
     /// Validate by reference before consuming a player; a rejected return cannot
     /// replace the rightful lease or mutate its publication/continuation state.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4136,19 +4207,20 @@ mod wasm {
         }
     }
 
-    /// A rejected ownership return retains the consumed WASM player wrapper.
+    /// A rejected ownership exit retains the consumed WASM player wrapper.
     /// Its projected JS Error retains `takePlayer()` to recover that exact player;
     /// returning it to its rightful context requires no lowering or cloning.
     #[wasm_bindgen]
     pub struct WasmExecutionPlayerReturnError {
-        rejected: RejectedPlayerReturn,
+        player: Box<crate::SemanticExecutionPlayer>,
+        message: String,
     }
 
     #[wasm_bindgen]
     impl WasmExecutionPlayerReturnError {
         #[wasm_bindgen(getter)]
         pub fn message(&self) -> String {
-            self.rejected.to_string()
+            self.message.clone()
         }
 
         #[wasm_bindgen(js_name = toString)]
@@ -4159,17 +4231,21 @@ mod wasm {
         /// Consume this rejection and restore ownership of the original player.
         #[wasm_bindgen(js_name = takePlayer)]
         pub fn take_player(self) -> crate::SemanticExecutionPlayer {
-            *self.rejected.player
+            *self.player
         }
     }
 
     impl WasmExecutionPlayerReturnError {
-        fn into_js_error(self) -> JsValue {
+        fn into_js_error(
+            player: Box<crate::SemanticExecutionPlayer>,
+            failure: AuthoringFailure,
+        ) -> JsValue {
             // Pyodide requires a real Error, not an Error-like WASM class.
             // Binding the existing consuming method retains the rejected player
             // in exactly one Rust owner; no player clone or host lease is added.
-            let error = typed_js_error(AuthoringFailure::from(self.rejected.reason));
-            let rejection = JsValue::from(self);
+            let message = failure.message.clone();
+            let error = typed_js_error(failure);
+            let rejection = JsValue::from(Self { player, message });
             let take_player: js_sys::Function =
                 js_sys::Reflect::get(&rejection, &JsValue::from_str("takePlayer"))
                     .expect("WASM rejection exposes takePlayer")
@@ -9929,6 +10005,11 @@ mod wasm {
             self.inner.prepare_execution_run().map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = retireExecutionSource)]
+        pub fn retire_execution_source(&mut self) -> Result<(), JsValue> {
+            self.inner.retire_execution_source().map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = prepareFamilySubsetDisplay)]
         pub fn prepare_family_subset_display(
             &mut self,
@@ -9973,6 +10054,43 @@ mod wasm {
                         .rate_func(rate)
                         .lag_ratio(lag_ratio),
                 )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveBindClickGlowPulse)]
+        pub fn live_bind_click_glow_pulse(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            intensity: f64,
+            run_time: f64,
+            rate_function: &str,
+            lag_ratio: f64,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "click binding")?;
+            let rate = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| js_error("unsupported click glow pulse rate function"))?;
+            self.inner
+                .bind_click_glow_pulse(
+                    target.semantic_mobject(),
+                    intensity,
+                    noon_core::AnimationOptions::new()
+                        .run_time(run_time)
+                        .rate_func(rate)
+                        .lag_ratio(lag_ratio)
+                        .reverse_rate_function(reverse_rate_function),
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveClearClickAction)]
+        pub fn live_clear_click_action(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "click binding")?;
+            self.inner
+                .clear_click_action(target.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -11767,7 +11885,24 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .return_execution_player(player)
-                .map_err(|rejected| WasmExecutionPlayerReturnError { rejected }.into_js_error())
+                .map_err(|rejected| {
+                    WasmExecutionPlayerReturnError::into_js_error(
+                        rejected.player,
+                        rejected.reason.into(),
+                    )
+                })
+        }
+
+        #[wasm_bindgen(js_name = discardExecutionPlayer)]
+        pub fn discard_execution_player(
+            &mut self,
+            player: crate::SemanticExecutionPlayer,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .discard_execution_player(player)
+                .map_err(|rejected| {
+                    WasmExecutionPlayerReturnError::into_js_error(rejected.player, rejected.failure)
+                })
         }
 
         #[wasm_bindgen(js_name = resumeExecutionPlayer)]
@@ -11892,6 +12027,70 @@ mod tests {
             .iter()
             .map(|(id, target, options)| create_request(Some(*id), target, *options))
             .collect()
+    }
+
+    #[test]
+    fn click_glow_pulse_binding_and_clear_share_cold_and_live_rust_publication() {
+        let mut context = CanonicalAuthoringScene::default();
+        let target = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &target).unwrap();
+        let nodes = context.scene.integration_store().borrow().len();
+        context
+            .bind_click_glow_pulse(&target, 2.0, AnimationOptions::new())
+            .unwrap();
+        assert_eq!(
+            target.state().unwrap().click_action(),
+            Some(noon_core::SemanticClickAction::GlowPulse(
+                noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false)
+            ))
+        );
+        assert_eq!(context.scene.integration_store().borrow().len(), nodes);
+        assert!(!context
+            .scene
+            .integration_store()
+            .borrow()
+            .has_effect_attachments());
+        context.live_player(1.0).unwrap();
+        context
+            .bind_click_glow_pulse(
+                &target,
+                3.0,
+                AnimationOptions::new()
+                    .run_time(0.4)
+                    .rate_func(RateFunction::Linear)
+                    .reverse_rate_function(true),
+            )
+            .unwrap();
+        let previous = target.state().unwrap().click_action();
+        assert_eq!(
+            previous,
+            Some(noon_core::SemanticClickAction::GlowPulse(
+                noon_core::SemanticClickGlowPulse::new(3.0, 0.4, RateFunction::Linear, true)
+            ))
+        );
+        for duration in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            let revision = context.scene.integration_store().borrow().scene_revision();
+            let error = context
+                .bind_click_glow_pulse(&target, 2.0, AnimationOptions::new().run_time(duration))
+                .unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("invalid_input", "click.invalid_options")
+            );
+            assert_eq!(target.state().unwrap().click_action(), previous);
+            assert_eq!(
+                context.scene.integration_store().borrow().scene_revision(),
+                revision
+            );
+        }
+        context.clear_click_action(&target).unwrap();
+        assert_eq!(target.state().unwrap().click_action(), None);
+        assert_eq!(context.scene.integration_store().borrow().len(), nodes);
+        assert!(!context
+            .scene
+            .integration_store()
+            .borrow()
+            .has_effect_attachments());
     }
 
     #[test]

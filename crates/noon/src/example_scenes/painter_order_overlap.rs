@@ -1,11 +1,11 @@
 //! Filled analytic and path geometry share one semantic painter order.
 use crate::{
-    AnimationOptions, ExecutionSession, RateFunction, Scene, SemanticPaint, SemanticStyle, Vec2,
-    VectorPath, BLUE, GREEN, RED,
+    AnimationOptions, RateFunction, Scene, SemanticPaint, SemanticStyle, Vec2, VectorPath, BLUE,
+    GREEN, RED,
 };
 
 /// Paired with `web/python/examples/painter_order_overlap.py` on native and WASM.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(1.25).map_err(|error| error.to_string())?;
     let mut rectangle = scene
@@ -60,7 +60,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     live.advance_segment_to(segment, segment.end_time())
         .map_err(|e| e.to_string())?;
     live.complete_segment(segment).map_err(|e| e.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -69,7 +71,7 @@ mod tests {
     fn painter_order_and_rotation_survive_direct_seek() {
         let mut session = super::session().unwrap();
         session.seek(0.5).unwrap();
-        let objects = &session.frame().objects;
+        let objects = &session.session().frame().objects;
         assert_eq!(objects.len(), 3);
         assert_eq!(objects[0].style.fill, Some(crate::RED));
         assert_eq!(objects[1].style.fill, Some(crate::BLUE));

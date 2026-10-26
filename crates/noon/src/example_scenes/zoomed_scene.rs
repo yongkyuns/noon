@@ -1,10 +1,9 @@
 //! One ordinary retained scene replayed through a moving inset camera.
 use crate::{
-    AnimationOptions, ExecutionSession, ManimGeometryOptions, RateFunction, Scene,
-    ZoomedSceneOptions, BLUE, YELLOW,
+    AnimationOptions, ManimGeometryOptions, RateFunction, Scene, ZoomedSceneOptions, BLUE, YELLOW,
 };
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         // ZoomedScene includes the ordinary invisible main-camera frame.
@@ -46,7 +45,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         )?;
         let mut session = scene.execution_session()?;
         scene.live(&mut session).play_animation(&animation)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }
@@ -56,9 +55,9 @@ mod tests {
     #[test]
     fn shared_zoomed_scene_demo_uses_one_runtime() {
         let mut session = super::session().unwrap();
-        assert_eq!(session.inset_2d_views().unwrap().len(), 1);
+        assert_eq!(session.session().inset_2d_views().unwrap().len(), 1);
         session.seek(0.5).unwrap();
-        let view = session.inset_2d_views().unwrap()[0];
+        let view = session.session().inset_2d_views().unwrap()[0];
         assert_eq!(view.camera.center, noon_core::Vec2::new(0.45, 0.15));
         assert!((view.zoom_factor() - 0.15).abs() < 1.0e-6);
     }

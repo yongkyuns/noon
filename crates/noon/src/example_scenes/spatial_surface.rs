@@ -1,8 +1,8 @@
 //! Small shared native/direct-WASM fixture for the typed UV surface lane.
 
 use crate::{
-    surface_mesh, AnimationOptions, Color, DeclaredAnimation, ExecutionSession, MeshOptions,
-    RateFunction, Scene, SemanticCamera3D, SemanticPaint, SemanticProjection3D, SemanticRotation3D,
+    surface_mesh, AnimationOptions, Color, DeclaredAnimation, MeshOptions, RateFunction, Scene,
+    SemanticCamera3D, SemanticPaint, SemanticProjection3D, SemanticRotation3D,
     SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, SurfaceOptions,
     SurfaceSample, UvSurfacePlan, WorldAffineEdit,
 };
@@ -75,7 +75,7 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
 }
 
 /// Duration-one animated session used by native and renderer-smoke hosts.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, animation) = scene()?;
     let mut session = scene
         .execution_session()
@@ -87,7 +87,9 @@ pub fn session() -> Result<ExecutionSession, String> {
             crate::AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Point-lit counterpart used to qualify real worker resource capture and light-only updates.
@@ -119,7 +121,7 @@ pub fn lighting_scene() -> Result<(Scene, crate::Mobject, crate::Mobject, Declar
 }
 
 /// Duration-one session for point-lit surface qualification.
-pub fn lighting_session() -> Result<ExecutionSession, String> {
+pub fn lighting_session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, animation) = lighting_scene()?;
     let mut session = scene
         .execution_session()
@@ -131,7 +133,9 @@ pub fn lighting_session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Default Cairo-shaded Manim Surface subset, retained as a UV cell family.
@@ -172,9 +176,9 @@ pub fn cairo_scene() -> Result<(Scene, crate::SurfaceFamily), String> {
 }
 
 /// Static execution session for the Cairo Surface appearance case.
-pub fn cairo_session() -> Result<ExecutionSession, String> {
+pub fn cairo_session() -> Result<crate::SceneExecution, String> {
     let (scene, _) = cairo_scene()?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 /// Pinned default Sphere and Torus profiles sampled through the Cairo Surface lane.
@@ -276,7 +280,7 @@ pub fn cairo_sphere_torus_scene() -> Result<
 }
 
 /// One-second paired default Sphere/Torus execution session.
-pub fn cairo_sphere_torus_session() -> Result<ExecutionSession, String> {
+pub fn cairo_sphere_torus_session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, movement) = cairo_sphere_torus_scene()?;
     let mut session = scene
         .execution_session()
@@ -288,7 +292,9 @@ pub fn cairo_sphere_torus_session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Paired Manim Cone body cells: one default cone and one tilted radial patch.
@@ -383,9 +389,9 @@ fn author_cairo_cone(
 }
 
 /// Static paired default/tilted Cone execution session.
-pub fn cairo_cone_bodies_session() -> Result<ExecutionSession, String> {
+pub fn cairo_cone_bodies_session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _) = cairo_cone_bodies_scene()?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -428,14 +434,15 @@ mod tests {
     fn rotating_surface_fixture_matches_forward_and_seek_at_start_midpoint_and_endpoint() {
         let mut forward = session().unwrap();
         assert_eq!(
-            forward.wake_state().timeline(),
+            forward.session().wake_state().timeline(),
             TimelineWakeState::Continuous
         );
         let expected_angles = [(0.0, 0.0f64), (0.5, 0.3), (1.0, 0.6)];
         let mut expected_frames = Vec::new();
         for &(time, angle) in &expected_angles {
-            forward.advance_to(time).unwrap();
+            forward.session_mut().advance_to(time).unwrap();
             let row = forward
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -444,18 +451,21 @@ mod tests {
             let world = row.world_transform().unwrap();
             assert!((world.rotation.components()[0] - (angle * 0.5).cos()).abs() < 1.0e-12);
             assert!((world.rotation.components()[3] - (angle * 0.5).sin()).abs() < 1.0e-12);
-            assert_eq!(forward.camera_3d().unwrap().unwrap().position.z, 5.0);
-            expected_frames.push(forward.frame().clone());
+            assert_eq!(
+                forward.session().camera_3d().unwrap().unwrap().position.z,
+                5.0
+            );
+            expected_frames.push(forward.session().frame().clone());
         }
         assert_eq!(
-            forward.wake_state().timeline(),
+            forward.session().wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
 
         let mut sought = session().unwrap();
         for (&(time, _), expected) in expected_angles.iter().zip(expected_frames) {
             sought.seek(time).unwrap();
-            assert_eq!(sought.frame(), &expected);
+            assert_eq!(sought.session().frame(), &expected);
         }
     }
 
@@ -485,8 +495,9 @@ mod tests {
         let mut session = lighting_session().unwrap();
         let mut observed = Vec::new();
         for time in [0.0, 0.5, 1.0] {
-            session.advance_to(time).unwrap();
+            session.session_mut().advance_to(time).unwrap();
             let mesh_row = session
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -496,6 +507,7 @@ mod tests {
                 })
                 .unwrap();
             let light_row = session
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -589,11 +601,11 @@ mod tests {
         drop(store);
 
         let mut session = cairo_sphere_torus_session().unwrap();
-        let start = session.camera_3d().unwrap().unwrap().position;
-        session.advance_to(0.5).unwrap();
-        let midpoint = session.camera_3d().unwrap().unwrap().position;
-        session.advance_to(29.0 / 30.0).unwrap();
-        let endpoint = session.camera_3d().unwrap().unwrap().position;
+        let start = session.session().camera_3d().unwrap().unwrap().position;
+        session.session_mut().advance_to(0.5).unwrap();
+        let midpoint = session.session().camera_3d().unwrap().unwrap().position;
+        session.session_mut().advance_to(29.0 / 30.0).unwrap();
+        let endpoint = session.session().camera_3d().unwrap().unwrap().position;
         assert_ne!(start, midpoint);
         assert_ne!(midpoint, endpoint);
     }
@@ -662,19 +674,19 @@ mod tests {
     fn cairo_surface_snapshot_has_no_timeline_work_and_stays_identical_on_seek() {
         let mut session = cairo_session().unwrap();
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
-        session.advance_to(0.0).unwrap();
-        let mut first = session.frame().clone();
+        session.session_mut().advance_to(0.0).unwrap();
+        let mut first = session.session().frame().clone();
         assert_eq!(first.objects.len(), 65);
-        session.advance_to(29.0 / 30.0).unwrap();
-        let last = session.frame().clone();
+        session.session_mut().advance_to(29.0 / 30.0).unwrap();
+        let last = session.session().frame().clone();
         first.time = last.time;
         assert_eq!(first, last);
-        assert_eq!(session.effective_time(), 29.0 / 30.0);
-        session.advance_to(1.0).unwrap();
+        assert_eq!(session.session().effective_time(), 29.0 / 30.0);
+        session.session_mut().advance_to(1.0).unwrap();
         first.time = 1.0;
-        assert_eq!(session.frame(), &first);
+        assert_eq!(session.session().frame(), &first);
     }
 }

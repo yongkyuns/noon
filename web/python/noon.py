@@ -1617,10 +1617,12 @@ class Scene:
         return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
 
     def on_click(self, target: Mobject, animation: object) -> Scene:
-        """Run Indicate(target) in Rust on a primary click of a filled circle/rectangle.
+        """Bind Indicate(target), GlowPulse(target), or None to a primary click.
 
-        Clicks during that target's indication are ignored. Completion restores
-        its appearance; script time stays unchanged. No Python callback is kept.
+        Filled circles and rectangles use the shared Rust input path. None clears
+        the action; registration does not start it. Clicks during that target's
+        effect are ignored. Completion restores its owned channels while script
+        time stays unchanged. No Python callback or captured attachment is kept.
         """
         return _scene_operations()._on_click(self, target, animation)
 
