@@ -671,7 +671,15 @@ fn regions_follow_panel_affines_and_copies_without_rebuilding_text() {
     close(current_state.transform.translation.x, expected.0);
     close(current_state.transform.translation.y, expected.1);
     assert_eq!(current_state.content, original.content);
-    assert_eq!(current_state.transform.scale, pose.scale);
+    close(
+        current_state.transform.scale.x,
+        pose.scale.x * original.transform.scale.x,
+    );
+    close(
+        current_state.transform.scale.y,
+        pose.scale.y * original.transform.scale.y,
+    );
+    close(current_state.transform.scale.z, pose.scale.z);
     close(
         current_state.transform.planar_rotation().unwrap(),
         pose.rotation_z,
@@ -814,7 +822,15 @@ fn live_regions_observe_unfinished_affines_and_preserve_publication_gates() {
     let expected = pose.transform_xy(local.transform.translation.x, local.transform.translation.y);
     close(state.transform.translation.x, expected.0);
     close(state.transform.translation.y, expected.1);
-    assert_eq!(state.transform.scale, pose.scale);
+    close(
+        state.transform.scale.x,
+        pose.scale.x * local.transform.scale.x,
+    );
+    close(
+        state.transform.scale.y,
+        pose.scale.y * local.transform.scale.y,
+    );
+    close(state.transform.scale.z, pose.scale.z);
     assert_ne!(state.transform, local.transform);
     let before = counts(&scene);
     assert!(matches!(

@@ -179,8 +179,18 @@ impl Code {
         let mut pose = transform;
         pose.translation.x = crate::semantic_mobject::authoring_render_f64("Code highlight x", x)?;
         pose.translation.y = crate::semantic_mobject::authoring_render_f64("Code highlight y", y)?;
+        // Keep identical content across ranges so ordinary affine Transform
+        // can animate both the position and extent without replacing geometry.
+        pose.scale.x = crate::semantic_mobject::authoring_render_f64(
+            "Code highlight scale.x",
+            pose.scale.x * width,
+        )?;
+        pose.scale.y = crate::semantic_mobject::authoring_render_f64(
+            "Code highlight scale.y",
+            pose.scale.y * height,
+        )?;
         let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
-            size: noon_core::Vec2::new(width as f32, height as f32),
+            size: noon_core::Vec2::new(1.0, 1.0),
         });
         state.transform = pose.into();
         state.set_z_index(z_index);

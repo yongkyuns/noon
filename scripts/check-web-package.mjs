@@ -326,7 +326,7 @@ const expectedTypeSurface = [
   "highlights(): WasmAuthoringFamilyHandle",
   "liveGetHighlightedCodeLines(code: WasmCodeHandle, start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
   "liveHighlightCodeLines(code: WasmCodeHandle, start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
-  "createCodeLineHighlightRenderer(canvas: OffscreenCanvas, highlighted: boolean): Promise<WasmExecutionCanvasRenderer>",
+  "createCodeLineHighlightRenderer(canvas: OffscreenCanvas, highlighted: boolean): Promise<ExecutionCanvasRenderer>",
   "export class WasmNativeFontFace",
   "constructor(family: string, data: Uint8Array, face_index: number)",
   "static bundled(family: string): WasmNativeFontFace",

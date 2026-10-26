@@ -1,5 +1,6 @@
 """Actual Python/WASM contract; no mocked semantics or Python code layout."""
 from pathlib import Path as FilePath
+from math import dist
 from noon import *
 
 
@@ -32,9 +33,9 @@ class CodeAuthoringContract(Scene):
         assert with_numbers.width > detached.width
         focus = block.highlight_lines(0, padding=0.03, color=BLUE, fill_opacity=0.3)
         focus.annotation = {"purpose": "retained line region"}
-        focus_id = focus.id
         assert block.highlights[0] is focus
         self.add(block)
+        focus_id = focus.id
         self.wait(0.05)
 
         # Ordinary live family copying rebinds every Text handle and metadata
@@ -43,11 +44,12 @@ class CodeAuthoringContract(Scene):
         line.annotation = {"purpose": "selection example"}
         center = line.get_center()
         clone = block.copy().shift(RIGHT * 3).scale(0.7).set_opacity(0.5)
+        self.add(clone)
         assert clone.code_lines[2] is not line
         assert clone.code_lines[2].text == line.text
         assert clone.code_lines[2].annotation == line.annotation
         assert clone.code_lines[2].font == face.family
-        assert (line.get_center() - center).length() < 1e-6
+        assert dist(line.get_center(), center) < 1e-6
         assert len(clone.highlights) == 1
         copied_focus = clone.highlights[0]
         assert isinstance(copied_focus, Rectangle)
@@ -58,20 +60,19 @@ class CodeAuthoringContract(Scene):
         assert abs(copied_focus.get_fill_opacity() - 0.5) < 1e-7
         assert abs(focus.get_fill_opacity() - 0.3) < 1e-7
         copied_region = clone.get_highlighted_lines(0, padding=0.03)
-        assert (copied_region.get_center() - copied_focus.get_center()).length() < 1e-6
+        assert dist(copied_region.get_center(), copied_focus.get_center()) < 1e-6
         assert abs(copied_region.width - copied_focus.width) < 1e-6
         assert abs(copied_region.height - copied_focus.height) < 1e-6
         extra = clone.highlight_lines(3, 4, include_line_numbers=True)
         assert len(clone.highlights) == 2 and clone.highlights[1] is extra
         assert len(block.highlights) == 1 and block.highlights[0] is focus
-        self.add(clone)
 
         # A row region follows the Code panel's frame, not an individually moved
         # line's current ink bounds. These calls run through the active session.
         slot_before = block.get_highlighted_lines(2)
         line.shift(RIGHT * 0.25)
         slot_after = block.get_highlighted_lines(2)
-        assert (slot_before.get_center() - slot_after.get_center()).length() < 1e-6
+        assert dist(slot_before.get_center(), slot_after.get_center()) < 1e-6
         assert abs(slot_before.width - slot_after.width) < 1e-6
         assert block.code_string == source.expandtabs(4)
         for start, stop in [(-1, 1), (0, 0), (3, 2), (0, 6), (2 ** 32, None)]:
@@ -117,7 +118,7 @@ class CodeAuthoringContract(Scene):
         assert all(root is not target for root in self.mobjects)
         self.play(Transform(focus, target), run_time=0.05, rate_func=linear)
         assert focus.id == focus_id and block.highlights[0] is focus
-        assert (focus.get_center() - target.get_center()).length() < 1e-6
+        assert dist(focus.get_center(), target.get_center()) < 1e-6
         assert abs(focus.width - target.width) < 1e-6
         assert abs(focus.height - target.height) < 1e-6
         assert len(self.mobjects) == 3

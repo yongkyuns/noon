@@ -145,7 +145,7 @@ same scene through direct Rust/WASM and the production Python worker.
 
 ```python
 focus = listing.highlight_lines(0)
-target = listing.get_highlighted_lines(1, 2)
+target = listing.get_highlighted_lines(1, 3)
 self.play(Transform(focus, target))
 ```
 
