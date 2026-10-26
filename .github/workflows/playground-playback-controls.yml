@@ -244,6 +244,7 @@ jobs:
           cargo test --locked -p noon-web --all-features --lib interpreter_worker
           python3 -m unittest discover -s web/python -p test_prepared_execution.py
           cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
+          cargo test --locked -p noon --no-default-features --features prepared-prefix --lib execution_session::replay::prefix
           node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs web/prepared-interpreter-driver.test.mjs
           node --test web/semantic-engine-endpoint.prepared.test.mjs web/prepared-authoring-worker.test.mjs
           node --test web/playground-prepared-lifecycle.test.mjs

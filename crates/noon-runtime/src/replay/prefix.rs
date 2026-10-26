@@ -7,10 +7,14 @@ use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
 use noon_core::{GeometryRef, ObjectId, SemanticClickIndicate};
 use std::sync::Arc;
 
+mod history_record_budget;
 mod resource_budget;
 mod storage;
+use history_record_budget::HistoryRecordBudget;
 use resource_budget::ResourceBudget;
 
+#[cfg(test)]
+mod history_record_budget_tests;
 #[cfg(test)]
 mod payload_budget_tests;
 #[cfg(test)]
@@ -43,6 +47,13 @@ pub enum PrefixError {
     /// Logical immutable-resource payloads exceed this stream's explicit cap.
     /// Existing history remains valid; this never evicts promised past resources.
     ResourceBudgetExceeded {
+        retained_bytes: usize,
+        additional_bytes: usize,
+        limit_bytes: usize,
+    },
+    /// Logical replay record storage exceeds the stream's cap. This is separate
+    /// from immutable resources and is not a total allocator/process memory cap.
+    HistoryRecordBudgetExceeded {
         retained_bytes: usize,
         additional_bytes: usize,
         limit_bytes: usize,
@@ -100,9 +111,19 @@ pub struct PrefixPublisher {
     object_slots: usize,
     resources: CompiledResources,
     resource_budget: ResourceBudget,
+    history_record_budget: HistoryRecordBudget,
 }
 
 impl PrefixPublisher {
+    /// Charged revision-table and saved-record bytes, including pending batches.
+    /// No delivery receipt is implied; indirect resource bytes are separate.
+    pub fn extracted_history_record_bytes(&self) -> usize {
+        self.history_record_budget.bytes()
+    }
+    pub fn history_record_budget_bytes(&self) -> usize {
+        self.history_record_budget.limit()
+    }
+
     /// Resource payload bytes extracted for this stream, including pending output.
     /// This is not a delivery receipt or process/allocator/GPU memory measurement.
     pub fn extracted_resource_bytes(&self) -> usize {
@@ -134,8 +155,15 @@ pub struct PrefixBatch {
     new_objects: Vec<CompiledObject>,
     resources: CompiledResources,
     resource_bytes: usize,
+    history_record_bytes: usize,
 }
 impl PrefixBatch {
+    /// Saved row/channel/track record bytes. The reader's outer revision table
+    /// was charged in full at bootstrap; indirect resources are charged separately.
+    pub fn history_record_bytes(&self) -> usize {
+        self.history_record_bytes
+    }
+
     /// Newly introduced immutable payload bytes; known resource handles cost zero.
     pub fn resource_bytes(&self) -> usize {
         self.resource_bytes
@@ -187,8 +215,18 @@ pub struct PrefixReceiver {
     object_capacity: usize,
     initial_object_slots: usize,
     resource_budget: ResourceBudget,
+    history_record_budget: HistoryRecordBudget,
 }
 impl PrefixReceiver {
+    /// Logical revision-table and saved-record bytes in adopted history.
+    /// Rewind/removal cannot refund storage needed by another retained time.
+    pub fn retained_history_record_bytes(&self) -> usize {
+        self.history_record_budget.bytes()
+    }
+    pub fn history_record_budget_bytes(&self) -> usize {
+        self.history_record_budget.limit()
+    }
+
     /// Logical immutable-resource bytes pinned by the adopted history, not heap/VRAM.
     /// Future resources remain charged even while an older frame is displayed.
     pub fn retained_resource_bytes(&self) -> usize {
@@ -361,7 +399,7 @@ impl PrefixReceiver {
         &self,
         runtime: &SceneInstance,
         batch: &PrefixBatch,
-    ) -> Result<(usize, usize, ResourceBudget), PrefixError> {
+    ) -> Result<(usize, usize, ResourceBudget, HistoryRecordBudget), PrefixError> {
         self.validate_runtime(runtime)?;
         if self.finished
             || !Arc::ptr_eq(&self.stream, &batch.stream)
@@ -376,6 +414,9 @@ impl PrefixReceiver {
             return Err(PrefixError::UnexpectedBatch);
         }
         let resource_budget = self.resource_budget.with_additional(batch.resource_bytes)?;
+        let history_record_budget = self
+            .history_record_budget
+            .with_additional(batch.history_record_bytes)?;
         let history = runtime
             .replay_history
             .as_ref()
@@ -405,7 +446,7 @@ impl PrefixReceiver {
                 object_slots: required,
             });
         }
-        Ok((count, payloads, resource_budget))
+        Ok((count, payloads, resource_budget, history_record_budget))
     }
 
     /// Install only future history. The displayed frame, runtime identity,
@@ -418,7 +459,8 @@ impl PrefixReceiver {
         runtime: &mut SceneInstance,
         batch: PrefixBatch,
     ) -> Result<PrefixBatchStats, PrefixError> {
-        let (count, payloads, resource_budget) = self.validate_append(runtime, &batch)?;
+        let (count, payloads, resource_budget, history_record_budget) =
+            self.validate_append(runtime, &batch)?;
         let history = runtime
             .replay_history
             .as_mut()
@@ -434,6 +476,7 @@ impl PrefixReceiver {
         history.stats.payloads_retained = payloads;
         history.end = Some(batch.frontier);
         self.resource_budget = resource_budget;
+        self.history_record_budget = history_record_budget;
         self.received_revisions = count;
         self.frontier = batch.frontier;
         self.finished = batch.terminal;
@@ -446,6 +489,12 @@ impl SceneInstance {
     /// Not a total memory limit: revisions, object/storage capacity, allocator
     /// overhead, source allocations and renderer residency require separate caps.
     pub const DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Provisional cap for logical replay-record bytes: the requested revision
+    /// table plus saved row/channel/track elements, using this target's layout.
+    /// Excludes allocator overhead/spare capacity, execution/frame/slot storage,
+    /// indirect resources, source copies, temporary batches and GPU residency.
+    pub const DEFAULT_PREFIX_HISTORY_RECORD_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
     /// Low-level bootstrap. The owning ExecutionSession must additionally prove
     /// its source segment and callback completion BEFORE invoking this method.
@@ -467,6 +516,20 @@ impl SceneInstance {
     pub fn create_prefix_projection_with_resource_budget(
         &self,
         resource_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_with_budgets(
+            resource_budget_bytes,
+            Self::DEFAULT_PREFIX_HISTORY_RECORD_BUDGET_BYTES,
+        )
+    }
+
+    /// Independent logical resource and replay-record byte caps. All bootstrap
+    /// admission precedes cloning or reservation. These are not total heap caps.
+    #[doc(hidden)]
+    pub fn create_prefix_projection_with_budgets(
+        &self,
+        resource_budget_bytes: usize,
+        history_record_budget_bytes: usize,
     ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
         let history = self
             .replay_history
@@ -495,6 +558,25 @@ impl SceneInstance {
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
+        // Charge the complete requested outer table once, including unused
+        // revision slots. Later appends add only their saved payload records.
+        let mut history_record_budget = HistoryRecordBudget::new(history_record_budget_bytes)
+            .with_additional(
+                history
+                    .limits
+                    .revisions
+                    .checked_mul(std::mem::size_of::<Revision>())
+                    .ok_or(ReplayError::RetentionLimit)?,
+            )?;
+        for revision in &history.revisions {
+            if let Some(saved) = &revision.inverse {
+                history_record_budget = history_record_budget.with_additional(
+                    saved
+                        .prefix_record_payload_bytes()
+                        .ok_or(ReplayError::RetentionLimit)?,
+                )?;
+            }
+        }
         let stream = Arc::new(());
         let publisher = PrefixPublisher {
             source: self.runtime_identity(),
@@ -507,6 +589,7 @@ impl SceneInstance {
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
             resource_budget,
+            history_record_budget,
         };
         let mut runtime = self.clone();
         let copied = runtime
@@ -537,6 +620,7 @@ impl SceneInstance {
             object_capacity: self.compiled.objects().len(),
             initial_object_slots: self.compiled.objects().len(),
             resource_budget,
+            history_record_budget,
         };
         Ok((publisher, runtime, receiver))
     }
@@ -618,6 +702,7 @@ impl SceneInstance {
             .get(publisher.next_revision..)
             .ok_or(PrefixError::SourceChanged)?;
         let mut inverse = Vec::with_capacity(suffix.len());
+        let mut history_record_bytes = 0usize;
         let mut stats = PrefixBatchStats {
             revisions: suffix.len(),
             ..Default::default()
@@ -633,6 +718,13 @@ impl SceneInstance {
             stats.payloads = stats
                 .payloads
                 .checked_add(saved.retention_cost())
+                .ok_or(ReplayError::RetentionLimit)?;
+            history_record_bytes = history_record_bytes
+                .checked_add(
+                    saved
+                        .prefix_record_payload_bytes()
+                        .ok_or(ReplayError::RetentionLimit)?,
+                )
                 .ok_or(ReplayError::RetentionLimit)?;
             stats.row_payloads += saved.object_indices().count();
             inverse.push(saved);
@@ -657,6 +749,11 @@ impl SceneInstance {
         {
             return Err(ReplayError::RetentionLimit.into());
         }
+        // Forward conversion preserves row/channel/track record shapes. Admit
+        // their exact logical charge before allocating those opposite revisions.
+        let history_record_budget = publisher
+            .history_record_budget
+            .with_additional(history_record_bytes)?;
         let forward = self
             .compiled
             .forward_prefix_revisions(&inverse)
@@ -701,11 +798,13 @@ impl SceneInstance {
             new_objects: new_objects.to_vec(),
             resources,
             resource_bytes,
+            history_record_bytes,
         };
         publisher
             .resources
             .extend_prefix_knowledge(&batch.resources);
         publisher.resource_budget = resource_budget;
+        publisher.history_record_budget = history_record_budget;
         publisher.extracted_payloads = extracted_payloads;
         publisher.object_slots = self.compiled.objects().len();
         publisher.next_revision = history.revisions.len();
