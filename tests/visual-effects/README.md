@@ -96,18 +96,88 @@ This qualifies filter/composition behavior, not independent image rasterization
 or physical-GPU speed. The existing browser authoring smoke executes the paired
 Python example and verifies completion and the retained ordinary image.
 
-Arbitrary image fills inside vector geometry, procedural paint, effect stacks,
-composed groups, backdrop capture and custom shaders remain separate
+The image-fill extension below covers supported planar vector geometry.
+Procedural paint, effect stacks, composed groups, backdrop capture and custom shaders remain separate
 work under [#1897](https://github.com/yongkyuns/noon/issues/1897). The following M0
 sections preserve the original design and declaration-stage evidence; their
 historical execution guards are not a current support matrix.
+
+## Image-painted planar geometry
+
+`ImagePaint` supplies immutable pixels inside an ordinary circle, rectangle or
+planar vector path. It uses the existing geometry coverage and solid stroke;
+intrinsic image alpha, fill opacity and final object opacity remain independent.
+The Rust counterpart is `ImagePaintOptions` with checked `ImageMapping` and
+`ImageUvTransform` values. Construction creates no scene object or GPU resource.
+
+```python
+from noon import ImageMapping, ImagePaint, Rectangle, Scene, linear
+
+class PaintedCard(Scene):
+    def construct(self):
+        card = Rectangle(width=4, height=2, stroke=None)
+        card.set_fill(ImagePaint("photo.png", mapping=ImageMapping(
+            fit="cover", scale=(-1, 1)
+        )), opacity=0.8)
+        self.add(card)
+        self.play(card.animate.set_fill_image_mapping(
+            ImageMapping(fit="cover", translation=(0.15, 0), scale=(-1, 1))
+        ), run_time=1, rate_func=linear)
+```
+
+The mirrored image keeps each scale's sign in its translated target. Animating
+from a positive scale to a negative scale is rejected because the interpolation
+would cross zero. Immediate replacement may change scale signs, fit, addressing,
+sampling or resource identity.
+
+Pixels may come from PNG/JPEG, a uint8 image array or an existing `ImageMobject`.
+An existing bitmap shares immutable pixels and preserves its sampling unless
+explicitly overridden; encoded/array inputs default to linear sampling. Nearest,
+linear (tent) and bicubic use the shared premultiplied image reconstruction, so
+hidden RGB in alpha-zero texels cannot bleed into visible paint.
+
+Mapping uses the lower-left normalized local geometry box. Image rows are
+top-first; positive rotation turns counterclockwise. `stretch` fills the box;
+`cover` preserves aspect ratio and crops; `contain` preserves aspect ratio and
+clips to its fitted rectangle, keeping empty margins. Alignment ranges from
+zero to one per axis. Addressing is `transparent`, `clamp` or `repeat`, applied
+per filter tap. Translation, rotation and signed scale place the fitted image
+about the local box center. Geometry motion, camera zoom and output resolution
+do not rewrite these authored values.
+
+Ordinary target animation interpolates mapping and fill opacity through the
+shared Fill channel. Endpoints require the same
+resource, sampling, fit and address modes and matching scale signs; exact
+endpoint samples preserve authored values. A mapping-only edit admits/uploads
+no pixels. Image fills share the existing bitmap texture pool, including when
+one resource also belongs to an `ImageMobject`. Resource roots include snapshots
+and timeline endpoints; retirement follows the existing publication lifecycle.
+
+Blur, Shadow and both Glow source modes reuse the painted geometry's isolated
+source capture. Image stroke/text paints, callback paint overlays, transient
+family presentations and cross-kind image crossfades remain outside this finite
+profile. Extreme mappings that cannot be represented safely by the GPU are
+rejected. This profile does not promise arbitrary f64 sampling precision or
+alias-free minification.
+
+Executable matching programs are `noon::example_scenes::image_fill`, native
+`image_fill`, and `web/python/examples/image_fill.py`. The actual native pixel
+oracle tests all fits, address modes and filters across transformed geometry,
+alpha/opacity and resource reuse; separate whole-image comparisons check source
+filters and unchanged solid strokes. The browser qualification script is
+`scripts/image-fill-qualification.mjs`: it compares direct Rust/WASM and Python
+on WebGPU/WebGL2 against an independent physical-fit/inverse-transform/filter
+reference, including inherited bitmap sampling and authored-time samples.
+Premultiplication/addressing shader mutations must fail that reference. Exact
+source/package identities, executed results and remaining gates live in #2330;
+these correctness checks do not establish physical-device frame pacing.
 
 ## Continuous gradient source capture
 
 Ordinary planar circle, rectangle and retained path linear fills can carry the
 same named glow attachment. Paint edits and glow parameter edits use their
 ordinary independent channels, with the existing authored clock, target capture,
-pulse ownership and completion. Gradient text/strokes, image paint, groups and
+pulse ownership and completion. Gradient text/strokes, groups and
 effect stacks remain outside this profile.
 
 Painted capture includes interpolated stop alpha and fill opacity. Silhouette
