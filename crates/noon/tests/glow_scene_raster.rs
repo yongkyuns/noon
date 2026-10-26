@@ -3059,7 +3059,9 @@ fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
             );
             assert!(
                 image
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|pixel| pixel[1] > pixel[0] && pixel[1] > pixel[2]),
                 "fixture must contain a visible green stroke"
             );
