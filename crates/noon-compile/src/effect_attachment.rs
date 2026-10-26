@@ -39,7 +39,8 @@ impl CompiledScene {
             next.as_deref(),
         )?;
         for property in CompiledEffect::PARAMETER_PROPERTIES {
-            let channel = CompiledChannelKey::new(index, property);
+            let Some(attachment) = expected else { break };
+            let channel = CompiledChannelKey::effect(index, property, attachment);
             if let Some(retired) = self.tracks.remove(&channel) {
                 self.track_count -= retired.len();
                 for track in retired {
@@ -50,7 +51,7 @@ impl CompiledScene {
         }
         let row = &mut self.objects[index as usize];
         row.effect = next;
-        // All three glow channels are now empty. Do not traverse unrelated
+        // The retired attachment's channels are empty. Do not traverse unrelated
         // channels, recompute motion, or move any retained object/track slot.
         row.dynamic.effect = false;
         Ok(())

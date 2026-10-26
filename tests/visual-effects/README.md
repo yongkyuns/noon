@@ -459,6 +459,14 @@ preflight validates names, owner references, values and duplicate writes before
 commit. Removing an owner retires its attachments through the retained reverse
 reference index. Removing/re-adding a name never revives a stale handle.
 
+Compiled effect channels retain that exact attachment generation alongside the
+object slot and parameter property. Track lookup, scheduler events, edits,
+completion, replay and retirement use the captured address; an object/property
+query without an attachment cannot alias an effect channel. Explicit slot
+compaction relocates the derived object address and preserves semantic identity.
+This execution prerequisite does not promote multiple attachments or group
+filtering: the qualified public profile still admits one attachment per leaf.
+
 `Scene::set_glow`, `add_effect`, `get_effect`, `set_effect`, `remove_effect` and
 `remove_glow` now exist. Mobject target/pre-execution edits use the same checked
 preparation. Names and exact handles are distinct selectors; a foreign or stale

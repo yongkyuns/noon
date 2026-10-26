@@ -147,13 +147,9 @@ impl TimelineEventScheduler {
 
         let mut start = 0;
         while start < tracks.len() {
-            let channel =
-                CompiledChannelKey::new(tracks[start].object_index, tracks[start].property);
+            let channel = tracks[start].channel();
             let mut end = start + 1;
-            while end < tracks.len()
-                && tracks[end].object_index == channel.object_index
-                && tracks[end].property == channel.property
-            {
+            while end < tracks.len() && tracks[end].channel() == channel {
                 end += 1;
             }
             scheduler.relower_channel(channel, &tracks[start..end]);
@@ -272,10 +268,7 @@ impl TimelineEventScheduler {
         channel: CompiledChannelKey,
         tracks: &[CompiledTrack],
     ) -> TimelineRelowerStats {
-        debug_assert!(tracks
-            .iter()
-            .all(|track| track.object_index == channel.object_index
-                && track.property == channel.property));
+        debug_assert!(tracks.iter().all(|track| track.channel() == channel));
 
         if tracks.is_empty() {
             let Some(group) = self.group_indices.remove(&channel) else {
@@ -895,6 +888,54 @@ mod tests {
             time_map: CompositionTimeMap::default(),
             transform_geometry_plan: None,
             reconciled: false,
+        }
+    }
+
+    #[test]
+    fn same_property_attachments_schedule_and_retire_independently() {
+        use noon_core::{EffectRadius, EffectTrackEndBehavior, EffectTrackValue, SemanticNodeId};
+        let a = SemanticNodeId::new(7, 3);
+        let b = SemanticNodeId::new(7, 4);
+        // Exercise the scheduler seam directly: public stack admission is a
+        // separate renderer qualification gate. Different generations and
+        // different slots must both be distinct within one object/property.
+        for b in [b, SemanticNodeId::new(8, 3)] {
+            let mut tracks: Vec<_> = [(a, 1.0, 1.0), (b, 3.0, 2.0)]
+                .into_iter()
+                .enumerate()
+                .map(|(id, (attachment, start, duration))| {
+                    let mut track = position_track(id as u64, 0, start, duration);
+                    track.property = Property::EffectRadius;
+                    track.values = TrackValues::Effect {
+                        attachment,
+                        from: EffectTrackValue::Radius(EffectRadius::Pixels(2.0)),
+                        to: EffectTrackValue::Radius(EffectRadius::Pixels(4.0)),
+                        end_behavior: EffectTrackEndBehavior::Sample,
+                    };
+                    track
+                })
+                .collect();
+            tracks.sort_by_key(CompiledTrack::channel);
+            let first = CompiledChannelKey::effect(0, Property::EffectRadius, a);
+            let second = CompiledChannelKey::effect(0, Property::EffectRadius, b);
+            let mut scheduler = TimelineEventScheduler::new(&tracks);
+            scheduler.seek(0.0);
+            assert_eq!(scheduler.next_event_time(), Some(1.0));
+            assert_eq!(scheduler.advance(1.5), 1);
+            assert_eq!(scheduler.requested(), &[first]);
+            assert!(scheduler.channel_changed_since(first, 0.0));
+            assert!(!scheduler.channel_changed_since(second, 0.0));
+            let retired = scheduler.relower_channel(first, &[]);
+            assert_eq!(retired.events_removed, 2);
+            assert_eq!(scheduler.next_event_time(), Some(3.0));
+            assert_eq!(scheduler.advance(3.5), 1);
+            assert_eq!(scheduler.requested(), &[second]);
+            assert!(!scheduler.channel_changed_since(first, 0.0));
+            assert!(scheduler.channel_changed_since(second, 0.0));
+            assert_eq!(scheduler.advance(6.0), 1);
+            assert_eq!(scheduler.requested(), &[second]);
+            assert_eq!(scheduler.advance(7.0), 0);
+            assert!(scheduler.requested().is_empty());
         }
     }
 

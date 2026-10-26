@@ -406,6 +406,7 @@ fn ambient_camera_motion_is_authored_time_driven_and_seek_equivalent() {
         &mut SemanticExecutionIndex::new(),
     )
     .unwrap();
+    let camera_object = lowered.compiled().objects()[0].clone();
     let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
     let mut seek = SceneInstance::from_semantic_execution(lowered);
     let camera_sample =
@@ -422,6 +423,18 @@ fn ambient_camera_motion_is_authored_time_driven_and_seek_equivalent() {
     assert_eq!(mid.theta, -0.7);
     assert_eq!(forward.frame(), seek.frame());
     assert_eq!(forward.last_timeline_scheduler_stats().active_groups, 1);
+
+    // This derived camera driver has no explicit track. Reapplying an authored
+    // spatial base must sample its current motion, just as direct seek does.
+    forward
+        .apply_execution_patch(&ExecutionPatch::SetSpatialState {
+            object: camera_object.id,
+            base_transform: camera_object.base_transform,
+            spatial: camera_object.spatial.as_deref().cloned(),
+        })
+        .unwrap();
+    assert_eq!(camera_sample(&forward), mid);
+    assert_eq!(forward.frame(), seek.frame());
 
     forward.advance_to(2.0).unwrap();
     seek.seek(2.0).unwrap();

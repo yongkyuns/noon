@@ -778,8 +778,26 @@ impl SceneInstance {
             .into_iter()
             .chain(properties)
             .any(|property| {
+                let channel = match property {
+                    Property::EffectColor
+                    | Property::EffectRadius
+                    | Property::EffectIntensity
+                    | Property::EffectOffset => {
+                        self.frame.objects[index].effect.as_ref().map_or_else(
+                            || CompiledChannelKey::new(index as u32, property),
+                            |effect| {
+                                CompiledChannelKey::effect(
+                                    index as u32,
+                                    property,
+                                    effect.attachment,
+                                )
+                            },
+                        )
+                    }
+                    _ => CompiledChannelKey::new(index as u32, property),
+                };
                 self.timeline_scheduler
-                    .channel_changed_since(CompiledChannelKey::new(index as u32, property), since)
+                    .channel_changed_since(channel, since)
                     || self
                         .reactive
                         .as_ref()

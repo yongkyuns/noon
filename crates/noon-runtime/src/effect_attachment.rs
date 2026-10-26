@@ -17,6 +17,10 @@ impl SceneInstance {
             .compiled
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))?;
+        let previous = self.compiled.objects()[index as usize]
+            .effect
+            .as_ref()
+            .map(|effect| effect.attachment);
         // Compiler validation completes before either authority is changed.
         let compiled = self.compiled.apply_execution_patch_with_stats(patch)?;
         let mut stats = RuntimePatchStats {
@@ -24,7 +28,8 @@ impl SceneInstance {
             ..RuntimePatchStats::default()
         };
         for property in CompiledEffect::PARAMETER_PROPERTIES {
-            let channel = CompiledChannelKey::new(index, property);
+            let Some(attachment) = previous else { break };
+            let channel = CompiledChannelKey::effect(index, property, attachment);
             if self.groups.remove(&channel).is_some() {
                 let retired = self.timeline_scheduler.relower_channel(channel, &[]);
                 stats.channels_relowered += retired.groups_relowered;

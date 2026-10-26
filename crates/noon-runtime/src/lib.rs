@@ -1472,6 +1472,11 @@ impl SceneInstance {
                     if let (Some(base), Some(current)) =
                         (&object.effect, &mut self.frame.objects[object_index].effect)
                     {
+                        if channel.attachment() != Some(base.attachment)
+                            || current.attachment != base.attachment
+                        {
+                            continue;
+                        }
                         let next = noon_core::EffectTrackValue::from_definition(
                             channel.property,
                             base.definition,
@@ -1558,7 +1563,16 @@ impl SceneInstance {
                     unreachable!("coupled channels were handled above")
                 }
             }
-            self.reapply_properties(object_index, &[channel.property]);
+            self.last_stats = reapply_timeline_channels(
+                &self.compiled,
+                &mut self.frame,
+                &mut self.groups,
+                &self.path_motion_plans,
+                [*channel],
+            );
+            if channel.property == Property::ZIndex {
+                self.reposition_painter_row(object_index);
+            }
             stats.groups_evaluated += self.last_stats.groups_evaluated;
             stats.tracks_advanced += self.last_stats.tracks_advanced;
             stats.binary_search_steps += self.last_stats.binary_search_steps;
@@ -1566,38 +1580,26 @@ impl SceneInstance {
     }
 
     fn reapply_properties(&mut self, object_index: usize, properties: &[Property]) {
-        let time = self.frame.time;
-        let mut stats = EvaluationStats::default();
-        for property in properties {
-            let channel = CompiledChannelKey::new(object_index as u32, *property);
-            let tracks = self.compiled.channel_tracks(channel);
-            let object = &self.compiled.objects()[object_index];
-            let Some(group) = self.groups.get_mut(&channel) else {
-                continue;
-            };
-            group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
-            apply_group(
-                &self.compiled,
-                &mut self.frame,
-                tracks,
-                group,
-                time,
-                object.base_transform,
-                object.base_style,
-                &self.path_motion_plans,
-            );
-            stats.groups_evaluated += 1;
-        }
+        let channels = properties.iter().flat_map(|&property| {
+            evaluation_property_channels(&self.compiled, object_index as u32, property)
+        });
+        self.last_stats = reapply_timeline_channels(
+            &self.compiled,
+            &mut self.frame,
+            &mut self.groups,
+            &self.path_motion_plans,
+            channels,
+        );
         if properties.contains(&Property::ZIndex) {
             self.reposition_painter_row(object_index);
         }
-        self.last_stats = stats;
     }
 
     fn relower_object(&mut self, object_index: usize, time: f64, stats: &mut EvaluationStats) {
         reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-        for property in PROPERTY_ORDER {
-            let channel = CompiledChannelKey::new(object_index as u32, property);
+        for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
+            evaluation_property_channels(&self.compiled, object_index as u32, property)
+        }) {
             let tracks = self.compiled.channel_tracks(channel);
             let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
@@ -1997,6 +1999,56 @@ const PROPERTY_ORDER: [Property; 19] = [
     Property::EffectIntensity,
     Property::EffectOffset,
 ];
+
+/// Ordinary channels can have derived drivers without explicit tracks (camera
+/// angular motion). Keep those addresses and add exact effect attachment lanes.
+fn evaluation_property_channels(
+    compiled: &CompiledScene,
+    object_index: u32,
+    property: Property,
+) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+    let attachments = matches!(
+        property,
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
+    )
+    .then(|| compiled.channels_for_object_property(object_index, property));
+    std::iter::once(CompiledChannelKey::new(object_index, property))
+        .chain(attachments.into_iter().flatten())
+}
+
+fn reapply_timeline_channels(
+    compiled: &CompiledScene,
+    frame: &mut FrameState,
+    groups: &mut BTreeMap<CompiledChannelKey, TrackGroup>,
+    path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
+    channels: impl IntoIterator<Item = CompiledChannelKey>,
+) -> EvaluationStats {
+    let time = frame.time;
+    let mut stats = EvaluationStats::default();
+    for channel in channels {
+        let tracks = compiled.channel_tracks(channel);
+        let object = &compiled.objects()[channel.object_index as usize];
+        let Some(group) = groups.get_mut(&channel) else {
+            continue;
+        };
+        group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
+        apply_group(
+            compiled,
+            frame,
+            tracks,
+            group,
+            time,
+            object.base_transform,
+            object.base_style,
+            path_motion_plans,
+        );
+        stats.groups_evaluated += 1;
+    }
+    stats
+}
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
     let mut groups = BTreeMap::new();
