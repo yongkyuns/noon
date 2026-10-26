@@ -3,6 +3,7 @@
 use noon_render_wgpu::{
     GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurScope,
 };
+use std::{cell::Cell, rc::Rc};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
@@ -122,36 +123,63 @@ async fn read(
     );
     queue.submit([encoder.finish()]);
     let callback_buffer = buffer.clone();
+    let completed = Rc::new(Cell::new(false));
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let resolve = resolve.clone();
         let reject = reject.clone();
         let buffer = callback_buffer.clone();
-        callback_buffer.map_async(wgpu::MapMode::Read, .., move |result| match result {
-            Ok(()) => {
-                let result = buffer
-                    .get_mapped_range(..)
-                    .map(|bytes| js_sys::Uint8Array::from(&*bytes));
-                buffer.unmap();
-                match result {
-                    Ok(bytes) => {
-                        let _ = resolve.call1(&JsValue::UNDEFINED, &bytes);
-                    }
-                    Err(error) => {
-                        let _ = reject
-                            .call1(&JsValue::UNDEFINED, &JsValue::from_str(&error.to_string()));
+        let completed = Rc::clone(&completed);
+        callback_buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+            completed.set(true);
+            match result {
+                Ok(()) => {
+                    let result = buffer
+                        .get_mapped_range(..)
+                        .map(|bytes| js_sys::Uint8Array::from(&*bytes));
+                    buffer.unmap();
+                    match result {
+                        Ok(bytes) => {
+                            let _ = resolve.call1(&JsValue::UNDEFINED, &bytes);
+                        }
+                        Err(error) => {
+                            let _ = reject
+                                .call1(&JsValue::UNDEFINED, &JsValue::from_str(&error.to_string()));
+                        }
                     }
                 }
-            }
-            Err(error) => {
-                let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str(&error.to_string()));
+                Err(error) => {
+                    let _ =
+                        reject.call1(&JsValue::UNDEFINED, &JsValue::from_str(&error.to_string()));
+                }
             }
         });
     });
-    // WebGPU's mapping completes through its browser promise. WebGL's explicit
-    // readback is driven by a nonblocking poll; no product frame path uses this.
-    device
-        .poll(wgpu::PollType::Poll)
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    // WebGL fences become observable after yielding to the browser. This
+    // bounded pump belongs solely to explicit qualification readback.
+    for _ in 0..6000 {
+        device
+            .poll(wgpu::PollType::Poll)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        if completed.get() {
+            break;
+        }
+        let yield_to_browser = js_sys::Promise::new(&mut |resolve, reject| {
+            let result = web_sys::window()
+                .ok_or_else(|| JsValue::from_str("raster qualification requires a browser window"))
+                .and_then(|window| {
+                    window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 5)
+                });
+            if let Err(error) = result {
+                let _ = reject.call1(&JsValue::UNDEFINED, &error);
+            }
+        });
+        JsFuture::from(yield_to_browser).await?;
+    }
+    if !completed.get() {
+        return Err(JsValue::from_str(
+            "Gaussian raster readback did not complete within the bounded poll window",
+        ));
+    }
     let bytes = JsFuture::from(promise)
         .await?
         .unchecked_into::<js_sys::Uint8Array>()

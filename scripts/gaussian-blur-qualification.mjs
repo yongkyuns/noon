@@ -47,8 +47,19 @@ try {
           pixels.splice((y * width + x) * 4, 4, ...color);
         }
         for (const sigma of kind === 3 ? [64] : [0.8, 3.25, 6]) {
-          const samples = await page.evaluate(async ({ pixels, width, height, sigma }) => JSON.parse(
-            await window.blurRenderer.qualifyGaussianBlurRaster(Uint8Array.from(pixels), width, height, sigma)), { pixels, width, height, sigma });
+          const samples = await page.evaluate(async ({ pixels, width, height, sigma }) => {
+            try {
+              const completed = await Promise.race([
+                window.blurRenderer.qualifyGaussianBlurRaster(Uint8Array.from(pixels), width, height, sigma),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Gaussian raster probe exceeded 90 seconds")), 90_000)),
+              ]);
+              const diagnostic = window.blurRenderer.takeGpuDiagnosticJson();
+              if (diagnostic) throw new Error(diagnostic);
+              return JSON.parse(completed);
+            } catch (error) {
+              throw new Error(`${error}; GPU diagnostic: ${window.blurRenderer.takeGpuDiagnosticJson() ?? "none"}`);
+            }
+          }, { pixels, width, height, sigma });
           assert.equal(samples.length, 2);
           for (let index = 0; index < samples.length; index++) {
             const sample = samples[index], opacity = index === 0 ? 1 : 0.37;
