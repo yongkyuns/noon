@@ -33,11 +33,33 @@ pub(crate) fn validate_gradient(
     Ok(())
 }
 
+pub(crate) fn validate_radial(
+    gradient: &noon_core::RadialGradient,
+) -> Result<(), SemanticExecutionValueError> {
+    let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
+        field: SemanticExecutionField::FillPaint,
+    };
+    if gradient.stops().len() > 16
+        || gradient
+            .radii()
+            .into_iter()
+            .any(|radius| !(radius as f32).is_finite() || (radius as f32) < 4.0 * f32::MIN_POSITIVE)
+        || gradient.stops().windows(2).any(|stops| {
+            stops[0].position() != stops[1].position()
+                && stops[0].position() as f32 == stops[1].position() as f32
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_definition(
     paint: &SemanticPaint,
 ) -> Result<(), SemanticExecutionValueError> {
     match paint {
         SemanticPaint::LinearGradient(gradient) => validate_gradient(gradient),
+        SemanticPaint::RadialGradient(gradient) => validate_radial(gradient),
         SemanticPaint::Image(image) => validate_image(image),
         SemanticPaint::Solid(_) => Err(SemanticExecutionValueError::UnsupportedPaintProfile {
             field: SemanticExecutionField::FillPaint,
@@ -110,6 +132,11 @@ pub(crate) fn validate_transition(
         validate_image(to)?;
         return Ok(());
     }
+    if let Some([from, to]) = transition.radials() {
+        validate_radial(from)?;
+        validate_radial(to)?;
+        return validate_stop_sweep(from.stops(), to.stops());
+    }
     let [from, to] = transition
         .gradients()
         .expect("closed checked gradient/image transition");
@@ -134,7 +161,17 @@ pub(crate) fn validate_transition(
             return Err(invalid());
         }
     }
-    for (a, b) in from.stops().windows(2).zip(to.stops().windows(2)) {
+    validate_stop_sweep(from.stops(), to.stops())
+}
+
+fn validate_stop_sweep(
+    from: &[noon_core::GradientStop],
+    to: &[noon_core::GradientStop],
+) -> Result<(), SemanticExecutionValueError> {
+    let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
+        field: SemanticExecutionField::FillPaint,
+    };
+    for (a, b) in from.windows(2).zip(to.windows(2)) {
         if a[0].position() == b[0].position() && a[1].position() == b[1].position() {
             continue;
         }
@@ -158,8 +195,11 @@ pub fn lower_fill(
     state: &SemanticObjectState,
     store: &SemanticStore,
 ) -> Result<Option<Arc<SemanticPaint>>, SemanticLoweringError> {
-    let Some(paint @ (SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))) =
-        state.style.fill.as_ref()
+    let Some(
+        paint @ (SemanticPaint::LinearGradient(_)
+        | SemanticPaint::RadialGradient(_)
+        | SemanticPaint::Image(_)),
+    ) = state.style.fill.as_ref()
     else {
         return Ok(None);
     };

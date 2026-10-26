@@ -2102,6 +2102,7 @@ mod wasm {
                             Some(WasmManimColor::from_color(color))
                         }
                         noon_core::SemanticPaint::LinearGradient(_)
+                        | noon_core::SemanticPaint::RadialGradient(_)
                         | noon_core::SemanticPaint::Image(_) => None,
                     })
                 })
@@ -2118,6 +2119,7 @@ mod wasm {
                             Some(WasmManimColor::from_color(color))
                         }
                         noon_core::SemanticPaint::LinearGradient(_)
+                        | noon_core::SemanticPaint::RadialGradient(_)
                         | noon_core::SemanticPaint::Image(_) => None,
                     })
                 })

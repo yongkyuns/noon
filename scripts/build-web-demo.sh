@@ -44,6 +44,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/gaussian-blur-qualification.mjs
   node --test scripts/gaussian-blur-reference.test.mjs
   node --check scripts/linear-gradient-qualification.mjs
+  node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/image-fill-qualification.mjs
   node --check scripts/glow-worker-reference.mjs
   node --test scripts/glow-worker-reference.test.mjs

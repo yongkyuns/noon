@@ -1695,10 +1695,18 @@ fn interpolate_manim_paint(
     }
     if matches!(
         start,
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))
+        Some(
+            SemanticPaint::LinearGradient(_)
+                | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Image(_)
+        )
     ) || matches!(
         end,
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))
+        Some(
+            SemanticPaint::LinearGradient(_)
+                | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Image(_)
+        )
     ) {
         return noon_core::PaintTransition::new(start.cloned(), 1.0, end.cloned(), 1.0)?
             .sample(alpha)

@@ -172,6 +172,44 @@ Premultiplication/addressing shader mutations must fail that reference. Exact
 source/package identities, executed results and remaining gates live in #2330;
 these correctness checks do not establish physical-device frame pacing.
 
+## Radial paint authoring and qualification
+
+`RadialGradient(stops, center=(0.5, 0.5), radii=(0.5, 0.5))` uses the same
+ordinary `set_fill`, `.animate.set_fill` and independent opacity grammar as linear
+paint. Rust uses `RadialGradient::new` and `set_fill_radial_gradient` on `Mobject`
+or `LiveSession`. Complete paired scripts are
+`noon::example_scenes::radial_gradient` and
+`web/python/examples/radial_gradient.py`; native `radial_gradient` and the direct
+Rust/WASM host run that same Rust program. The scripts animate an elliptical
+field's center, radii, transparent stops and opacity, then transition to solid
+paint and back, using ordinary play/hold completion.
+
+Center is in the normalized local box, from lower-left zero to upper-right one.
+Radii are positive lengths along those normalized axes. Equal radii form an
+ellipse on a nonsquare box. The field coordinate is
+`hypot((x-center.x)/radii.x, (y-center.y)/radii.y)`, with pad extension and the
+shared right-continuous, encoded-premultiplied stop interpolation. These are
+object-local coordinates, rather than effect radii in scene/output-pixel units.
+Geometry transforms carry paint with the object; camera zoom does not edit it.
+
+The finite planar circle/rectangle/path profile admits at most 16 stops and
+radii/stop intervals representable by its GPU arithmetic. Center, radii, colors,
+positions and fill opacity interpolate; matching stop counts are required.
+Solid/absent endpoints promote to the radial topology during the interior of an
+animation; exact endpoints preserve their original kind. Linear/radial kind
+changes require immediate replacement. Invalid profiles reject atomically.
+Stroke/text paints, transient family presentation and callback paint edits keep
+the existing continuous-paint exclusions.
+
+The native `radial_gradient_raster` oracle independently computes the ellipse,
+premultiplied stop/time vectors and LDR quantization across transformed primitive
+and path draws, with same-time/rewind and clean-upload checks. Replacing the
+actual WGSL elliptical distance by a one-axis field must fail it; restoring the
+shader must pass. `scripts/radial-gradient-qualification.mjs` exercises both
+Rust/WASM and Python on WebGPU/WebGL2 against a separate temporal field formula.
+These tests establish only the executed finite correctness profile; owning PR
+evidence records exact revisions and promotion gates.
+
 ## Continuous gradient source capture
 
 Ordinary planar circle, rectangle and retained path linear fills can carry the

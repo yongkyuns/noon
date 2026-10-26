@@ -2,8 +2,8 @@
 use std::sync::Arc;
 
 use crate::{
-    Color, GradientStop, ImagePaint, ImagePaintError, LinearGradient, LinearGradientError,
-    SemanticPaint,
+    Color, GradientError, GradientStop, ImagePaint, ImagePaintError, LinearGradient,
+    RadialGradient, SemanticPaint,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,7 +13,7 @@ pub enum PaintTransitionError {
     InvalidProgress,
     DifferentStopCounts,
     DegenerateAxis,
-    Gradient(LinearGradientError),
+    Gradient(GradientError),
     Image(ImagePaintError),
 }
 
@@ -31,8 +31,8 @@ impl std::fmt::Display for PaintTransitionError {
     }
 }
 impl std::error::Error for PaintTransitionError {}
-impl From<LinearGradientError> for PaintTransitionError {
-    fn from(error: LinearGradientError) -> Self {
+impl From<GradientError> for PaintTransitionError {
+    fn from(error: GradientError) -> Self {
         Self::Gradient(error)
     }
 }
@@ -45,6 +45,7 @@ impl From<ImagePaintError> for PaintTransitionError {
 #[derive(Clone, Debug, PartialEq)]
 enum PreparedPaintTransition {
     Gradient([Arc<LinearGradient>; 2]),
+    Radial([Arc<RadialGradient>; 2]),
     Image(Box<[ImagePaint; 2]>),
 }
 
@@ -104,6 +105,29 @@ impl PaintTransition {
                 prepared,
             });
         }
+        let radial = |paint: &Option<SemanticPaint>| match paint {
+            Some(SemanticPaint::RadialGradient(gradient)) => Some(gradient.clone()),
+            _ => None,
+        };
+        if let Some(template) = radial(&from).or_else(|| radial(&to)) {
+            let promote = |paint: &Option<SemanticPaint>| match paint {
+                Some(SemanticPaint::RadialGradient(gradient)) => Ok(gradient.clone()),
+                Some(SemanticPaint::Solid(color)) => radial_solid(&template, *color),
+                None => radial_solid(&template, Color::rgba(0.0, 0.0, 0.0, 0.0)),
+                _ => Err(PaintTransitionError::UnsupportedPaint),
+            };
+            let gradients = [promote(&from)?, promote(&to)?];
+            if gradients[0].stops().len() != gradients[1].stops().len() {
+                return Err(PaintTransitionError::DifferentStopCounts);
+            }
+            return Ok(Self {
+                from,
+                from_opacity,
+                to,
+                to_opacity,
+                prepared: PreparedPaintTransition::Radial(gradients),
+            });
+        }
         let gradient = |paint: &Option<SemanticPaint>| match paint {
             Some(SemanticPaint::LinearGradient(gradient)) => Some(gradient.clone()),
             _ => None,
@@ -115,7 +139,9 @@ impl PaintTransition {
             |paint: &Option<SemanticPaint>| -> Result<Arc<LinearGradient>, PaintTransitionError> {
                 match paint {
                     Some(SemanticPaint::LinearGradient(gradient)) => Ok(gradient.clone()),
-                    Some(SemanticPaint::Image(_)) => Err(PaintTransitionError::UnsupportedPaint),
+                    Some(SemanticPaint::Image(_) | SemanticPaint::RadialGradient(_)) => {
+                        Err(PaintTransitionError::UnsupportedPaint)
+                    }
                     Some(SemanticPaint::Solid(_)) | None => {
                         let color = match paint {
                             Some(SemanticPaint::Solid(color)) => *color,
@@ -151,14 +177,21 @@ impl PaintTransition {
     pub fn gradients(&self) -> Option<&[Arc<LinearGradient>; 2]> {
         match &self.prepared {
             PreparedPaintTransition::Gradient(gradients) => Some(gradients),
-            PreparedPaintTransition::Image(_) => None,
+            PreparedPaintTransition::Image(_) | PreparedPaintTransition::Radial(_) => None,
+        }
+    }
+
+    pub fn radials(&self) -> Option<&[Arc<RadialGradient>; 2]> {
+        match &self.prepared {
+            PreparedPaintTransition::Radial(gradients) => Some(gradients),
+            PreparedPaintTransition::Gradient(_) | PreparedPaintTransition::Image(_) => None,
         }
     }
 
     pub fn images(&self) -> Option<&[ImagePaint; 2]> {
         match &self.prepared {
             PreparedPaintTransition::Image(images) => Some(images),
-            PreparedPaintTransition::Gradient(_) => None,
+            PreparedPaintTransition::Gradient(_) | PreparedPaintTransition::Radial(_) => None,
         }
     }
 
@@ -224,39 +257,28 @@ impl PaintTransition {
                     opacity,
                 ));
             }
+            PreparedPaintTransition::Radial([from, to]) => {
+                let center = std::array::from_fn(|i| mix(from.center()[i], to.center()[i], alpha));
+                let radii = std::array::from_fn(|i| {
+                    // Equal subnormals stay positive instead of rounding two
+                    // weighted terms down to zero.
+                    alpha.mul_add(to.radii()[i] - from.radii()[i], from.radii()[i])
+                });
+                return Ok((
+                    Some(SemanticPaint::RadialGradient(Arc::new(
+                        RadialGradient::new(
+                            center,
+                            radii,
+                            blend_stops(from.stops(), to.stops(), alpha)?,
+                        )?,
+                    ))),
+                    opacity,
+                ));
+            }
             PreparedPaintTransition::Gradient(gradients) => gradients,
         };
         let point = |a: [f64; 2], b: [f64; 2]| [mix(a[0], b[0], alpha), mix(a[1], b[1], alpha)];
-        let stops = from
-            .stops()
-            .iter()
-            .zip(to.stops())
-            .map(|(a, b)| {
-                let color = |color: Color| {
-                    let alpha = f64::from(color.alpha);
-                    [
-                        f64::from(color.red) * alpha,
-                        f64::from(color.green) * alpha,
-                        f64::from(color.blue) * alpha,
-                        alpha,
-                    ]
-                };
-                let a_color = color(a.color());
-                let b_color = color(b.color());
-                let c: [f64; 4] = std::array::from_fn(|i| mix(a_color[i], b_color[i], alpha));
-                let color = if c[3] == 0.0 {
-                    Color::rgba(0.0, 0.0, 0.0, 0.0)
-                } else {
-                    Color::rgba(
-                        (c[0] / c[3]) as f32,
-                        (c[1] / c[3]) as f32,
-                        (c[2] / c[3]) as f32,
-                        c[3] as f32,
-                    )
-                };
-                GradientStop::new(mix(a.position(), b.position(), alpha), color)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let stops = blend_stops(from.stops(), to.stops(), alpha)?;
         let gradient = LinearGradient::new(
             point(from.start(), to.start()),
             point(from.end(), to.end()),
@@ -267,6 +289,58 @@ impl PaintTransition {
             opacity,
         ))
     }
+}
+
+fn radial_solid(
+    template: &RadialGradient,
+    color: Color,
+) -> Result<Arc<RadialGradient>, PaintTransitionError> {
+    let stops = template
+        .stops()
+        .iter()
+        .map(|stop| GradientStop::new(stop.position(), color))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Arc::new(RadialGradient::new(
+        template.center(),
+        template.radii(),
+        stops,
+    )?))
+}
+
+fn blend_stops(
+    from: &[GradientStop],
+    to: &[GradientStop],
+    alpha: f64,
+) -> Result<Vec<GradientStop>, PaintTransitionError> {
+    from.iter()
+        .zip(to)
+        .map(|(a, b)| {
+            let color = |color: Color| {
+                let alpha = f64::from(color.alpha);
+                [
+                    f64::from(color.red) * alpha,
+                    f64::from(color.green) * alpha,
+                    f64::from(color.blue) * alpha,
+                    alpha,
+                ]
+            };
+            let a_color = color(a.color());
+            let b_color = color(b.color());
+            let c: [f64; 4] = std::array::from_fn(|i| mix(a_color[i], b_color[i], alpha));
+            let color = if c[3] == 0.0 {
+                Color::rgba(0.0, 0.0, 0.0, 0.0)
+            } else {
+                Color::rgba(
+                    (c[0] / c[3]) as f32,
+                    (c[1] / c[3]) as f32,
+                    (c[2] / c[3]) as f32,
+                    c[3] as f32,
+                )
+            };
+            GradientStop::new(mix(a.position(), b.position(), alpha), color)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 fn mix(from: f64, to: f64, alpha: f64) -> f64 {

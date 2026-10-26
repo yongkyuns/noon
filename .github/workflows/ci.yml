@@ -81,6 +81,7 @@ on:
       - "tests/visual-effects/**"
       - "scripts/glow-worker-*.mjs"
       - "scripts/linear-gradient-qualification.mjs"
+      - "scripts/radial-gradient-qualification.mjs"
       - "scripts/image-fill-qualification.mjs"
       - "crates/noon-web/src/glow_worker_smoke.rs"
       - "crates/noon-web/src/retained_execution_canvas.rs"
@@ -88,6 +89,7 @@ on:
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
       - "crates/noon/tests/linear_gradient_raster.rs"
+      - "crates/noon/tests/radial_gradient_raster.rs"
       - "crates/noon/examples/glow_scene_playback.rs"
       - "crates/noon/src/effect_authoring*"
       - "crates/noon/src/effect_authoring/**"
@@ -249,6 +251,8 @@ jobs:
         # The linear-paint oracle uses the same public Scene and retained GPU path.
         # Absence of the requested native adapter is a failure.
         run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture
+      - name: Qualify public Rust radial paint on native GPU
+        run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -500,6 +504,8 @@ jobs:
         env:
           NOON_GRADIENT_ARTIFACTS: browser-smoke-artifacts/linear-gradient
         run: node scripts/linear-gradient-qualification.mjs
+      - name: Qualify paired radial paint authoring
+        run: node scripts/radial-gradient-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage

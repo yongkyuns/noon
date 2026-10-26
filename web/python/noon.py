@@ -1947,6 +1947,7 @@ _PUBLIC_EXPORTS = {
     "Blur": "_noon_effects",
     "Shadow": "_noon_effects",
     "LinearGradient": "_noon_paints",
+    "RadialGradient": "_noon_paints",
     "ImagePaint": "_noon_paints",
     "ImageMapping": "_noon_paints",
     "GlowPulse": "_noon_effects",

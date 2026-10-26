@@ -33,6 +33,20 @@ struct PaintUniform {
 }
 
 impl PaintUniform {
+    fn set_stops(&mut self, stops: &[noon_core::GradientStop]) {
+        self.metadata[0] = stops.len() as u32;
+        for (target, stop) in self.stops.iter_mut().zip(stops) {
+            let c = stop.color();
+            target.color = [
+                c.red * c.alpha,
+                c.green * c.alpha,
+                c.blue * c.alpha,
+                c.alpha,
+            ];
+            target.position[0] = stop.position() as f32;
+        }
+    }
+
     fn new(
         value: &crate::paint::PreparedPaint,
         images: Option<&super::raster_image_gpu::RasterImageGpuRenderer>,
@@ -58,17 +72,19 @@ impl PaintUniform {
                     end[0] as f32,
                     end[1] as f32,
                 ];
-                result.metadata[0] = definition.stops().len() as u32;
-                for (target, stop) in result.stops.iter_mut().zip(definition.stops()) {
-                    let c = stop.color();
-                    target.color = [
-                        c.red * c.alpha,
-                        c.green * c.alpha,
-                        c.blue * c.alpha,
-                        c.alpha,
-                    ];
-                    target.position[0] = stop.position() as f32;
-                }
+                result.set_stops(definition.stops());
+            }
+            noon_core::SemanticPaint::RadialGradient(definition) => {
+                let center = definition.center();
+                let radii = definition.radii();
+                result.endpoints = [
+                    center[0] as f32,
+                    center[1] as f32,
+                    radii[0] as f32,
+                    radii[1] as f32,
+                ];
+                result.metadata[1] = 2;
+                result.set_stops(definition.stops());
             }
             noon_core::SemanticPaint::Image(image) => {
                 let dimensions = images
