@@ -7,6 +7,9 @@ await qualifyPairedAuthoring({
     id: `blur-${sampleTime}`, file: "blur.py",
     factory: "createDirectBlurSmokeRenderer", objectCount: 3,
     duration: 6, sampleTime, playback: "live", canvasSize: [640, 360],
+    // Quiet waits hold their last publication while retaining a timer deadline.
+    directHeldSampleTime: sampleTime === 0.5 ? 0 : sampleTime === 2.5 ? 2.25
+      : sampleTime === 5.5 ? 5.25 : undefined,
     boundaries: [0.75, 2.25, 3, 4.5, 5.25],
     stopAtSourceCompletion: sampleTime === 6,
   })),
