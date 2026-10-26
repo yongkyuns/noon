@@ -1,4 +1,5 @@
 //! Explicit capacity maintenance; append itself never relocates scene storage.
+use super::object_budget;
 use super::{PrefixError, PrefixReceiver, ReplayError, Revision};
 use crate::{FrameObjectState, SceneInstance};
 
@@ -18,12 +19,48 @@ pub(super) fn preflight_history_index_capacity(capacity: usize) -> Result<usize,
         })
 }
 
+/// One storage-growth implementation for bootstrap and later maintenance.
+/// Requested over-budget storage fails before any reservation. Allocation failure
+/// or allocator over-reservation may leave larger capacities, but cannot change
+/// rows, history, publication or the receiver's advertised object capacity.
+pub(super) fn reserve_object_vectors(
+    runtime: &mut SceneInstance,
+    total: usize,
+    limit_bytes: usize,
+) -> Result<(), PrefixError> {
+    object_budget::preflight_reserved(runtime, total, limit_bytes)?;
+    runtime
+        .compiled
+        .reserve_prefix_object_capacity(total)
+        .map_err(|_| PrefixError::Allocation)?;
+    macro_rules! reserve {
+        ($values:expr) => {
+            $values
+                .try_reserve_exact(total.saturating_sub($values.len()))
+                .map_err(|_| PrefixError::Allocation)?;
+        };
+    }
+    reserve!(runtime.frame.objects);
+    reserve!(runtime.frame.presences);
+    reserve!(runtime.frame.reveals);
+    reserve!(runtime.frame.morphs);
+    reserve!(runtime.frame.render_geometries);
+    reserve!(runtime.frame.render_transforms);
+    reserve!(runtime.frame.family_animations);
+    reserve!(runtime.frame.family_animation_plan_indices);
+    reserve!(runtime.painter_ranks);
+    reserve!(runtime.painter_order);
+    object_budget::preflight_reserved(runtime, 0, limit_bytes)?;
+    Ok(())
+}
+
 impl PrefixReceiver {
     /// Named O(existing storage) maintenance barrier, separate from ordinary
     /// prefix delivery. Reserve ahead using a bounded workload capacity or the
     /// next batch's required_object_capacity(). Returns requested total slots.
     /// Allocation failure changes capacity only, never frame/history/publication.
-    /// Payload and revision limits are entry counts, not a physical-memory cap.
+    /// The separate object-vector byte cap includes existing spare capacity.
+    /// It excludes maps, indirect payloads and allocator/whole-process peaks.
     pub fn reserve_object_capacity(
         &mut self,
         runtime: &mut SceneInstance,
@@ -38,27 +75,7 @@ impl PrefixReceiver {
         {
             return Err(ReplayError::RetentionLimit.into());
         }
-        runtime
-            .compiled
-            .reserve_prefix_object_capacity(total)
-            .map_err(|_| PrefixError::Allocation)?;
-        macro_rules! reserve {
-            ($values:expr) => {
-                $values
-                    .try_reserve_exact(total.saturating_sub($values.len()))
-                    .map_err(|_| PrefixError::Allocation)?;
-            };
-        }
-        reserve!(runtime.frame.objects);
-        reserve!(runtime.frame.presences);
-        reserve!(runtime.frame.reveals);
-        reserve!(runtime.frame.morphs);
-        reserve!(runtime.frame.render_geometries);
-        reserve!(runtime.frame.render_transforms);
-        reserve!(runtime.frame.family_animations);
-        reserve!(runtime.frame.family_animation_plan_indices);
-        reserve!(runtime.painter_ranks);
-        reserve!(runtime.painter_order);
+        reserve_object_vectors(runtime, total, self.object_vector_budget_bytes)?;
         self.object_capacity = total;
         Ok(total)
     }

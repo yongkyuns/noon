@@ -33,6 +33,35 @@ impl CompiledReplayRevision {
 }
 
 impl CompiledScene {
+    /// Requested backing bytes of the five object/order vectors in a clone.
+    /// `minimum` reserves room for historical rows even when currently inactive.
+    /// Source spare capacity is not copied. Indirect payloads/maps are excluded.
+    pub fn prefix_object_clone_bytes(&self, minimum: usize) -> Option<usize> {
+        self.prefix_object_vector_bytes(minimum, false)
+    }
+
+    /// Reported object/order capacities, or their requested minimum after growth.
+    /// Fixed-size arithmetic only; this is not allocator/whole-scene accounting.
+    pub fn prefix_object_reserved_bytes(&self, minimum: usize) -> Option<usize> {
+        self.prefix_object_vector_bytes(minimum, true)
+    }
+
+    fn prefix_object_vector_bytes(&self, minimum: usize, spare: bool) -> Option<usize> {
+        fn bytes<T>(values: &Vec<T>, minimum: usize, spare: bool) -> Option<usize> {
+            let slots = if spare {
+                values.capacity()
+            } else {
+                values.len()
+            };
+            slots.max(minimum).checked_mul(std::mem::size_of::<T>())
+        }
+        bytes(&self.objects, minimum, spare)?
+            .checked_add(bytes(&self.family_ranks, minimum, spare)?)?
+            .checked_add(bytes(&self.painter_ranks, minimum, spare)?)?
+            .checked_add(bytes(&self.family_order, minimum, spare)?)?
+            .checked_add(bytes(&self.painter_order, minimum, spare)?)
+    }
+
     /// Named O(existing storage) capacity barrier. Never called implicitly from
     /// prefix append or ordinary local mutation. No logical state is changed.
     pub fn reserve_prefix_object_capacity(
@@ -120,5 +149,41 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn object_vector_accounting_includes_all_five_vectors_and_spare_capacity() {
+        use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
+        let object = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::circle(0.5),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut scene = CompiledScene::compile_objects(vec![object], &[]).unwrap();
+        let cloned = scene.prefix_object_clone_bytes(0);
+        scene.reserve_prefix_object_capacity(8).unwrap();
+        fn bytes<T>(values: &Vec<T>) -> usize {
+            values.capacity() * std::mem::size_of::<T>()
+        }
+        let expected = bytes(&scene.objects)
+            + bytes(&scene.family_ranks)
+            + bytes(&scene.painter_ranks)
+            + bytes(&scene.family_order)
+            + bytes(&scene.painter_order);
+        assert_eq!(scene.prefix_object_reserved_bytes(0), Some(expected));
+        assert_eq!(scene.prefix_object_clone_bytes(0), cloned);
+        assert!(expected > cloned.unwrap());
+        assert_eq!(scene.prefix_object_reserved_bytes(8), Some(expected));
+    }
+
+    #[test]
+    fn object_vector_request_overflow_is_rejected_without_reserving() {
+        let scene = CompiledScene::compile_objects(Vec::new(), &[]).unwrap();
+        let before = scene.prefix_object_reserved_bytes(0);
+        assert_eq!(scene.prefix_object_clone_bytes(0), Some(0));
+        assert_eq!(scene.prefix_object_clone_bytes(usize::MAX), None);
+        assert_eq!(scene.prefix_object_reserved_bytes(usize::MAX), None);
+        assert_eq!(scene.prefix_object_reserved_bytes(0), before);
     }
 }
