@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 import noon
+# Keep type identities stable when patch.dict restores each fake JS host.
+import _noon_paints
 import _manim_semantic_handles as handles
 import _manim_updaters as updaters
 
