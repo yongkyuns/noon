@@ -9,6 +9,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// Continuous fills currently require ordinary planar vector content.
+    ContinuousPaintProfile,
     /// This operation requires immutable raster-image content.
     ImageContent,
     /// Point matching requires vector geometry on both operands.
@@ -79,6 +81,7 @@ pub enum UnsupportedAuthoringOperation {
 impl std::fmt::Display for UnsupportedAuthoringOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::ContinuousPaintProfile => "continuous paint requires ordinary planar vector content and a representable finite gradient",
             Self::ImageContent => "this operation requires raster-image content",
             Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",
@@ -131,6 +134,7 @@ impl From<noon_core::PointArrayShapeError> for AuthoringError {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    PaintTransition(noon_core::PaintTransitionError),
     /// Immutable audio PCM preparation or resource admission failed.
     AudioResource(noon_core::AudioResourceError),
     /// A finite authored clip has invalid timing, trim, gain, or fades.
@@ -338,6 +342,7 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PaintTransition(error) => error.fmt(f),
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
             Self::GlowParameter(error) => error.fmt(f),
@@ -492,6 +497,7 @@ impl std::fmt::Display for AuthoringError {
 impl std::error::Error for AuthoringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::PaintTransition(error) => Some(error),
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),
             Self::AudioResource(error) => Some(error),
@@ -646,5 +652,11 @@ impl From<noon_core::SemanticFamilyPairingError> for AuthoringError {
 impl From<noon_core::GlowParameterError> for AuthoringError {
     fn from(error: noon_core::GlowParameterError) -> Self {
         Self::GlowParameter(error)
+    }
+}
+
+impl From<noon_core::PaintTransitionError> for AuthoringError {
+    fn from(error: noon_core::PaintTransitionError) -> Self {
+        Self::PaintTransition(error)
     }
 }

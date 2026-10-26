@@ -75,11 +75,13 @@ on:
       - "web/ci-workflow-topology.test.mjs"
       - "tests/visual-effects/**"
       - "scripts/glow-worker-*.mjs"
+      - "scripts/linear-gradient-qualification.mjs"
       - "crates/noon-web/src/glow_worker_smoke.rs"
       - "crates/noon-web/src/retained_execution_canvas.rs"
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/linear_gradient_raster.rs"
       - "crates/noon/examples/glow_scene_playback.rs"
       - "crates/noon/src/effect_authoring*"
       - "crates/noon/src/effect_authoring/**"
@@ -227,6 +229,10 @@ jobs:
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
+      - name: Qualify public Rust animated linear paint on native GPU
+        # The linear-paint oracle uses the same public Scene and retained GPU path.
+        # Absence of the requested native adapter is a failure.
+        run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -468,6 +474,10 @@ jobs:
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker
         run: node scripts/glow-worker-qualification.mjs
+      - name: Qualify Rust-WASM and Python animated linear paint on WebGPU and WebGL
+        env:
+          NOON_GRADIENT_ARTIFACTS: browser-smoke-artifacts/linear-gradient
+        run: node scripts/linear-gradient-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage

@@ -308,6 +308,40 @@ impl Default for SemanticStyle {
 }
 
 impl SemanticStyle {
+    /// Capture a lowered effective fill, retaining authored precision exactly
+    /// when its value still lowers to the same paint and alpha.
+    pub fn capture_effective_fill(
+        &self,
+        fill: Option<Color>,
+        gradient: Option<&std::sync::Arc<crate::LinearGradient>>,
+    ) -> (Option<SemanticPaint>, f64) {
+        if let Some(gradient) = gradient {
+            let alpha = fill.map_or(0.0, |color| color.alpha);
+            let unchanged = matches!(&self.fill, Some(SemanticPaint::LinearGradient(authored))
+                if authored == gradient && self.fill_opacity as f32 == alpha);
+            return (
+                Some(SemanticPaint::LinearGradient(gradient.clone())),
+                if unchanged {
+                    self.fill_opacity
+                } else {
+                    f64::from(alpha)
+                },
+            );
+        }
+        let lowered = match &self.fill {
+            Some(SemanticPaint::Solid(color)) => {
+                let mut color = *color;
+                color.alpha = (f64::from(color.alpha) * self.fill_opacity) as f32;
+                Some(color)
+            }
+            _ => None,
+        };
+        if lowered == fill && !matches!(self.fill, Some(SemanticPaint::LinearGradient(_))) {
+            (self.fill.clone(), self.fill_opacity)
+        } else {
+            (fill.map(SemanticPaint::Solid), 1.0)
+        }
+    }
     /// Validate all numeric paint and style fields before publishing authored state.
     pub fn is_finite(&self) -> bool {
         let paint = |paint: Option<&SemanticPaint>| match paint {

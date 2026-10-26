@@ -596,7 +596,7 @@ where
                     prepared.store(),
                     source,
                     target,
-                    from,
+                    from.clone(),
                     interpolation,
                     leaf.options.path_arc,
                     start,
@@ -849,7 +849,7 @@ where
                                 attachment: attachment.attachment,
                                 definition,
                             });
-                            captures.insert(leaf.execution_object_id, from);
+                            captures.insert(leaf.execution_object_id, from.clone());
                         }
                     }
                 }
@@ -1398,6 +1398,7 @@ where
         captured
     } else if admitted {
         EffectiveAnimationProperties {
+            fill_gradient: None,
             glow: None,
             z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
@@ -1635,6 +1636,7 @@ mod tests {
 
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
+            fill_gradient: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -2044,7 +2046,7 @@ mod tests {
             animation,
             0.0,
             AnimationOptions::new(),
-            |_| Some(captured),
+            |_| Some(captured.clone()),
         )
         .unwrap();
 
@@ -2187,6 +2189,7 @@ mod tests {
         );
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
+            fill_gradient: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -2209,7 +2212,7 @@ mod tests {
             animation,
             4.0,
             AnimationOptions::new(),
-            |_| Some(effective),
+            |_| Some(effective.clone()),
         )
         .unwrap();
 
@@ -2387,7 +2390,7 @@ mod tests {
                 AnimationOptions::new(),
                 |_| {
                     captures += 1;
-                    Some(current)
+                    Some(current.clone())
                 },
             )
             .unwrap();

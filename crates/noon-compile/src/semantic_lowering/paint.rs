@@ -33,7 +33,50 @@ pub(crate) fn validate_definition(
     Ok(())
 }
 
-pub(super) fn lower_fill(
+pub(crate) fn validate_transition(
+    transition: &noon_core::PaintTransition,
+) -> Result<(), SemanticExecutionValueError> {
+    let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
+        field: SemanticExecutionField::FillPaint,
+    };
+    let [from, to] = transition.gradients();
+    validate_definition(from)?;
+    validate_definition(to)?;
+    if from.start() != to.start() || from.end() != to.end() {
+        let coordinate_scale = from
+            .start()
+            .into_iter()
+            .chain(from.end())
+            .chain(to.start())
+            .chain(to.end())
+            .map(f64::abs)
+            .fold(0.0, f64::max);
+        // Two rounded endpoints can differ from their f64 values by half an
+        // ULP per coordinate. Bound the entire axis sweep, not sampled times.
+        if transition.minimum_axis_length() <= 4.0 * f64::from(f32::EPSILON) * coordinate_scale {
+            return Err(invalid());
+        }
+    }
+    for (a, b) in from.stops().windows(2).zip(to.stops().windows(2)) {
+        if a[0].position() == b[0].position() && a[1].position() == b[1].position() {
+            continue;
+        }
+        let gaps = [
+            a[1].position() - a[0].position(),
+            b[1].position() - b[0].position(),
+        ];
+        if gaps == [0.0, 0.0] {
+            continue;
+        }
+        let coordinate_scale = a[1].position().max(b[1].position());
+        if gaps[0].min(gaps[1]) <= 2.0 * f64::from(f32::EPSILON) * coordinate_scale {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+pub fn lower_fill(
     node: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,

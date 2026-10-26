@@ -222,7 +222,7 @@ pub fn lower_prepared_family_transform_channels(
             prepared.store(),
             source,
             target,
-            occurrence.effective_source,
+            occurrence.effective_source.clone(),
             noon_core::SemanticTransformInterpolation::Affine,
             occurrence.options.path_arc,
         )
@@ -271,7 +271,7 @@ pub fn lower_prepared_family_transform_channels(
                 anchor_execution_object_id: occurrence.source_execution_object_id,
                 source: occurrence.source,
                 target_state: occurrence.target_state,
-                effective_source: occurrence.effective_source,
+                effective_source: occurrence.effective_source.clone(),
                 tracks,
             });
             continue;

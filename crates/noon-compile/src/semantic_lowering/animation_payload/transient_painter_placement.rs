@@ -56,6 +56,7 @@ mod tests {
             source: SemanticNodeId::new(1, 0),
             target_state: SemanticNodeId::new(2, 0),
             effective_source: EffectiveAnimationProperties {
+                fill_gradient: None,
                 glow: None,
                 z_index: 0.0,
                 transform: Transform2D::IDENTITY,

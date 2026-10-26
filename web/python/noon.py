@@ -1939,6 +1939,7 @@ _PUBLIC_EXPORTS = {
     "SVGMobject": "_manim_svg",
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
+    "LinearGradient": "_noon_paints",
     "GlowPulse": "_noon_effects",
     "Pixels": "_noon_effects",
     "EffectHandle": "_noon_effects",

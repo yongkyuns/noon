@@ -413,6 +413,7 @@ mod tests {
 
     fn effective() -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
+            fill_gradient: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D::IDENTITY,

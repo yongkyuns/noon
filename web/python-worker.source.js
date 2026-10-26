@@ -5,6 +5,7 @@ import initNoonWeb, {
   WasmAuthoringFamilyHandle,
   WasmGlow,
   WasmGlowUpdate,
+  WasmLinearGradient,
   WasmAuthoringVectorPath,
   WasmCoordinateOptions,
   WasmBarChartOptions,
@@ -200,6 +201,7 @@ async function initializePyodide() {
   };
   self.noonGlowUpdate = (...args) => new WasmGlowUpdate(...args);
   self.noonGlow = (update) => new WasmGlow(update);
+  self.noonLinearGradient = (...args) => new WasmLinearGradient(...args);
   self.noonAuthoringImageOptions = WasmImageMobjectOptions;
   self.noonCreateAuthoringImageHandle = (options) => authoringStore.createImage(options);
   self.noonAuthoringMeshOptions = WasmMeshOptions;

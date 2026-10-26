@@ -719,6 +719,7 @@ impl Scene {
             .effective_semantic_object(&store, object.node_id())
             .map_err(AuthoringError::from)?;
         Ok(crate::EffectiveMobjectState {
+            fill_gradient: observed.object.fill_gradient.clone(),
             z_index: observed.object.z_index,
             transform: observed.object.transform,
             style: observed.object.style,
