@@ -235,28 +235,67 @@ fn logical_row_example_preserves_glyphs_above_rotated_scaled_highlights() {
     };
     let mut raster = pollster::block_on(Raster::with_dimensions(960, 540));
     let after = raster.capture(&highlighted.take_renderer_publication());
-    let mut changed = 0;
-    let mut opaque_glyph_pixels = 0;
-    for (before, after) in before
-        .as_chunks::<4>()
-        .0
+    retain("code-line-control-native", &before, 960, 540);
+    retain("code-line-highlights-native", &after, 960, 540);
+    let before_pixels = before.as_chunks::<4>().0;
+    let after_pixels = after.as_chunks::<4>().0;
+    let mut colors = std::collections::HashMap::new();
+    for pixel in before_pixels.iter().filter(|pixel| pixel[..3] != [0, 0, 0]) {
+        *colors.entry(*pixel).or_insert(0usize) += 1;
+    }
+    let (panel, panel_pixels) = colors.into_iter().max_by_key(|(_, count)| *count).unwrap();
+    assert!(panel_pixels > 2_000 && panel[..3].iter().all(|value| *value < 128));
+    let background_blue_gain = before_pixels
         .iter()
-        .zip(after.as_chunks::<4>().0)
-    {
+        .zip(after_pixels)
+        .filter(|(before, _)| **before == panel)
+        .map(|(_, after)| after[2].saturating_sub(panel[2]))
+        .max()
+        .unwrap();
+    assert!(
+        background_blue_gain > 0,
+        "yellow bands must alter the panel background"
+    );
+    let mut changed = 0;
+    let mut glyph_pixels_above_band = 0;
+    for (index, (before, after)) in before_pixels.iter().zip(after_pixels).enumerate() {
         changed += usize::from(before != after);
-        if before[..3] == [248, 248, 242] {
-            assert_eq!(
-                before, after,
-                "highlights must not tint source glyph interiors"
+        let minimum = *before[..3].iter().min().unwrap();
+        let maximum = *before[..3].iter().max().unwrap();
+        if minimum < 150 || maximum - minimum > 16 {
+            continue;
+        }
+        let (x, y) = ((index % 960) as i32, (index / 960) as i32);
+        let near_band = (-2..=2).any(|dy| {
+            (-2..=2).any(|dx| {
+                let (nx, ny) = (x + dx, y + dy);
+                if !(0..960).contains(&nx) || !(0..540).contains(&ny) {
+                    return false;
+                }
+                let neighbor = ny as usize * 960 + nx as usize;
+                before_pixels[neighbor] == panel && after_pixels[neighbor][2] > panel[2]
+            })
+        });
+        if near_band {
+            // SDF glyphs need not contain any fully opaque pixel at this size.
+            // The default yellow's blue lies between the dark panel and these
+            // bright glyphs. An underlay only increases background blue; an
+            // overlay would decrease glyph blue instead.
+            assert!(
+                before[2].saturating_sub(after[2]) <= 2,
+                "a highlight must remain below antialiased source glyphs"
             );
-            opaque_glyph_pixels += 1;
+            glyph_pixels_above_band += 1;
         }
     }
     assert!(
         changed > 2_000,
         "both highlights must render over the opaque panel"
     );
-    assert!(opaque_glyph_pixels > 50, "glyph interiors must be sampled");
+    assert!(
+        glyph_pixels_above_band > 20,
+        "glyphs within the highlighted area must be sampled"
+    );
     assert_pixels_equal(
         &raster.capture(&highlighted.take_renderer_publication()),
         &after,
@@ -264,8 +303,7 @@ fn logical_row_example_preserves_glyphs_above_rotated_scaled_highlights() {
     );
     assert_eq!(raster.last_scene_upload_bytes, 0);
     assert_eq!(raster.last_scene_repacked, 0);
-    retain("code-line-highlights-native", &after, 960, 540);
-    eprintln!("Code logical-row raster: changed={changed}, opaque_glyphs={opaque_glyph_pixels}, static_uploads=0");
+    eprintln!("Code logical-row raster: changed={changed}, glyphs_above_band={glyph_pixels_above_band}, background_blue_gain={background_blue_gain}, static_uploads=0");
 }
 
 #[test]

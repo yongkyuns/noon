@@ -81,23 +81,56 @@ await qualifyPairedAuthoring({
     if (fixture.id !== "code-row-highlights") return {};
     const control = rowControls.get(backend);
     assert.ok(control, "row highlights must be qualified with their undecorated control");
+    const colors = new Map();
+    for (let offset = 0; offset < control.data.length; offset += 4) {
+      const key = control.data.readUInt32LE(offset);
+      if ((key & 0xffffff) !== 0) colors.set(key, (colors.get(key) ?? 0) + 1);
+    }
+    const [panel, panelPixels] = [...colors].sort((a, b) => b[1] - a[1])[0];
+    const panelBlue = (panel >>> 16) & 0xff;
+    assert.ok(panelPixels > 2_000 && [panel & 0xff, (panel >>> 8) & 0xff, panelBlue].every(value => value < 128));
+    let backgroundBlueGain = 0;
+    for (let offset = 0; offset < rust.data.length; offset += 4) {
+      if (control.data.readUInt32LE(offset) === panel) {
+        backgroundBlueGain = Math.max(backgroundBlueGain, rust.data[offset + 2] - panelBlue);
+      }
+    }
+    assert.ok(backgroundBlueGain > 0, "yellow bands must alter the panel background");
     let changed = 0;
-    let opaqueGlyphPixels = 0;
+    let glyphPixelsAboveBand = 0;
     for (let offset = 0; offset < rust.data.length; offset += 4) {
       const before = control.data.subarray(offset, offset + 4);
       const after = rust.data.subarray(offset, offset + 4);
       if (!before.equals(after)) changed++;
-      // Full-coverage monokai foreground is an independent painter-order check:
-      // a band drawn over glyphs would tint these pixels, even if both frontends
-      // agreed on the incorrect image. Antialiased edges may legitimately blend.
-      if (before[0] === 248 && before[1] === 248 && before[2] === 242) {
-        assert.ok(before.equals(after), "source glyph interiors must remain above the bands");
-        opaqueGlyphPixels++;
+      const minimum = Math.min(...before.subarray(0, 3));
+      if (minimum < 150 || Math.max(...before.subarray(0, 3)) - minimum > 16) continue;
+      const x = (offset / 4) % rust.width;
+      const y = Math.floor(offset / 4 / rust.width);
+      let nearBand = false;
+      for (let dy = -2; dy <= 2 && !nearBand; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= rust.width || ny < 0 || ny >= rust.height) continue;
+          const neighbor = (ny * rust.width + nx) * 4;
+          if (control.data.readUInt32LE(neighbor) === panel && rust.data[neighbor + 2] > panelBlue) {
+            nearBand = true;
+            break;
+          }
+        }
+      }
+      if (nearBand) {
+        // SDF glyphs may have no fully opaque pixel at this size. An underlay
+        // increases background blue because the default yellow's blue lies
+        // between the dark panel and these bright glyphs. An overlay would
+        // decrease glyph blue instead. This checks actual layer placement.
+        assert.ok(before[2] - after[2] <= 2,
+          "row bands must remain below antialiased source glyphs");
+        glyphPixelsAboveBand++;
       }
     }
     assert.ok(changed > 2_000, "row bands must be visible over the opaque panel");
-    assert.ok(opaqueGlyphPixels > 50, "painter-order check must sample rendered source glyphs");
-    return { changedPixelsFromControl: changed, unchangedOpaqueGlyphPixels: opaqueGlyphPixels };
+    assert.ok(glyphPixelsAboveBand > 20, "painter-order check must sample glyphs within the highlighted area");
+    return { changedPixelsFromControl: changed, glyphPixelsAboveBand, backgroundBlueGain };
   },
   async prepareContext(context) {
     if (!process.env.NOON_PYODIDE_ROOT) return;
