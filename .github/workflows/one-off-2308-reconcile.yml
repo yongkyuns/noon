@@ -1,0 +1,225 @@
+name: One-off 2308 reconciled source qualification
+
+on:
+  push:
+    branches: [agent/2308-reconcile-qualification-20261026]
+    paths:
+      - .github/ci/one-off-2308-reconcile.py
+      - .github/workflows/one-off-2308-reconcile.yml
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PIN_BASE: d6afd19037d8eb421fcbd3ddc222fa20f150922b
+      PIN_PR: b3a4b7f484e607a4b14bc57e70f4947f8520ca42
+      PIN_MASTER: f102a74b9bf28440f4862e799604a57c7882fa68
+      EXPECTED_TREE: 5c5ac2f6a5eed63d62ca926a5585de3a7bc2a80e
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Checkout isolated helper without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Reconstruct and authenticate the exact candidate
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RECONCILE_ROOT="$RUNNER_TEMP/noon-2308-reconcile"
+          export EVIDENCE="$RUNNER_TEMP/noon-2308-reconcile-evidence"
+          mkdir -p "$RECONCILE_ROOT" "$EVIDENCE"
+          printf 'RECONCILE_ROOT=%s\nEVIDENCE=%s\n' "$RECONCILE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, sys, tarfile
+          from pathlib import Path
+          root = Path(os.environ['RECONCILE_ROOT'])
+          out = Path(os.environ['EVIDENCE'])
+          repo = Path.cwd()
+          work = root / 'work'
+          def git(*args, cwd=repo, check=True):
+              return subprocess.run(['git', *args], cwd=cwd, check=check, capture_output=True)
+          refs = {name: os.environ['PIN_' + key] for name, key in
+                  [('base', 'BASE'), ('pr2308', 'PR'), ('master', 'MASTER')]}
+          expected_trees = {'base':'6b284e87208f3c1b7484922bb22e24acc0c9e2fc',
+                            'pr2308':'ef783beee4154f1e8270698907042859b2263614',
+                            'master':'c2782f09648a4e4cc39b87daa3460bf82b6c6688'}
+          fetched = git('fetch', '--no-tags', '--depth=128', 'origin', *refs.values())
+          (out / 'fetch.log').write_bytes(fetched.stdout + fetched.stderr)
+          manifest = {'scope':'Isolated reconciliation qualification; no remote refs written',
+                      'diagnostic_commit':git('rev-parse', 'HEAD').stdout.decode().strip(), 'inputs':{}}
+          for name, sha in refs.items():
+              assert git('rev-parse', sha + '^{commit}').stdout.decode().strip() == sha
+              tree = git('rev-parse', sha + '^{tree}').stdout.decode().strip()
+              assert tree == expected_trees[name], (name, tree)
+              manifest['inputs'][name] = {'commit':sha, 'tree':tree}
+          assert git('merge-base', refs['pr2308'], refs['master']).stdout.decode().strip() == refs['base']
+          git('worktree', 'add', '--detach', str(work), refs['pr2308'])
+          git('config', 'user.name', 'Noon reconciliation qualification', cwd=work)
+          git('config', 'user.email', 'qualification@example.invalid', cwd=work)
+          merged = git('merge', '--no-commit', '--no-ff', refs['master'], cwd=work, check=False)
+          (out / 'merge.log').write_bytes(merged.stdout + merged.stderr)
+          assert merged.returncode == 1, merged.returncode
+          conflicts = git('diff', '--name-only', '--diff-filter=U', cwd=work).stdout.decode().splitlines()
+          expected_conflicts = ['crates/noon-compile/src/lib.rs',
+            'crates/noon-compile/src/semantic_lowering/publication.rs',
+            'crates/noon-compile/src/transaction_preflight.rs',
+            'crates/noon-runtime/src/transient_animation.rs',
+            'crates/noon-web/src/browser_pointer_input.rs',
+            'crates/noon-web/src/execution_canvas.rs',
+            'crates/noon/src/execution_session/interactions.rs',
+            'web/execution-worker-client.js', 'web/main.js',
+            'web/playground-preview-rerun.test.mjs', 'web/semantic-engine-endpoint.js']
+          assert sorted(conflicts) == sorted(expected_conflicts), conflicts
+          manifest['confirmed_conflicts'] = conflicts
+          (out / 'original-conflicts.diff').write_bytes(git('diff', '--cc', cwd=work).stdout)
+          for name in ('master', 'pr2308'):
+              directory = root / name
+              directory.mkdir()
+              archive = root / (name + '.tar')
+              git('archive', '--format=tar', '--output=' + str(archive), refs[name])
+              with tarfile.open(archive) as source:
+                  source.extractall(directory, filter='data')
+          helper = repo / '.github/ci/one-off-2308-reconcile.py'
+          manifest['helper_sha256'] = hashlib.sha256(helper.read_bytes()).hexdigest()
+          transformed = subprocess.run([sys.executable, str(helper)], capture_output=True)
+          (out / 'reconstruct.log').write_bytes(transformed.stdout + transformed.stderr)
+          if transformed.returncode:
+              print(transformed.stdout.decode(), transformed.stderr.decode())
+              raise SystemExit(transformed.returncode)
+          git('add', '--all', cwd=work)
+          assert not git('ls-files', '-u', cwd=work).stdout
+          tree = git('write-tree', cwd=work).stdout.decode().strip()
+          manifest['unformatted_candidate_tree'] = tree
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          assert tree == os.environ['EXPECTED_TREE'], ('candidate differs from reviewed source', tree)
+          git('diff', '--cached', '--check', refs['master'], cwd=work)
+          (out / 'unformatted-vs-master.patch').write_bytes(git('diff', '--cached', '--binary', refs['master'], cwd=work).stdout)
+          print(json.dumps(manifest, indent=2))
+          PY
+      - name: Install repository-pinned Rust and WASM target
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose | tee "$EVIDENCE/rust-version.log"
+      - name: Restore Cargo sources
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-reconcile-2308
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Use read-only compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install native audio dependencies
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Format isolated candidate and freeze its actual tested source
+        id: formatted
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          cargo fmt --all 2>&1 | tee "$EVIDENCE/format.log"
+          git add --all
+          git diff --cached --binary "$EXPECTED_TREE" > "$EVIDENCE/formatter.patch"
+          git diff --cached --check "$PIN_MASTER"
+          git commit -m 'Reconcile prepared playback with pinned master for isolated qualification'
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          def git(*args): return subprocess.check_output(['git', *args])
+          manifest = json.loads((out / 'manifest.json').read_text())
+          sha = git('rev-parse', 'HEAD').decode().strip()
+          parents = git('show', '-s', '--format=%P', 'HEAD').decode().split()
+          assert parents == [os.environ['PIN_PR'], os.environ['PIN_MASTER']], parents
+          manifest['tested_candidate'] = {'commit':sha, 'tree':git('rev-parse', 'HEAD^{tree}').decode().strip(),
+                                         'parents':parents, 'published':False}
+          for label, base in [('master', os.environ['PIN_MASTER']), ('pr2308', os.environ['PIN_PR'])]:
+              (out / ('candidate-vs-' + label + '.patch')).write_bytes(git('diff', '--binary', base, 'HEAD'))
+          source = out / 'candidate-source.tar.gz'
+          git('archive', '--format=tar.gz', '--output=' + str(source), 'HEAD')
+          manifest['candidate_archive_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest['tested_candidate'], indent=2))
+          PY
+      - name: Run canonical fast gate without changing assertions
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/fast.exit"; exit "$code"' EXIT
+          bash scripts/check.sh fast "$PIN_MASTER" 2>&1 | tee "$EVIDENCE/fast.log"
+      - name: Run prepared input and historical binding regressions
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/prepared-input.exit"; exit "$code"' EXIT
+          cargo test --locked -p noon --features prepared-prefix --test prepared_prefix_bindings --test prepared_prefix_identity --test prepared_prefix_interactions --test prepared_prefix_lifecycle 2>&1 | tee "$EVIDENCE/prepared-input.log"
+      - name: Check prepared WASM with and without renderer
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/wasm.exit"; exit "$code"' EXIT
+          cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-renderer.log"
+          cargo check --locked -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-rendererless.log"
+      - name: Run complete web preflight without claiming browser execution
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          NOON_WEB_PREFLIGHT_ONLY: "1"
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/web-preflight.exit"; exit "$code"' EXIT
+          node --version | tee "$EVIDENCE/node-version.log"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/web-preflight.log"
+      - name: Verify final tracked source and preserve exact outcomes
+        if: ${{ always() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 > "$EVIDENCE/final-status.txt"
+          git diff --exit-code
+          git diff --cached --exit-code
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          manifest = json.loads((out / 'manifest.json').read_text())
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip() == manifest['tested_candidate']['tree']
+          manifest['command_exit_codes'] = {name: int(path.read_text()) if path.exists() else None
+              for name in ('fast', 'prepared-input', 'wasm', 'web-preflight')
+              for path in [out / (name + '.exit')]}
+          manifest['tracked_source_unchanged'] = True
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest['command_exit_codes'], indent=2))
+          PY
+      - name: Preserve source-bound candidate and all diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-2308-reconciled-source-qualification
+          path: ${{ runner.temp }}/noon-2308-reconcile-evidence
+          if-no-files-found: error
+          retention-days: 3
