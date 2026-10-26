@@ -99,6 +99,58 @@ fn fixture(
 }
 
 #[test]
+fn idle_interaction_ticks_reject_foreign_stores_and_invalid_time_without_publication() {
+    let (mut store, _, _, _, mut session) = fixture(0);
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    let revision = store.scene_revision();
+    let mut foreign = SemanticStore::new();
+    assert!(matches!(
+        session.advance_interactions(&mut foreign, 1.0),
+        Err(ExecutionSessionInputError::Publication(
+            crate::ExecutionSessionPublicationError::ForeignSemanticStore
+        ))
+    ));
+    for time in [f64::NAN, f64::INFINITY, -1.0] {
+        assert!(matches!(
+            session.advance_interactions(&mut store, time),
+            Err(ExecutionSessionInputError::Interaction(_))
+        ));
+    }
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(store.scene_revision(), revision);
+    assert!(!session.interactions_active());
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn active_interaction_tick_rejects_an_unpublished_store_without_advancing() {
+    let (mut store, _, target, _, mut session) = fixture(0);
+    click(&mut store, &mut session, 1, 0.0);
+    session.advance_interactions(&mut store, 1.0).unwrap();
+    session.take_frame_changes();
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    let mut edit = SemanticMutationTransaction::new();
+    edit.set_click_indicate(target, None);
+    edit.apply(&mut store).unwrap();
+    let revision = store.scene_revision();
+    assert_ne!(revision, publication.scene_revision());
+    assert!(matches!(
+        session.advance_interactions(&mut store, 1.2),
+        Err(ExecutionSessionInputError::Publication(
+            crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+        ))
+    ));
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(store.scene_revision(), revision);
+    assert!(session.interactions_active());
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
 fn click_indicate_is_local_and_does_not_change_authored_revisions() {
     let (mut store, _, target, _, mut session) = fixture(1_000);
     let authored_revision = store.scene_revision();

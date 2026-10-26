@@ -225,6 +225,89 @@ test("semantic rerun preflights its context before switching the live renderer",
   client.terminate();
 });
 
+test("source retirement waits for its owner and reuses the renderer for a paused replacement", async () => {
+  FakeWorker.instances.length = 0;
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  const render = await prepare(client);
+  const initial = client.startSemanticExecution(
+    { contextId: "semantic-old" }, { authoringClient: authoring },
+  );
+  await Promise.resolve();
+  replyRender(render, "start_engine", "engine_started");
+  await initial;
+  const canvas = client.canvas;
+  const engine = authoring.attachments[0].controlPort.peer;
+  let acknowledge;
+  const release = new Promise(resolve => { acknowledge = resolve; });
+  const released = [];
+  authoring.releaseSemanticExecution = async contextId => {
+    released.push(contextId);
+    await release;
+  };
+  let retired = false;
+  const retiring = client.retireExecutionSource().then(() => { retired = true; });
+  await Promise.resolve();
+  assert.deepEqual(released, ["semantic-old"]);
+  assert.equal(retired, false);
+  assert.equal(engine.closed, false, "an unacknowledged release retains its control capability");
+  assert.equal(render.terminated, false);
+  acknowledge();
+  await retiring;
+  assert.equal(engine.closed, true);
+  assert.equal(render.terminated, false);
+  assert.equal(client.canvas, canvas);
+  await assert.rejects(client.state(), /has not been started/);
+  await client.retireExecutionSource();
+  assert.deepEqual(released, ["semantic-old"], "retry after success is an idle lifecycle no-op");
+
+  const replacement = client.reconcileSemanticExecution(
+    { contextId: "semantic-new" }, { authoringClient: authoring },
+  );
+  const rebuild = await waitForRequest(render, "rebuild_engine");
+  render.emitMessage(envelope("noon.render", "engine_rebuilt", {
+    requestId: rebuild.requestId, transportMode: "transferable", backend: "WebGL2",
+  }));
+  const result = await replacement;
+  assert.equal(result.ready.session, 2);
+  assert.equal(authoring.attachments.at(-1).options.initiallyPaused, true);
+  assert.equal(client.canvas, canvas);
+  assert.equal(FakeWorker.instances.length, 1, "Run must reuse its retained renderer");
+  assert.deepEqual(released, ["semantic-old"]);
+  client.terminate();
+});
+
+test("rejected source release keeps the same context and renderer available for retry", async () => {
+  FakeWorker.instances.length = 0;
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  const render = await prepare(client);
+  const initial = client.startSemanticExecution(
+    { contextId: "semantic-retained" }, { authoringClient: authoring },
+  );
+  await Promise.resolve();
+  replyRender(render, "start_engine", "engine_started");
+  await initial;
+  const engine = authoring.attachments[0].controlPort.peer;
+  const rejection = new Error("shared retirement rejected");
+  const attempts = [];
+  let reject = true;
+  authoring.releaseSemanticExecution = async contextId => {
+    attempts.push(contextId);
+    if (reject) throw rejection;
+  };
+  await assert.rejects(client.retireExecutionSource(), error => error === rejection);
+  assert.equal(engine.closed, false);
+  assert.equal(render.terminated, false);
+  assert.equal(authoring.attachments.length, 1);
+  reject = false;
+  await client.retireExecutionSource();
+  assert.deepEqual(attempts, ["semantic-retained", "semantic-retained"]);
+  assert.equal(engine.closed, true);
+  assert.equal(render.terminated, false);
+  client.terminate();
+});
+
 test("a replacement source continuation keeps its generation and starts despite a paused prior scene", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();

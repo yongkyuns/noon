@@ -128,6 +128,7 @@ function fixture(
     resumeExecutionPlayer: () => { leased = true; resumed += 1; return player; },
     returnExecutionPlayer: (value) => { leased = false; returned += 1; returnedPlayer = value; },
     discardExecutionPlayer: (value) => { assert.equal(value, player); leased = false; discarded += 1; },
+    retireExecutionSource: () => { assert.equal(leased, false); },
     liveHandoffDuration: () => leased ? undefined : Math.max(time, 1),
     liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
@@ -1205,6 +1206,65 @@ test("failed incomplete-source discard retains its exact player and context for 
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("source retirement rejection retains returned ownership and open ports for an explicit retry", async () => {
+  const contexts = new Map();
+  const f = fixture("transferable", null, null, {}, {
+    onStop() { contexts.delete("source"); },
+  });
+  contexts.set("source", f.context);
+  let reject = true, attempts = 0, ticks = 0, controlClosed = false, renderClosed = false;
+  f.control.port1.on("close", () => { controlClosed = true; });
+  f.render.port1.on("close", () => { renderClosed = true; });
+  f.player.tickCallbackPhaseJson = () => { ticks += 1; return null; };
+  f.context.retireExecutionSource = () => {
+    attempts += 1;
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(controlClosed, false);
+    assert.equal(renderClosed, false);
+    if (reject) throw new Error("canonical source retirement rejected");
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const idle = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "idle");
+    assert.throws(() => endpoint.stop({ retireSource: true }), /canonical source retirement rejected/);
+    await idle;
+    await turn();
+    assert.equal(contexts.get("source"), f.context);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().stopped, 0);
+    assert.equal(controlClosed, false);
+    assert.equal(renderClosed, false);
+    f.render.port2.postMessage({ type: "tick", timestamp: 100 });
+    await turn();
+    assert.equal(ticks, 0, "a rejected release halts progression while preserving retry ownership");
+    reject = false;
+    endpoint.stop({ retireSource: true });
+    await turn();
+    assert.equal(attempts, 2);
+    assert.equal(f.stats().returned, 1, "retry must use the same returned player");
+    assert.equal(f.stats().stopped, 1);
+    assert.equal(contexts.size, 0);
+  } finally { reject = false; endpoint?.stop({ retireSource: true }); f.close(); }
+});
+
+test("renderer recovery returns its player without retiring the source invocation", async () => {
+  const f = fixture();
+  f.context.retireExecutionSource = () => assert.fail("recovery must retain input ownership");
+  try {
+    const ready = next(f.control.port2);
+    const endpoint = await f.attach();
+    await ready;
+    endpoint.stop();
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(f.stats().stopped, 1);
+  } finally { f.close(); }
+});
+
 test("undo-drag command publishes its Rust reversal and returns disabled state", async () => {
   const f = fixture();
   let endpoint;
@@ -1835,6 +1895,7 @@ test("player construction failure closes both transferred ports", async () => {
     createExecutionPlayer: () => { throw new Error("lowering failed"); },
     returnExecutionPlayer: () => { throw new Error("must not return an uncreated player"); },
     discardExecutionPlayer: () => { throw new Error("must not discard an uncreated player"); },
+    retireExecutionSource: () => { throw new Error("must not retire an uncreated source"); },
   }, {
     controlPort: control.port1, renderPort: render.port1, session: 7,
     loopDurationSeconds: 2, transportMode: "transferable",

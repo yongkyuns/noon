@@ -60,7 +60,8 @@ export async function attachSemanticEngine(
   }
   if (typeof context?.createExecutionPlayer !== "function" ||
       typeof context.returnExecutionPlayer !== "function" ||
-      typeof context.discardExecutionPlayer !== "function") {
+      typeof context.discardExecutionPlayer !== "function" ||
+      typeof context.retireExecutionSource !== "function") {
     throw new Error("semantic execution requires a context player lease API");
   }
   if (typeof initiallyPaused !== "boolean") {
@@ -84,7 +85,7 @@ export async function attachSemanticEngine(
   let sections = [];
   // A player is leased from the authoring context. The transport session only
   // frames deltas; it never selects or creates a second runtime for a scene.
-  let transport;
+  let transport = null;
   let stopped = false;
   let latestTick = null;
   let draining = false;
@@ -1121,11 +1122,12 @@ export async function attachSemanticEngine(
       stop();
     }
   }
-  function stop() {
+  function stop({ retireSource = false } = {}) {
     // Halt progression immediately, while retaining a rejected consuming exit
     // for an explicit retry. Final release happens only after ownership settles.
-    if (stopped && player === null) return;
+    if (stopped && player === null && transport === null) return;
     stopped = true;
+    if (transport !== null) emitExecutionWake("idle", null, true);
     if (player !== null) {
       if (pendingPhaseJson !== null) {
         const interruption = new Error("canonical callback phase interrupted by endpoint stop");
@@ -1154,6 +1156,11 @@ export async function attachSemanticEngine(
       }
       player = null;
     }
+    // Genuine source replacement must finish its shared semantic cleanup before
+    // closing either port. A rejected retirement keeps the returned player in
+    // its exact context and this halted endpoint open for an explicit retry.
+    // Renderer recovery calls ordinary stop() and preserves that invocation.
+    if (retireSource) context.retireExecutionSource();
     if (hasAudio) post({ type: "audio_stopped" });
     continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
@@ -1169,6 +1176,7 @@ export async function attachSemanticEngine(
     controls.length = 0;
     latestTick = null;
     transport?.close?.();
+    transport = null;
     renderPort.close();
     controlPort.close();
     onStop();

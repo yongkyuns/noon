@@ -378,6 +378,35 @@ export class ExecutionWorkerClient {
     });
   }
 
+  async retireExecutionSource() {
+    if (this.#semanticContextId === null) return;
+    this.#requireStarted();
+    const generation = this.#lifecycleGeneration;
+    const engine = this.#engineWorker;
+    const contextId = this.#semanticContextId;
+    this.#audioControlGeneration += 1;
+    this.#audioDevice.stop();
+    // Await the canonical owner's stop + retirement, not a fire-and-forget
+    // endpoint message. Rejection keeps that exact source available for retry.
+    await this.#semanticAuthoringClient.releaseSemanticExecution(contextId);
+    this.#assertLifecycleCurrent(generation);
+    if (engine !== this.#engineWorker || contextId !== this.#semanticContextId) {
+      throw new ExecutionTransitionCancelled();
+    }
+    closeEndpoint(engine);
+    this.#engineWorker = null;
+    this.#semanticAuthoringClient = null;
+    this.#semanticContextId = null;
+    this.#semanticCallbackSessionId = null;
+    this.#ready = null;
+    this.#playing = false;
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
+    this.#pointerReceipt = null;
+    this.#rejectOwner("engine", new ExecutionTransitionCancelled());
+    this.#retireAudio();
+  }
+
   async #transitionSemanticExecution(
     contextId,
     authoringClient,
@@ -389,7 +418,11 @@ export class ExecutionWorkerClient {
       replaceExistingEndpoint = false,
     },
   ) {
-    this.#requireStarted();
+    // Explicit Run may have released its source before authoring in the same
+    // store. The retained renderer/canvas can accept the ordinary new endpoint.
+    if (this.#renderWorker === null || this.#session === 0) {
+      throw new Error("ExecutionWorkerClient has not been started");
+    }
     validateSemanticContextId(contextId);
     validateSemanticAuthoringClient(authoringClient);
     const generation = this.#lifecycleGeneration;
@@ -768,7 +801,9 @@ export class ExecutionWorkerClient {
   }
 
   resize(width, height, devicePixelRatio = 1) {
-    this.#requireStarted();
+    if (this.#renderWorker === null) {
+      throw new Error("ExecutionWorkerClient has no retained renderer");
+    }
     if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(devicePixelRatio)) {
       throw new TypeError("execution canvas dimensions must be finite");
     }

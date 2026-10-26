@@ -908,30 +908,41 @@ async function clickGlowPulseParity(backend) {
     const temporary = targets[1];
     const reloaded = {};
     for (const host of ["direct", "worker"]) {
-      if (host === "worker") {
-        // Prepare the new source before the real click so its authoring cost
-        // cannot consume the short interaction we are about to replace.
-        await pages.worker.evaluate(async source => {
-          const { execution, authoring } = clickGlowPulseParity;
-          await execution.pause();
-          clickGlowPulseParity.preparedReplacement = await authoring.run(source);
-        }, clickGlowPulseSource);
-      }
+      const previousSession = host === "worker" ? await pages.worker.evaluate(async () =>
+        (await clickGlowPulseParity.execution.metrics()).metrics.presentedSession) : null;
       const point = shapeSurfaceCenter(temporary);
       const bounds = await pages[host].locator("#scene").boundingBox();
       assert.ok(bounds);
       await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
-      await waitUntil(`${host} temporary glow before reload`, async () => {
+      const active = await waitUntil(`${host} temporary glow before reload`, async () => {
         const frame = await frameFor(host);
-        return frame.interactions_active && frame.objects[1].glow?.definition.intensity > 0.15;
+        return frame.interactions_active && frame.objects[1].glow?.definition.intensity > 0.15 && frame;
       }, 5000);
+      assert.equal(active.time, 0, `${host}: reload click advanced authored time`);
+      assert.deepEqual(active.objects.map(object => object.id), initial[host].objects.map(object => object.id),
+        `${host}: reload click changed the current source`);
+      assert.deepEqual(matchedVisibleObjectState(active.objects), matchedVisibleObjectState(initial[host].objects),
+        `${host}: reload click changed ordinary source geometry or style`);
+      const { pixels, coverage } = await waitUntil(`${host} presented halo before reload`, async () => {
+        if (host === "direct") await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render());
+        const pixels = await capture(host, "active-pulse-before-reload");
+        const coverage = inspectClickGlowHalo(baseline[host], pixels, temporary,
+          `${backend} ${host} temporary before reload`);
+        return coverage.haloPixels > 40 && { pixels, coverage };
+      }, 5000);
+      checkpoints.push({ id: `${host}-active-pulse-before-reload`,
+        attachment: active.objects[1].glow.attachment, previousSession,
+        ...coverage, sha256: hash(pixels.data) });
       let replacement;
       if (host === "direct") {
-        replacement = await pages.direct.evaluate(async () => {
+        replacement = await pages.direct.evaluate(async attachment => {
           const previous = clickGlowPulseParity;
           const active = JSON.parse(previous.renderer.debugSelectionFrameJson());
           if (!active.interactions_active || active.objects[1].glow === null) {
             throw new Error("direct source replacement must begin with an active temporary attachment");
+          }
+          if (JSON.stringify(active.objects[1].glow.attachment) !== JSON.stringify(attachment)) {
+            throw new Error("direct source replacement must retire the attachment whose halo was observed");
           }
           previous.detach(); previous.driver.stop();
           previous.renderer.retireExecutionSource();
@@ -960,28 +971,38 @@ async function clickGlowPulseParity(backend) {
           return { retiredAttachment: active.objects[1].glow.attachment,
             retiredPublication: active.publication, retirementPublication: retired.publication,
             retiredBeforeFree: true, recreated: true };
-        });
+        }, active.objects[1].glow.attachment);
         await pages.direct.waitForFunction(() => clickGlowPulseParity.driver.stats().idle);
       } else {
-        replacement = await pages.worker.evaluate(async () => {
-          const { execution, authoring, preparedReplacement } = clickGlowPulseParity;
-          const previousSession = (await execution.metrics()).metrics.presentedSession;
+        assert.ok(previousSession != null, "worker reload click requires a presented source session");
+        replacement = await pages.worker.evaluate(async ({ source, previousSession, attachment }) => {
+          const { execution, authoring } = clickGlowPulseParity;
+          if ((await execution.metrics()).metrics.presentedSession !== previousSession) {
+            throw new Error("worker source changed between the reload click and retirement");
+          }
           const active = await execution.debugFrame();
           if (!active.interactions_active || active.objects[1].glow === null) {
             throw new Error("worker source replacement must begin with an active temporary attachment");
           }
-          const result = await execution.reconcileSemanticExecution(preparedReplacement.semanticExecution, {
+          if (JSON.stringify(active.objects[1].glow.attachment) !== JSON.stringify(attachment)) {
+            throw new Error("worker source replacement must retire the attachment whose halo was observed");
+          }
+          // Authoring also writes this worker's canonical store. Await the old
+          // source's release before Run can make its input publication stale.
+          await execution.retireExecutionSource();
+          const authored = await authoring.run(source);
+          const result = await execution.reconcileSemanticExecution(authored.semanticExecution, {
             authoringClient: authoring,
           });
-          delete clickGlowPulseParity.preparedReplacement;
           const fresh = await execution.debugFrame();
           if (fresh.interactions_active || fresh.objects[1].glow !== null) {
             throw new Error("fresh Run retained an old input-owned attachment or invocation");
           }
           await execution.pause();
           return { retiredAttachment: active.objects[1].glow.attachment,
-            retiredPublication: active.publication, previousSession, session: result.ready.session };
-        });
+            retiredPublication: active.publication, previousSession, session: result.ready.session,
+            releasedBeforeAuthoring: true };
+        }, { source: clickGlowPulseSource, previousSession, attachment: active.objects[1].glow.attachment });
         assert.notEqual(replacement.session, replacement.previousSession, "fresh Run must replace the execution session");
         await waitUntil("worker fresh Run presentation", () => pages.worker.evaluate(async session => {
           const { metrics } = await clickGlowPulseParity.execution.metrics();

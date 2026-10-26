@@ -86,6 +86,78 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
 }
 
 #[test]
+fn paused_worker_audio_tick_survives_new_scene_in_shared_authoring_store() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    let resource =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.1; 8_000], 32_000).unwrap();
+    scene
+        .audio(resource.clone(), noon_core::AudioClipOptions::default())
+        .unwrap();
+    let semantics = std::rc::Rc::clone(scene.integration_store());
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 107)
+            .unwrap();
+    player.tick_callback_phase_json(1_000.0).unwrap();
+    player.tick_callback_phase_json(1_250.0).unwrap();
+    player.pause();
+    player.tick_callback_phase_json(1_300.0).unwrap();
+    assert_eq!(player.time(), 0.25);
+    assert!(!player.session.interactions_active());
+    player.session.take_frame_changes();
+    let frame = player.session.frame().clone();
+    let publication = player.session.publication_context();
+
+    // Python Run creates a new root in the same authoring arena before the
+    // audio transition asks the old, paused player for its final clock sample.
+    let mut replacement = noon::Scene::with_integration_store(std::rc::Rc::clone(&semantics));
+    let replacement_circle = replacement.circle(0.75).unwrap();
+    replacement.add(&replacement_circle).unwrap();
+    replacement
+        .audio(resource, noon_core::AudioClipOptions::default())
+        .unwrap();
+    let revision = replacement.revision();
+    assert_ne!(revision, publication.scene_revision());
+    assert_ne!(Some(replacement.root()), player.semantic_root);
+    player.pause();
+    let mut expected_clock = player.clock.clone();
+    assert_eq!(expected_clock.scene_time(1_500.0).unwrap(), 0.25);
+    assert!(player.tick_callback_phase_json(1_500.0).unwrap().is_none());
+    assert_eq!(player.clock, expected_clock);
+    assert!(!player.is_playing());
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(player.session.take_frame_changes().is_empty());
+    assert_eq!(semantics.borrow().scene_revision(), revision);
+
+    player.retire_execution_source().unwrap();
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(player.session.take_frame_changes().is_empty());
+    assert_eq!(semantics.borrow().scene_revision(), revision);
+    let mut next = SemanticExecutionPlayer::from_scene_execution(
+        replacement.into_execution().unwrap(),
+        1.0,
+        108,
+    )
+    .unwrap();
+    next.pause();
+    assert!(next.tick_callback_phase_json(1_600.0).unwrap().is_none());
+    assert!(std::rc::Rc::ptr_eq(
+        next.semantics.as_ref().unwrap(),
+        &semantics
+    ));
+    assert!(next.has_audio_wasm());
+    assert!(!next.is_playing());
+    assert_eq!(next.time(), 0.0);
+    assert_eq!(
+        next.session.publication_context().scene_revision(),
+        revision
+    );
+}
+
+#[test]
 fn worker_audio_sections_use_shared_strict_nonwrapping_navigation() {
     let scene = noon::example_scenes::background_music_lesson::scene().unwrap();
     let navigation = scene.section_navigation();

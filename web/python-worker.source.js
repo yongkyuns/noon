@@ -977,8 +977,18 @@ async function handleContinuationControl(request) {
         throw new Error("cannot release an active semantic continuation context");
       }
       if (entry) {
+        // This acknowledgement is the pre-authoring source-release barrier.
+        // Stop on the owning worker, so a cross-port stop cannot race the next
+        // Run's writes into the same semantic arena. Recovery still uses the
+        // ordinary endpoint stop/return path without retiring its source.
+        for (const endpoint of [...entry.endpoints]) endpoint.stop({ retireSource: true });
         entry.released = true;
-        retireSemanticContext(request.contextId, entry);
+        try {
+          retireSemanticContext(request.contextId, entry);
+        } catch (error) {
+          entry.released = false;
+          throw error;
+        }
       }
       post("semantic_execution_released", { requestId });
       return;

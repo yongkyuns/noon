@@ -101,7 +101,17 @@ impl ExecutionSession {
         store: &mut SemanticStore,
         prepared: noon_runtime::PreparedInteractionAdvance,
     ) -> Result<(), ExecutionSessionInputError> {
-        self.require_published_store(store)?;
+        if store.identity() != self.store_identity {
+            return Err(super::ExecutionSessionPublicationError::ForeignSemanticStore.into());
+        }
+        // A replacement Scene may already be authored in this same arena while
+        // the old paused source supplies its final clock sample. An idle tick
+        // has no writes or attachment retirements and keeps that publication.
+        // Active invocations, including neutral pulses, still require its exact
+        // published semantic revision before any effective or lifetime change.
+        if self.interactions_active() {
+            self.require_published_store(store)?;
+        }
         if self.interactions_active() && self.pending_callback_token().is_some() {
             return Err(ExecutionSessionInputError::RequiredCallbackPending);
         }
