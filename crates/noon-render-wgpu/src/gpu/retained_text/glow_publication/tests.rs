@@ -301,12 +301,12 @@ fn glow_order_initially_effect_free_publication_prepares_later_local_attachment(
     // an effect-free scene. A later local attachment must not need that scan.
     let publication = scene.take_renderer_publication();
     assert_eq!(
-        fixture.renderer.retained_glow.painter_ranks.len(),
+        fixture.renderer.retained_effects.painter_ranks.len(),
         publication.frame().objects.len()
     );
     for (rank, &index) in publication.painter_order().iter().enumerate() {
         assert_eq!(
-            fixture.renderer.retained_glow.painter_ranks[index as usize],
+            fixture.renderer.retained_effects.painter_ranks[index as usize],
             rank
         );
     }
@@ -319,15 +319,17 @@ fn glow_order_initially_effect_free_publication_prepares_later_local_attachment(
         .unwrap();
     assert_eq!(
         fixture.prepare(&mut scene, true),
-        RetainedGlowStats::default()
+        RetainedEffectStats::default()
     );
     scene
-        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
             object: ObjectId::new(101),
             expected: None,
-            glow: Some(Arc::new(CompiledGlow {
+            effect: Some(Arc::new(CompiledEffect {
                 attachment: SemanticNodeId::new(31, 5),
-                definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0))).unwrap(),
+                definition: Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
+                    .unwrap()
+                    .into(),
             })),
         })
         .unwrap();
@@ -336,7 +338,7 @@ fn glow_order_initially_effect_free_publication_prepares_later_local_attachment(
     assert_eq!((attached.rows_examined, attached.sources_prepared), (1, 1));
     assert_eq!(
         fixture.prepare(&mut scene, true),
-        RetainedGlowStats {
+        RetainedEffectStats {
             retained_texture_bytes: attached.retained_texture_bytes,
             ..Default::default()
         }
@@ -349,18 +351,18 @@ fn glow_order_reattachment_keeps_reorders_published_without_effects() {
         let mut fixture = Fixture::new();
         let mut scene = runtime(3, true, mixed);
         fixture.prepare(&mut scene, true);
-        let old = scene.frame().objects[1].glow.as_ref().unwrap().clone();
+        let old = scene.frame().objects[1].effect.as_ref().unwrap().clone();
         scene
-            .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
                 object: ObjectId::new(101),
                 expected: Some(old.attachment),
-                glow: None,
+                effect: None,
             })
             .unwrap();
         let removed = fixture.prepare(&mut scene, true);
         assert_eq!(removed.rows_examined, 1);
         assert_eq!(removed.retained_texture_bytes, 0);
-        assert!(!fixture.renderer.has_retained_analytic_glow_sources());
+        assert!(!fixture.renderer.has_retained_effect_sources());
         scene
             .apply_execution_patch(&ExecutionPatch::SetZIndex {
                 object: ObjectId::new(101),
@@ -369,13 +371,13 @@ fn glow_order_reattachment_keeps_reorders_published_without_effects() {
             .unwrap();
         assert_eq!(
             fixture.prepare(&mut scene, true),
-            RetainedGlowStats::default()
+            RetainedEffectStats::default()
         );
         scene
-            .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
                 object: ObjectId::new(101),
                 expected: None,
-                glow: Some(Arc::new(CompiledGlow {
+                effect: Some(Arc::new(CompiledEffect {
                     attachment: SemanticNodeId::new(31, 6),
                     definition: old.definition,
                 })),
@@ -394,12 +396,12 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
     let mut fixture = Fixture::new();
     let mut scene = runtime(4096, true, false);
     fixture.prepare(&mut scene, true);
-    let old = scene.frame().objects[1].glow.as_ref().unwrap().clone();
+    let old = scene.frame().objects[1].effect.as_ref().unwrap().clone();
     scene
-        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
             object: ObjectId::new(101),
             expected: Some(old.attachment),
-            glow: None,
+            effect: None,
         })
         .unwrap();
     fixture.prepare(&mut scene, true);
@@ -419,10 +421,10 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
     let created = fixture.prepare(&mut scene, true);
     assert_eq!((created.rows_examined, created.sources_prepared), (1, 0));
     scene
-        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
             object: added,
             expected: None,
-            glow: Some(Arc::new(CompiledGlow {
+            effect: Some(Arc::new(CompiledEffect {
                 attachment: SemanticNodeId::new(32, 5),
                 definition: old.definition,
             })),
@@ -433,7 +435,7 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
     assert_eq!((attached.rows_examined, attached.sources_prepared), (1, 1));
     assert_eq!(
         fixture.prepare(&mut scene, true),
-        RetainedGlowStats {
+        RetainedEffectStats {
             retained_texture_bytes: attached.retained_texture_bytes,
             ..Default::default()
         }
