@@ -24,6 +24,7 @@ fn mixed_paths_preserve_order_and_only_coalesce_matching_coverage_profiles() {
         .enumerate()
         .map(|(index, path)| FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             id: ObjectId::new(index as u64),
             content: ObjectContentRef::Geometry(GeometryRef::path(path)),

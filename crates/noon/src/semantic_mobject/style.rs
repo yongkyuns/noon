@@ -7,11 +7,11 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
         Some(SemanticPaint::Solid(color)) => {
             Ok(Some(Color::rgb(color.red, color.green, color.blue)))
         }
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
-            Err(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
-            ))
-        }
+        Some(
+            SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) | SemanticPaint::Resource(_),
+        ) => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+        )),
         None => Ok(None),
     }
 }
@@ -19,9 +19,9 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
 pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, AuthoringError> {
     let fill_visible = match style.fill.as_ref() {
         Some(SemanticPaint::Solid(color)) => f64::from(color.alpha) * style.fill_opacity > 0.0,
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
-            style.fill_opacity > 0.0
-        }
+        Some(
+            SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) | SemanticPaint::Resource(_),
+        ) => style.fill_opacity > 0.0,
         None => false,
     };
     paint_color(if fill_visible {
@@ -38,7 +38,7 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
 fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, AuthoringError> {
     match paint {
         Some(SemanticPaint::Solid(color)) => Ok(f64::from(color.alpha) * opacity),
-        Some(SemanticPaint::LinearGradient(_)) => Ok(opacity),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_)) => Ok(opacity),
         Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
         )),
@@ -91,7 +91,9 @@ fn replace_paint_color(
     *opacity = match paint {
         None => opacity_when_enabled,
         Some(SemanticPaint::Solid(previous)) => f64::from(previous.alpha) * *opacity,
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => *opacity,
+        Some(
+            SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) | SemanticPaint::Resource(_),
+        ) => *opacity,
     };
     *paint = Some(SemanticPaint::Solid(color));
 }
@@ -627,7 +629,68 @@ pub(crate) fn prepare_fill_gradient(
     Ok(state)
 }
 
+pub(crate) fn prepare_fill_image(
+    object: &Mobject,
+    image: noon_core::ImagePaint,
+    opacity: Option<f64>,
+) -> Result<SemanticObjectState, AuthoringError> {
+    object.validate()?;
+    let mut state = object.state()?;
+    if state.style.fill.is_none() {
+        state.style.fill_opacity = 1.0;
+    }
+    state.style.fill = Some(SemanticPaint::Image(std::sync::Arc::new(image)));
+    if let Some(opacity) = opacity {
+        edit_fill_opacity(&mut state.style, opacity)?;
+    }
+    let store = object.integration_store().borrow();
+    if store
+        .raster_image_resources()
+        .get(image.resource())
+        .is_none()
+    {
+        return Err(AuthoringError::MissingImageResource(image.resource()));
+    }
+    noon_compile::lower_semantic_image_fill(object.node_id(), &state, &store).map_err(|_| {
+        AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::ContinuousPaintProfile)
+    })?;
+    Ok(state)
+}
+
 impl Mobject {
+    /// Borrow immutable pixels from this image as reusable local fill parameters.
+    /// The returned value is a capability; this source or an attached fill must
+    /// remain an owner until the value is attached to another object.
+    pub fn image_paint(
+        &self,
+        mapping: noon_core::ImageMapping,
+        sampling: Option<noon_core::RasterImageSampling>,
+    ) -> Result<noon_core::ImagePaint, AuthoringError> {
+        self.validate()?;
+        let content = self
+            .state()?
+            .content
+            .image()
+            .ok_or(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ImageContent,
+            ))?;
+        Ok(noon_core::ImagePaint::new(
+            content.resource(),
+            mapping,
+            sampling.unwrap_or(content.sampling()),
+        ))
+    }
+
+    /// Fill supported planar geometry from an existing immutable image resource.
+    pub fn set_fill_image(
+        &mut self,
+        image: noon_core::ImagePaint,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        let state = prepare_fill_image(self, image, opacity)?;
+        self.commit_state(state)
+    }
+
     /// Set one immutable object-local gradient through the ordinary style transaction.
     pub fn set_fill_gradient(
         &mut self,

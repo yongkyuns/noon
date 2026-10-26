@@ -409,4 +409,180 @@ mod tests {
         ));
         assert!(store.raster_image_resources().is_empty());
     }
+
+    #[test]
+    fn image_fill_ownership_survives_source_replacement_and_retires_after_last_paint() {
+        let mut store = SemanticStore::new();
+        let source = create(&mut store, Arc::from([71; 8]));
+        let handle = store
+            .semantic_object_state_checked(source)
+            .unwrap()
+            .content
+            .image()
+            .unwrap()
+            .resource();
+        let image = crate::ImagePaint::new(
+            handle,
+            crate::ImageMapping::default(),
+            RasterImageSampling::Linear,
+        );
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        state.style.fill = Some(crate::SemanticPaint::Image(Arc::new(image)));
+        let fill = store.insert_semantic_object(state.clone());
+        let clone = store.insert_semantic_object(state);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(source, StoredGeometry::Circle { radius: 2.0 });
+        transaction.apply(&mut store).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_some());
+        let mut style = store
+            .semantic_object_state_checked(fill)
+            .unwrap()
+            .style
+            .clone();
+        style.fill = None;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_style(fill, style.clone());
+        transaction.apply(&mut store).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_some());
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_style(clone, style);
+        transaction.apply(&mut store).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_none());
+    }
+
+    #[test]
+    fn foreign_or_retired_image_fill_rejection_preserves_complete_transaction() {
+        let mut source_store = SemanticStore::new();
+        let source = create(&mut source_store, Arc::from([43; 8]));
+        let handle = source_store
+            .semantic_object_state_checked(source)
+            .unwrap()
+            .content
+            .image()
+            .unwrap()
+            .resource();
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let before = store.semantic_object_state_checked(object).unwrap().clone();
+        let mut style = before.style.clone();
+        style.fill = Some(crate::SemanticPaint::Image(Arc::new(
+            crate::ImagePaint::new(
+                handle,
+                crate::ImageMapping::default(),
+                RasterImageSampling::Nearest,
+            ),
+        )));
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(object, StoredGeometry::Circle { radius: 2.0 });
+        transaction.replace_style(object, style);
+        assert!(matches!(
+            transaction.apply(&mut store),
+            Err(SemanticMutationTransactionError::InvalidImageResource { .. })
+        ));
+        assert_eq!(
+            store.semantic_object_state_checked(object).unwrap(),
+            &before
+        );
+    }
+
+    #[test]
+    fn image_fill_animation_owns_pixels_and_clone_remaps_both_endpoints() {
+        let mut store = SemanticStore::new();
+        let source = create(&mut store, Arc::from([79; 8]));
+        let handle = store
+            .semantic_object_state_checked(source)
+            .unwrap()
+            .content
+            .image()
+            .unwrap()
+            .resource();
+        let image = crate::ImagePaint::new(
+            handle,
+            crate::ImageMapping::default(),
+            RasterImageSampling::Linear,
+        );
+        let target =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let transition = Arc::new(
+            crate::PaintTransition::new(
+                Some(crate::SemanticPaint::Image(Arc::new(image))),
+                0.25,
+                Some(crate::SemanticPaint::Image(Arc::new(image))),
+                0.75,
+            )
+            .unwrap(),
+        );
+        let mut transaction = SemanticMutationTransaction::new();
+        let animation = transaction.create_object_property_track(
+            target,
+            crate::SemanticObjectTrackProperty::Fill,
+            crate::SemanticObjectTrackValues::Paint { transition },
+            crate::TrackTiming::new(0.0, 1.0, crate::RateFunction::Linear),
+            crate::CompositionTimeMap::default(),
+        );
+        let animation = transaction
+            .apply(&mut store)
+            .unwrap()
+            .resolve(animation)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(source, StoredGeometry::Circle { radius: 2.0 });
+        transaction.apply(&mut store).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_some());
+        let cloned = store.clone();
+        let images = cloned
+            .semantic_animation_state(animation)
+            .unwrap()
+            .image_paints()
+            .unwrap();
+        assert_ne!(images[0].resource().arena, handle.arena);
+        assert_eq!(images[0].resource(), images[1].resource());
+        assert!(cloned
+            .raster_image_resources()
+            .get(images[0].resource())
+            .is_some());
+        assert!(cloned.raster_image_resources().get(handle).is_none());
+        store.remove_node(animation).unwrap();
+        assert!(store.raster_image_resources().get(handle).is_none());
+        assert!(cloned
+            .raster_image_resources()
+            .get(images[0].resource())
+            .is_some());
+    }
+
+    #[test]
+    fn image_fill_family_style_rejects_before_any_publication() {
+        let mut store = SemanticStore::new();
+        let source = create(&mut store, Arc::from([83; 8]));
+        let handle = store
+            .semantic_object_state_checked(source)
+            .unwrap()
+            .content
+            .image()
+            .unwrap()
+            .resource();
+        let family = store.insert_family();
+        let style = crate::SemanticStyle {
+            fill: Some(crate::SemanticPaint::Image(Arc::new(
+                crate::ImagePaint::new(
+                    handle,
+                    crate::ImageMapping::default(),
+                    RasterImageSampling::Linear,
+                ),
+            ))),
+            ..crate::SemanticStyle::default()
+        };
+        let revision = store.scene_revision();
+        let resources = store.raster_image_resources().stats();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style(family, style);
+        assert!(transaction.apply(&mut store).is_err());
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.raster_image_resources().stats(), resources);
+    }
 }

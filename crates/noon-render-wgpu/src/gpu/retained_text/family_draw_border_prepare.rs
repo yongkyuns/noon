@@ -732,6 +732,7 @@ mod draw_border_tests {
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -754,6 +755,7 @@ mod draw_border_tests {
             time: 1.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,

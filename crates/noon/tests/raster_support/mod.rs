@@ -20,6 +20,7 @@ pub struct Raster {
     pub last_scene_upload_bytes: usize,
     pub last_overlay_upload_bytes: usize,
     pub last_scene_repacked: usize,
+    pub last_scene_path_batches: usize,
 }
 impl Raster {
     // This support module is compiled separately by native and Vulkan test binaries.
@@ -109,10 +110,22 @@ impl Raster {
             last_scene_upload_bytes: 0,
             last_overlay_upload_bytes: 0,
             last_scene_repacked: 0,
+            last_scene_path_batches: 0,
         }
     }
     pub fn capture(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
         self.capture_frame(publication, false, None)
+    }
+
+    // Independent sessions have unrelated epochs and resource handles. Keep the
+    // adapter and target, but start a fresh retained publication/resource owner.
+    #[allow(dead_code)]
+    pub fn reset_scene(&mut self) {
+        self.preparer.reset_publication_context();
+        self.renderer.reset_spatial_publication_context();
+        self.text = self
+            .renderer
+            .create_retained_text_state(&self.device, &self.queue);
     }
 
     // Shared support is compiled independently by non-interactive integration tests.
@@ -147,6 +160,16 @@ impl Raster {
             )
             .unwrap();
         self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
+        self.last_scene_path_batches = prepared
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches)
+            .filter(|batch| {
+                matches!(
+                    batch.primitive,
+                    noon_render_wgpu::RenderPrimitive::Path { .. }
+                )
+            })
+            .count();
         self.last_scene_upload_bytes = self
             .renderer
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)

@@ -15,15 +15,30 @@ pub(super) struct PreparedPublication<'session, 'store> {
 }
 
 impl<'session, 'store> PreparedPublication<'session, 'store> {
-    pub(super) fn supports(prepared: &PreparedSemanticMutationTransaction<'_>) -> bool {
-        prepared.mutations().iter().all(|mutation| {
-            matches!(
-                mutation,
-                SemanticMutation::SetProperty { .. }
-                    | SemanticMutation::SetObjectTransform { .. }
-                    | SemanticMutation::ReplaceStyle { .. }
-                    | SemanticMutation::UpdateEffect { .. }
-            )
+    pub(super) fn supports(
+        session: &ExecutionSession,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+    ) -> bool {
+        prepared.mutations().iter().all(|mutation| match mutation {
+            SemanticMutation::SetProperty { .. }
+            | SemanticMutation::SetObjectTransform { .. }
+            | SemanticMutation::UpdateEffect { .. } => true,
+            SemanticMutation::ReplaceStyle { style, .. } => {
+                // The value-only commit cannot introduce immutable dependencies.
+                // An image already in the execution closure stays on this local
+                // path; a new image uses the existing resource publication proof.
+                [&style.fill, &style.stroke, &style.background_stroke]
+                    .into_iter()
+                    .flatten()
+                    .all(|paint| match paint {
+                        noon_core::SemanticPaint::Image(image) => session
+                            .raster_image_resources()
+                            .get(image.resource())
+                            .is_some(),
+                        _ => true,
+                    })
+            }
+            _ => false,
         })
     }
 
@@ -318,6 +333,7 @@ mod viewport_tests {
             occurrence_index: 0,
             base: DerivedDisplayObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 z_index: 0.0,
                 content: GeometryRef::circle(0.5).into(),
                 text_bounds: None,

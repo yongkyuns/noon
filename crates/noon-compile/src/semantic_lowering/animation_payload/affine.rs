@@ -27,6 +27,7 @@ use super::transform_payload::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
     pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     pub glow: Option<crate::CompiledGlow>,
     pub z_index: f64,
     pub transform: Transform2D,
@@ -1655,7 +1656,12 @@ pub(super) fn lower_affine_channels(
         from.transform.scale != to.scale,
         &mut channels,
     )?;
-    let fill_changed = source.style.fill != target.style.fill
+    let fill_changed = from.fill_image.as_ref()
+        != match target.style.fill.as_ref() {
+            Some(noon_core::SemanticPaint::Image(image)) => Some(image),
+            _ => None,
+        }
+        || source.style.fill != target.style.fill
         || source.style.fill_opacity != target.style.fill_opacity
         || (from.style.fill != target_style.fill
             && !has_binding(source, SemanticObjectProperty::FillOpacity))
@@ -1665,13 +1671,15 @@ pub(super) fn lower_affine_channels(
                 _ => None,
             }
             && !has_binding(source, SemanticObjectProperty::FillOpacity));
-    let (from_paint, from_opacity) = source
-        .style
-        .capture_effective_fill(from.style.fill, from.fill_gradient.as_ref());
-    let continuous_fill = from.fill_gradient.is_some()
+    let (from_paint, from_opacity) = source.style.capture_effective_fill(
+        from.style.fill,
+        from.fill_gradient.as_ref(),
+        from.fill_image.as_ref(),
+    );
+    let continuous_fill = (from.fill_gradient.is_some() || from.fill_image.is_some())
         || matches!(
             target.style.fill,
-            Some(noon_core::SemanticPaint::LinearGradient(_))
+            Some(noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Image(_))
         );
     let fill_values = if continuous_fill {
         let transition = noon_core::PaintTransition::new(
@@ -1779,7 +1787,7 @@ pub(super) fn lower_affine_lifecycle_channels(
             Some(
                 noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Resource(_)
             )
-        ) || from.fill_gradient.is_some())
+        ) || (from.fill_gradient.is_some() || from.fill_image.is_some()))
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
@@ -2122,7 +2130,7 @@ pub(super) fn lower_draw_border_then_fill_channels(
     stroke_width: f64,
     stroke_color: Option<noon_core::Color>,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if from.fill_gradient.is_some() {
+    if from.fill_gradient.is_some() || from.fill_image.is_some() {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
@@ -2206,7 +2214,7 @@ pub(super) fn lower_subset_display_channels(
     source: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if from.fill_gradient.is_some() {
+    if from.fill_gradient.is_some() || from.fill_image.is_some() {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
@@ -2391,7 +2399,7 @@ pub fn lower_indicate_channels_with_bindings(
     color: noon_core::Color,
     scale_center: noon_core::SemanticVec3,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if from.fill_gradient.is_some() {
+    if from.fill_gradient.is_some() || from.fill_image.is_some() {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if !transform_is_finite(from.transform) {
@@ -2627,10 +2635,10 @@ pub(super) fn lower_transform_channels(
             return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
         }
     }
-    if from.fill_gradient.is_some()
+    if (from.fill_gradient.is_some() || from.fill_image.is_some())
         || matches!(
             target.style.fill,
-            Some(noon_core::SemanticPaint::LinearGradient(_))
+            Some(noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Image(_))
         )
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
@@ -3097,6 +3105,7 @@ mod tests {
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             fill_gradient: None,
+            fill_image: None,
             glow: None,
             z_index: 0.0,
             transform,
@@ -3381,6 +3390,7 @@ mod tests {
         });
         let from = EffectiveAnimationProperties {
             fill_gradient: None,
+            fill_image: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -3515,6 +3525,7 @@ mod tests {
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
             fill_gradient: None,
+            fill_image: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -3717,6 +3728,7 @@ mod tests {
             |_| {
                 Some(EffectiveAnimationProperties {
                     fill_gradient: None,
+                    fill_image: None,
                     glow: None,
                     z_index: 0.0,
                     transform: Transform2D::default(),
@@ -3958,6 +3970,7 @@ mod tests {
         let index = index(&store);
         let current = EffectiveAnimationProperties {
             fill_gradient: None,
+            fill_image: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D::default(),

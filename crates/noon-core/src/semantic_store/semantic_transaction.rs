@@ -3119,7 +3119,7 @@ impl SemanticMutationTransaction {
                         &mut staged_object_order,
                         *node,
                     );
-                    if !style.is_finite() {
+                    if !style.is_finite() || style_contains_image_paint(style) {
                         return Err(invalid_style_error(index, *node));
                     }
                     if background_stroke_opacity.is_some_and(|opacity| {
@@ -3254,9 +3254,13 @@ impl SemanticMutationTransaction {
                     }
                 }
                 SemanticMutation::ReplaceStyle { object, style } => {
-                    if !style.is_finite() {
+                    if !style.is_finite()
+                        || (style_contains_image_paint(style)
+                            && catalog.ensure_family(*object, index).is_ok())
+                    {
                         return Err(invalid_style_error(index, *object));
                     }
+                    validate_style_resources(store, style, index)?;
                     if let SemanticTransactionNodeRef::Pending(token) = object {
                         if let Some(path) = staged_pending_paths.get_mut(token) {
                             let did_change = path.style != *style;
@@ -4344,11 +4348,43 @@ pub(super) fn validate_object_content_resource(
 }
 
 fn set_object_style(store: &mut SemanticStore, object: SemanticNodeId, style: SemanticStyle) {
-    store
-        .node_mut(object)
-        .and_then(|node| node.semantic_object_state_mut())
-        .expect("preflighted semantic object must remain valid while transaction owns the store")
-        .style = style;
+    store.retain_semantic_style_resources(&style);
+    let previous = std::mem::replace(
+        &mut store
+            .node_mut(object)
+            .and_then(|node| node.semantic_object_state_mut())
+            .expect(
+                "preflighted semantic object must remain valid while transaction owns the store",
+            )
+            .style,
+        style,
+    );
+    store.release_semantic_style_resources(&previous);
+}
+
+pub(super) fn validate_style_resources(
+    store: &SemanticStore,
+    style: &SemanticStyle,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    for paint in [&style.fill, &style.stroke, &style.background_stroke] {
+        if let Some(crate::SemanticPaint::Image(paint)) = paint {
+            let resource = paint.resource();
+            if store.raster_image_resources().get(resource).is_none() {
+                return Err(SemanticMutationTransactionError::InvalidImageResource {
+                    index,
+                    resource,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn style_contains_image_paint(style: &SemanticStyle) -> bool {
+    [&style.fill, &style.stroke, &style.background_stroke]
+        .into_iter()
+        .any(|paint| matches!(paint, Some(crate::SemanticPaint::Image(_))))
 }
 
 const fn is_transform_property(property: SemanticObjectProperty) -> bool {

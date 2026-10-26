@@ -268,6 +268,7 @@ mod tests {
         let text_handle = texts.insert(text_resource()).unwrap();
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -290,6 +291,7 @@ mod tests {
             time: 1.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -402,6 +404,7 @@ mod tests {
         store.add_member(family_id, leaf).unwrap();
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -425,6 +428,7 @@ mod tests {
             time: 1.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,

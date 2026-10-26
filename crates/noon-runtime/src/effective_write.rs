@@ -161,6 +161,7 @@ impl EffectivePropertyWrite {
             }
             Self::Presence { object, .. } => ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style::default(),
             },
@@ -177,6 +178,7 @@ impl EffectivePropertyWrite {
             },
             Self::Style { object, style } => ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style,
             },
@@ -206,6 +208,7 @@ impl EffectivePropertyWrite {
             },
             Self::Fill { object, fill } => ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     fill,
@@ -214,6 +217,7 @@ impl EffectivePropertyWrite {
             },
             Self::Stroke { object, stroke } => ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     stroke,
@@ -225,6 +229,7 @@ impl EffectivePropertyWrite {
                 stroke_width,
             } => ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     stroke_width,
@@ -233,6 +238,7 @@ impl EffectivePropertyWrite {
             },
             Self::Opacity { object, opacity } => ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     opacity,
@@ -289,6 +295,7 @@ pub(crate) fn apply_effective_property_to_row(
         }
         EffectivePropertyWrite::Style { style, .. } => {
             *row.fill_gradient = None;
+            *row.fill_image = None;
             *row.style = style;
             return;
         }

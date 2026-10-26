@@ -980,6 +980,7 @@ mod tests {
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 object,
                 fill_gradient: None,
+                fill_image: None,
                 style: Style {
                     opacity: 0.5,
                     ..Style::default()
@@ -1021,6 +1022,7 @@ mod tests {
         let style = ExecutionPatch::SetStyle {
             object,
             fill_gradient: None,
+            fill_image: None,
             style: Style {
                 opacity: 0.25,
                 ..Style::default()
@@ -1299,6 +1301,7 @@ mod tests {
             },
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: missing,
                 style: Style::default(),
             },
@@ -1353,6 +1356,7 @@ mod tests {
         let transaction = ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: changed_style,
             },
@@ -1392,6 +1396,7 @@ mod tests {
         let transaction =
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: authored,
                 style: Style {
                     opacity: 0.25,
@@ -1435,6 +1440,7 @@ mod tests {
         let frame = instance.prepare_advance_to(0.5).unwrap();
         let invalid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
             fill_gradient: None,
+            fill_image: None,
             object,
             style: Style {
                 opacity: f32::NAN,
@@ -1558,6 +1564,7 @@ mod tests {
         let transaction =
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     opacity: 0.25,
@@ -1644,6 +1651,7 @@ mod tests {
             },
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: missing,
                 style: Style::default(),
             },
@@ -1770,6 +1778,7 @@ mod tests {
             },
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: original.style,
             },

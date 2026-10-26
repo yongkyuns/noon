@@ -54,6 +54,16 @@ impl DerivedDisplayAnimationPlan {
     ) -> Result<Self, DerivedDisplayEvaluationError> {
         let mut seen = std::collections::BTreeSet::new();
         for occurrence in &occurrences {
+            if occurrence.base.fill_image.is_some()
+                || occurrence.tracks.iter().any(|track| {
+                    matches!(&track.values, TrackValues::Paint { transition } if transition.images().is_some())
+                })
+            {
+                return Err(DerivedDisplayEvaluationError::UnsupportedProperty {
+                    occurrence_index: occurrence.occurrence_index,
+                    property: Property::Fill,
+                });
+            }
             if !seen.insert(occurrence.occurrence_index) {
                 return Err(DerivedDisplayEvaluationError::DuplicateOccurrence(
                     occurrence.occurrence_index,
@@ -230,6 +240,7 @@ impl std::error::Error for DerivedDisplayEvaluationError {}
 fn row_from_derived(base: &DerivedDisplayObjectState) -> FrameRowState {
     FrameRowState {
         fill_gradient: base.fill_gradient.clone(),
+        fill_image: base.fill_image.clone(),
         glow: None,
         z_index: base.z_index,
         transform: base.transform,
@@ -252,6 +263,7 @@ fn derived_from_row(
 ) -> DerivedDisplayObjectState {
     DerivedDisplayObjectState {
         fill_gradient: row.fill_gradient,
+        fill_image: row.fill_image.clone(),
         z_index: row.z_index,
         content: row.content_override.unwrap_or(base_content),
         text_bounds,
@@ -341,6 +353,7 @@ mod tests {
     fn base(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
             fill_gradient: None,
+            fill_image: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,
@@ -378,6 +391,55 @@ mod tests {
             occurrence_index,
             base,
             tracks,
+        }
+    }
+
+    #[test]
+    fn image_fill_transients_reject_at_plan_construction() {
+        let mut resources = noon_core::RasterImageResourceArena::default();
+        let handle = resources.intern_rgba8(1, 1, vec![255; 4]).unwrap();
+        let image = Arc::new(noon_core::ImagePaint::new(
+            handle,
+            noon_core::ImageMapping::default(),
+            noon_core::RasterImageSampling::Linear,
+        ));
+        let mut painted = base(GeometryRef::circle(1.0));
+        painted.fill_image = Some(image.clone());
+        let value = after_stable(
+            0,
+            4,
+            painted,
+            vec![track(
+                Property::Appearance,
+                TrackValues::Scalar { from: 0.0, to: 1.0 },
+            )],
+        );
+        let transition = noon_core::PaintTransition::new(
+            Some(noon_core::SemanticPaint::Image(image.clone())),
+            0.25,
+            Some(noon_core::SemanticPaint::Image(image)),
+            0.75,
+        )
+        .unwrap();
+        let animated = after_stable(
+            0,
+            4,
+            base(GeometryRef::circle(1.0)),
+            vec![track(
+                Property::Fill,
+                TrackValues::Paint {
+                    transition: Arc::new(transition),
+                },
+            )],
+        );
+        for occurrence in [value, animated] {
+            assert_eq!(
+                DerivedDisplayAnimationPlan::new(vec![occurrence]),
+                Err(DerivedDisplayEvaluationError::UnsupportedProperty {
+                    occurrence_index: 4,
+                    property: Property::Fill,
+                },)
+            );
         }
     }
 

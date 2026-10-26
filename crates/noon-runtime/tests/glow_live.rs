@@ -159,6 +159,7 @@ fn final_glow_base_coalesces_independently_of_style_and_transform() {
             },
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: ObjectId::new(1),
                 style,
             },

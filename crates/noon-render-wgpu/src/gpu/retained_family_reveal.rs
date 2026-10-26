@@ -252,6 +252,7 @@ mod tests {
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -265,6 +266,7 @@ mod tests {
         };
         let circle = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -300,6 +302,7 @@ mod tests {
 
         let first_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -313,6 +316,7 @@ mod tests {
         };
         let second_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -341,6 +345,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -354,6 +359,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -447,6 +453,7 @@ mod tests {
         let handle = texts.insert(resource).unwrap();
         let object = FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

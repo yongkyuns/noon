@@ -546,6 +546,7 @@ mod tests {
             inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 slot,
                 order: 0,

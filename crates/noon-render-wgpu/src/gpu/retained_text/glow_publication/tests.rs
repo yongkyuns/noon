@@ -235,6 +235,7 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style,
             })
@@ -876,6 +877,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     fill: None,
@@ -933,6 +935,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style,
             })

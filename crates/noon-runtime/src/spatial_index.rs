@@ -583,6 +583,7 @@ mod tests {
             time: 0.0,
             objects: vec![crate::FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 z_index: 0.0,
@@ -611,6 +612,7 @@ mod tests {
             time: 0.0,
             objects: vec![crate::FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 z_index: 0.0,

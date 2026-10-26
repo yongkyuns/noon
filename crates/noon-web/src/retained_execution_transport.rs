@@ -21,9 +21,30 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V17 combines master's render-geometry retirement with exact, validated glow in the *genuine* execution/render worker
-// envelope. Older readers must reject rather than silently discard the halo.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 18;
+// V21 adds resource-backed local image paint to the genuine worker envelope.
+// V19/V20 are reserved by the separate Blur/Shadow branches. Readers reject
+// every other version rather than silently discarding a paint or effect.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 21;
+
+/// A checked mapping and source capability at the real worker boundary. Pixels
+/// travel once in the existing resource bundle, never in an effective row.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportImagePaint {
+    pub image: TransportImageResourceHandle,
+    pub mapping: noon_core::ImageMapping,
+    pub sampling: TransportImageSampling,
+}
+
+impl From<noon_core::ImagePaint> for TransportImagePaint {
+    fn from(value: noon_core::ImagePaint) -> Self {
+        Self {
+            image: value.resource().into(),
+            mapping: value.mapping(),
+            sampling: value.sampling().into(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -352,6 +373,8 @@ impl From<&ObjectContentRef> for TransportObjectContent {
 pub struct RetainedTransportObjectState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_image: Option<TransportImagePaint>,
     pub draw_enabled: bool,
     pub slot: TransportSlotId,
     pub order: u32,
@@ -1185,7 +1208,36 @@ impl RetainedExecutionFrameMirror {
     ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
         validate_object_state(object)?;
         let content = self.resolve_content(&object.content)?;
-        frame_object(object, content)
+        let fill_image = object
+            .fill_image
+            .map(|paint| {
+                let resource = self.image_handles.get(&paint.image).ok_or(
+                    RetainedExecutionTransportError::UnknownImageResource(paint.image),
+                )?;
+                let image = noon_core::ImagePaint::new(
+                    resource.resource(),
+                    paint.mapping,
+                    paint.sampling.into(),
+                );
+                let bounds = content
+                    .geometry()
+                    .and_then(GeometryRef::local_bounds)
+                    .ok_or(RetainedExecutionTransportError::InvalidObjectPatch(
+                        object.slot,
+                    ))?;
+                noon_compile::validate_image_paint_bounds(
+                    object.object,
+                    &image,
+                    bounds,
+                    [resource.width(), resource.height()],
+                )
+                .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
+                Ok(image)
+            })
+            .transpose()?;
+        noon_compile::validate_fill_image(object.object, fill_image.as_ref())
+            .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
+        frame_object(object, content, fill_image)
     }
 
     pub const fn camera(&self) -> Camera2DState {
@@ -1394,10 +1446,7 @@ impl RetainedExecutionFrameMirror {
             .collect::<Result<Vec<_>, _>>()?;
         let frame_objects = objects
             .iter()
-            .map(|object| {
-                self.resolve_content(&object.content)
-                    .and_then(|content| frame_object(object, content))
-            })
+            .map(|object| self.resolve_transport_object_state(object))
             .collect::<Result<Vec<_>, _>>()?;
         let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
         let slot_indices = slots
@@ -1451,7 +1500,7 @@ impl RetainedExecutionFrameMirror {
                 return Err(RetainedExecutionTransportError::DuplicateSlot(object.slot));
             }
             validate_object_state(object)?;
-            let content = self.resolve_content(&object.content)?;
+            let content = self.resolve_transport_object_state(object)?;
             let (index, added) = if let Some(&index) = self.slot_indices.get(&object.slot) {
                 let current = &frame.objects[index];
                 if current.id != object.object {
@@ -1606,14 +1655,14 @@ impl RetainedExecutionFrameMirror {
                 self.slots.push(object.slot);
                 self.slot_indices.insert(object.slot, index);
                 self.object_indices.insert(object.object, index);
-                frame.objects.push(frame_object(object, content)?);
+                frame.objects.push(content);
                 frame.presences.push(object.presence);
                 frame.reveals.push(object.reveal);
                 frame.morphs.push(object.morph);
                 frame.render_geometries.push(geometry);
                 frame.render_transforms.push(object.render_transform);
             } else {
-                frame.objects[index] = frame_object(object, content)?;
+                frame.objects[index] = content;
                 frame.presences[index] = object.presence;
                 frame.reveals[index] = object.reveal;
                 frame.morphs[index] = object.morph;
@@ -1808,6 +1857,7 @@ fn transport_object(
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
         fill_gradient: object.fill_gradient.clone(),
+        fill_image: object.fill_image.as_deref().copied().map(Into::into),
         draw_enabled: object.draw_enabled,
         slot: TransportSlotId {
             slot: slot_index,
@@ -1865,6 +1915,31 @@ fn validate_object_fields(
 ) -> Result<(), RetainedExecutionTransportError> {
     noon_compile::validate_fill_gradient(object.object, object.fill_gradient.as_deref())
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
+    if object.fill_image.is_some()
+        && (object.fill_gradient.is_some()
+            || object.glow.is_some()
+            || object.spatial.is_some()
+            || object.reveal != 1.0
+            || object.morph != 0.0
+            || object.render_geometry.is_some()
+            || object.render_geometry_resource.is_some()
+            || object.render_transform.is_some()
+            || object.text_bounds.is_some()
+            || !matches!(
+                &object.content,
+                TransportObjectContent::Geometry {
+                    geometry: GeometryRef::Circle { .. }
+                        | GeometryRef::Rectangle { .. }
+                        | GeometryRef::VectorPath(_),
+                    resource: None,
+                }
+            )
+            || !glow_content_is_supported(&object.content))
+    {
+        return Err(RetainedExecutionTransportError::InvalidObjectPatch(
+            object.slot,
+        ));
+    }
     if object.glow.is_some_and(|glow| glow.to_compiled().is_none())
         || (object.glow.is_some()
             && (!glow_content_is_supported(&object.content)
@@ -2019,6 +2094,7 @@ fn removed_indices_contains_slot(
 fn frame_object(
     object: &RetainedTransportObjectState,
     content: ObjectContentRef,
+    fill_image: Option<noon_core::ImagePaint>,
 ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
     let spatial = match object.spatial.as_ref() {
         Some(spatial) => Some(spatial.to_compiled().ok_or(
@@ -2028,6 +2104,7 @@ fn frame_object(
     };
     Ok(FrameObjectState {
         fill_gradient: object.fill_gradient.clone(),
+        fill_image: fill_image.map(Arc::new),
         draw_enabled: object.draw_enabled,
         glow: object
             .glow
@@ -2109,6 +2186,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2122,6 +2200,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2218,7 +2297,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 18);
+        assert_eq!(snapshot.protocol_version, 21);
         assert_eq!(
             snapshot.objects[0].glow.unwrap().attachment,
             glow.attachment
@@ -2288,7 +2367,7 @@ mod tests {
         // Both independently evolved predecessors must fail closed: V15 glow
         // and V16 geometry retirement are not the combined V17 schema.
         let next_sequence = mirror.next_sequence;
-        for version in [14, 15, 16] {
+        for version in [14, 15, 16, 17, 18, 19, 20] {
             let mut old = snapshot.clone();
             old.protocol_version = version;
             assert_eq!(
@@ -3373,6 +3452,7 @@ mod tests {
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -3495,6 +3575,7 @@ mod tests {
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

@@ -733,7 +733,9 @@ impl SemanticObjectState {
             match paint {
                 None => true,
                 Some(
-                    crate::SemanticPaint::LinearGradient(_) | crate::SemanticPaint::Resource(_),
+                    crate::SemanticPaint::LinearGradient(_)
+                    | crate::SemanticPaint::Image(_)
+                    | crate::SemanticPaint::Resource(_),
                 ) => false,
                 Some(crate::SemanticPaint::Solid(color)) => {
                     let alpha = f64::from(color.alpha) * opacity;

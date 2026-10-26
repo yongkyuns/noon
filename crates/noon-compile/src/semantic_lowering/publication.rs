@@ -1326,6 +1326,15 @@ fn lower_prepared_entry(
     );
     compiled.glow = glow::lower_prepared_attachment(prepared, object)?;
     compiled.fill_gradient = lowered.fill_gradient;
+    compiled.fill_image = lowered.fill_image.clone();
+    if let Some(image) = &lowered.fill_image {
+        resource_additions
+            .capture_image(
+                prepared.store(),
+                noon_core::SemanticImageContent::with_sampling(image.resource(), image.sampling()),
+            )
+            .map_err(SemanticPublicationLoweringError::Resource)?;
+    }
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
@@ -1487,6 +1496,7 @@ fn lower_semantic_publication(
         // glow outside the same finite profile accepted at initial lowering.
         glow::lower_prepared_attachment(prepared, node.into())?;
         super::paint::lower_fill(node, &state, prepared.store())?;
+        super::paint::lower_image_fill(node, &state, prepared.store())?;
         // Object-owned interaction/metadata declarations have no render-value patch.
         let Some(flags) = domains.get(&node) else {
             continue;
@@ -1569,10 +1579,23 @@ fn lower_semantic_publication(
             }
         }
         if flags.style {
+            let fill_image = super::paint::lower_image_fill(node, &state, prepared.store())?;
+            if let Some(image) = &fill_image {
+                resource_additions
+                    .capture_image(
+                        prepared.store(),
+                        noon_core::SemanticImageContent::with_sampling(
+                            image.resource(),
+                            image.sampling(),
+                        ),
+                    )
+                    .map_err(SemanticPublicationLoweringError::Resource)?;
+            }
             mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,
                 fill_gradient: super::paint::lower_fill(node, &state, prepared.store())?,
+                fill_image,
             });
         }
     }

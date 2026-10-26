@@ -12,6 +12,7 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
     };
     FrameObjectState {
         fill_gradient: None,
+        fill_image: None,
         draw_enabled: true,
         glow: None,
         spatial: None,

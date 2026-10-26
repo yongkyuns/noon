@@ -19,6 +19,7 @@ use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayObjectState {
     pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    pub fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     pub z_index: f64,
     pub content: ObjectContentRef,
     pub text_bounds: Option<Rect>,
@@ -480,6 +481,7 @@ mod derived_display_tests {
     fn derived_state() -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
             fill_gradient: None,
+            fill_image: None,
             z_index: 2.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             text_bounds: None,
@@ -502,6 +504,7 @@ mod derived_display_tests {
             time: 0.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 id: ObjectId::new(1),
@@ -596,6 +599,7 @@ mod derived_display_tests {
         };
         let state = DerivedDisplayObjectState {
             fill_gradient: None,
+            fill_image: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             text_bounds: None,

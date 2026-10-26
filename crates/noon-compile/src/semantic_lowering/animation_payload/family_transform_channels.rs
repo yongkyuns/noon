@@ -216,6 +216,16 @@ pub fn lower_prepared_family_transform_channels(
             }
         })?;
 
+        if occurrence.effective_source.fill_image.is_some()
+            || matches!(source.style.fill, Some(noon_core::SemanticPaint::Image(_)))
+            || matches!(target.style.fill, Some(noon_core::SemanticPaint::Image(_)))
+        {
+            return Err(payload_error(
+                occurrence,
+                AffinePayloadIssue::UnsupportedStyleChange,
+            ));
+        }
+
         validate_affine_payload(source, target, occurrence.options)
             .map_err(|issue| payload_error(occurrence, issue))?;
         let mut channels = lower_transform_channels(

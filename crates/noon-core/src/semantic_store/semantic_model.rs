@@ -243,6 +243,8 @@ pub enum SemanticPaint {
     Solid(Color),
     /// Continuous local paint; opacity remains on the owning semantic style.
     LinearGradient(std::sync::Arc<crate::LinearGradient>),
+    /// Continuous local paint referencing the existing immutable image arena.
+    Image(std::sync::Arc<crate::ImagePaint>),
     /// Stable resource identity for a future gradient/pattern paint resource.
     Resource(u64),
 }
@@ -314,7 +316,21 @@ impl SemanticStyle {
         &self,
         fill: Option<Color>,
         gradient: Option<&std::sync::Arc<crate::LinearGradient>>,
+        image: Option<&std::sync::Arc<crate::ImagePaint>>,
     ) -> (Option<SemanticPaint>, f64) {
+        if let Some(image) = image {
+            let alpha = fill.map_or(0.0, |color| color.alpha);
+            let unchanged = matches!(&self.fill, Some(SemanticPaint::Image(authored))
+                if authored == image && self.fill_opacity as f32 == alpha);
+            return (
+                Some(SemanticPaint::Image(image.clone())),
+                if unchanged {
+                    self.fill_opacity
+                } else {
+                    f64::from(alpha)
+                },
+            );
+        }
         if let Some(gradient) = gradient {
             let alpha = fill.map_or(0.0, |color| color.alpha);
             let unchanged = matches!(&self.fill, Some(SemanticPaint::LinearGradient(authored))
@@ -336,7 +352,12 @@ impl SemanticStyle {
             }
             _ => None,
         };
-        if lowered == fill && !matches!(self.fill, Some(SemanticPaint::LinearGradient(_))) {
+        if lowered == fill
+            && !matches!(
+                self.fill,
+                Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))
+            )
+        {
             (self.fill.clone(), self.fill_opacity)
         } else {
             (fill.map(SemanticPaint::Solid), 1.0)
@@ -351,7 +372,12 @@ impl SemanticStyle {
                     && color.blue.is_finite()
                     && color.alpha.is_finite()
             }
-            Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) | None => true,
+            Some(
+                SemanticPaint::LinearGradient(_)
+                | SemanticPaint::Image(_)
+                | SemanticPaint::Resource(_),
+            )
+            | None => true,
         };
         paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
@@ -424,7 +450,9 @@ impl SemanticStyle {
         }?;
         match paint {
             SemanticPaint::Solid(color) => Some(*color),
-            SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_) => None,
+            SemanticPaint::LinearGradient(_)
+            | SemanticPaint::Image(_)
+            | SemanticPaint::Resource(_) => None,
         }
     }
 

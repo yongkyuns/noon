@@ -356,6 +356,7 @@ impl SemanticExecutionIndex {
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
                 fill_gradient: state.fill_gradient,
+                fill_image: state.fill_image.clone(),
                 semantic_id,
                 glow: state.glow,
                 execution_id: self.ensure_object(semantic_id),
@@ -456,6 +457,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
     pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     /// Authoritative scene-global semantic identity.
@@ -889,6 +891,7 @@ fn lower_graph_dependencies(
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
     pub(super) fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub(super) fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     pub(super) glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
@@ -939,6 +942,9 @@ fn lower_glow_attachment(
         return Ok(None);
     }
     let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    if matches!(state.style.fill, Some(SemanticPaint::Image(_))) {
+        return Err(unsupported());
+    }
     let [attachment] = effects else {
         return Err(unsupported());
     };
@@ -960,6 +966,9 @@ pub(super) fn validate_glow_source_profile(
     store: &SemanticStore,
 ) -> Result<(), SemanticLoweringError> {
     let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    if matches!(state.style.fill, Some(SemanticPaint::Image(_))) {
+        return Err(unsupported());
+    }
     let geometry_supported = match state.content {
         SemanticObjectContent::Geometry(noon_core::StoredGeometry::Circle { radius }) => {
             radius.is_finite() && radius > 0.0
@@ -1104,6 +1113,7 @@ pub(super) fn lower_object_state(
     };
     Ok(LoweredObjectState {
         fill_gradient: super::paint::lower_fill(semantic_id, state, store)?,
+        fill_image: super::paint::lower_image_fill(semantic_id, state, store)?,
         glow: None,
         content: state.content,
         base_transform,
@@ -1320,6 +1330,15 @@ fn lower_paint(
                 });
             }
             super::paint::validate_definition(gradient)?;
+            Ok(Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)))
+        }
+        SemanticPaint::Image(image) => {
+            if paint_field != SemanticExecutionField::FillPaint {
+                return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+                    field: paint_field,
+                });
+            }
+            super::paint::validate_image_definition(image)?;
             Ok(Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)))
         }
         SemanticPaint::Solid(color) => {

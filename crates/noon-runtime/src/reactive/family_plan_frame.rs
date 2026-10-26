@@ -178,6 +178,7 @@ mod tests {
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = crate::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             z_index: 0.0,
@@ -191,6 +192,7 @@ mod tests {
         };
         let circle = crate::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             z_index: 0.0,
@@ -216,6 +218,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     z_index: 0.0,
@@ -229,6 +232,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     z_index: 0.0,
@@ -273,6 +277,7 @@ mod tests {
         states[0] = None;
         frame.objects.push(FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             z_index: 0.0,

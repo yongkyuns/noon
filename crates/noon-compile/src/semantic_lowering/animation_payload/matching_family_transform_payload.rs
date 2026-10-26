@@ -204,6 +204,7 @@ mod tests {
             target_state: SemanticNodeId::new(2, 0),
             effective_source: super::super::EffectiveAnimationProperties {
                 fill_gradient: None,
+                fill_image: None,
                 glow: None,
                 z_index: 0.0,
                 transform: noon_core::Transform2D::IDENTITY,

@@ -112,11 +112,18 @@ impl std::fmt::Display for RasterImagePrepareError {
 }
 impl std::error::Error for RasterImagePrepareError {}
 
+#[derive(Clone, Debug)]
+pub(super) struct PreparedImagePaintResource {
+    pub handle: RasterImageResourceHandle,
+    pub resource: RasterImageResource,
+}
+
 /// An unpublished sparse change set. All fallible resource checks finish before
 /// this can replace renderer rows.
 pub(super) struct ImagePreparation {
     reset: bool,
     updates: Vec<(usize, Option<PreparedImageObject>)>,
+    paint_updates: Vec<(usize, Option<PreparedImagePaintResource>)>,
 }
 
 #[derive(Debug)]
@@ -125,6 +132,9 @@ pub(super) struct RasterImageFramePreparer {
     pub generation: u64,
     pub base_generation: u64,
     pub objects: HashMap<usize, PreparedImageObject>,
+    pub paint_objects: HashMap<usize, PreparedImagePaintResource>,
+    pub paint_dirty: Vec<usize>,
+    pub paint_removed: Vec<usize>,
     pub dirty: Vec<usize>,
     pub removed: Vec<usize>,
     initialized: bool,
@@ -137,6 +147,9 @@ impl Default for RasterImageFramePreparer {
             generation: 0,
             base_generation: 0,
             objects: HashMap::new(),
+            paint_objects: HashMap::new(),
+            paint_dirty: Vec::new(),
+            paint_removed: Vec::new(),
             dirty: Vec::new(),
             removed: Vec::new(),
             initialized: false,
@@ -255,12 +268,106 @@ impl RasterImageFramePreparer {
                 stage_slot(index)?;
             }
         }
-        Ok(ImagePreparation { reset, updates })
+        let mut paint_updates = Vec::new();
+        let mut stage_paint = |index: usize| -> Result<(), RasterImagePrepareError> {
+            let Some((object, paint)) = frame
+                .objects
+                .get(index)
+                .and_then(|object| object.fill_image.as_deref().map(|paint| (object, *paint)))
+                .filter(|_| frame.is_present(index))
+            else {
+                if self.paint_objects.contains_key(&index) {
+                    paint_updates.push((index, None));
+                }
+                return Ok(());
+            };
+            let handle = paint.resource();
+            let existing = self
+                .paint_objects
+                .get(&index)
+                .filter(|row| row.handle == handle);
+            let resource = match resources {
+                Some(resources) => resources.get(handle),
+                None => existing.map(|row| &row.resource),
+            }
+            .ok_or(RasterImagePrepareError::MissingResource(handle))?;
+            if resource.width() > texture_limit || resource.height() > texture_limit {
+                return Err(RasterImagePrepareError::TextureLimit {
+                    width: resource.width(),
+                    height: resource.height(),
+                    limit: texture_limit,
+                });
+            }
+            let valid = object
+                .geometry()
+                .filter(|geometry| {
+                    matches!(
+                        geometry,
+                        noon_core::GeometryRef::Circle { .. }
+                            | noon_core::GeometryRef::Rectangle { .. }
+                            | noon_core::GeometryRef::VectorPath(_)
+                    )
+                })
+                .and_then(|geometry| geometry.local_bounds())
+                .is_some_and(|bounds| {
+                    noon_compile::validate_image_paint_bounds(
+                        object.id,
+                        &paint,
+                        bounds,
+                        [resource.width(), resource.height()],
+                    )
+                    .is_ok()
+                });
+            if !valid
+                || object.spatial.is_some()
+                || frame
+                    .render_geometries
+                    .get(index)
+                    .is_some_and(Option::is_some)
+                || frame
+                    .render_transforms
+                    .get(index)
+                    .is_some_and(Option::is_some)
+                || object.fill_gradient.is_some()
+                || object.glow.is_some()
+                || frame.reveal(index) != 1.0
+                || frame.morph(index) != 0.0
+            {
+                return Err(RasterImagePrepareError::InvalidPresentation(object.id));
+            }
+            if reset || existing.is_none() {
+                paint_updates.push((
+                    index,
+                    Some(PreparedImagePaintResource {
+                        handle,
+                        resource: resource.clone(),
+                    }),
+                ));
+            }
+            Ok(())
+        };
+        if reset {
+            for index in 0..frame.objects.len() {
+                stage_paint(index)?;
+            }
+        } else {
+            for &index in changes.object_indices() {
+                stage_paint(index)?;
+            }
+        }
+        Ok(ImagePreparation {
+            reset,
+            updates,
+            paint_updates,
+        })
     }
 
     pub fn commit(&mut self, preparation: ImagePreparation) {
         self.initialized = true;
-        if !preparation.reset && preparation.updates.is_empty() {
+        if !preparation.reset
+            && preparation.updates.is_empty()
+            && preparation.paint_updates.is_empty()
+        {
             return;
         }
         self.base_generation = self.generation;
@@ -270,9 +377,14 @@ impl RasterImageFramePreparer {
             .expect("image preparation generation exhausted");
         self.dirty.clear();
         self.removed.clear();
+        self.paint_dirty.clear();
+        self.paint_removed.clear();
         if preparation.reset {
             self.removed.extend(self.objects.keys().copied());
             self.objects.clear();
+            self.paint_removed
+                .extend(self.paint_objects.keys().copied());
+            self.paint_objects.clear();
         }
         for (index, row) in preparation.updates {
             match row {
@@ -288,5 +400,19 @@ impl RasterImageFramePreparer {
         }
         self.removed
             .retain(|index| !self.objects.contains_key(index));
+        for (index, row) in preparation.paint_updates {
+            match row {
+                Some(row) => {
+                    self.paint_objects.insert(index, row);
+                    self.paint_dirty.push(index);
+                }
+                None => {
+                    self.paint_objects.remove(&index);
+                    self.paint_removed.push(index);
+                }
+            }
+        }
+        self.paint_removed
+            .retain(|index| !self.paint_objects.contains_key(index));
     }
 }

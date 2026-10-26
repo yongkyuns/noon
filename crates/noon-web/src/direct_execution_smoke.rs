@@ -788,6 +788,15 @@ pub async fn create_direct_mixed_scalar_composition_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for image fitting, UV target animation and image-paint removal.
+#[wasm_bindgen(js_name = createDirectImagePaintSmokeRenderer)]
+pub async fn create_direct_image_paint_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::image_paint::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for shared authored glow pulses, motion and endpoint restoration.
 #[wasm_bindgen(js_name = createDirectLinearGradientSmokeRenderer)]
 pub async fn create_direct_linear_gradient_smoke_renderer(

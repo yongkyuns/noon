@@ -57,6 +57,41 @@ impl SemanticResourceReferences {
 }
 
 impl SemanticStore {
+    pub(super) fn retain_semantic_animation_resources(
+        &mut self,
+        state: &crate::SemanticAnimationState,
+    ) {
+        if let Some(paints) = state.image_paints() {
+            for paint in paints {
+                if self.raster_image_resources.get(paint.resource()).is_some() {
+                    SemanticResourceReferences::retain(
+                        &mut self.resource_references.images,
+                        paint.resource(),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(super) fn release_semantic_animation_resources(
+        &mut self,
+        state: &crate::SemanticAnimationState,
+    ) {
+        if let Some(paints) = state.image_paints() {
+            for paint in paints {
+                let handle = paint.resource();
+                if self.resource_references.images.contains_key(&handle)
+                    && SemanticResourceReferences::release(
+                        &mut self.resource_references.images,
+                        handle,
+                    )
+                {
+                    self.resource_retirement_candidates.images.push(handle);
+                }
+            }
+        }
+    }
+
     pub(super) fn retain_semantic_audio_resource(&mut self, handle: AudioResourceHandle) {
         debug_assert!(self.audio_resources.get(handle).is_some());
         SemanticResourceReferences::retain(&mut self.resource_references.audio, handle);
@@ -70,12 +105,43 @@ impl SemanticStore {
 
     pub(super) fn retain_semantic_object_resources(&mut self, state: &SemanticObjectState) {
         self.retain_semantic_content_resources(state.content);
+        self.retain_semantic_style_resources(&state.style);
         self.retain_semantic_numeric_text_resources(state);
     }
 
     pub(super) fn release_semantic_object_resources(&mut self, state: &SemanticObjectState) {
         self.release_semantic_content_resources(state.content);
+        self.release_semantic_style_resources(&state.style);
         self.release_semantic_numeric_text_resources(state);
+    }
+
+    pub(super) fn retain_semantic_style_resources(&mut self, style: &crate::SemanticStyle) {
+        for paint in [&style.fill, &style.stroke, &style.background_stroke] {
+            if let Some(crate::SemanticPaint::Image(paint)) = paint {
+                if self.raster_image_resources.get(paint.resource()).is_some() {
+                    SemanticResourceReferences::retain(
+                        &mut self.resource_references.images,
+                        paint.resource(),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(super) fn release_semantic_style_resources(&mut self, style: &crate::SemanticStyle) {
+        for paint in [&style.fill, &style.stroke, &style.background_stroke] {
+            if let Some(crate::SemanticPaint::Image(paint)) = paint {
+                let handle = paint.resource();
+                if self.resource_references.images.contains_key(&handle)
+                    && SemanticResourceReferences::release(
+                        &mut self.resource_references.images,
+                        handle,
+                    )
+                {
+                    self.resource_retirement_candidates.images.push(handle);
+                }
+            }
+        }
     }
 
     pub(super) fn replace_semantic_object_content(
@@ -431,6 +497,18 @@ impl SemanticStore {
             .collect::<Vec<_>>();
         for state in &states {
             self.retain_semantic_object_resources(state);
+        }
+        let animations = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter_map(|node| match &node.kind {
+                super::SemanticNodeKind::Animation(animation) => Some(animation.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for animation in &animations {
+            self.retain_semantic_animation_resources(animation);
         }
         let audio_handles = self
             .slots

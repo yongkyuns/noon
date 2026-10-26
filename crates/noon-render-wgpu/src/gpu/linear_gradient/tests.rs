@@ -50,6 +50,7 @@ fn set_gradient(runtime: &mut SceneInstance, paint: Option<Arc<LinearGradient>>)
             object: ObjectId::new(7),
             style,
             fill_gradient: paint,
+            fill_image: None,
         })
         .unwrap();
 }
@@ -75,6 +76,7 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
             object: ObjectId::new(50_000),
             style: Style::default(),
             fill_gradient: Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
+            fill_image: None,
         })
         .unwrap();
     let changes = runtime.take_frame_changes();
@@ -128,6 +130,7 @@ fn path_gradient_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
                 object: ObjectId::new(500),
                 style: runtime.frame().objects[500].style,
                 fill_gradient: paint,
+                fill_image: None,
             })
             .unwrap();
         let changes = runtime.take_frame_changes();
@@ -279,6 +282,7 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
                 .apply_execution_patch(&ExecutionPatch::SetStyle {
                     object: ObjectId::new(7),
                     fill_gradient: paint,
+                    fill_image: None,
                     style: Style {
                         fill: Some(Color::rgba(
                             1.0,

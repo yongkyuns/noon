@@ -4,7 +4,7 @@ use super::{
     raster_image_prepare::{ImageUniform, RasterImageFramePreparer},
     CameraUniform, PATH_SAMPLE_COUNT,
 };
-use noon_core::RasterImageResourceHandle;
+use noon_core::{RasterImageResource, RasterImageResourceHandle};
 use std::{collections::HashMap, mem::size_of, sync::Arc};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -19,6 +19,7 @@ pub struct RasterImageUploadStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RasterImageResidencyStats {
     pub textures: usize,
+    /// Resident image objects and vector image-fill consumers sharing these textures.
     pub objects: usize,
     pub pixel_bytes: usize,
 }
@@ -44,6 +45,7 @@ struct TextureResidency {
     binding: wgpu::BindGroup,
     references: usize,
     pixel_bytes: usize,
+    dimensions: [u32; 2],
 }
 #[derive(Debug)]
 struct ObjectResidency {
@@ -89,6 +91,7 @@ pub(super) struct RasterImageGpuRenderer {
     object_layout: wgpu::BindGroupLayout,
     textures: HashMap<RasterImageResourceHandle, TextureResidency>,
     objects: HashMap<usize, ObjectResidency>,
+    paint_objects: HashMap<usize, RasterImageResourceHandle>,
     owner: Option<Arc<()>>,
     generation: Option<u64>,
     pixel_bytes: usize,
@@ -138,6 +141,7 @@ impl RasterImageGpuRenderer {
             object_layout,
             textures: HashMap::new(),
             objects: HashMap::new(),
+            paint_objects: HashMap::new(),
             owner: None,
             generation: None,
             pixel_bytes: 0,
@@ -258,7 +262,7 @@ impl RasterImageGpuRenderer {
     pub fn stats(&self) -> RasterImageResidencyStats {
         RasterImageResidencyStats {
             textures: self.textures.len(),
-            objects: self.objects.len(),
+            objects: self.objects.len() + self.paint_objects.len(),
             pixel_bytes: self.pixel_bytes,
         }
     }
@@ -277,6 +281,7 @@ impl RasterImageGpuRenderer {
         {
             stats.textures_retired = self.textures.len();
             self.objects.clear();
+            self.paint_objects.clear();
             self.textures.clear();
             self.pixel_bytes = 0;
             self.owner = Some(prepared.owner.clone());
@@ -325,58 +330,7 @@ impl RasterImageGpuRenderer {
                 }
                 return;
             }
-            let texture = self.textures.entry(handle).or_insert_with(|| {
-                let size = wgpu::Extent3d {
-                    width: row.resource.width(),
-                    height: row.resource.height(),
-                    depth_or_array_layers: 1,
-                };
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Noon immutable raster image"),
-                    size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    row.resource.rgba8(),
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(size.width * 4),
-                        rows_per_image: Some(size.height),
-                    },
-                    size,
-                );
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Noon image texture binding"),
-                    layout: &self.texture_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    }],
-                });
-                let pixel_bytes = row.resource.rgba8().len();
-                stats.textures_uploaded += 1;
-                stats.pixel_bytes_uploaded += pixel_bytes;
-                self.pixel_bytes += pixel_bytes;
-                TextureResidency {
-                    _texture: texture,
-                    binding,
-                    references: 0,
-                    pixel_bytes,
-                }
-            });
-            texture.references += 1;
+            self.retain_texture(device, queue, handle, &row.resource, &mut stats);
             let buffer = create_buffer_with_data(
                 device,
                 queue,
@@ -413,6 +367,34 @@ impl RasterImageGpuRenderer {
                 update(index);
             }
         }
+        let previous_paints =
+            (!partial).then(|| self.paint_objects.keys().copied().collect::<Vec<_>>());
+        let mut update_paint = |index: usize| {
+            let next = prepared.paint_objects.get(&index);
+            let previous = self.paint_objects.get(&index).copied();
+            if previous == next.map(|row| row.handle) {
+                return;
+            }
+            if let Some(handle) = self.paint_objects.remove(&index) {
+                self.release_texture(handle, &mut retired);
+            }
+            if let Some(row) = next {
+                self.retain_texture(device, queue, row.handle, &row.resource, &mut stats);
+                self.paint_objects.insert(index, row.handle);
+            }
+        };
+        if partial {
+            for &index in prepared.paint_removed.iter().chain(&prepared.paint_dirty) {
+                update_paint(index);
+            }
+        } else {
+            for index in previous_paints.expect("complete reconciliation") {
+                update_paint(index);
+            }
+            for &index in prepared.paint_objects.keys() {
+                update_paint(index);
+            }
+        }
         for handle in retired {
             if self
                 .textures
@@ -428,16 +410,102 @@ impl RasterImageGpuRenderer {
         stats
     }
 
+    pub(super) fn texture_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.texture_layout
+    }
+
+    pub(super) fn texture_binding(
+        &self,
+        handle: RasterImageResourceHandle,
+    ) -> Option<&wgpu::BindGroup> {
+        self.textures.get(&handle).map(|texture| &texture.binding)
+    }
+
+    pub(super) fn texture_dimensions(&self, handle: RasterImageResourceHandle) -> Option<[u32; 2]> {
+        self.textures.get(&handle).map(|texture| texture.dimensions)
+    }
+
+    fn retain_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        handle: RasterImageResourceHandle,
+        resource: &RasterImageResource,
+        stats: &mut RasterImageUploadStats,
+    ) {
+        let texture = self.textures.entry(handle).or_insert_with(|| {
+            let size = wgpu::Extent3d {
+                width: resource.width(),
+                height: resource.height(),
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Noon immutable raster image"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                resource.rgba8(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size.width * 4),
+                    rows_per_image: Some(size.height),
+                },
+                size,
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Noon image texture binding"),
+                layout: &self.texture_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                }],
+            });
+            let pixel_bytes = resource.rgba8().len();
+            stats.textures_uploaded += 1;
+            stats.pixel_bytes_uploaded += pixel_bytes;
+            self.pixel_bytes += pixel_bytes;
+            TextureResidency {
+                _texture: texture,
+                binding,
+                references: 0,
+                pixel_bytes,
+                dimensions: [resource.width(), resource.height()],
+            }
+        });
+        texture.references += 1;
+    }
+
+    fn release_texture(
+        &mut self,
+        handle: RasterImageResourceHandle,
+        retired: &mut Vec<RasterImageResourceHandle>,
+    ) {
+        let texture = self
+            .textures
+            .get_mut(&handle)
+            .expect("resident image texture");
+        texture.references -= 1;
+        if texture.references == 0 {
+            retired.push(handle);
+        }
+    }
+
     fn remove_object(&mut self, index: usize, retired: &mut Vec<RasterImageResourceHandle>) {
         if let Some(row) = self.objects.remove(&index) {
-            let texture = self
-                .textures
-                .get_mut(&row.resource)
-                .expect("resident image texture");
-            texture.references -= 1;
-            if texture.references == 0 {
-                retired.push(row.resource);
-            }
+            self.release_texture(row.resource, retired);
         }
     }
 

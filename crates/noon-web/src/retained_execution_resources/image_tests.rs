@@ -607,3 +607,178 @@ fn stale_retirement_is_dropped_without_releasing_the_resource() {
     );
     assert_eq!(mirror.resources().image_count(), 1);
 }
+
+fn image_fill_initial() -> (Vec<u8>, RetainedExecutionDeltaEnvelope) {
+    let mut scene = noon::Scene::new();
+    let source = scene
+        .image_rgba8(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 0])
+        .unwrap();
+    let paint = source
+        .image_paint(
+            noon::ImageMapping::default(),
+            Some(noon::RasterImageSampling::Linear),
+        )
+        .unwrap();
+    for x in [-1.5, 1.5] {
+        let mut shape = scene.rectangle(2.0, 2.0).unwrap();
+        shape.disable_stroke().unwrap();
+        shape.set_translation(x, 0.0).unwrap();
+        shape.set_fill_image(paint, Some(0.75)).unwrap();
+        scene.add(&shape).unwrap();
+    }
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap();
+    let bytes = player.resource_bundle_bytes();
+    let delta = serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+    (bytes, delta)
+}
+
+#[test]
+fn image_fill_bundle_remaps_shared_pixels_and_mapping_edits_do_not_retain_new_pixels() {
+    let (bytes, initial) = image_fill_initial();
+    let bundle = RetainedResourceBundle::decode_binary(&bytes).unwrap();
+    assert_eq!((bundle.image_count(), bundle.image_bytes()), (1, 8));
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+    let wire = initial.objects[0].fill_image.unwrap();
+    let local = *mirror.frame().unwrap().objects[0]
+        .fill_image
+        .as_deref()
+        .unwrap();
+    assert_ne!(local.resource().arena, wire.image.arena);
+    assert_eq!(
+        mirror.frame().unwrap().objects[1]
+            .fill_image
+            .as_ref()
+            .unwrap()
+            .resource(),
+        local.resource()
+    );
+    let pixels = mirror
+        .resources()
+        .images()
+        .get(local.resource())
+        .unwrap()
+        .rgba8()
+        .as_ptr();
+    for sequence in 1..=64 {
+        let mut update = initial.clone();
+        update.snapshot = false;
+        update.sequence = sequence;
+        update.painter_order = None;
+        update.objects.truncate(1);
+        let paint = update.objects[0].fill_image.as_mut().unwrap();
+        paint.mapping = noon::ImageMapping::new(
+            noon::ImageFit::Stretch,
+            [0.5; 2],
+            noon::ImageAddressMode::Repeat,
+            noon::ImageUvTransform::new([sequence as f64 / 64.0, -0.25], [0.5, 0.75], 0.3).unwrap(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&update).unwrap();
+        assert!(!json.contains("rgba8") && !json.contains("pixels"));
+        let (_, changes) = mirror.apply_family(family_delta(update)).unwrap();
+        assert_eq!(changes.object_indices(), &[0]);
+        assert_eq!(mirror.resources().image_count(), 1);
+        assert_eq!(
+            mirror
+                .resources()
+                .images()
+                .get(local.resource())
+                .unwrap()
+                .rgba8()
+                .as_ptr(),
+            pixels
+        );
+    }
+}
+
+#[test]
+fn image_fill_unknown_resource_and_unsupported_profile_reject_before_publication() {
+    let (bytes, initial) = image_fill_initial();
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+    let before = mirror.frame().unwrap().clone();
+    let mut valid = initial.clone();
+    valid.snapshot = false;
+    valid.sequence = 1;
+    valid.painter_order = None;
+    valid.objects[0].transform.translation.x += 0.125;
+    for failure in 0..5 {
+        let mut bad = valid.clone();
+        match failure {
+            0 => bad.objects[1].fill_image.as_mut().unwrap().image.arena += 1,
+            1 => bad.objects[1].reveal = 0.5,
+            2 => bad.objects[1].morph = 0.5,
+            3 => {
+                bad.objects[1].content = TransportObjectContent::Geometry {
+                    geometry: noon::GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+                    resource: None,
+                }
+            }
+            _ => {
+                bad.objects[1].fill_image.as_mut().unwrap().mapping = noon::ImageMapping::new(
+                    noon::ImageFit::Cover,
+                    [0.5; 2],
+                    noon::ImageAddressMode::Clamp,
+                    noon::ImageUvTransform::new([f64::MAX, 0.0], [1.0; 2], 0.0).unwrap(),
+                )
+                .unwrap()
+            }
+        }
+        assert!(
+            mirror.apply_family(family_delta(bad)).is_err(),
+            "case {failure}"
+        );
+        assert_eq!(mirror.frame().unwrap(), &before);
+        assert_eq!(mirror.wire.applied_sequence(), Some(0));
+        assert_eq!(mirror.resources().image_count(), 1);
+    }
+    assert_eq!(
+        mirror.apply_family(family_delta(valid)).unwrap().0,
+        RetainedTransportApplyOutcome::Applied
+    );
+    // Checked mapping decoding rejects invalid values before a receiver exists.
+    let mut json = serde_json::to_value(initial).unwrap();
+    json["objects"][0]["fill_image"]["mapping"]["transform"]["scale"][0] = serde_json::json!(0.0);
+    assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(json).is_err());
+}
+
+#[test]
+fn image_fill_retirement_waits_for_last_referring_shape_and_rejected_retirement_is_atomic() {
+    let (bytes, initial) = image_fill_initial();
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+    let image = initial.objects[0].fill_image.unwrap().image;
+    let mut first = initial.clone();
+    first.snapshot = false;
+    first.sequence = 1;
+    first.painter_order = None;
+    first.objects.truncate(1);
+    first.objects[0].fill_image = None;
+    let mut invalid = family_delta(first.clone());
+    invalid.resource_retirements.images.push(image);
+    let before = mirror.frame().unwrap().clone();
+    assert!(mirror.apply_family(invalid).is_err());
+    assert_eq!(mirror.frame().unwrap(), &before);
+    assert_eq!(mirror.wire.applied_sequence(), Some(0));
+    mirror.apply_family(family_delta(first)).unwrap();
+    assert_eq!(mirror.resources().image_count(), 1);
+    let mut last = initial;
+    last.snapshot = false;
+    last.sequence = 2;
+    last.painter_order = None;
+    last.objects.remove(0);
+    last.objects[0].fill_image = None;
+    let mut last = family_delta(last);
+    last.resource_retirements.images.push(image);
+    mirror.apply_family(last).unwrap();
+    assert_eq!(mirror.resources().image_count(), 0);
+    assert!(mirror
+        .frame()
+        .unwrap()
+        .objects
+        .iter()
+        .all(|row| row.fill_image.is_none()));
+}

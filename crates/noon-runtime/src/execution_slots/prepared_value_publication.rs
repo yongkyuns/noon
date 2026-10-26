@@ -30,6 +30,7 @@ enum PreparedAuthoredValueWrite {
         object_index: usize,
         style: Style,
         fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+        fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
         changes_execution: bool,
     },
 }
@@ -156,12 +157,14 @@ impl SceneInstance {
                     ExecutionPatch::SetStyle {
                         style,
                         fill_gradient,
+                        fill_image,
                         ..
                     },
                 ) => PreparedAuthoredValueWrite::Style {
                     object_index,
                     style: *style,
                     fill_gradient: fill_gradient.clone(),
+                    fill_image: fill_image.clone(),
                     changes_execution,
                 },
                 (2, ExecutionPatch::SetSemanticTransform { transform, .. }) => {
@@ -337,6 +340,7 @@ impl SceneInstance {
                 PreparedAuthoredValueWrite::Style {
                     style,
                     fill_gradient,
+                    fill_image,
                     object_index,
                     ..
                 } => {
@@ -344,9 +348,11 @@ impl SceneInstance {
                         object_index as u32,
                         style,
                         fill_gradient.clone(),
+                        fill_image.clone(),
                     );
                     self.frame.objects[object_index].style = style;
                     self.frame.objects[object_index].fill_gradient = fill_gradient;
+                    self.frame.objects[object_index].fill_image = fill_image;
                     self.reapply_properties(
                         object_index,
                         &[
