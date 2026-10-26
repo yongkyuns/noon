@@ -4,7 +4,7 @@
 //! shader uniforms, retained paint values or runtime interpolation results.
 use noon::{
     AnimationOptions, ImageAddressMode, ImageFit, ImageMapping, ImageUvTransform, Mobject,
-    RasterImageSampling, RateFunction, Scene,
+    RasterImageSampling, RateFunction, Scene, Vec2, VectorPath,
 };
 mod raster_support;
 use raster_support::{Raster, SIZE};
@@ -225,7 +225,16 @@ fn scene(profile: Profile) -> (Scene, Mobject, Mobject) {
     let image = scene.image_rgba8(3, 2, PIXELS.to_vec()).unwrap();
     let mut shape = match profile.shape {
         0 => scene.rectangle(4.0, 2.0).unwrap(),
-        1 => Mobject::manim_rectangle(std::rc::Rc::clone(scene.integration_store()), 4.0, 2.0)
+        1 => scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-2.0, -1.0))
+                    .line_to(Vec2::new(2.0, -1.0))
+                    .line_to(Vec2::new(2.0, 1.0))
+                    .line_to(Vec2::new(-2.0, 1.0))
+                    .close(),
+                Default::default(),
+            )
             .unwrap(),
         _ => scene.circle(1.5).unwrap(),
     };
@@ -283,6 +292,11 @@ fn image_paint_fit_filter_address_pose_and_alpha_match_independent_pixels() {
                         let (scene, _image, _shape) = scene(profile);
                         let mut session = scene.execution_session().unwrap();
                         let pixels = raster.capture(&session.take_renderer_publication());
+                        assert_eq!(
+                            raster.last_scene_path_batches > 0,
+                            shape == 1,
+                            "the explicit vector fixture must reach the path draw route"
+                        );
                         samples += check_pixels(&pixels, profile);
                         assert_eq!(pixels, raster.capture(&session.take_renderer_publication()));
                         assert_eq!(

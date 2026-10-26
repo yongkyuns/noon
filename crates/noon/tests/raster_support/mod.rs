@@ -20,6 +20,7 @@ pub struct Raster {
     pub last_scene_upload_bytes: usize,
     pub last_overlay_upload_bytes: usize,
     pub last_scene_repacked: usize,
+    pub last_scene_path_batches: usize,
 }
 impl Raster {
     // This support module is compiled separately by native and Vulkan test binaries.
@@ -109,6 +110,7 @@ impl Raster {
             last_scene_upload_bytes: 0,
             last_overlay_upload_bytes: 0,
             last_scene_repacked: 0,
+            last_scene_path_batches: 0,
         }
     }
     pub fn capture(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
@@ -158,6 +160,16 @@ impl Raster {
             )
             .unwrap();
         self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
+        self.last_scene_path_batches = prepared
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches)
+            .filter(|batch| {
+                matches!(
+                    batch.primitive,
+                    noon_render_wgpu::RenderPrimitive::Path { .. }
+                )
+            })
+            .count();
         self.last_scene_upload_bytes = self
             .renderer
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
