@@ -1,12 +1,14 @@
 //! Native syntax-highlighted source listings over ordinary retained text.
 //!
-//! Layout and highlighting happen once, at admission. A `Code` is a normal
-//! semantic family with a background, optional line numbers, and text lines;
+//! Admission retains the allocated layout. Bounded source edits refresh text
+//! and contextual highlighting through shared semantic transactions. A `Code`
+//! is a normal family with a background, optional line numbers, and text lines;
 //! transforms, copies, animations and rendering use the shared engine paths.
 
 mod admission;
 mod highlight;
 mod regions;
+mod source_update;
 #[cfg(all(test, feature = "bundled-fonts"))]
 mod tests;
 
@@ -14,8 +16,9 @@ use crate::{
     AuthoringError, Color, LiveSession, LiveSessionError, Mobject, MobjectFamily, NativeFontFace,
     Scene, TextAuthoringError, TextPartAuthoringError, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
 };
+pub use noon_core::CodeSyntaxColors;
 use noon_core::SemanticStore;
-use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::BTreeMap, path::Path, rc::Rc, sync::Arc};
 
 /// Background presentation, using ordinary retained vector geometry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -85,6 +88,12 @@ pub struct CodeOptions {
     pub background: CodeBackground,
     pub background_config: CodeBackgroundConfig,
     pub paragraph_config: CodeParagraphConfig,
+    /// A same-row-count source variant whose extent is reserved before fitting.
+    /// This is measured, never displayed. Row edits cannot exceed these slots.
+    pub reserved_source: Option<String>,
+    pub syntax_colors: CodeSyntaxColors,
+    /// Exact whole identifiers or dotted paths; comments and strings are protected.
+    pub token_colors: BTreeMap<String, Color>,
 }
 impl Default for CodeOptions {
     fn default() -> Self {
@@ -98,6 +107,9 @@ impl Default for CodeOptions {
             background: CodeBackground::Rectangle,
             background_config: CodeBackgroundConfig::default(),
             paragraph_config: CodeParagraphConfig::default(),
+            reserved_source: None,
+            syntax_colors: CodeSyntaxColors::default(),
+            token_colors: BTreeMap::new(),
         }
     }
 }
@@ -142,6 +154,10 @@ pub enum CodeAuthoringError {
         count: usize,
     },
     UnsupportedLineRegion(&'static str),
+    UnsupportedSourceUpdate(&'static str),
+    SourceDoesNotFit {
+        index: usize,
+    },
     Text(TextAuthoringError),
     TextPart(TextPartAuthoringError),
     Semantic(AuthoringError),
@@ -166,6 +182,12 @@ impl std::fmt::Display for CodeAuthoringError {
             ),
             Self::UnsupportedLineRegion(reason) => {
                 write!(f, "Code line region is unavailable: {reason}")
+            }
+            Self::UnsupportedSourceUpdate(reason) => {
+                write!(f, "Code source update is unavailable: {reason}")
+            }
+            Self::SourceDoesNotFit { index } => {
+                write!(f, "Code line {index} exceeds its reserved layout")
             }
             Self::Text(error) => error.fmt(f),
             Self::TextPart(error) => error.fmt(f),
@@ -200,6 +222,16 @@ pub struct Code {
     highlights: MobjectFamily,
     code_lines: MobjectFamily,
     line_numbers: Option<MobjectFamily>,
+}
+
+/// The removed and replacement rows of one atomic Code edit. The previous row
+/// leaves this listing; other scene/family memberships remain unchanged. It is
+/// still usable for an ordinary exit animation. The current row occupies the
+/// same rank in the listing's `code_lines` family.
+#[derive(Clone, Debug)]
+pub struct CodeLineReplacement {
+    pub previous: Mobject,
+    pub current: Mobject,
 }
 impl Code {
     pub fn new(
@@ -405,6 +437,19 @@ impl CodeOptions {
     fn validate(&self) -> Result<(), CodeAuthoringError> {
         if self.tab_width > 256 {
             return Err(invalid("tab_width (0..=256)", self.tab_width));
+        }
+        if !self.syntax_colors.is_valid() {
+            return Err(invalid(
+                "syntax_colors",
+                "expected finite RGBA channels in 0..=1",
+            ));
+        }
+        for (selector, color) in &self.token_colors {
+            if !noon_core::is_valid_code_token_selector(selector)
+                || !noon_core::is_valid_code_color(*color)
+            {
+                return Err(invalid("token_colors", selector));
+            }
         }
         let paragraph = &self.paragraph_config;
         if !paragraph.font_size.is_finite() || paragraph.font_size <= 0.0 {

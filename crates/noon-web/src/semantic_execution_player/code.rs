@@ -4,6 +4,16 @@ use crate::authoring_error::AuthoringFailure;
 use std::ops::Range;
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn live_replace_code_line(
+        &mut self,
+        code: &noon::Code,
+        index: usize,
+        source: &str,
+    ) -> Result<noon::CodeLineReplacement, AuthoringFailure> {
+        self.with_live_session(|live| Ok(code.replace_line_in_live_session(live, index, source)))?
+            .map_err(AuthoringFailure::from)
+    }
+
     pub(crate) fn live_get_highlighted_code_lines(
         &mut self,
         code: &noon::Code,

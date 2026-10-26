@@ -2040,6 +2040,7 @@ dependencies = [
  "syntect",
  "two-face 0.5.2+bat-0.26.1",
  "typst-assets",
+ "unicode-ident",
  "usvg 0.48.1",
  "wgpu",
 ]
@@ -2058,6 +2059,7 @@ name = "noon-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "unicode-ident",
 ]
 
 [[package]]

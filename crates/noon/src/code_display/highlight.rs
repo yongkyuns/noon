@@ -5,9 +5,12 @@
 //! Scope classification comes from Syntect's grammars, so this is a documented
 //! syntax/color profile rather than an assertion of identical Pygments tokens.
 
-use std::{fmt, ops::Range, sync::OnceLock};
+use std::{collections::BTreeMap, fmt, ops::Range, sync::OnceLock};
 
-use noon_core::{Color, TextSourceFill, TextSourceSpan};
+use noon_core::{
+    is_valid_code_color, is_valid_code_token_selector, CodeSyntaxColors, Color, TextSourceFill,
+    TextSourceSpan,
+};
 use syntect::{
     easy::ScopeRangeIterator,
     highlighting::{
@@ -20,6 +23,8 @@ use syntect::{
 #[derive(Debug)]
 pub(super) struct HighlightedCode {
     pub source: String,
+    /// The selected grammar/profile, including admission-time autodetection.
+    pub resolved_language: String,
     pub lines: Vec<HighlightedLine>,
     pub background: Color,
     pub foreground: Color,
@@ -36,6 +41,8 @@ pub(super) struct HighlightedLine {
 pub(super) enum HighlightError {
     UnknownLanguage(String),
     UnknownStyle(String),
+    InvalidColors,
+    InvalidToken(String),
     SourceTooLong,
     Parse { line: usize, message: String },
 }
@@ -51,6 +58,8 @@ impl fmt::Display for HighlightError {
                 f,
                 "unsupported Code formatter style {style:?}; use Code::get_styles_list()"
             ),
+            Self::InvalidColors => write!(f, "Code syntax/token colors require finite RGBA channels in 0..=1"),
+            Self::InvalidToken(token) => write!(f, "invalid Code token selector {token:?}; expected a whole identifier or dotted identifier path"),
             Self::SourceTooLong => write!(f, "Code source exceeds Noon's UTF-8 span space"),
             Self::Parse { line, message } => {
                 write!(f, "Code highlighting failed on line {line}: {message}")
@@ -134,9 +143,40 @@ pub(super) fn highlight(
     source: &str,
     language: Option<&str>,
     style: &str,
+    syntax_colors: &CodeSyntaxColors,
+    token_colors: &BTreeMap<String, Color>,
 ) -> Result<HighlightedCode, HighlightError> {
     u32::try_from(source.len()).map_err(|_| HighlightError::SourceTooLong)?;
-    let theme = theme(style)?;
+    if !syntax_colors.is_valid()
+        || token_colors
+            .values()
+            .copied()
+            .any(|color| !is_valid_code_color(color))
+    {
+        return Err(HighlightError::InvalidColors);
+    }
+    if let Some(token) = token_colors
+        .keys()
+        .find(|token| !is_valid_code_token_selector(token))
+    {
+        return Err(HighlightError::InvalidToken(token.clone()));
+    }
+    let mut theme = theme(style)?;
+    let foreground = syntax_colors.foreground.unwrap_or_else(|| {
+        color(
+            theme
+                .settings
+                .foreground
+                .expect("native Code theme has foreground"),
+        )
+    });
+    if syntax_colors.foreground.is_some() {
+        // The bundled theme rules are opaque. A private transparent marker
+        // identifies only the fallback, so arbitrary authored f32 colors survive
+        // Syntect's byte-color machinery without recoloring equal-colored rules.
+        theme.settings.foreground = Some(CUSTOM_FOREGROUND);
+    }
+    let token_tree = TokenColorTree::new(token_colors);
     let syntax = match language {
         Some(language) => syntax_for_language(language)?,
         None => syntaxes()
@@ -163,21 +203,43 @@ pub(super) fn highlight(
                     message: error.to_string(),
                 })?;
         let overrides = if cuda {
-            cuda_fills(parsed_line, &changes, state.path.clone(), &highlighter).map_err(
-                |message| HighlightError::Parse {
-                    line: index + 1,
-                    message,
-                },
-            )?
+            cuda_fills(
+                parsed_line,
+                &changes,
+                state.path.clone(),
+                &highlighter,
+                syntax_colors,
+            )
+            .map_err(|message| HighlightError::Parse {
+                line: index + 1,
+                message,
+            })?
         } else if syntax.name == "Python" {
-            python_word_operator_fills(parsed_line, &changes, state.path.clone(), &highlighter)
-                .map_err(|message| HighlightError::Parse {
-                    line: index + 1,
-                    message,
-                })?
+            python_word_operator_fills(
+                parsed_line,
+                &changes,
+                state.path.clone(),
+                &highlighter,
+                syntax_colors,
+            )
+            .map_err(|message| HighlightError::Parse {
+                line: index + 1,
+                message,
+            })?
         } else {
             Vec::new()
         };
+        let (category_fills, token_fills) = custom_fills(
+            parsed_line,
+            &changes,
+            state.path.clone(),
+            syntax_colors,
+            &token_tree,
+        )
+        .map_err(|message| HighlightError::Parse {
+            line: index + 1,
+            message,
+        })?;
         let mut fills = Vec::new();
         for (style, _, range) in
             RangedHighlightIterator::new(&mut state, &changes, parsed_line, &highlighter)
@@ -186,11 +248,21 @@ pub(super) fn highlight(
                 &mut fills,
                 range.start.min(line.len()),
                 range.end.min(line.len()),
-                color(style.foreground),
+                if style.foreground == CUSTOM_FOREGROUND && syntax_colors.foreground.is_some() {
+                    foreground
+                } else {
+                    color(style.foreground)
+                },
             );
+        }
+        if !category_fills.is_empty() {
+            fills = overlay_fills(fills, &category_fills);
         }
         if !overrides.is_empty() {
             fills = overlay_fills(fills, &overrides);
+        }
+        if !token_fills.is_empty() {
+            fills = overlay_fills(fills, &token_fills);
         }
         lines.push(HighlightedLine {
             source: line.into(),
@@ -198,12 +270,13 @@ pub(super) fn highlight(
         });
         source_offset = parsed_end;
     }
-    let foreground = theme
-        .settings
-        .foreground
-        .expect("native Code theme has foreground");
     Ok(HighlightedCode {
         source: source.into(),
+        resolved_language: if cuda {
+            "CUDA C++".into()
+        } else {
+            syntax.name.clone()
+        },
         lines,
         background: color(
             theme
@@ -211,10 +284,21 @@ pub(super) fn highlight(
                 .background
                 .expect("native Code theme has background"),
         ),
-        foreground: color(foreground),
-        line_number: color(theme.settings.gutter_foreground.unwrap_or(foreground)),
+        foreground,
+        line_number: theme
+            .settings
+            .gutter_foreground
+            .map(color)
+            .unwrap_or(foreground),
     })
 }
+
+const CUSTOM_FOREGROUND: SyntaxColor = SyntaxColor {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 0,
+};
 
 fn push_fill(fills: &mut Vec<TextSourceFill>, start: usize, end: usize, color: Color) {
     if start >= end {
@@ -233,6 +317,170 @@ fn push_fill(fills: &mut Vec<TextSourceFill>, start: usize, end: usize, color: C
     ));
 }
 
+#[derive(Default)]
+struct TokenColorNode<'a> {
+    color: Option<Color>,
+    next: BTreeMap<&'a str, usize>,
+}
+
+/// A flat, authoring-local trie avoids scanning every configured selector at
+/// every source token. No matcher or syntax state survives source admission.
+struct TokenColorTree<'a> {
+    nodes: Vec<TokenColorNode<'a>>,
+}
+
+impl<'a> TokenColorTree<'a> {
+    fn new(colors: &'a BTreeMap<String, Color>) -> Self {
+        let mut nodes = vec![TokenColorNode::default()];
+        for (selector, &color) in colors {
+            let mut index = 0;
+            for component in selector.split('.') {
+                index = match nodes[index].next.get(component) {
+                    Some(&next) => next,
+                    None => {
+                        let next = nodes.len();
+                        nodes.push(TokenColorNode::default());
+                        nodes[index].next.insert(component, next);
+                        next
+                    }
+                };
+            }
+            nodes[index].color = Some(color);
+        }
+        Self { nodes }
+    }
+
+    fn longest_match(&self, source: &str) -> Option<(usize, Color)> {
+        let mut index = 0;
+        let mut cursor = 0;
+        let mut best = None;
+        loop {
+            let remainder = &source[cursor..];
+            let first = remainder.chars().next()?;
+            if first != '_' && !unicode_ident::is_xid_start(first) {
+                return best;
+            }
+            let length = identifier_length(remainder);
+            let Some(&next) = self.nodes[index].next.get(&remainder[..length]) else {
+                return best;
+            };
+            index = next;
+            cursor += length;
+            if let Some(color) = self.nodes[index].color {
+                best = Some((cursor, color));
+            }
+            if source.as_bytes().get(cursor) != Some(&b'.') || self.nodes[index].next.is_empty() {
+                return best;
+            }
+            cursor += 1;
+            if cursor == source.len() {
+                return best;
+            }
+        }
+    }
+
+    fn fills(&self, source: &str, regions: &[Range<usize>]) -> Vec<TextSourceFill> {
+        if self.nodes[0].next.is_empty() {
+            return Vec::new();
+        }
+        let mut fills = Vec::new();
+        for region in regions {
+            let mut cursor = region.start;
+            while cursor < region.end {
+                let remainder = &source[cursor..region.end];
+                let character = remainder.chars().next().expect("nonempty token region");
+                if unicode_ident::is_xid_continue(character) {
+                    if let Some((length, color)) = self.longest_match(remainder) {
+                        push_fill(&mut fills, cursor, cursor + length, color);
+                        cursor += length;
+                    } else {
+                        cursor += identifier_length(remainder);
+                    }
+                } else {
+                    cursor += character.len_utf8();
+                }
+            }
+        }
+        fills
+    }
+}
+
+fn identifier_length(source: &str) -> usize {
+    source
+        .char_indices()
+        .find(|(_, character)| !unicode_ident::is_xid_continue(*character))
+        .map_or(source.len(), |(offset, _)| offset)
+}
+
+fn custom_fills(
+    line: &str,
+    changes: &[(usize, syntect::parsing::ScopeStackOp)],
+    mut stack: ScopeStack,
+    colors: &CodeSyntaxColors,
+    tokens: &TokenColorTree<'_>,
+) -> Result<(Vec<TextSourceFill>, Vec<TextSourceFill>), String> {
+    if [
+        colors.comment,
+        colors.keyword,
+        colors.number,
+        colors.string,
+        colors.operator,
+    ]
+    .into_iter()
+    .all(|color| color.is_none())
+        && tokens.nodes[0].next.is_empty()
+    {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let comment = scope("comment");
+    let string = scope("string");
+    let number = scope("constant.numeric");
+    let operator = scope("keyword.operator");
+    let keywords = [
+        scope("keyword"),
+        scope("storage"),
+        scope("support.type"),
+        scope("constant.language"),
+    ];
+    let mut fills = Vec::new();
+    let mut code_regions: Vec<Range<usize>> = Vec::new();
+    for (range, operation) in ScopeRangeIterator::new(changes, line) {
+        stack.apply(operation).map_err(|error| error.to_string())?;
+        if range.is_empty() {
+            continue;
+        }
+        let contains = |prefix: Scope| stack.as_slice().iter().any(|s| prefix.is_prefix_of(*s));
+        let lexical = contains(comment) || contains(string);
+        let color = if contains(comment) {
+            colors.comment
+        } else if contains(string) {
+            colors.string
+        } else if contains(number) {
+            colors.number
+        } else if contains(operator) {
+            colors.operator
+        } else if keywords.into_iter().any(contains) {
+            colors.keyword
+        } else {
+            None
+        };
+        if let Some(color) = color {
+            push_fill(&mut fills, range.start, range.end, color);
+        }
+        if !lexical {
+            if let Some(previous) = code_regions
+                .last_mut()
+                .filter(|previous| previous.end == range.start)
+            {
+                previous.end = range.end;
+            } else {
+                code_regions.push(range);
+            }
+        }
+    }
+    Ok((fills, tokens.fills(line, &code_regions)))
+}
+
 /// CUDA uses the bundled C++ grammar for strings, comments, preprocessor and
 /// nested expressions, then extends code tokens with CUDA qualifiers/builtins
 /// and launch delimiters. This explicit profile is not a plain C++ alias and
@@ -247,14 +495,17 @@ fn python_word_operator_fills(
     changes: &[(usize, syntect::parsing::ScopeStackOp)],
     mut stack: ScopeStack,
     highlighter: &Highlighter<'_>,
+    syntax_colors: &CodeSyntaxColors,
 ) -> Result<Vec<TextSourceFill>, String> {
     let comment = scope("comment");
     let string = scope("string");
-    let word_operator = color(
-        highlighter
-            .style_for_stack(&[scope("keyword.operator.word")])
-            .foreground,
-    );
+    let word_operator = syntax_colors.operator.unwrap_or_else(|| {
+        color(
+            highlighter
+                .style_for_stack(&[scope("keyword.operator.word")])
+                .foreground,
+        )
+    });
     let mut fills = Vec::new();
     for (range, operation) in ScopeRangeIterator::new(changes, line) {
         stack.apply(operation).map_err(|error| error.to_string())?;
@@ -304,6 +555,7 @@ fn cuda_fills(
     changes: &[(usize, syntect::parsing::ScopeStackOp)],
     mut stack: ScopeStack,
     highlighter: &Highlighter<'_>,
+    syntax_colors: &CodeSyntaxColors,
 ) -> Result<Vec<TextSourceFill>, String> {
     let comment = scope("comment");
     let string = scope("string");
@@ -327,18 +579,22 @@ fn cuda_fills(
             regions.push(range);
         }
     }
-    let keyword = color(
-        highlighter
-            .style_for_stack(&[scope("storage.modifier.cuda")])
-            .foreground,
-    );
+    let keyword = syntax_colors.keyword.unwrap_or_else(|| {
+        color(
+            highlighter
+                .style_for_stack(&[scope("storage.modifier.cuda")])
+                .foreground,
+        )
+    });
     // Pygments CudaLexer variable qualifiers (including __device__) use
     // Keyword.Type. Keep this separate from function qualifiers (Keyword.Reserved).
-    let type_keyword = color(
-        highlighter
-            .style_for_stack(&[scope("storage.type.cuda")])
-            .foreground,
-    );
+    let type_keyword = syntax_colors.keyword.unwrap_or_else(|| {
+        color(
+            highlighter
+                .style_for_stack(&[scope("storage.type.cuda")])
+                .foreground,
+        )
+    });
     let function = color(
         highlighter
             .style_for_stack(&[scope("entity.name.function")])
@@ -354,11 +610,13 @@ fn cuda_fills(
             .style_for_stack(&[scope("support.variable.cuda")])
             .foreground,
     );
-    let operator = color(
-        highlighter
-            .style_for_stack(&[scope("keyword.operator.cuda")])
-            .foreground,
-    );
+    let operator = syntax_colors.operator.unwrap_or_else(|| {
+        color(
+            highlighter
+                .style_for_stack(&[scope("keyword.operator.cuda")])
+                .foreground,
+        )
+    });
     let mut fills = Vec::new();
     for region in regions {
         let mut cursor = region.start;
@@ -535,6 +793,20 @@ fn theme(name: &str) -> Result<Theme, HighlightError> {
 mod tests {
     use super::*;
 
+    fn highlight(
+        source: &str,
+        language: Option<&str>,
+        style: &str,
+    ) -> Result<HighlightedCode, HighlightError> {
+        super::highlight(
+            source,
+            language,
+            style,
+            &CodeSyntaxColors::default(),
+            &BTreeMap::new(),
+        )
+    }
+
     fn at(line: &HighlightedLine, needle: &str) -> Color {
         let offset = line.source.find(needle).unwrap() as u32;
         line.fills
@@ -542,6 +814,213 @@ mod tests {
             .find(|fill| fill.source_span.start <= offset && offset < fill.source_span.end)
             .unwrap()
             .color
+    }
+
+    fn customized(
+        source: &str,
+        language: &str,
+        colors: CodeSyntaxColors,
+        tokens: &[(&str, Color)],
+    ) -> HighlightedCode {
+        super::highlight(
+            source,
+            Some(language),
+            "vim",
+            &colors,
+            &tokens
+                .iter()
+                .map(|&(name, color)| (name.into(), color))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn custom_cuda_colors_preserve_whole_identifiers_and_source_associations() {
+        let source = "__shared__ float tile[TILE_DIM + 1];\nint inside = blockIdx.x + threadIdx.x;\nout[0] = in[0]; __syncthreads(); // in tile out";
+        let result = customized(
+            source,
+            "cuda",
+            CodeSyntaxColors {
+                keyword: Some(Color::PURPLE),
+                number: Some(Color::ORANGE),
+                comment: Some(Color::GRAY),
+                ..CodeSyntaxColors::default()
+            },
+            &[
+                ("tile", Color::BLUE),
+                ("in", Color::BLUE),
+                ("out", Color::GREEN),
+                ("TILE_DIM", Color::ORANGE),
+                ("blockIdx.x", Color::ORANGE),
+                ("threadIdx.x", Color::ORANGE),
+                ("__syncthreads", Color::PINK),
+            ],
+        );
+        assert_eq!(result.source, source);
+        assert_eq!(at(&result.lines[0], "__shared__"), Color::PURPLE);
+        assert_eq!(at(&result.lines[0], "float"), Color::PURPLE);
+        assert_eq!(at(&result.lines[0], "tile"), Color::BLUE);
+        assert_eq!(at(&result.lines[0], "TILE_DIM"), Color::ORANGE);
+        assert_eq!(at(&result.lines[0], "1"), Color::ORANGE);
+        assert_eq!(at(&result.lines[1], "int"), Color::PURPLE);
+        assert_ne!(at(&result.lines[1], "inside"), Color::BLUE);
+        for token in ["blockIdx.x", "threadIdx.x"] {
+            let start = result.lines[1].source.find(token).unwrap();
+            for offset in start..start + token.len() {
+                let fill = result.lines[1]
+                    .fills
+                    .iter()
+                    .find(|fill| {
+                        fill.source_span.start as usize <= offset
+                            && offset < fill.source_span.end as usize
+                    })
+                    .unwrap();
+                assert_eq!(fill.color, Color::ORANGE);
+            }
+        }
+        assert_eq!(at(&result.lines[2], "out"), Color::GREEN);
+        assert_eq!(at(&result.lines[2], "in["), Color::BLUE);
+        assert_eq!(at(&result.lines[2], "__syncthreads"), Color::PINK);
+        let comment = result.lines[2].source.find("//").unwrap() as u32;
+        assert!(result.lines[2]
+            .fills
+            .iter()
+            .filter(|fill| fill.source_span.end > comment)
+            .all(|fill| fill.color == Color::GRAY));
+    }
+
+    #[test]
+    fn custom_tokens_obey_multiline_comment_and_raw_string_precedence() {
+        let result = customized(
+            "/* in\ntile */ in;\nconst char *s = R\"tag(out\nin)tag\"; out;",
+            "cuda",
+            CodeSyntaxColors {
+                comment: Some(Color::GRAY),
+                string: Some(Color::ORANGE),
+                ..CodeSyntaxColors::default()
+            },
+            &[
+                ("in", Color::BLUE),
+                ("tile", Color::BLUE),
+                ("out", Color::GREEN),
+            ],
+        );
+        assert_eq!(at(&result.lines[0], "in"), Color::GRAY);
+        assert_eq!(at(&result.lines[1], "tile"), Color::GRAY);
+        assert_eq!(at(&result.lines[1], "in;"), Color::BLUE);
+        assert_eq!(at(&result.lines[2], "out"), Color::ORANGE);
+        assert_eq!(at(&result.lines[3], "in"), Color::ORANGE);
+        assert_eq!(at(&result.lines[3], "out;"), Color::GREEN);
+    }
+
+    #[test]
+    fn exact_unicode_tokens_and_longest_dotted_selectors_have_valid_local_spans() {
+        let result = customized(
+            "café cafe\u{301} in\u{301} inside in_ _in 1in 🙂 in\na.b a.bc a.b.c a.c",
+            "text",
+            CodeSyntaxColors::default(),
+            &[
+                ("café", Color::BLUE),
+                ("cafe\u{301}", Color::GREEN),
+                ("in", Color::PINK),
+                ("a", Color::BLUE),
+                ("a.b", Color::GREEN),
+                ("a.b.c", Color::ORANGE),
+            ],
+        );
+        assert_eq!(at(&result.lines[0], "café"), Color::BLUE);
+        assert_eq!(at(&result.lines[0], "cafe\u{301}"), Color::GREEN);
+        for token in ["in\u{301}", "inside", "in_", "_in", "1in"] {
+            assert_ne!(at(&result.lines[0], token), Color::PINK, "{token}");
+        }
+        assert_eq!(result.lines[0].fills.last().unwrap().color, Color::PINK);
+        assert_eq!(at(&result.lines[1], "a.b "), Color::GREEN);
+        assert_eq!(at(&result.lines[1], "a.bc"), Color::BLUE);
+        assert_eq!(at(&result.lines[1], "a.b.c"), Color::ORANGE);
+        assert_eq!(at(&result.lines[1], "a.c"), Color::BLUE);
+        for line in result.lines {
+            let mut end = 0;
+            for fill in line.fills {
+                assert_eq!(fill.source_span.start as usize, end);
+                end = fill.source_span.end as usize;
+                assert!(line.source.is_char_boundary(end));
+            }
+            assert_eq!(end, line.source.len());
+        }
+    }
+
+    #[test]
+    fn keyword_and_operator_categories_keep_language_extensions_and_exact_overrides() {
+        let colors = CodeSyntaxColors {
+            keyword: Some(Color::GREEN),
+            operator: Some(Color::RED),
+            ..CodeSyntaxColors::default()
+        };
+        let python = customized("for item in values: return item + 1", "python", colors, &[]);
+        assert_eq!(at(&python.lines[0], "for"), Color::GREEN);
+        assert_eq!(at(&python.lines[0], "in"), Color::RED);
+        assert_eq!(at(&python.lines[0], "+"), Color::RED);
+        let cuda = customized(
+            "__global__ void f() {}\nf<<<1, 1>>>();",
+            "cuda",
+            colors,
+            &[("void", Color::BLUE)],
+        );
+        assert_eq!(at(&cuda.lines[0], "__global__"), Color::GREEN);
+        assert_eq!(at(&cuda.lines[0], "void"), Color::BLUE);
+        assert_eq!(at(&cuda.lines[1], "<<<"), Color::RED);
+        assert_eq!(at(&cuda.lines[1], ">>>"), Color::RED);
+    }
+
+    #[test]
+    fn foreground_preserves_full_color_precision_and_explicit_equal_palette_rules() {
+        let foreground = Color::rgba(0.1234567, 0.2345678, 0.3456789, 0.456789);
+        let result = customized(
+            "def function(value):\n    return value",
+            "python",
+            CodeSyntaxColors {
+                foreground: Some(foreground),
+                ..CodeSyntaxColors::default()
+            },
+            &[],
+        );
+        assert_eq!(result.foreground, foreground);
+        assert_eq!(at(&result.lines[1], "value"), foreground);
+        // Vim deliberately has the same byte color for its function rule and
+        // original fallback. Only the fallback follows `foreground`.
+        assert_eq!(at(&result.lines[0], "function"), color(rgb(0xcccccc)));
+    }
+
+    #[test]
+    fn invalid_color_or_token_choices_fail_before_highlighting() {
+        assert_eq!(
+            super::highlight(
+                "in",
+                Some("text"),
+                "vim",
+                &CodeSyntaxColors {
+                    number: Some(Color::rgba(f32::NAN, 0.0, 0.0, 1.0)),
+                    ..CodeSyntaxColors::default()
+                },
+                &BTreeMap::new()
+            )
+            .unwrap_err(),
+            HighlightError::InvalidColors,
+        );
+        for selector in ["", "in[0]", "x.", "x .y"] {
+            assert_eq!(
+                super::highlight(
+                    "in",
+                    Some("text"),
+                    "vim",
+                    &CodeSyntaxColors::default(),
+                    &BTreeMap::from([(selector.into(), Color::BLUE)])
+                )
+                .unwrap_err(),
+                HighlightError::InvalidToken(selector.into()),
+            );
+        }
     }
 
     #[test]
@@ -705,12 +1184,16 @@ mod tests {
         );
         assert_eq!(language_for_file_name("file.ts"), Some("TypeScript".into()));
         let guessed = highlight("#!/usr/bin/env python\nreturn 2", None, "vim").unwrap();
+        assert_eq!(guessed.resolved_language, "Python");
         assert_eq!(at(&guessed.lines[1], "return"), color(rgb(0xcdcd00)));
         let plain = highlight("some words with no language signal", None, "vim").unwrap();
+        assert_eq!(plain.resolved_language, "Plain Text");
         assert!(plain.lines[0]
             .fills
             .iter()
             .all(|fill| fill.color == plain.foreground));
+        let cuda = highlight("__shared__ float tile[2];", Some("cu"), "vim").unwrap();
+        assert_eq!(cuda.resolved_language, "CUDA C++");
     }
 
     #[test]

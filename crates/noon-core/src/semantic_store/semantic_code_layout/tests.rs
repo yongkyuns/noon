@@ -19,6 +19,88 @@ fn metrics() -> SemanticCodeLayoutMetrics {
     }
 }
 
+fn recipe() -> Arc<SemanticCodeSourceRecipe> {
+    Arc::new(SemanticCodeSourceRecipe {
+        language: Some("Python".into()),
+        formatter_style: "vim".into(),
+        tab_width: 4,
+        font_family: "Example".into(),
+        font_data: Arc::from([1, 2, 3]),
+        font_face_index: 0,
+        font_metrics_profile: NativeFontMetricsProfile::CairoFreeType,
+        font_size: 24.0,
+        line_spacing: 0.5,
+        disable_ligatures: true,
+        logical_source_x: 0.0,
+        syntax_colors: CodeSyntaxColors::default(),
+        token_colors: BTreeMap::new(),
+    })
+}
+
+#[test]
+fn source_recipe_is_retained_and_shared_through_transaction_and_store_copy() {
+    let mut store = SemanticStore::new();
+    let mut tx = SemanticMutationTransaction::new();
+    let listing = stage_listing(&mut tx);
+    let recipe = recipe();
+    tx.set_code_layout(
+        listing.root,
+        listing
+            .layout(metrics())
+            .with_source_recipe(Arc::clone(&recipe)),
+    );
+    let result = tx.apply(&mut store).unwrap();
+    let root = result.resolve(listing.root).unwrap();
+    let retained = store.semantic_code_layout(root).unwrap().unwrap();
+    assert!(Arc::ptr_eq(retained.source_recipe().unwrap(), &recipe));
+    let copy = store.clone();
+    let copied = copy.semantic_code_layout(root).unwrap().unwrap();
+    assert!(Arc::ptr_eq(copied.source_recipe().unwrap(), &recipe));
+    assert_ne!(
+        copied.panel_geometry().arena,
+        retained.panel_geometry().arena
+    );
+    assert_eq!(store.text_resources().len(), 0);
+    assert_eq!(store.font_resources().len(), 0);
+}
+
+#[test]
+fn invalid_source_recipe_rolls_back_the_whole_listing_transaction() {
+    let mut invalid = Vec::new();
+    let mut value = (*recipe()).clone();
+    value.logical_source_x = 9.0;
+    invalid.push(value);
+    let mut value = (*recipe()).clone();
+    value.font_size = f32::NAN;
+    invalid.push(value);
+    let mut value = (*recipe()).clone();
+    value.font_data = Arc::from([]);
+    invalid.push(value);
+    let mut value = (*recipe()).clone();
+    value.token_colors.insert("a b".into(), Color::RED);
+    invalid.push(value);
+    let mut value = (*recipe()).clone();
+    value.syntax_colors.comment = Some(Color::rgba(1.0, 0.0, 0.0, f32::NAN));
+    invalid.push(value);
+    let mut store = SemanticStore::new();
+    let before = snapshot(&store);
+    for value in invalid {
+        let mut tx = SemanticMutationTransaction::new();
+        let listing = stage_listing(&mut tx);
+        tx.set_code_layout(
+            listing.root,
+            listing
+                .layout(metrics())
+                .with_source_recipe(Arc::new(value)),
+        );
+        assert!(matches!(
+            tx.apply(&mut store),
+            Err(SemanticMutationTransactionError::InvalidCodeLayout { .. })
+        ));
+        assert_eq!(snapshot(&store), before);
+    }
+}
+
 fn panel_path() -> VectorPath {
     VectorPath::new()
         .move_to(Vec2::new(-1.0, -1.0))

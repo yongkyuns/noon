@@ -348,6 +348,17 @@ pub enum GlyphOutlineProfile {
     CairoCoreText,
 }
 
+/// Explicit native text layout environment. Semantic authoring recipes retain
+/// this exact choice so later source edits use the same preparation contract.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NativeFontMetricsProfile {
+    #[default]
+    CairoFreeType,
+    /// Fractional Pango layout with Cairo/CoreText paths, for static monochrome
+    /// TrueType faces. CFF, variable and intrinsic color faces are unsupported.
+    CairoCoreText,
+}
+
 /// One shaped run. `fill == None` means inherit the owning mobject's color;
 /// `Some` preserves an intrinsic backend color (for example styled Typst content).
 #[derive(Clone, Debug, PartialEq)]

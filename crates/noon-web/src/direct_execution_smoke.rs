@@ -22,6 +22,25 @@ pub async fn create_code_line_highlight_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Independent reserved-layout source states through the direct typed Rust path.
+#[wasm_bindgen(js_name = createCodeSourceRenderer)]
+pub async fn create_code_source_renderer(
+    canvas: OffscreenCanvas,
+    updated: bool,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::code_source_update::session(updated).map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// The same source edit animated through a normal Rust live continuation.
+#[wasm_bindgen(js_name = createCodeSourceUpdateRenderer)]
+pub async fn create_code_source_update_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::code_source_update::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct Rust/WASM first-presented-frame proof shared with native semantics:
 /// thirty-two individually admitted, 1/16-second animated endpoints.
 struct OverdueShortAnimation {

@@ -64,6 +64,8 @@ mod semantic_table_layout;
 pub use semantic_table_layout::*;
 mod semantic_code_layout;
 pub use semantic_code_layout::*;
+mod semantic_code_colors;
+pub use semantic_code_colors::*;
 
 mod semantic_animations;
 pub use semantic_animations::*;

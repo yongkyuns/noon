@@ -1,12 +1,13 @@
 use super::*;
 use noon_core::{
-    SemanticCodeLayoutMetrics, SemanticCodeLayoutNodes, SemanticMutationTransaction,
-    SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStyle,
-    SemanticTransactionCodeLayout, SemanticTransform2_5D, StoredGeometry, StrokeCap, StrokeJoin,
-    StrokeWidthMode, TextResource, TextSourceFill, VectorPath,
+    SemanticCodeLayoutMetrics, SemanticCodeLayoutNodes, SemanticCodeSourceRecipe,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole, SemanticObjectState,
+    SemanticPaint, SemanticStyle, SemanticTransactionCodeLayout, SemanticTransform2_5D,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, TextResource, TextSourceFill,
+    VectorPath,
 };
 
-type TextDependency = (
+pub(super) type TextDependency = (
     noon_core::TextCompilationIdentity,
     TextResource,
     noon_core::FontResourceArena,
@@ -49,17 +50,30 @@ impl Publisher<'_, '_> {
         self,
         prepared: PreparedCode,
     ) -> Result<noon_core::SemanticNodeId, CodeAuthoringError> {
+        self.publish_text(|store, publish| prepared.publish(store, publish))
+    }
+
+    pub(super) fn publish_text<T>(
+        self,
+        prepare: impl FnOnce(
+            &mut SemanticStore,
+            &mut dyn FnMut(
+                &mut SemanticStore,
+                SemanticMutationTransaction,
+            )
+                -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, CodeAuthoringError> {
         match self {
-            Self::Store(store) => prepared
-                .publish(&mut store.borrow_mut(), &mut |store, tx| {
-                    tx.apply(store).map_err(AuthoringError::from)
-                })
-                .map_err(Into::into),
+            Self::Store(store) => prepare(&mut store.borrow_mut(), &mut |store, tx| {
+                tx.apply(store).map_err(AuthoringError::from)
+            })
+            .map_err(Into::into),
             Self::Scene(scene) => scene
-                .with_semantic_publication(|store, publish| Ok(prepared.publish(store, publish)))?
+                .with_semantic_publication(|store, publish| Ok(prepare(store, publish)))?
                 .map_err(Into::into),
             Self::Live(live) => live
-                .with_semantic_publication(|store, publish| Ok(prepared.publish(store, publish)))
+                .with_semantic_publication(|store, publish| Ok(prepare(store, publish)))
                 .map_err(CodeAuthoringError::LiveSession)?
                 .map_err(Into::into),
         }
@@ -79,13 +93,13 @@ pub(super) fn publish(
     Code::from_family(MobjectFamily::from_node(store, root)?)
 }
 
-struct PreparedLine {
-    dependency: TextDependency,
-    transform: SemanticTransform2_5D,
-    style: SemanticStyle,
+pub(super) struct PreparedLine {
+    pub(super) dependency: TextDependency,
+    pub(super) transform: SemanticTransform2_5D,
+    pub(super) style: SemanticStyle,
 }
 impl PreparedLine {
-    fn new(
+    pub(super) fn new(
         source: String,
         fills: Vec<TextSourceFill>,
         color: Color,
@@ -115,7 +129,7 @@ impl PreparedLine {
         })
     }
 
-    fn resource(&self) -> &TextResource {
+    pub(super) fn resource(&self) -> &TextResource {
         &self.dependency.1
     }
 
@@ -136,7 +150,7 @@ impl PreparedLine {
             .map_or(0.0, |run| run.transform.tx)
     }
 
-    fn ink_horizontal_bounds(&self) -> (f64, f64) {
+    pub(super) fn ink_horizontal_bounds(&self) -> (f64, f64) {
         let resource = self.resource();
         let scale = self.transform.scale.x;
         let recenter = self.recenter_x();
@@ -146,7 +160,7 @@ impl PreparedLine {
         )
     }
 
-    fn vertical_bounds(&self) -> (f64, f64) {
+    pub(super) fn vertical_bounds(&self) -> (f64, f64) {
         let resource = self.resource();
         let scale = self.transform.scale.y;
         (
@@ -155,7 +169,7 @@ impl PreparedLine {
         )
     }
 
-    fn position(&mut self, logical_x: f64, baseline_y: f64) {
+    pub(super) fn position(&mut self, logical_x: f64, baseline_y: f64) {
         // Native Text is centered on ink at compilation. Undo that presentation
         // centering using the retained run origin; never left-align each line's
         // visible ink, which would erase indentation and leading spaces.
@@ -172,6 +186,7 @@ struct PreparedCode {
     panel_style: SemanticStyle,
     buttons: Vec<SemanticObjectState>,
     layout_metrics: SemanticCodeLayoutMetrics,
+    source_recipe: Arc<SemanticCodeSourceRecipe>,
 }
 impl PreparedCode {
     fn new(source: &str, options: CodeOptions) -> Result<Self, CodeAuthoringError> {
@@ -182,15 +197,62 @@ impl PreparedCode {
             .as_deref()
             .and_then(highlight::language_for_file_name);
         let language = options.language.as_deref().or(file_language.as_deref());
-        let highlighted = highlight::highlight(&source, language, &options.formatter_style)
-            .map_err(|error| CodeAuthoringError::Highlight(error.to_string()))?;
+        let highlighted = highlight::highlight(
+            &source,
+            language,
+            &options.formatter_style,
+            &options.syntax_colors,
+            &options.token_colors,
+        )
+        .map_err(|error| CodeAuthoringError::Highlight(error.to_string()))?;
         debug_assert_eq!(highlighted.source, source);
-        let config = &options.paragraph_config;
+        let mut config = options.paragraph_config.clone();
+        let face = match &config.font_face {
+            Some(face) => face.clone(),
+            None => {
+                crate::bundled_native_font_face(if config.font.eq_ignore_ascii_case("monospace") {
+                    DEFAULT_NATIVE_TEXT_FONT_FAMILY
+                } else {
+                    &config.font
+                })?
+            }
+        };
+        config.font_face = Some(face.clone());
+        let config = &config;
         let mut lines = highlighted
             .lines
             .into_iter()
             .map(|line| PreparedLine::new(line.source, line.fills, highlighted.foreground, config))
             .collect::<Result<Vec<_>, _>>()?;
+        let reserved = options
+            .reserved_source
+            .as_ref()
+            .map(|reserved| {
+                let source = normalize_source(reserved, options.tab_width)?;
+                let reserved = highlight::highlight(
+                    &source,
+                    Some(&highlighted.resolved_language),
+                    &options.formatter_style,
+                    &options.syntax_colors,
+                    &options.token_colors,
+                )
+                .map_err(|error| CodeAuthoringError::Highlight(error.to_string()))?;
+                if reserved.lines.len() != lines.len() {
+                    return Err(invalid(
+                        "reserved_source",
+                        "must have the same row count as source",
+                    ));
+                }
+                reserved
+                    .lines
+                    .into_iter()
+                    .map(|line| {
+                        PreparedLine::new(line.source, line.fills, reserved.foreground, config)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
         let mut numbers = options
             .add_line_numbers
             .then(|| {
@@ -219,7 +281,11 @@ impl PreparedCode {
             config,
         )?;
         let (mut row_bottom, mut row_top) = reference.vertical_bounds();
-        for line in lines.iter().chain(numbers.iter().flatten()) {
+        for line in lines
+            .iter()
+            .chain(&reserved)
+            .chain(numbers.iter().flatten())
+        {
             let (bottom, top) = line.vertical_bounds();
             row_bottom = row_bottom.min(bottom);
             row_top = row_top.max(top);
@@ -242,13 +308,18 @@ impl PreparedCode {
         } else {
             0.0
         };
-        let body_width = gutter + lines.iter().map(PreparedLine::width).fold(0.0f64, f64::max);
+        let body_width = gutter
+            + lines
+                .iter()
+                .chain(&reserved)
+                .map(PreparedLine::width)
+                .fold(0.0f64, f64::max);
         let window = options.background == CodeBackground::Window;
         let mut min_x: f64 = if window { -0.1 } else { 0.0 };
         let mut max_x = body_width.max(if window { 0.7 } else { 0.0 });
         let mut body_left = 0.0f64;
         let mut body_right = 0.0f64;
-        for line in &lines {
+        for line in lines.iter().chain(&reserved) {
             let (left, right) = line.ink_horizontal_bounds();
             body_left = body_left.min(left);
             body_right = body_right.max(right);
@@ -281,6 +352,21 @@ impl PreparedCode {
                 body_left - center_x
             },
         };
+        let source_recipe = Arc::new(SemanticCodeSourceRecipe {
+            language: Some(highlighted.resolved_language.clone().into()),
+            formatter_style: options.formatter_style.clone().into(),
+            tab_width: options.tab_width,
+            font_family: Arc::clone(&face.family),
+            font_data: Arc::clone(&face.data),
+            font_face_index: face.face_index,
+            font_metrics_profile: face.metrics_profile(),
+            font_size: config.font_size,
+            line_spacing: config.line_spacing,
+            disable_ligatures: config.disable_ligatures,
+            logical_source_x: gutter - center_x,
+            syntax_colors: options.syntax_colors,
+            token_colors: options.token_colors.clone(),
+        });
         for (index, line) in lines.iter_mut().enumerate() {
             line.position(gutter - center_x, -(index as f64) * step - center_y);
         }
@@ -336,6 +422,7 @@ impl PreparedCode {
             panel_style,
             buttons,
             layout_metrics,
+            source_recipe,
         })
     }
 
@@ -413,7 +500,8 @@ impl PreparedCode {
                         },
                         self.layout_metrics,
                         panel_geometry,
-                    ),
+                    )
+                    .with_source_recipe(self.source_recipe),
                 );
                 let result = publish(store, tx).map_err(TextAuthoringError::Semantic)?;
                 result.resolve(root).ok_or(TextAuthoringError::Semantic(

@@ -236,6 +236,12 @@ jobs:
         env:
           NOON_CODE_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code
         run: node scripts/code-qualification.mjs
+      - name: Qualify reserved Code source edits and ordinary row transitions
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 10
+        env:
+          NOON_CODE_SOURCE_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code/source
+        run: node scripts/code-source-qualification.mjs
       - name: Retain Code rendering and lifecycle evidence
         if: always() && matrix.browser == 'chromium'
         uses: actions/upload-artifact@v7

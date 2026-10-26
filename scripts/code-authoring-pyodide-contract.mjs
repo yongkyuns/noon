@@ -47,6 +47,23 @@ try {
   boundaryCode.highlightLines(1, undefined, new wasm.WasmCodeHighlightOptions(false));
   assert.equal(boundaryCode.highlights().memberKeys().length, 1);
   report.lineRegionBoundaryChecks = "typed indices, atomic range rejection, cold attachment";
+  for (const index of [...invalidIndices, null, undefined]) {
+    assert.throws(() => boundaryCode.replaceLine(index, "z"),
+      error => error.category === "invalid_input" && error.code === "code.invalid_option");
+  }
+  const sourceBefore = boundaryCode.lineSources();
+  const membersBefore = boundaryCode.codeLines().memberKeys();
+  for (const [index, source] of [[3, "z"], [0, "a\nb"], [0, "overflow".repeat(100)]]) {
+    assert.throws(() => boundaryCode.replaceLine(index, source),
+      error => error.category === "invalid_input");
+  }
+  assert.deepEqual(boundaryCode.lineSources(), sourceBefore);
+  assert.deepEqual(boundaryCode.codeLines().memberKeys(), membersBefore);
+  const replacement = boundaryCode.replaceLine(0, "z");
+  assert.equal(replacement.previous().textSource(), "x");
+  assert.equal(replacement.current().textSource(), "z");
+  replacement.free();
+  report.sourceReplacementBoundaryChecks = "typed indices, atomic fit/range rejection, ordinary row handles";
   const { loadPyodide } = await import(pathToFileURL(path.resolve(runtimeRoot, "pyodide.mjs")));
   const pyodide = await loadPyodide({ indexURL: path.resolve(runtimeRoot) + path.sep });
   assert.equal(pyodide.version, pinnedVersion);
@@ -83,6 +100,8 @@ try {
     noonHighlightCodeLines: (context, code, start, stop, options) => context == null
       ? code.highlightLines(start, stop, options)
       : context.liveHighlightCodeLines(code, start, stop, options),
+    noonReplaceCodeLine: (context, code, index, source) => context == null
+      ? code.replaceLine(index, source) : context.liveReplaceCodeLine(code, index, source),
   });
   for (const descriptor of PYTHON_COMPAT_MODULES) {
     pyodide.FS.writeFile(descriptor.runtimePath,
@@ -109,6 +128,24 @@ _code_result = json.dumps({"families": len(scene.mobjects), "time": scene.time,
   assert.equal(report.observed.families, 3);
   assert.ok(Math.abs(report.observed.time - 0.1) < 1e-9);
   assert.equal(report.observed.ownership, "active");
+  const sourceFixture = fs.readFileSync(new URL("./code-source-authoring-contract.py", import.meta.url), "utf8");
+  report.sourceFixtureSha256 = hash(sourceFixture);
+  pyodide.runPython(sourceFixture + `
+source_scene = CodeSourceAuthoringContract()
+token = _manim_reactive._enter_authoring_scene(source_scene)
+try:
+    source_scene.construct()
+finally:
+    _manim_reactive._leave_authoring_scene(token)
+source_context = _manim_scene.execution_context(source_scene)
+_code_source_result = json.dumps({"families": len(source_scene.mobjects), "time": source_scene.time,
+    "ownership": str(source_context.liveExecutionOwnership()), **source_scene.source_contract_observed})
+`);
+  report.sourceObserved = JSON.parse(pyodide.globals.get("_code_source_result"));
+  assert.equal(report.sourceObserved.families, 2);
+  assert.ok(Math.abs(report.sourceObserved.time - 0.8) < 1e-9);
+  assert.equal(report.sourceObserved.ownership, "active");
+  assert.equal(report.sourceObserved.unchanged_rows, 5);
   report.result = "PASS";
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {

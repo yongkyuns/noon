@@ -216,7 +216,7 @@ pub use camera_authoring::CameraAutoFrame;
 #[cfg(feature = "code")]
 pub use code_display::{
     Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeHighlightOptions,
-    CodeOptions, CodeParagraphConfig,
+    CodeLineReplacement, CodeOptions, CodeParagraphConfig, CodeSyntaxColors,
 };
 pub use composite_entry::CompositeEntryHandle;
 #[cfg(all(feature = "native-text", feature = "latex"))]

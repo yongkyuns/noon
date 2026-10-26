@@ -4,8 +4,51 @@
 //! only an identity guard for that frame; the panel object owns its resource.
 
 use crate::{
-    GeometryResourceHandle, SemanticLocalResourceToken, SemanticNodeId, SemanticTransactionNodeRef,
+    CodeSyntaxColors, Color, GeometryResourceHandle, NativeFontMetricsProfile,
+    SemanticLocalResourceToken, SemanticNodeId, SemanticTransactionNodeRef,
 };
+use std::{collections::BTreeMap, sync::Arc};
+
+/// Immutable authoring inputs for editing an allocated listing. Font bytes are
+/// shared immutable inputs, not a resource handle or another text scene. Current
+/// source remains authoritative on the ordinary text members.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticCodeSourceRecipe {
+    pub language: Option<Arc<str>>,
+    pub formatter_style: Arc<str>,
+    pub tab_width: usize,
+    pub font_family: Arc<str>,
+    pub font_data: Arc<[u8]>,
+    pub font_face_index: u32,
+    pub font_metrics_profile: NativeFontMetricsProfile,
+    pub font_size: f32,
+    pub line_spacing: f32,
+    pub disable_ligatures: bool,
+    /// Logical column zero, before glyph ink centering, in the panel frame.
+    pub logical_source_x: f64,
+    pub syntax_colors: CodeSyntaxColors,
+    pub token_colors: BTreeMap<String, Color>,
+}
+
+impl SemanticCodeSourceRecipe {
+    pub fn is_valid(&self) -> bool {
+        self.tab_width <= 256
+            && !self.font_family.is_empty()
+            && !self.font_data.is_empty()
+            && self.font_size.is_finite()
+            && self.font_size > 0.0
+            && self.line_spacing.is_finite()
+            && self.line_spacing >= -1.0
+            && self.logical_source_x.is_finite()
+            && self.syntax_colors.is_valid()
+            && self.token_colors.iter().all(|(token, color)| {
+                crate::is_valid_code_token_selector(token)
+                    && [color.red, color.green, color.blue, color.alpha]
+                        .into_iter()
+                        .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
+            })
+    }
+}
 
 /// Named ordinary nodes that make one listing's durable query structure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +129,7 @@ pub struct SemanticCodeLayout {
     nodes: SemanticCodeLayoutNodes,
     metrics: SemanticCodeLayoutMetrics,
     panel_geometry: GeometryResourceHandle,
+    source_recipe: Option<Arc<SemanticCodeSourceRecipe>>,
 }
 
 impl SemanticCodeLayout {
@@ -98,7 +142,17 @@ impl SemanticCodeLayout {
             nodes,
             metrics,
             panel_geometry,
+            source_recipe: None,
         }
+    }
+
+    pub fn with_source_recipe(mut self, recipe: Arc<SemanticCodeSourceRecipe>) -> Self {
+        self.source_recipe = Some(recipe);
+        self
+    }
+
+    pub fn source_recipe(&self) -> Option<&Arc<SemanticCodeSourceRecipe>> {
+        self.source_recipe.as_ref()
     }
 
     pub const fn nodes(&self) -> &SemanticCodeLayoutNodes {
@@ -149,6 +203,7 @@ pub struct SemanticTransactionCodeLayout {
     nodes: SemanticCodeLayoutNodes<SemanticTransactionNodeRef>,
     metrics: SemanticCodeLayoutMetrics,
     panel_geometry: SemanticCodePanelGeometry,
+    source_recipe: Option<Arc<SemanticCodeSourceRecipe>>,
 }
 
 impl From<SemanticCodeLayout> for SemanticTransactionCodeLayout {
@@ -167,18 +222,25 @@ impl SemanticTransactionCodeLayout {
             nodes,
             metrics,
             panel_geometry: panel_geometry.into(),
+            source_recipe: None,
         }
+    }
+
+    pub fn with_source_recipe(mut self, recipe: Arc<SemanticCodeSourceRecipe>) -> Self {
+        self.source_recipe = Some(recipe);
+        self
     }
 
     pub fn map_existing(
         layout: SemanticCodeLayout,
         map: impl FnMut(SemanticNodeId) -> SemanticTransactionNodeRef,
     ) -> Self {
-        Self::new(
-            layout.nodes.map_nodes(map),
-            layout.metrics,
-            layout.panel_geometry,
-        )
+        Self {
+            nodes: layout.nodes.map_nodes(map),
+            metrics: layout.metrics,
+            panel_geometry: layout.panel_geometry.into(),
+            source_recipe: layout.source_recipe,
+        }
     }
 
     pub(crate) fn nodes(&self) -> &SemanticCodeLayoutNodes<SemanticTransactionNodeRef> {
@@ -197,6 +259,11 @@ impl SemanticTransactionCodeLayout {
 
     pub(crate) fn is_valid(&self) -> bool {
         self.metrics.is_valid()
+            && self.source_recipe.as_ref().is_none_or(|recipe| {
+                recipe.is_valid()
+                    && (self.metrics.body_left..=self.metrics.body_right)
+                        .contains(&recipe.logical_source_x)
+            })
     }
 
     pub(crate) fn panel_geometry(&self) -> SemanticCodePanelGeometry {
@@ -219,7 +286,12 @@ impl SemanticTransactionCodeLayout {
         let SemanticCodePanelGeometry::Existing(panel_geometry) = self.panel_geometry else {
             unreachable!("Code panel guard materializes with its pending panel path")
         };
-        SemanticCodeLayout::new(self.nodes.map_nodes(resolve), self.metrics, panel_geometry)
+        SemanticCodeLayout {
+            nodes: self.nodes.map_nodes(resolve),
+            metrics: self.metrics,
+            panel_geometry,
+            source_recipe: self.source_recipe,
+        }
     }
 }
 

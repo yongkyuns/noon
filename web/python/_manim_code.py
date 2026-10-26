@@ -19,10 +19,12 @@ try:
     from js import noonCodeHighlightOptions as _new_highlight_options
     from js import noonGetHighlightedCodeLines as _get_highlighted_lines
     from js import noonHighlightCodeLines as _highlight_lines
+    from js import noonReplaceCodeLine as _replace_line
 except ImportError:
     _new_code_options = _create_code = _code_from_family = None
     _code_styles_list = _code_languages_list = None
     _new_highlight_options = _get_highlighted_lines = _highlight_lines = None
+    _replace_line = None
 
 
 def _integer(name, value):
@@ -57,12 +59,31 @@ def _handle_key(handle):
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
 
 
+def _colors(name, supplied):
+    if supplied is None:
+        return ()
+    if not isinstance(supplied, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    result = []
+    for selector, value in supplied.items():
+        if not isinstance(selector, str):
+            raise TypeError(f"{name} keys must be strings")
+        result.append((selector, _compat._as_color(name, value)))
+    return result
+
+
 class Code(_compat.VGroup):
     """Retained, syntax-colored source lines with native tab and gutter layout.
 
     Indentation and empty lines are preserved. This display object does not
     format source code. Use ``get_languages_list`` and ``get_styles_list`` for
     the shared engine’s supported language and theme profiles.
+
+    ``reserved_source`` measures an alternate source with the same number of
+    rows before fitting. Later ``replace_line`` calls use the allocated layout.
+    ``syntax_colors`` overrides foreground/comment/keyword/number/string/operator
+    colors. ``token_colors`` selects whole identifiers or dotted identifier paths
+    outside comments and strings; omitted colors use the named theme.
     """
 
     default_paragraph_config = {
@@ -79,7 +100,8 @@ class Code(_compat.VGroup):
         self, code_file=None, code_string=None, language=None,
         formatter_style="vim", tab_width=4, add_line_numbers=True,
         line_numbers_from=1, background="rectangle", background_config=None,
-        paragraph_config=None,
+        paragraph_config=None, *, reserved_source=None, syntax_colors=None,
+        token_colors=None,
     ):
         if _create_code is None or _new_code_options is None:
             raise RuntimeError("Code requires Noon’s shared Rust authoring runtime")
@@ -103,6 +125,10 @@ class Code(_compat.VGroup):
             raise TypeError("add_line_numbers must be a bool")
         if not isinstance(background, str):
             raise TypeError("background must be a string")
+        if reserved_source is not None and not isinstance(reserved_source, str):
+            raise TypeError("reserved_source must be a string or None")
+        syntax_colors = _colors("syntax_colors", syntax_colors)
+        token_colors = _colors("token_colors", token_colors)
         tab_width = _integer("tab_width", tab_width)
         line_numbers_from = _integer("line_numbers_from", line_numbers_from)
         paragraph = _config("paragraph_config", self.default_paragraph_config, paragraph_config,
@@ -135,6 +161,14 @@ class Code(_compat.VGroup):
                 engine_call(options.setBackgroundFill, fill.red, fill.green, fill.blue, fill.alpha)
             engine_call(options.setBackgroundStroke, stroke.red, stroke.green, stroke.blue, stroke.alpha,
                         float(panel["stroke_width"]) * 0.01, float(panel["stroke_opacity"]))
+            if reserved_source is not None:
+                engine_call(options.setReservedSource, reserved_source)
+            for selector, value in syntax_colors:
+                engine_call(options.setSyntaxColor, selector, value.red, value.green,
+                            value.blue, value.alpha)
+            for selector, value in token_colors:
+                engine_call(options.setTokenColor, selector, value.red, value.green,
+                            value.blue, value.alpha)
         except BaseException:
             options.free()
             raise
@@ -191,6 +225,72 @@ class Code(_compat.VGroup):
     def code_string(self):
         """The current normalized source as observed from retained Rust rows."""
         return "\n".join(str(source) for source in engine_call(self._code_handle.lineSources))
+
+    def replace_line(self, index, source):
+        """Replace one source row without reflow, returning ``(previous, current)``.
+
+        ``reserved_source`` can reserve a larger same-row-count variant when
+        constructing the listing. Rust owns fitting, contextual syntax and the
+        logical baseline. An edit outside the allocated layout fails atomically.
+        Unchanged rows retain their handles. The previous Text leaves this
+        listing and the new Text occupies its slot, including for identical
+        source strings. Other ordinary memberships of the previous Text remain.
+
+        For an ordinary animated transition, add ``previous`` to the scene and
+        play ``FadeOut(previous)`` with ``Write(current)``.
+        """
+        if _replace_line is None:
+            raise RuntimeError("Code source replacement requires Noon’s shared Rust authoring runtime")
+        index = _number("index", _integer("index", index))
+        if not isinstance(source, str):
+            raise TypeError("source must be a string")
+        context = _live_constructor_context("Code.replace_line", allow_unstarted=True)
+        if context is None:
+            context = getattr(self, "_canonical_live_target_context", None)
+        replacement = engine_call(_replace_line, context, self._code_handle, index, source)
+        try:
+            previous_handle = engine_call(replacement.previous)
+            current_handle = engine_call(replacement.current)
+        finally:
+            replacement.free()
+        context = context if context is not None else getattr(self, "_canonical_live_target_context", None)
+        # This registry preserves Python aliases only. Rust has already made
+        # the atomic source, resource and membership change.
+        known = self.code_lines._semantic_member_wrappers
+        previous = known.pop(_handle_key(previous_handle), None)
+        scene = None
+        if isinstance(previous, Text):
+            # Retain its existing JS handle and derived ObjectId so ordinary
+            # re-entry can reuse the same binding. Source is observed from Rust;
+            # normal membership reconciliation decides whether it detached.
+            previous._source = str(engine_call(previous_handle.textSource))
+            scene = getattr(previous, "_scene", None)
+            if scene is not None:
+                from _manim_scene import _sync_membership_wrapper_attachments
+                _sync_membership_wrapper_attachments(scene, "remove", (previous,))
+        else:
+            previous = self._replacement_text(previous_handle, context)
+        current = self._replacement_text(current_handle, context)
+        known[_handle_key(current_handle)] = current
+        if scene is not None:
+            # The shared operation may have put the new row inside an attached
+            # Code family. Associate its derived wrapper identity with that
+            # already-published membership; never add it as another scene root.
+            from _manim_scene import _reconcile_completed_family_bindings
+            _reconcile_completed_family_bindings(scene, (current,))
+        return previous, current
+
+    def _replacement_text(self, handle, context):
+        wrapper = object.__new__(Text)
+        source = str(engine_call(handle.textSource))
+        wrapper._initialize_text(source, self._code_font_size,
+                                 handle, _base.WHITE, 1.0, presentation_applied=True)
+        wrapper._font = self._code_font
+        wrapper._font_face = self._code_font_face
+        wrapper._line_spacing = self._code_line_spacing
+        if context is not None:
+            wrapper._canonical_live_target_context = context
+        return wrapper
 
     def get_highlighted_lines(
         self, start, stop=None, *, include_line_numbers=False, padding=None,

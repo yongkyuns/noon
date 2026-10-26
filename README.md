@@ -170,8 +170,66 @@ preserve the frame. Live creation samples the panel's current effective pose and
 priority and follows the ordinary publication gates. Replaced or baked panel
 geometry, temporary effective-content replacements, and unsupported spatial or
 reveal/morph overrides produce an explicit error when a new region is requested.
-Source replacement and reflow are separate work tracked by
+General reflow remains separate work tracked by
 [#2302](https://github.com/yongkyuns/noon/issues/2302).
+
+#### Reserve space for a source edit
+
+Supply a longer source variant when creating a listing to reserve its extent
+before fitting or positioning the Code. Both variants must have the same number
+of rows. A later `replace_line` uses the original logical row origin and baseline,
+keeping the panel, gutter, row slots and unaffected text fixed.
+
+```python
+listing = Code(
+    code_string=source,
+    reserved_source=padded_source,
+    language="cuda",
+    syntax_colors={"keyword": PURPLE, "number": GOLD},
+    token_colors={"tile": TEAL, "in": TEAL, "out": GREEN,
+                  "__syncthreads": PINK},
+)
+self.add(listing)
+
+previous, current = listing.replace_line(0, padded_declaration)
+self.add(previous)
+self.play(FadeOut(previous), Write(current), run_time=0.75)
+```
+
+The replaced row receives a fresh ordinary Text identity in `code_lines`.
+`previous` leaves that listing and retains any independent memberships; adding
+it explicitly allows the usual outgoing animation. `current` is already a child
+of the listing. Source and token styles
+are recomputed in Rust with the listing's lexical context. Unaffected rows keep
+their identities and resources; a row whose syntax changes because of the edit
+receives updated content through the same atomic publication. Invalid edits or
+edits outside the allocated extent leave the listing unchanged. Without
+`reserved_source`, the initial source defines that extent. This operation keeps a
+fixed row count rather than inserting rows or reflowing the page.
+
+Rust exposes `CodeOptions::reserved_source`, `Code::replace_line` and
+`replace_line_in_live_session`. The returned `CodeLineReplacement` contains
+`previous` and `current` ordinary Mobjects. The paired
+[Rust](crates/noon-native/examples/code_source_update.rs) and
+[Python](web/python/examples/code_source_update.py) examples animate the CUDA
+declaration edit using the normal execution path.
+
+#### Associate source tokens with visual concepts
+
+`syntax_colors` optionally overrides `foreground`, `comment`, `keyword`,
+`number`, `string` and `operator` colors from the selected theme. `foreground`
+sets the unclassified fallback color; explicit theme rules retain their colors.
+`token_colors`
+maps exact identifiers or dotted identifier paths such as `threadIdx.x` to
+colors. Matching respects Unicode identifier boundaries: `in` does not recolor
+`int`, and names inside comments or strings keep their lexical colors. Exact
+token matches take precedence over category colors outside comments and strings;
+the longest matching dotted path wins. Rust uses `CodeSyntaxColors` and the
+`CodeOptions::token_colors` map for the same behavior.
+
+These maps express lesson-specific associations while the framework owns
+lexing, context, source spans and shaping. Omitted overrides preserve the named
+theme's normal presentation.
 
 The paired [Rust](crates/noon-native/examples/code_line_highlight.rs) and
 [Python](web/python/examples/code_line_highlight.py) examples highlight a blank

@@ -9,8 +9,12 @@ import _manim_code as code
 
 
 class Handle:
-    def __init__(self, slot):
+    def __init__(self, slot, source=""):
         self.semanticSlot, self.semanticGeneration = slot, 1
+        self.source = source
+
+    def textSource(self):
+        return self.source
 
 
 class Family(Handle):
@@ -18,15 +22,21 @@ class Family(Handle):
         super().__init__(slot)
         self._semantic_member_wrappers = {code._handle_key(member._semantic_handle): member
                                           for member in members}
+        self._member_keys = None
 
     @property
     def submobjects(self):
-        return list(self._semantic_member_wrappers.values())
+        if self._member_keys is None:
+            return list(self._semantic_member_wrappers.values())
+        return [self._semantic_member_wrappers[key] for key in self._member_keys]
 
 
 class CodeHandle:
     def __init__(self, numbers=True):
-        self.lines = Family(2, [types.SimpleNamespace(_semantic_handle=Handle(10 + i)) for i in range(3)])
+        self.sources = ["def demo():", "    return 1", ""]
+        self.lines = Family(2, [types.SimpleNamespace(_semantic_handle=Handle(10 + i, source))
+                                for i, source in enumerate(self.sources)])
+        self.lines._member_keys = list(self.lines._semantic_member_wrappers)
         self.panel = Family(3)
         self.regions = Family(5)
         self.numbers = Family(4, [types.SimpleNamespace(_semantic_handle=Handle(20 + i)) for i in range(3)]) if numbers else None
@@ -52,7 +62,7 @@ class CodeHandle:
 
     def lineSources(self):
         self.source_reads += 1
-        return ["def demo():", "    return 1", ""]
+        return self.sources.copy()
 
     def lineNumberSources(self):
         self.number_reads += 1
@@ -65,11 +75,30 @@ class CodeHandle:
 class Options:
     def __init__(self, *args):
         self.args, self.calls, self.freed = args, {}, False
+        self.call_sequence = []
 
     def __getattr__(self, name):
         if name.startswith("set"):
-            return lambda *args: self.calls.__setitem__(name, args)
+            def setter(*args):
+                self.calls[name] = args
+                self.call_sequence.append((name, args))
+            return setter
         raise AttributeError(name)
+
+    def free(self):
+        self.freed = True
+
+
+class Replacement:
+    def __init__(self, previous, current):
+        self._previous, self._current = previous, current
+        self.freed = False
+
+    def previous(self):
+        return self._previous
+
+    def current(self):
+        return self._current
 
     def free(self):
         self.freed = True
@@ -82,6 +111,7 @@ class CodeFacadeTests(unittest.TestCase):
         self.options = []
         self.highlight_options = []
         self.region_handles = []
+        self.replacements = []
 
         def options(*args):
             result = Options(*args)
@@ -103,6 +133,16 @@ class CodeFacadeTests(unittest.TestCase):
             self.region_handles.append(result)
             return result
 
+        def replace(_context, handle, index, source):
+            index = int(index)
+            previous = handle.lines.submobjects[index]._semantic_handle
+            current = Handle(200 + len(self.replacements), source)
+            handle.lines._member_keys[index] = code._handle_key(current)
+            handle.sources[index] = source
+            result = Replacement(previous, current)
+            self.replacements.append(result)
+            return result
+
         self.patches = [
             patch.object(code, "_new_code_options", side_effect=options),
             patch.object(code, "_create_code", side_effect=lambda *_: self.handle),
@@ -114,6 +154,7 @@ class CodeFacadeTests(unittest.TestCase):
             patch.object(code, "_new_highlight_options", side_effect=highlight_options),
             patch.object(code, "_get_highlighted_lines", side_effect=region),
             patch.object(code, "_highlight_lines", side_effect=region),
+            patch.object(code, "_replace_line", side_effect=replace),
         ]
         for patcher in self.patches:
             patcher.start()
@@ -160,6 +201,11 @@ class CodeFacadeTests(unittest.TestCase):
             ({"paragraph_config": {"font": 3}}, TypeError),
             ({"paragraph_config": {"unknown": 3}}, NotImplementedError),
             ({"background_config": {"unknown": 3}}, NotImplementedError),
+            ({"reserved_source": ["line"]}, TypeError),
+            ({"syntax_colors": []}, TypeError),
+            ({"token_colors": "tile"}, TypeError),
+            ({"syntax_colors": {1: noon.RED}}, TypeError),
+            ({"token_colors": {False: noon.RED}}, TypeError),
         ]:
             with self.subTest(options=options), self.assertRaises(error):
                 code.Code(code_string="x", **options)
@@ -196,6 +242,109 @@ class CodeFacadeTests(unittest.TestCase):
         self.assertEqual(code.Code.get_languages_list(), ["Python", "Rust"])
         with self.assertRaisesRegex(NotImplementedError, "native named themes"):
             code.Code.get_pygments_style("vim")
+
+    def test_reservation_and_color_maps_forward_without_python_lexing(self):
+        reserved = "def demo():\n    return 10000\n"
+        code.Code(code_string="x", reserved_source=reserved,
+                  syntax_colors={"foreground": noon.WHITE, "comment": noon.GRAY},
+                  token_colors={"tile": noon.BLUE, "threadIdx.x": noon.GREEN})
+        self.assertEqual(self.options[0].calls["setReservedSource"], (reserved,))
+        selected = [(name, args) for name, args in self.options[0].call_sequence
+                    if name in {"setSyntaxColor", "setTokenColor"}]
+        self.assertEqual(selected, [
+            ("setSyntaxColor", ("foreground", noon.WHITE.red, noon.WHITE.green, noon.WHITE.blue, noon.WHITE.alpha)),
+            ("setSyntaxColor", ("comment", noon.GRAY.red, noon.GRAY.green, noon.GRAY.blue, noon.GRAY.alpha)),
+            ("setTokenColor", ("tile", noon.BLUE.red, noon.BLUE.green, noon.BLUE.blue, noon.BLUE.alpha)),
+            ("setTokenColor", ("threadIdx.x", noon.GREEN.red, noon.GREEN.green, noon.GREEN.blue, noon.GREEN.alpha)),
+        ])
+
+    def test_replacement_preserves_previous_alias_and_unaffected_wrappers(self):
+        value = code.Code(code_string="x", paragraph_config={"font_size": 20})
+        previous = value.code_lines.submobjects[1]
+        previous.annotation = "old source"
+        unaffected = value.code_lines.submobjects[0]
+        result = value.replace_line(1, "    return 10000")
+        self.assertIs(result[0], previous)
+        self.assertEqual(result[0].text, "    return 1")
+        self.assertEqual(result[0].annotation, "old source")
+        self.assertIs(value.code_lines.submobjects[0], unaffected)
+        self.assertIs(value.code_lines.submobjects[1], result[1])
+        self.assertIsInstance(result[1], code.Text)
+        self.assertEqual(result[1].text, "    return 10000")
+        self.assertEqual(result[1].font_size, 20)
+        self.assertIs(result[1]._canonical_live_target_context, self.context)
+        self.assertEqual(value.code_string, "def demo():\n    return 10000\n")
+        self.assertTrue(self.replacements[0].freed)
+        code._replace_line.assert_called_once_with(self.context, self.handle, 1.0, "    return 10000")
+        again_old, again_current = value.replace_line(1, "    return 1")
+        self.assertIs(again_old, result[1])
+        self.assertIs(value.code_lines.submobjects[1], again_current)
+        self.assertEqual(again_old.text, "    return 10000")
+        self.assertEqual(value.code_string, "def demo():\n    return 1\n")
+        value._rehydrate_semantic_family_handle()
+        self.assertIs(value.code_lines.submobjects[1], again_current)
+        self.assertIs(value.code_lines.submobjects[0], unaffected)
+
+    def test_replacement_keeps_old_binding_for_ordinary_scene_reentry(self):
+        value = code.Code(code_string="x")
+        previous = value.code_lines.submobjects[0]
+        previous._scene = scene = object()
+        previous._object = derived_object = object()
+        original_handle = previous._semantic_handle
+        reconciled = []
+        associated = []
+
+        def reconcile(owner, operation, values):
+            self.assertIs(owner, scene)
+            self.assertEqual(operation, "remove")
+            self.assertEqual(values, (previous,))
+            previous._scene = None
+            reconciled.append(values)
+
+        def associate(owner, values):
+            self.assertIs(owner, scene)
+            self.assertEqual(values, (value.code_lines.submobjects[0],))
+            current = values[0]
+            self.assertIsNone(current._scene)
+            current._scene = scene
+            current._object = object()
+            associated.append(current)
+
+        with patch.dict("sys.modules", {"_manim_scene": types.SimpleNamespace(
+                _sync_membership_wrapper_attachments=reconcile,
+                _reconcile_completed_family_bindings=associate)}):
+            old, current = value.replace_line(0, "other")
+        self.assertEqual(reconciled, [(previous,)])
+        self.assertEqual(associated, [current])
+        self.assertIs(old, previous)
+        self.assertIs(old._semantic_handle, original_handle)
+        self.assertIs(old._object, derived_object)
+        self.assertIsNone(old._scene)
+        self.assertIs(current._scene, scene)
+
+    def test_detached_replacement_keeps_only_the_live_context_without_scene_binding(self):
+        value = code.Code(code_string="x")
+        with patch.dict("sys.modules", {"_manim_scene": types.SimpleNamespace()}):
+            old, current = value.replace_line(0, "other")
+        self.assertIsNone(old._scene)
+        self.assertIsNone(current._scene)
+        self.assertIsNone(current._object)
+        self.assertIs(current._canonical_live_target_context, self.context)
+
+    def test_replacement_python_shapes_and_native_failure_do_not_change_aliases(self):
+        value = code.Code(code_string="x")
+        original = value.code_lines.submobjects
+        for index, source, error in [(True, "x", TypeError), (1.5, "x", TypeError),
+                                     ("1", "x", TypeError), (10 ** 1000, "x", ValueError),
+                                     (1, None, TypeError)]:
+            with self.subTest(index=index, source=source), self.assertRaises(error):
+                value.replace_line(index, source)
+        code._replace_line.assert_not_called()
+        with patch.object(code, "_replace_line", side_effect=ValueError("source does not fit")), \
+                self.assertRaisesRegex(ValueError, "does not fit"):
+            value.replace_line(-1, "not a native row")
+        self.assertEqual(value.code_lines.submobjects, original)
+        self.assertEqual(value.code_string, "def demo():\n    return 1\n")
 
     def test_line_regions_forward_native_defaults_and_preserve_attached_alias(self):
         value = code.Code(code_string="x")

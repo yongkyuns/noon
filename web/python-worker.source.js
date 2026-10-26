@@ -388,6 +388,9 @@ async function initializePyodide() {
   self.noonHighlightCodeLines = (context, code, start, stop, options) =>
     context == null ? code.highlightLines(start, stop, options)
       : context.liveHighlightCodeLines(code, start, stop, options);
+  self.noonReplaceCodeLine = (context, code, index, source) =>
+    context == null ? code.replaceLine(index, source)
+      : context.liveReplaceCodeLine(code, index, source);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)
