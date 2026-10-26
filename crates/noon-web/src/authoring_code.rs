@@ -35,7 +35,7 @@ fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<noon::Color, JsV
     ))
 }
 
-fn line_index(name: &'static str, value: &JsValue) -> Result<usize, JsValue> {
+pub(crate) fn line_index(name: &'static str, value: &JsValue) -> Result<usize, JsValue> {
     let value = value.as_f64().ok_or_else(|| {
         js_error(noon::CodeAuthoringError::InvalidOption {
             name,
@@ -219,11 +219,87 @@ impl WasmCodeOptions {
         self.options.background_config.stroke_opacity = opacity;
         Ok(())
     }
+
+    #[wasm_bindgen(js_name = setReservedSource)]
+    pub fn set_reserved_source(&mut self, source: String) {
+        self.options.reserved_source = Some(source);
+    }
+
+    #[wasm_bindgen(js_name = setSyntaxColor)]
+    pub fn set_syntax_color(
+        &mut self,
+        category: &str,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        let color = color(red, green, blue, alpha)?;
+        let selected = match category {
+            "foreground" => &mut self.options.syntax_colors.foreground,
+            "comment" => &mut self.options.syntax_colors.comment,
+            "keyword" => &mut self.options.syntax_colors.keyword,
+            "number" => &mut self.options.syntax_colors.number,
+            "string" => &mut self.options.syntax_colors.string,
+            "operator" => &mut self.options.syntax_colors.operator,
+            _ => {
+                return Err(js_error(noon::CodeAuthoringError::InvalidOption {
+                    name: "syntax_colors category",
+                    value: category.to_owned(),
+                }))
+            }
+        };
+        *selected = Some(color);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setTokenColor)]
+    pub fn set_token_color(
+        &mut self,
+        token: String,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        if !noon_core::is_valid_code_token_selector(&token) {
+            return Err(js_error(noon::CodeAuthoringError::InvalidOption {
+                name: "token_colors selector",
+                value: token,
+            }));
+        }
+        self.options
+            .token_colors
+            .insert(token, color(red, green, blue, alpha)?);
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
 pub struct WasmCodeHandle {
     pub(crate) code: noon::Code,
+}
+
+#[wasm_bindgen]
+pub struct WasmCodeLineReplacement {
+    pub(crate) replacement: noon::CodeLineReplacement,
+}
+
+impl WasmCodeLineReplacement {
+    pub(crate) fn new(replacement: noon::CodeLineReplacement) -> Self {
+        Self { replacement }
+    }
+}
+
+#[wasm_bindgen]
+impl WasmCodeLineReplacement {
+    pub fn previous(&self) -> WasmAuthoringMobjectHandle {
+        WasmAuthoringMobjectHandle::from_semantic_mobject(self.replacement.previous.clone())
+    }
+
+    pub fn current(&self) -> WasmAuthoringMobjectHandle {
+        WasmAuthoringMobjectHandle::from_semantic_mobject(self.replacement.current.clone())
+    }
 }
 
 impl WasmCodeHandle {
@@ -281,6 +357,18 @@ impl WasmCodeHandle {
 
     pub fn highlights(&self) -> WasmAuthoringFamilyHandle {
         WasmAuthoringFamilyHandle::from_semantic_family(self.code.highlights().clone())
+    }
+
+    #[wasm_bindgen(js_name = replaceLine)]
+    pub fn replace_line(
+        &self,
+        index: JsValue,
+        source: &str,
+    ) -> Result<WasmCodeLineReplacement, JsValue> {
+        self.code
+            .replace_line(line_index("index", &index)?, source)
+            .map(WasmCodeLineReplacement::new)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = getHighlightedLines)]

@@ -7,6 +7,7 @@ use std::{collections::HashMap, fmt, sync::Arc};
 
 #[cfg(test)]
 use crate::outline::outline_commands_to_path;
+pub use noon_core::NativeFontMetricsProfile;
 use noon_core::{
     Color, DRect, DVec2, FontFaceIdentity, FontResourceArena, FontResourceError,
     FontVariationSetting, GlyphRun, PositionedGlyph, TextAffineTransform, TextClusterIdentity,
@@ -28,17 +29,6 @@ const MANIM_PLAIN_LINE_ADVANCE_SCALE: f64 = 0.75;
 // TEXT2SVG_ADJUSTMENT_FACTOR (4.8). Pango/Cairo then converts points at 96 DPI,
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
 const MANIM_PANGO_LAYOUT_PIXEL: f64 = 3.6;
-
-/// Explicit layout environment for native text; the portable default is stable
-/// across hosts. This changes preparation only, never the presentation clock.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum NativeFontMetricsProfile {
-    #[default]
-    CairoFreeType,
-    /// Fractional Pango layout with Cairo/CoreText paths, for static monochrome
-    /// TrueType faces. CFF, variable and intrinsic color faces are unsupported.
-    CairoCoreText,
-}
 
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
 /// collection index, so a glyph identity never resolves to a different file.

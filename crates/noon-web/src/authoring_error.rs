@@ -114,6 +114,14 @@ impl From<noon::CodeAuthoringError> for AuthoringFailure {
                 "code.unsupported_line_region",
                 error,
             ),
+            UnsupportedSourceUpdate(_) => Self::new(
+                "unsupported_operation",
+                "code.unsupported_source_update",
+                error,
+            ),
+            SourceDoesNotFit { .. } => {
+                Self::new("invalid_input", "code.source_does_not_fit", error)
+            }
             Text(error) => error.into(),
             TextPart(error) => error.into(),
             Semantic(error) => error.into(),
@@ -873,7 +881,6 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::PlaybackControlUnavailable { .. } => "lowering.playback_control_unavailable",
             E::UnsupportedMutation { .. } => "lowering.unsupported_mutation",
             E::UnsupportedReactiveMembership { .. } => "lowering.unsupported_reactive_membership",
-            E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
             E::Value(noon_compile::SemanticLoweringError::UnsupportedGlowProfile { .. }) => {

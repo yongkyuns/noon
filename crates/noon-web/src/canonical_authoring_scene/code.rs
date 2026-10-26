@@ -1,13 +1,36 @@
 use super::wasm::CanonicalAuthoringSceneContext;
-use crate::authoring_code::line_range;
+use crate::authoring_code::{line_index, line_range};
 use crate::{
     authoring_error::js_error, WasmAuthoringMobjectHandle, WasmCodeHandle,
-    WasmCodeHighlightOptions, WasmCodeOptions,
+    WasmCodeHighlightOptions, WasmCodeLineReplacement, WasmCodeOptions,
 };
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = liveReplaceCodeLine)]
+    pub fn live_replace_code_line(
+        &mut self,
+        code: &WasmCodeHandle,
+        index: JsValue,
+        source: &str,
+    ) -> Result<WasmCodeLineReplacement, JsValue> {
+        let index = line_index("index", &index)?;
+        if self.inner.player_ownership.is_unstarted() {
+            code.code
+                .replace_line(index, source)
+                .map(WasmCodeLineReplacement::new)
+                .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_replace_code_line(&code.code, index, source)
+                .map(WasmCodeLineReplacement::new)
+                .map_err(js_error)
+        }
+    }
+
     #[wasm_bindgen(js_name = liveGetHighlightedCodeLines)]
     pub fn live_get_highlighted_code_lines(
         &mut self,

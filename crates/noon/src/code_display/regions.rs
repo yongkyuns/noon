@@ -123,7 +123,7 @@ impl Code {
         options: CodeHighlightOptions,
     ) -> Result<SemanticObjectState, CodeAuthoringError> {
         options.validate()?;
-        let layout = self.layout()?;
+        let (layout, transform, z_index) = self.layout_frame(live)?;
         let metrics = layout.metrics();
         if lines.start >= lines.end || lines.end > metrics.line_count {
             return Err(CodeAuthoringError::InvalidLineRange {
@@ -132,33 +132,6 @@ impl Code {
                 count: metrics.line_count,
             });
         }
-        let store = self.family.integration_store();
-        let panel = Mobject::from_node(Rc::clone(store), layout.nodes().panel)?;
-        let panel_state = panel.state()?;
-        if panel_state.content.geometry() != Some(StoredGeometry::Resource(layout.panel_geometry()))
-        {
-            return Err(CodeAuthoringError::UnsupportedLineRegion(
-                "the original panel geometry was replaced or baked",
-            ));
-        }
-        let (transform, z_index) = if let Some(live) = live {
-            live.effective_content_placement(&panel)
-                .map_err(|error| match error {
-                    LiveSessionError::Authoring(AuthoringError::Unsupported(
-                        crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
-                    )) => CodeAuthoringError::UnsupportedLineRegion(
-                        "the panel has an unsupported effective content or spatial override",
-                    ),
-                    other => CodeAuthoringError::LiveSession(other),
-                })?
-        } else {
-            (
-                panel_state.transform.as_planar().ok_or(
-                    CodeAuthoringError::UnsupportedLineRegion("the panel pose is not planar"),
-                )?,
-                panel_state.z_index(),
-            )
-        };
         let left = if options.include_line_numbers {
             metrics.gutter_left
         } else {
@@ -202,6 +175,42 @@ impl Code {
             ..Default::default()
         };
         Ok(state)
+    }
+
+    pub(super) fn layout_frame(
+        &self,
+        live: Option<&LiveSession<'_>>,
+    ) -> Result<(SemanticCodeLayout, noon_core::SemanticTransform2_5D, f64), CodeAuthoringError>
+    {
+        let layout = self.layout()?;
+        let store = self.family.integration_store();
+        let panel = Mobject::from_node(Rc::clone(store), layout.nodes().panel)?;
+        let panel_state = panel.state()?;
+        if panel_state.content.geometry() != Some(StoredGeometry::Resource(layout.panel_geometry()))
+        {
+            return Err(CodeAuthoringError::UnsupportedLineRegion(
+                "the original panel geometry was replaced or baked",
+            ));
+        }
+        let (transform, z_index) = if let Some(live) = live {
+            live.effective_content_placement(&panel)
+                .map_err(|error| match error {
+                    LiveSessionError::Authoring(AuthoringError::Unsupported(
+                        crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+                    )) => CodeAuthoringError::UnsupportedLineRegion(
+                        "the panel has an unsupported effective content or spatial override",
+                    ),
+                    other => CodeAuthoringError::LiveSession(other),
+                })?
+        } else {
+            (
+                panel_state.transform.as_planar().ok_or(
+                    CodeAuthoringError::UnsupportedLineRegion("the panel pose is not planar"),
+                )?,
+                panel_state.z_index(),
+            )
+        };
+        Ok((layout, transform, z_index))
     }
 
     fn publish_highlight(

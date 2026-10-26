@@ -31,17 +31,23 @@ assert.deepEqual(Array.from(regionOptions.args), [true]);
 const code = {
   getHighlightedLines: (...args) => calls.push(["detached", ...args]),
   highlightLines: (...args) => calls.push(["attached", ...args]),
+  replaceLine: (...args) => calls.push(["replace", ...args]),
 };
 context.liveGetHighlightedCodeLines = (...args) => calls.push(["live detached", ...args]);
 context.liveHighlightCodeLines = (...args) => calls.push(["live attached", ...args]);
+context.liveReplaceCodeLine = (...args) => calls.push(["live replace", ...args]);
 self.noonGetHighlightedCodeLines(null, code, 1, undefined, regionOptions);
 self.noonHighlightCodeLines(null, code, 1, 3, regionOptions);
 self.noonGetHighlightedCodeLines(context, code, 1, undefined, regionOptions);
 self.noonHighlightCodeLines(context, code, 1, 3, regionOptions);
+self.noonReplaceCodeLine(null, code, 0, "tile[N][N + 1]");
+self.noonReplaceCodeLine(context, code, 0, "tile[N][N + 1]");
 assert.deepEqual(calls.slice(2), [
   ["detached", 1, undefined, regionOptions],
   ["attached", 1, 3, regionOptions],
   ["live detached", code, 1, undefined, regionOptions],
   ["live attached", code, 1, 3, regionOptions],
+  ["replace", 0, "tile[N][N + 1]"],
+  ["live replace", code, 0, "tile[N][N + 1]"],
 ]);
-console.log("✓ Code worker forwards construction, retained queries and cold/live line regions");
+console.log("✓ Code worker forwards construction, retained queries and cold/live line regions and replacement");
