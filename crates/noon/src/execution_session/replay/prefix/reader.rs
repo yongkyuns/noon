@@ -52,6 +52,15 @@ impl PrefixReader {
         self.receiver.resource_budget_bytes()
     }
 
+    /// Logical revision-table and saved-record bytes retained for all ready times.
+    /// This is independent of the resource-byte charge, not a heap measurement.
+    pub fn retained_history_record_bytes(&self) -> usize {
+        self.receiver.retained_history_record_bytes()
+    }
+    pub fn history_record_budget_bytes(&self) -> usize {
+        self.receiver.history_record_budget_bytes()
+    }
+
     /// Explicit seek cancels transient gestures/effects through the same session
     /// policy as ordinary replay. Invalid/unavailable times change nothing.
     pub fn seek(&mut self, time: f64) -> Result<&FrameState, PrefixError> {

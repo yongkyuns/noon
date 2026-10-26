@@ -5,6 +5,7 @@ use noon_core::{Property, TrackId};
 use std::collections::BTreeMap;
 
 mod order;
+mod record_bytes;
 mod resources;
 mod storage;
 use order::SparseOrder;

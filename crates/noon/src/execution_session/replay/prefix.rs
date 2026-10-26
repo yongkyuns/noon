@@ -3,6 +3,8 @@ use super::ExecutionSession;
 use crate::ExecutionSegment;
 use noon_runtime::{PrefixBatch, PrefixError, PrefixPublisher};
 
+#[cfg(test)]
+mod history_record_budget_tests;
 mod reader;
 pub use reader::PrefixReader;
 
@@ -68,10 +70,28 @@ impl ExecutionSession {
         boundary: ExecutionSegment,
         resource_budget_bytes: usize,
     ) -> Result<(PrefixPublisher, PrefixReader), PrefixError> {
+        self.create_prepared_prefix_with_budgets(
+            boundary,
+            resource_budget_bytes,
+            noon_runtime::SceneInstance::DEFAULT_PREFIX_HISTORY_RECORD_BUDGET_BYTES,
+        )
+    }
+
+    /// Bootstrap with independent immutable-resource and replay-record byte caps.
+    /// Record bytes cover the requested revision table and saved row/channel/track
+    /// elements, not allocator overhead, source copies, frame storage or GPU state.
+    /// Both limits are checked by shared Rust before cloning the reader projection.
+    pub fn create_prepared_prefix_with_budgets(
+        &self,
+        boundary: ExecutionSegment,
+        resource_budget_bytes: usize,
+        history_record_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, PrefixReader), PrefixError> {
         self.ensure_prefix_boundary(boundary)?;
-        let (publisher, runtime, receiver) = self
-            .runtime
-            .create_prefix_projection_with_resource_budget(resource_budget_bytes)?;
+        let (publisher, runtime, receiver) = self.runtime.create_prefix_projection_with_budgets(
+            resource_budget_bytes,
+            history_record_budget_bytes,
+        )?;
         // Pin every retained physical identity, including rows not live at the
         // bootstrap time. Selected membership is still proved by the runtime.
         let mut slots = noon_runtime::ExecutionSlotTable::new();
