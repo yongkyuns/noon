@@ -251,6 +251,83 @@ impl WorkerAudioResources {
     }
 }
 
+#[cfg(any(test, all(target_arch = "wasm32", feature = "renderer")))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WorkerAudioAnchorError {
+    SessionMismatch { expected: u32, actual: u32 },
+    InvalidAuthoredTime(f64),
+    NonFiniteSample(f64),
+    NonFiniteReceipt(f64),
+    ReceiptBeforeSample { sampled: f64, received: f64 },
+}
+
+#[cfg(any(test, all(target_arch = "wasm32", feature = "renderer")))]
+impl std::fmt::Display for WorkerAudioAnchorError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("stale or invalid worker audio anchor: ")?;
+        match self {
+            Self::SessionMismatch { expected, actual } => write!(
+                formatter,
+                "resource session {expected}, received session {actual}"
+            ),
+            Self::InvalidAuthoredTime(time) => write!(
+                formatter,
+                "authored time must be finite and nonnegative, received {time:?}"
+            ),
+            Self::NonFiniteSample(sampled) => {
+                write!(
+                    formatter,
+                    "sample epoch must be finite, received {sampled:?}"
+                )
+            }
+            Self::NonFiniteReceipt(received) => {
+                write!(
+                    formatter,
+                    "receipt epoch must be finite, received {received:?}"
+                )
+            }
+            Self::ReceiptBeforeSample { sampled, received } => write!(
+                formatter,
+                "receipt epoch {received:?} precedes sample epoch {sampled:?}"
+            ),
+        }
+    }
+}
+
+/// Validate the original host observations without correcting either timestamp.
+/// Projection overflow remains the downstream clip query's responsibility.
+#[cfg(any(test, all(target_arch = "wasm32", feature = "renderer")))]
+fn worker_audio_time_at_receipt(
+    expected_session: u32,
+    session: u32,
+    time: f64,
+    sampled_epoch_ms: f64,
+    received_epoch_ms: f64,
+) -> Result<f64, WorkerAudioAnchorError> {
+    if session != expected_session {
+        return Err(WorkerAudioAnchorError::SessionMismatch {
+            expected: expected_session,
+            actual: session,
+        });
+    }
+    if !time.is_finite() || time < 0.0 {
+        return Err(WorkerAudioAnchorError::InvalidAuthoredTime(time));
+    }
+    if !sampled_epoch_ms.is_finite() {
+        return Err(WorkerAudioAnchorError::NonFiniteSample(sampled_epoch_ms));
+    }
+    if !received_epoch_ms.is_finite() {
+        return Err(WorkerAudioAnchorError::NonFiniteReceipt(received_epoch_ms));
+    }
+    if received_epoch_ms < sampled_epoch_ms {
+        return Err(WorkerAudioAnchorError::ReceiptBeforeSample {
+            sampled: sampled_epoch_ms,
+            received: received_epoch_ms,
+        });
+    }
+    Ok(time + (received_epoch_ms - sampled_epoch_ms) / 1000.0)
+}
+
 #[cfg(all(target_arch = "wasm32", feature = "renderer"))]
 mod wasm {
     use super::*;
@@ -299,16 +376,14 @@ mod wasm {
             sampled_epoch_ms: f64,
             received_epoch_ms: f64,
         ) -> Result<(), JsValue> {
-            if session != self.resources.session()
-                || !time.is_finite()
-                || time < 0.0
-                || !sampled_epoch_ms.is_finite()
-                || !received_epoch_ms.is_finite()
-                || received_epoch_ms < sampled_epoch_ms
-            {
-                return Err(js_error("stale or invalid worker audio anchor"));
-            }
-            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
+            let time = worker_audio_time_at_receipt(
+                self.resources.session(),
+                session,
+                time,
+                sampled_epoch_ms,
+                received_epoch_ms,
+            )
+            .map_err(js_error)?;
             self.output
                 .start_clips(self.resources.at_time(time).map_err(js_error)?)
         }
@@ -347,6 +422,97 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_anchor_keeps_equal_epochs_and_positive_transport_age_exact() {
+        for (time, sampled, received, expected) in [
+            (2.1, 1_792_956_040_812.0, 1_792_956_040_812.0, 2.1),
+            (2.0, 1_000.0, 1_250.0, 2.25),
+            (2.0, -1_000.0, -750.0, 2.25),
+            (-0.0, 0.0, 0.0, 0.0),
+        ] {
+            assert_eq!(
+                worker_audio_time_at_receipt(19, 19, time, sampled, received),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn worker_anchor_reports_original_session_values_before_other_invalid_fields() {
+        let error = worker_audio_time_at_receipt(19, 20, f64::NAN, f64::NAN, f64::NAN).unwrap_err();
+        assert_eq!(
+            error,
+            WorkerAudioAnchorError::SessionMismatch {
+                expected: 19,
+                actual: 20
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "stale or invalid worker audio anchor: resource session 19, received session 20"
+        );
+    }
+
+    #[test]
+    fn worker_anchor_rejects_invalid_authored_time_without_changing_its_bits() {
+        for time in [
+            -f64::from_bits(1),
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let error = worker_audio_time_at_receipt(19, 19, time, 1_000.0, 1_000.0).unwrap_err();
+            let WorkerAudioAnchorError::InvalidAuthoredTime(actual) = error else {
+                panic!("unexpected anchor error: {error:?}");
+            };
+            assert_eq!(actual.to_bits(), time.to_bits());
+            assert_eq!(error.to_string(), format!(
+                "stale or invalid worker audio anchor: authored time must be finite and nonnegative, received {time:?}"
+            ));
+        }
+    }
+
+    #[test]
+    fn worker_anchor_distinguishes_nonfinite_sample_and_receipt_values() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let sample_error =
+                worker_audio_time_at_receipt(19, 19, 2.1, value, 1_000.0).unwrap_err();
+            let WorkerAudioAnchorError::NonFiniteSample(actual) = sample_error else {
+                panic!("unexpected anchor error: {sample_error:?}");
+            };
+            assert_eq!(actual.to_bits(), value.to_bits());
+            assert_eq!(sample_error.to_string(), format!(
+                "stale or invalid worker audio anchor: sample epoch must be finite, received {value:?}"
+            ));
+            let receipt_error =
+                worker_audio_time_at_receipt(19, 19, 2.1, 1_000.0, value).unwrap_err();
+            let WorkerAudioAnchorError::NonFiniteReceipt(actual) = receipt_error else {
+                panic!("unexpected anchor error: {receipt_error:?}");
+            };
+            assert_eq!(actual.to_bits(), value.to_bits());
+            assert_eq!(receipt_error.to_string(), format!(
+                "stale or invalid worker audio anchor: receipt epoch must be finite, received {value:?}"
+            ));
+        }
+    }
+
+    #[test]
+    fn worker_anchor_rejects_one_millisecond_and_one_representable_step_backwards() {
+        let sampled = 1_792_956_040_812.0_f64;
+        for received in [sampled - 1.0, f64::from_bits(sampled.to_bits() - 1)] {
+            assert!(received < sampled);
+            let error = worker_audio_time_at_receipt(19, 19, 2.1, sampled, received).unwrap_err();
+            assert_eq!(
+                error,
+                WorkerAudioAnchorError::ReceiptBeforeSample { sampled, received }
+            );
+            assert_eq!(error.to_string(), format!(
+                "stale or invalid worker audio anchor: receipt epoch {received:?} precedes sample epoch {sampled:?}"
+            ));
+        }
+    }
     #[test]
     fn round_trip_keeps_trimmed_loop_phase_fades_and_silent_gaps() {
         let mut scene = noon::Scene::new();
@@ -369,6 +535,13 @@ mod tests {
         let bytes = encode(&session, 19).unwrap();
         let resources = WorkerAudioResources::decode(&bytes).unwrap();
         assert_eq!(resources.session(), 19);
+        // Finite inputs can overflow the unchanged age projection. The helper
+        // must leave that rejection at the existing downstream clip query.
+        for (time, sampled, received) in [(0.0, -f64::MAX, f64::MAX), (f64::MAX, 0.0, f64::MAX)] {
+            let projected = worker_audio_time_at_receipt(19, 19, time, sampled, received).unwrap();
+            assert!(projected.is_infinite());
+            assert!(resources.at_time(projected).is_err());
+        }
         for time in [0.0, 1.0, 1.25, 1.6, 2.75, 3.75, 4.0, 90.0] {
             let original = session.audio_playback_at(time).unwrap().collect::<Vec<_>>();
             let mirrored = resources.at_time(time).unwrap();
