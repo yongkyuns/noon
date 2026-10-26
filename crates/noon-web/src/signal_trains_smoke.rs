@@ -11,5 +11,5 @@ pub async fn create_direct_signal_trains_renderer(
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::line_passing_flash::train_playback()
         .map_err(|error| JsValue::from_str(&error))?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

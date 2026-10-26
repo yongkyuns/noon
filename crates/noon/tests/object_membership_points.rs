@@ -221,7 +221,7 @@ fn effective_root_queries_preserve_aliases_and_replay_at_each_coherent_child_pos
 #[test]
 fn shared_native_and_direct_wasm_example_observes_the_complete_copied_object() {
     let session = noon::example_scenes::object_membership::session().unwrap();
-    assert_eq!(session.painter_order().len(), 3);
+    assert_eq!(session.session().painter_order().len(), 3);
 }
 
 #[test]

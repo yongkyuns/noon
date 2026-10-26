@@ -1901,16 +1901,40 @@ def _glow_pulse_parameters(animation: object, play_kwargs: dict[str, object]):
 
 def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Scene:
     """Declare a Rust action; Python callbacks do not participate in playback."""
-    if not isinstance(animation, _animate.Indicate):
-        raise NotImplementedError("Scene.on_click currently supports Indicate(target) only")
-    classified = _canonical_indicate_animation(self, animation)
-    animated, family = classified
-    if family or animated is not target:
-        raise ValueError("Scene.on_click requires Indicate on the same single target")
+    from _noon_effects import GlowPulse
+
+    if not isinstance(target, _base.Mobject):
+        raise TypeError("Scene.on_click requires a Mobject target")
+    if _semantic_handles._is_shared_family(target):
+        raise NotImplementedError("Scene.on_click requires a single leaf target")
+    if getattr(target, "_scene", None) is not self:
+        raise ValueError("Scene.on_click target must belong to this Scene")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("Scene.on_click requires a shared semantic handle")
+    if animation is None:
+        engine_call(
+            _context(self).liveClearClickAction,
+            target._semantic_handle,
+            operation="Scene.on_click",
+        )
+        return self
+    if isinstance(animation, GlowPulse):
+        if _canonical_glow_pulse_animation(self, animation) is not target:
+            raise ValueError("Scene.on_click requires GlowPulse on the same single target")
+        method = _context(self).liveBindClickGlowPulse
+        parameters = _glow_pulse_parameters(animation, {})
+    elif isinstance(animation, _animate.Indicate):
+        animated, family = _canonical_indicate_animation(self, animation)
+        if family or animated is not target:
+            raise ValueError("Scene.on_click requires Indicate on the same single target")
+        method = _context(self).liveBindClickIndicate
+        parameters = _indicate_parameters(animation, {})
+    else:
+        raise NotImplementedError("Scene.on_click supports Indicate(target), GlowPulse(target), or None")
     engine_call(
-        _context(self).liveBindClickIndicate,
+        method,
         target._semantic_handle,
-        *_indicate_parameters(animation, {}),
+        *parameters,
         operation="Scene.on_click",
     )
     return self

@@ -255,7 +255,7 @@ pub async fn create_number_plane_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::number_plane::session().map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 #[cfg(all(
@@ -267,5 +267,5 @@ pub async fn create_complex_plane_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::complex_plane::session().map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

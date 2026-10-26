@@ -18,7 +18,8 @@ fn initial() -> (Vec<u8>, RetainedExecutionDeltaEnvelope) {
         .unwrap();
     scene.add(&image).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap();
     let bytes = player.resource_bundle_bytes();
     let frame = serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
     (bytes, frame)

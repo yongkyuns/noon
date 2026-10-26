@@ -15,7 +15,8 @@ fn player() -> (SemanticExecutionPlayer, SemanticNodeId) {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 41).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 41)
+            .unwrap();
     (player, detached.node_id())
 }
 

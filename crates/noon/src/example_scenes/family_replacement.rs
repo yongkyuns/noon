@@ -1,7 +1,7 @@
 //! Paired with ordinary_family_replacement.py on native and direct Rust/WASM.
-use crate::{ExecutionSession, LayoutAnchor, LayoutDimension::Width, Scene};
+use crate::{LayoutAnchor, LayoutDimension::Width, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut first = scene.rectangle(2.0, 1.0).map_err(|e| e.to_string())?;
     let mut second = scene.square(1.0).map_err(|e| e.to_string())?;
@@ -43,5 +43,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }

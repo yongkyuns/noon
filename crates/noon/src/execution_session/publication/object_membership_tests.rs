@@ -208,5 +208,5 @@ fn rejected_cycle_keeps_frame_membership_and_publication_coherent() {
 #[test]
 fn direct_native_and_wasm_example_uses_the_normal_session() {
     let session = crate::example_scenes::object_membership::session().unwrap();
-    assert_eq!(session.painter_order().len(), 3);
+    assert_eq!(session.session().painter_order().len(), 3);
 }

@@ -207,7 +207,7 @@ pub async fn create_table_renderer(
     compiler: &mut crate::WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::session(compiler).map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Direct WASM renderer counterpart of the configurable DecimalTable fixture.
@@ -219,7 +219,7 @@ pub async fn create_decimal_table_format_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session =
         noon::example_scenes::table::decimal_format_session(compiler).map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Direct WASM renderer counterpart of the grouped-label table fixture.
@@ -229,7 +229,7 @@ pub async fn create_mobject_table_family_labels_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::family_labels_session().map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Direct WASM renderer counterpart of the plain-text Table labels fixture.
@@ -239,7 +239,7 @@ pub async fn create_table_labels_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::labels_session().map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Direct WASM renderer counterpart of the Table line-configuration fixture.
@@ -249,7 +249,7 @@ pub async fn create_table_line_config_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::line_config_session().map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 #[wasm_bindgen]

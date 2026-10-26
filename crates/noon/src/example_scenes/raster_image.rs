@@ -84,7 +84,7 @@ pub fn program() -> Result<LiveProgram<RasterImage>, String> {
 pub fn sampling_session(
     sampling: RasterImageSampling,
     opacity: f64,
-) -> Result<crate::ExecutionSession, String> {
+) -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut background = scene.square(8.0).map_err(message)?;
     background
@@ -97,7 +97,7 @@ pub fn sampling_session(
     options.set_opacity(opacity).map_err(message)?;
     let image = scene.image(options).map_err(message)?;
     scene.add(&image).map_err(message)?;
-    scene.execution_session().map_err(message)
+    scene.into_execution().map_err(message)
 }
 
 fn message(error: impl std::fmt::Display) -> String {

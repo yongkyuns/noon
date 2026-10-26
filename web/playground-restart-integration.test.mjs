@@ -145,6 +145,7 @@ function navigationFixture() {
       const candidate = {
         canvas: context.canvas, terminations: 0,
         pause: () => Promise.resolve(),
+        retireExecutionSource: () => Promise.resolve(),
         terminate() { this.terminations += 1; this.canvas = { id: `replacement-${owners.length}`, style: {} }; },
       };
       owners.push(candidate);

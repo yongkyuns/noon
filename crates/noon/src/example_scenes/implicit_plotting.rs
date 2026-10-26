@@ -1,8 +1,5 @@
 //! Paired implicit-contour gallery: two scalar fields become retained paths.
-use crate::{
-    ExecutionSession, ImplicitPlotOptions, ManimAxesOptions, ManimGeometryOptions, Scene, BLUE,
-    YELLOW,
-};
+use crate::{ImplicitPlotOptions, ManimAxesOptions, ManimGeometryOptions, Scene, BLUE, YELLOW};
 
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 use crate::Text;
@@ -60,9 +57,9 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let scene = scene().map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

@@ -308,6 +308,7 @@ const diagnostics = {
   snapshots: {},
   pageErrors: [],
   consoleErrors: [],
+  failedRequests: [],
   unexpectedNavigations: 0,
   serverOutput: "",
 };
@@ -337,6 +338,9 @@ try {
   });
   page = await context.newPage();
   page.on("pageerror", (error) => diagnostics.pageErrors.push(String(error)));
+  page.on("requestfailed", request => diagnostics.failedRequests.push({
+    phase, url: request.url(), error: request.failure()?.errorText ?? "request failed",
+  }));
   page.on("console", (message) => {
     if (message.type() === "error") diagnostics.consoleErrors.push({ phase, text: message.text() });
   });

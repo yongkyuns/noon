@@ -1,10 +1,10 @@
 //! Shared deterministic rate tracks, paired with ordinary_polynomial_rates.py.
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
 };
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     build_session(
         &[
             RateFunction::Smoothstep,
@@ -18,7 +18,7 @@ pub fn session() -> Result<ExecutionSession, String> {
     )
 }
 
-pub fn easing_session() -> Result<ExecutionSession, String> {
+pub fn easing_session() -> Result<crate::SceneExecution, String> {
     build_session(
         &[
             RateFunction::EaseInQuad,
@@ -40,7 +40,7 @@ pub fn easing_session() -> Result<ExecutionSession, String> {
 }
 
 /// Three standard sine curves through the same retained method-target composition.
-pub fn sine_session() -> Result<ExecutionSession, String> {
+pub fn sine_session() -> Result<crate::SceneExecution, String> {
     build_session(
         &[
             RateFunction::EaseInSine,
@@ -53,7 +53,7 @@ pub fn sine_session() -> Result<ExecutionSession, String> {
 }
 
 /// Exponential and circular rates share the same retained target composition.
-pub fn exponential_circular_session() -> Result<ExecutionSession, String> {
+pub fn exponential_circular_session() -> Result<crate::SceneExecution, String> {
     build_session(
         &[
             RateFunction::EaseInExpo,
@@ -69,7 +69,7 @@ pub fn exponential_circular_session() -> Result<ExecutionSession, String> {
 }
 
 /// Original overshooting back rates through retained method targets.
-pub fn back_session() -> Result<ExecutionSession, String> {
+pub fn back_session() -> Result<crate::SceneExecution, String> {
     build_session(
         &[
             RateFunction::EaseInBack,
@@ -82,7 +82,7 @@ pub fn back_session() -> Result<ExecutionSession, String> {
 }
 
 /// Original elastic overshoot and piecewise bounce rates use retained Rust targets.
-pub fn elastic_bounce_session() -> Result<ExecutionSession, String> {
+pub fn elastic_bounce_session() -> Result<crate::SceneExecution, String> {
     build_session(
         &[
             RateFunction::EaseInElastic,
@@ -98,7 +98,7 @@ pub fn elastic_bounce_session() -> Result<ExecutionSession, String> {
 }
 
 /// Lingering's early hold and reverse Create use the same shared composition.
-pub fn lingering_session() -> Result<ExecutionSession, String> {
+pub fn lingering_session() -> Result<crate::SceneExecution, String> {
     build_session_with_reverse_create(
         &[RateFunction::Lingering, RateFunction::Lingering],
         0.65,
@@ -111,7 +111,7 @@ fn build_session(
     rates: &[RateFunction],
     side: f64,
     row_step: f64,
-) -> Result<ExecutionSession, String> {
+) -> Result<crate::SceneExecution, String> {
     build_session_with_reverse_create(rates, side, row_step, false)
 }
 
@@ -120,7 +120,7 @@ fn build_session_with_reverse_create(
     side: f64,
     row_step: f64,
     reverse_create_last: bool,
-) -> Result<ExecutionSession, String> {
+) -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut shapes = Vec::new();
@@ -178,7 +178,7 @@ fn build_session_with_reverse_create(
         scene
             .live(&mut session)
             .declare_and_activate_composition(&request, AnimationOptions::new())?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }
@@ -188,12 +188,13 @@ mod tests {
     use super::*;
 
     fn assert_seek_matches_forward(
-        build: fn() -> Result<ExecutionSession, String>,
+        build: fn() -> Result<crate::SceneExecution, String>,
         expected_count: usize,
-    ) -> ExecutionSession {
+    ) -> crate::SceneExecution {
         let mut forward = build().unwrap();
         let mut sought = build().unwrap();
         let ids = forward
+            .session()
             .frame()
             .objects
             .iter()
@@ -201,13 +202,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ids.len(), expected_count);
         for time in [0.0, 0.125, 0.25, 0.375, 0.5, 0.75, 1.0] {
-            forward.advance_to(time).unwrap();
+            forward.session_mut().advance_to(time).unwrap();
             sought.seek(time).unwrap();
             for (index, (left, right)) in forward
+                .session()
                 .frame()
                 .objects
                 .iter()
-                .zip(&sought.frame().objects)
+                .zip(&sought.session().frame().objects)
                 .enumerate()
             {
                 assert_eq!(left.id, ids[index]);
@@ -216,7 +218,7 @@ mod tests {
                 assert_eq!(left.style, right.style);
             }
         }
-        assert_eq!(forward.effective_time(), 1.0);
+        assert_eq!(forward.session().effective_time(), 1.0);
         sought
     }
 
@@ -225,7 +227,7 @@ mod tests {
         let mut sought = assert_seek_matches_forward(lingering_session, 2);
         for (time, x) in [(0.4, 0.0), (0.8, 2.0), (0.9, 2.0)] {
             sought.seek(time).unwrap();
-            assert!((sought.frame().objects[0].transform.translation.x - x).abs() < 1e-6);
+            assert!((sought.session().frame().objects[0].transform.translation.x - x).abs() < 1e-6);
         }
     }
 
@@ -233,7 +235,7 @@ mod tests {
     fn elastic_bounce_rates_preserve_original_positions_and_seek_identity() {
         let mut sought = assert_seek_matches_forward(elastic_bounce_session, 6);
         sought.seek(0.25).unwrap();
-        for (object, original) in sought.frame().objects.iter().zip([
+        for (object, original) in sought.session().frame().objects.iter().zip([
             -0.005524271728019903_f64 as f32,
             0.9116116523516816_f64 as f32,
             0.011969444423734044_f64 as f32,
@@ -249,16 +251,16 @@ mod tests {
     fn back_rates_preserve_overshoot_and_seek_forward_identity() {
         let mut sought = assert_seek_matches_forward(back_session, 3);
         sought.seek(0.25).unwrap();
-        assert!(sought.frame().objects[0].transform.translation.x < -2.0);
+        assert!(sought.session().frame().objects[0].transform.translation.x < -2.0);
         sought.seek(0.75).unwrap();
-        assert!(sought.frame().objects[1].transform.translation.x > 2.0);
+        assert!(sought.session().frame().objects[1].transform.translation.x > 2.0);
     }
 
     #[test]
     fn exponential_circular_rates_keep_original_positions_and_seek_identity() {
         let mut sought = assert_seek_matches_forward(exponential_circular_session, 6);
         sought.seek(0.25).unwrap();
-        for (object, original) in sought.frame().objects.iter().zip([
+        for (object, original) in sought.session().frame().objects.iter().zip([
             0.005524271728019903_f64 as f32,
             0.8232233047033631_f64 as f32,
             0.015625_f32,
@@ -274,7 +276,7 @@ mod tests {
     fn sine_rates_keep_seek_and_forward_sampling_equal_at_original_positions() {
         let mut sought = assert_seek_matches_forward(sine_session, 3);
         sought.seek(0.25).unwrap();
-        for (object, original) in sought.frame().objects.iter().zip([
+        for (object, original) in sought.session().frame().objects.iter().zip([
             0.07612046748871326_f64 as f32,
             0.3826834323650898_f64 as f32,
             0.1464466094067262_f64 as f32,
@@ -292,7 +294,7 @@ mod tests {
     fn all_five_rates_preserve_identity_and_seek_matches_forward_sampling() {
         let mut sought = assert_seek_matches_forward(session, 5);
         sought.seek(0.25).unwrap();
-        let objects = &sought.frame().objects;
+        let objects = &sought.session().frame().objects;
         assert!((objects[3].transform.translation.x - 0.6457513).abs() < 1e-6);
         assert_eq!(objects[4].transform.translation.x, -1.0);
     }

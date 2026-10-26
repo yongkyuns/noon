@@ -67,6 +67,6 @@ fn paired_example_replays_both_width_segments() {
     let mut session = noon::example_scenes::animated_stroke_width::session().unwrap();
     for (time, expected) in [(0., 0.), (0.5, 0.1), (1., 0.2), (1.5, 0.11), (2., 0.02)] {
         session.seek(time).unwrap();
-        assert!((session.frame().objects[0].style.stroke_width - expected).abs() < 1e-6);
+        assert!((session.session().frame().objects[0].style.stroke_width - expected).abs() < 1e-6);
     }
 }

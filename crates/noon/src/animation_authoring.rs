@@ -33,6 +33,10 @@ impl DeclaredAnimation {
         self.node
     }
 
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        &self.store
+    }
+
     /// Read the current authored options from the authoritative semantic store.
     pub fn options(&self) -> Result<AnimationOptions, String> {
         self.store

@@ -1,7 +1,7 @@
 //! The same four-control cubic used by the ordinary Python constructor fixture.
-use crate::{ExecutionSession, ManimGeometryOptions, Scene, Vec2, VectorPath};
+use crate::{ManimGeometryOptions, Scene, Vec2, VectorPath};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let path = VectorPath::new().move_to(Vec2::new(-3., -1.)).cubic_to(
@@ -20,7 +20,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }
