@@ -449,6 +449,9 @@ async function clickIndicateParity(backend, { moving = false } = {}) {
         const renderer = moving
           ? await createDirectMovingClickIndicateRenderer(canvas.transferControlToOffscreen())
           : await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), false, true);
+        // Match the worker's external-sample pacing. The wake driver still
+        // advances input effects, while authored motion stays at the selected time.
+        if (moving) renderer.pauseDirect(performance.now());
         const driver = createDirectExecutionWakeDriver(renderer);
         const detach = attachNativeInputs(renderer, canvas, {
           onInput: () => driver.wake(), onError: error => errors.push(String(error)),
@@ -583,6 +586,14 @@ async function clickIndicateParity(backend, { moving = false } = {}) {
     };
     const active = {};
     for (const host of ["direct", "worker"]) {
+      if (moving && host === "direct") {
+        // Begin the independently qualified realtime-motion case only after
+        // both hosts have captured the same paused midpoint picture.
+        await pages.direct.evaluate(() => {
+          clickIndicateParity.renderer.resumeDirect();
+          clickIndicateParity.driver.wake();
+        });
+      }
       const presentedBefore = host === "direct"
         ? await pages.direct.evaluate(() => clickIndicateParity.driver.stats().presentedFrames)
         : (await pages.worker.evaluate(async () =>
