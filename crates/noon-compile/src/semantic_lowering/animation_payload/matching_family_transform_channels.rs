@@ -210,7 +210,7 @@ fn lower_matched_occurrence(
         prepared.store(),
         &source,
         &target,
-        source_member.effective,
+        source_member.effective.clone(),
         noon_core::SemanticTransformInterpolation::Affine,
         activation.options.path_arc,
     )
@@ -257,7 +257,7 @@ fn lower_matched_occurrence(
             anchor_execution_object_id: source_member.execution_object_id,
             source: source_member.node,
             target_state: target_node,
-            effective_source: source_member.effective,
+            effective_source: source_member.effective.clone(),
             tracks,
         });
         return Ok(());

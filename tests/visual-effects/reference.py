@@ -204,3 +204,27 @@ def linear_gradient_pixel(start: Sequence[float], end: Sequence[float],
     opacity = (fraction(coverage, 0, 1) * fraction(fill_opacity, 0, 1)
                * fraction(object_opacity, 0, 1))
     return tuple(float(v * opacity) for v in color)
+
+
+def paint_transition_pixel(from_axis, to_axis, from_stops, to_stops, alpha, point, opacities):
+    """Independent rational temporal promotion followed by the spatial oracle.
+
+    The f64/f32 engine and WGSL are not imported. Time is a caller-supplied
+    normalized sample; this function owns neither scene state nor scheduling.
+    """
+    number(alpha, 0, 1)
+    t = Fraction(str(alpha))
+    def mix(a, b):
+        return Fraction(str(a)) * (1 - t) + Fraction(str(b)) * t
+    axis = [float(mix(a, b)) for a, b in zip(from_axis, to_axis)]
+    if len(from_stops) != len(to_stops):
+        raise ValueError("different stop counts")
+    stops = []
+    for a, b in zip(from_stops, to_stops):
+        premultiplied = [mix(Fraction(str(a[i])) * Fraction(str(a[4])),
+                            Fraction(str(b[i])) * Fraction(str(b[4]))) for i in range(1, 4)]
+        opacity = mix(a[4], b[4])
+        rgb = [float(v / opacity) if opacity else 0.0 for v in premultiplied]
+        stops.append((float(mix(a[0], b[0])), (*rgb, float(opacity))))
+    return linear_gradient_pixel(axis[:2], axis[2:], stops, point,
+                                 fill_opacity=float(mix(*opacities)))

@@ -1405,6 +1405,13 @@ impl CompiledScene {
             }
             validate_glow_track_attachment(track, staged.or(resident_glow))
                 .map_err(CompilePatchError::InvalidTrack)?;
+            validate_paint_track_profile(
+                track,
+                continuous_fill_content_supported(&self.objects[object_index as usize].content),
+                self.objects[object_index as usize].spatial.is_some(),
+                staged.is_some() || resident_glow.is_some(),
+            )
+            .map_err(CompilePatchError::InvalidTrack)?;
             candidates
                 .entry(CompiledChannelKey::new(object_index, track.property))
                 .or_default()
@@ -1452,6 +1459,17 @@ impl CompiledScene {
         let mut objects = Vec::with_capacity(object_count);
 
         for (index, mut object) in source_objects.into_iter().enumerate() {
+            if let Some(gradient) = &object.fill_gradient {
+                if !continuous_fill_content_supported(&object.content)
+                    || object.spatial.is_some()
+                    || object.glow.is_some()
+                    || semantic_lowering::paint::validate_definition(gradient).is_err()
+                {
+                    return Err(CompileError::InvalidTrack(
+                        TimelineError::InvalidPaintValues,
+                    ));
+                }
+            }
             if !object.base_z_index.is_finite() {
                 return Err(CompileError::InvalidZIndex(object.id));
             }
@@ -1477,6 +1495,8 @@ impl CompiledScene {
                 .ok_or(CompileError::UnknownObject(track.object))?;
             validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
             validate_glow_track(track, &objects[object_index as usize])
+                .map_err(CompileError::InvalidTrack)?;
+            validate_paint_track(track, &objects[object_index as usize])
                 .map_err(CompileError::InvalidTrack)?;
             if !valid_track_for_spatial(track, objects[object_index as usize].spatial.as_deref()) {
                 return Err(CompileError::InvalidTrack(
@@ -1874,6 +1894,25 @@ impl CompiledScene {
         Ok(())
     }
 
+    pub(crate) fn require_continuous_paint_source(
+        &self,
+        index: u32,
+        supported: bool,
+    ) -> Result<(), CompilePatchError> {
+        if !supported
+            && (self.objects[index as usize].fill_gradient.is_some()
+                || self
+                    .channel_tracks(CompiledChannelKey::new(index, Property::Fill))
+                    .iter()
+                    .any(|track| matches!(track.values, TrackValues::Paint { .. })))
+        {
+            return Err(CompilePatchError::InvalidTrack(
+                TimelineError::InvalidPaintValues,
+            ));
+        }
+        Ok(())
+    }
+
     pub fn apply_execution_patch(
         &mut self,
         patch: &ExecutionPatch,
@@ -2161,6 +2200,10 @@ impl CompiledScene {
                     content,
                     *text_bounds,
                 )?;
+                self.require_continuous_paint_source(
+                    index,
+                    continuous_fill_content_supported(content),
+                )?;
                 for property in [Property::Transform, Property::Morph] {
                     let channel = CompiledChannelKey::new(index, property);
                     if let Some(track) = self
@@ -2220,6 +2263,7 @@ impl CompiledScene {
                     object: *object,
                     field: ObjectStateField::Transform,
                 })?;
+                self.require_continuous_paint_source(index, spatial.is_none())?;
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
                 self.update_spatial_anchor_group(index, previous.as_ref(), spatial.as_ref());
                 self.objects[index as usize].base_transform = base_transform;
@@ -2241,6 +2285,7 @@ impl CompiledScene {
                         field: ObjectStateField::Transform,
                     });
                 }
+                self.require_continuous_paint_source(index, spatial.is_none())?;
                 let object_is_mesh = self.compiled_object_is_mesh(index as usize);
                 if spatial.as_ref().is_some_and(|spatial| {
                     (spatial.draw_kind == CompiledSpatialDrawKind::Mesh) != object_is_mesh
@@ -2310,6 +2355,16 @@ impl CompiledScene {
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
+                let source = &self.objects[index as usize];
+                if fill_gradient.is_some()
+                    && (!continuous_fill_content_supported(&source.content)
+                        || source.spatial.is_some()
+                        || source.glow.is_some())
+                {
+                    return Err(CompilePatchError::InvalidTrack(
+                        TimelineError::InvalidPaintValues,
+                    ));
+                }
                 self.objects[index as usize].base_style = *style;
                 self.objects[index as usize].fill_gradient = fill_gradient.clone();
             }
@@ -2322,6 +2377,7 @@ impl CompiledScene {
                     self.objects[index as usize].glow.as_deref(),
                     glow,
                 )?;
+                self.require_continuous_paint_source(index, false)?;
                 self.objects[index as usize].glow = Some(Arc::clone(glow));
             }
             ExecutionPatch::SetGlowAttachment {
@@ -2562,6 +2618,8 @@ impl CompiledScene {
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
         validate_glow_track(track, &self.objects[object_index as usize])
             .map_err(CompilePatchError::InvalidTrack)?;
+        validate_paint_track(track, &self.objects[object_index as usize])
+            .map_err(CompilePatchError::InvalidTrack)?;
         if !valid_track_for_spatial(
             track,
             self.objects[object_index as usize].spatial.as_deref(),
@@ -2679,6 +2737,46 @@ fn reject_geometry_track_on_text(
 ) -> Result<(), (TrackId, Property)> {
     if object.text().is_some() && matches!(track.property, Property::Transform | Property::Morph) {
         return Err((track.id, track.property));
+    }
+    Ok(())
+}
+
+pub(crate) fn continuous_fill_content_supported(content: &ObjectContentRef) -> bool {
+    match content.geometry() {
+        Some(GeometryRef::Circle { radius }) => *radius > 0.0,
+        Some(GeometryRef::Rectangle { size }) => size.x > 0.0 && size.y > 0.0,
+        Some(GeometryRef::VectorPath(path)) => path
+            .conservative_bounds()
+            .is_some_and(|bounds| bounds.max.x > bounds.min.x && bounds.max.y > bounds.min.y),
+        Some(GeometryRef::External(_)) => true,
+        _ => false,
+    }
+}
+
+fn validate_paint_track(
+    track: &TrackDefinition,
+    object: &CompiledObject,
+) -> Result<(), TimelineError> {
+    validate_paint_track_profile(
+        track,
+        continuous_fill_content_supported(&object.content),
+        object.spatial.is_some(),
+        object.glow.is_some(),
+    )
+}
+
+pub(crate) fn validate_paint_track_profile(
+    track: &TrackDefinition,
+    supported_content: bool,
+    spatial: bool,
+    glow: bool,
+) -> Result<(), TimelineError> {
+    if let TrackValues::Paint { transition } = &track.values {
+        if !supported_content || spatial || glow {
+            return Err(TimelineError::InvalidPaintValues);
+        }
+        semantic_lowering::paint::validate_transition(transition)
+            .map_err(|_| TimelineError::InvalidPaintValues)?;
     }
     Ok(())
 }
@@ -2855,6 +2953,15 @@ fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchErro
 }
 
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
+    if object.fill_gradient.is_some()
+        && (!continuous_fill_content_supported(&object.content)
+            || object.spatial.is_some()
+            || object.glow.is_some())
+    {
+        return Err(CompilePatchError::InvalidTrack(
+            TimelineError::InvalidPaintValues,
+        ));
+    }
     validate_z_index(object.id, object.base_z_index)?;
     if !valid_compiled_spatial(object.spatial.as_deref()) {
         return Err(CompilePatchError::InvalidObjectState {

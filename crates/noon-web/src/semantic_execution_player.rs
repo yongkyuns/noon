@@ -1951,6 +1951,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_fill_gradient(
+        &mut self,
+        mobject: &noon::Mobject,
+        gradient: std::sync::Arc<noon::LinearGradient>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_fill_gradient(mobject, gradient, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,

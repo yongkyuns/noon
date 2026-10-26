@@ -3,7 +3,7 @@ import math
 from pathlib import Path
 import unittest
 
-from reference import linear_gradient_pixel
+from reference import linear_gradient_pixel, paint_transition_pixel
 
 RED = (1, 0, 0, 1)
 BLUE = (0, 0, 1, 1)
@@ -11,6 +11,29 @@ STOPS = [(0, RED), (1, BLUE)]
 
 
 class LinearGradientReference(unittest.TestCase):
+    def test_shared_temporal_vectors_and_seeded_defects(self):
+        vectors = []
+        def numbers(field):
+            return tuple(float(v) for v in field.split(","))
+        for line in Path(__file__).with_name("paint-transition-vectors.txt").read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            name, a, b, source, target, time, point, opacity, expected = line.split("|")
+            actual = paint_transition_pixel(numbers(a), numbers(b),
+                [numbers(s) for s in source.split(";")], [numbers(s) for s in target.split(";")],
+                float(time), numbers(point), numbers(opacity))
+            expected = numbers(expected)
+            for x, y in zip(actual, expected):
+                self.assertAlmostEqual(x, y, places=14, msg=name)
+            vectors.append((name, actual))
+        self.assertEqual(len(vectors), 12)
+        values = dict(vectors)
+        # Straight-alpha temporal mixing leaks invisible red; a frozen source
+        # misses time; applying fill opacity twice darkens the independent case.
+        self.assertNotEqual(values["transparent_rgb"], (0.25, 0, 0.25, 0.5))
+        self.assertNotEqual(values["quarter"], (1, 0, 0, 1))
+        self.assertNotEqual(values["independent_opacity"], (0.09375, 0.09375, 0.0625, 0.25))
+
     def test_shared_rust_vectors_have_independently_recomputed_expected_values(self):
         path = Path(__file__).with_name("linear-gradient-vectors.txt")
         names = set()

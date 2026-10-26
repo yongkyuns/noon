@@ -29,7 +29,7 @@ pub(crate) use style::{
     edit_fade_to, edit_fade_to_occurrences, edit_fill, edit_fill_color, edit_fill_opacity,
     edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color, edit_stroke_opacity,
     edit_stroke_width, fade_factor, manim_color_from_effective, opaque_paint_color,
-    parse_stroke_cap, validate_fade_to_inputs, PaintStyleEdit,
+    parse_stroke_cap, prepare_fill_gradient, validate_fade_to_inputs, PaintStyleEdit,
 };
 use style::{parse_stroke_join, parse_stroke_width_mode};
 
@@ -1691,6 +1691,14 @@ fn interpolate_manim_paint(
     }
     if alpha == 1.0 {
         return Ok(end.cloned());
+    }
+    if matches!(start, Some(SemanticPaint::LinearGradient(_)))
+        || matches!(end, Some(SemanticPaint::LinearGradient(_)))
+    {
+        return noon_core::PaintTransition::new(start.cloned(), 1.0, end.cloned(), 1.0)?
+            .sample(alpha)
+            .map(|(paint, _)| paint)
+            .map_err(Into::into);
     }
     match (start, end) {
         (None, None) => Ok(None),
