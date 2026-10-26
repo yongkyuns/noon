@@ -93,6 +93,11 @@ impl PreparedEffectivePropertyBatch {
     pub fn is_empty(&self) -> bool {
         self.writes.is_empty()
     }
+
+    /// Sparse targets of this already-validated batch, in retained write order.
+    pub fn objects(&self) -> impl Iterator<Item = noon_core::ObjectId> + '_ {
+        self.writes.iter().map(|(_, write)| write.object())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,6 +146,25 @@ impl std::fmt::Display for PreparedFrameCommitError {
 impl std::error::Error for PreparedFrameCommitError {}
 
 impl SceneInstance {
+    /// Append component writes to an existing current-publication carry.
+    /// Existing write order is preserved, and all final writes use the ordinary
+    /// effective-property validator before any publication can commit.
+    pub fn extend_effective_property_batch(
+        &self,
+        existing: Option<PreparedEffectivePropertyBatch>,
+        additional: &[EffectivePropertyWrite],
+    ) -> Result<PreparedEffectivePropertyBatch, crate::AuthoredPublicationError> {
+        if let Some(existing) = existing.as_ref() {
+            self.preflight_effective_carry_forward(existing, self.publication_context())?;
+        }
+        let mut writes = existing.map_or_else(Vec::new, |batch| {
+            batch.writes.into_iter().map(|(_, write)| write).collect()
+        });
+        writes.extend_from_slice(additional);
+        self.prepare_effective_property_batch(&writes)
+            .map_err(crate::AuthoredPublicationError::Compile)
+    }
+
     /// Publish already-validated transient effective writes without advancing the
     /// authored timeline or touching replay retention.  This is deliberately
     /// narrower than `commit_prepared_frame`: interaction drivers use it while a
@@ -505,7 +529,14 @@ impl SceneInstance {
             writes
                 .iter()
                 .copied()
-                .map(EffectivePropertyWrite::as_execution_patch),
+                .map(|write| {
+                    let glow = self
+                        .effective_object(write.object())
+                        .and_then(|row| row.effect.as_deref())
+                        .copied();
+                    write.as_execution_patch(glow)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         );
         self.compiled
             .preflight_execution_transaction(&transaction)?;

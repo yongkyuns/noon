@@ -289,7 +289,9 @@ fn query_keeps_original_occurrence_and_does_not_acknowledge_or_publish_input() {
     assert_eq!(session.publication_context(), before);
     assert!(session.take_frame_changes().is_empty());
     assert!(session.wake_state().is_quiescent());
-    session.submit_native_pointer_input(&token, input).unwrap();
+    session
+        .submit_native_pointer_input(&mut store, &token, input)
+        .unwrap();
     assert_eq!(session.last_native_event_sequence, Some(0));
     assert!(matches!(
         session.pick_native_pointer_fill(&token, input, |_| true),

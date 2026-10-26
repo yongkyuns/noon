@@ -1,14 +1,12 @@
 //! Native highlighted source listings shared by Rust and Python examples.
 
-use crate::{
-    Code, CodeBackground, CodeOptions, CodeParagraphConfig, ExecutionSession, Scene, Text,
-};
+use crate::{Code, CodeBackground, CodeOptions, CodeParagraphConfig, Scene, Text};
 
 pub const PYTHON_SOURCE: &str =
     "def squares(values):\n    return [\n        x * x for x in values\n    ]";
 pub const CUDA_SOURCE: &str = "__global__ void transpose(float *out) {\n    __shared__ float tile[8][9];\n    // Padding keeps the bank stride coprime.\n    out[threadIdx.x] = tile[0][threadIdx.x];\n}";
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut title = scene
         .text(Text::new("Code is part of the scene").with_font_size(32.0))
@@ -57,5 +55,5 @@ pub fn session() -> Result<ExecutionSession, String> {
             cuda.family().into(),
         ])
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }

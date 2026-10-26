@@ -464,7 +464,9 @@ fn translation_signal_driver_rejects_press_without_acknowledging_it() {
     assert!(!session.translation_drag_active());
     // The same sequence remains admissible through the ordinary ingress because
     // rejected acquisition did not acknowledge it.
-    session.submit_native_pointer_input(&token, press).unwrap();
+    session
+        .submit_native_pointer_input(&mut store, &token, press)
+        .unwrap();
 }
 
 #[test]

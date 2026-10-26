@@ -1,6 +1,6 @@
 //! Shared persistent DecimalNumber example for native and direct WASM hosts.
 
-use crate::{DecimalFormat, DecimalNumber, ExecutionSession, LatexBackend, Scene};
+use crate::{DecimalFormat, DecimalNumber, LatexBackend, Scene};
 use std::rc::Rc;
 
 pub const INITIAL_VALUE: f64 = -0.004;
@@ -27,7 +27,7 @@ pub fn build(backend: &mut impl LatexBackend) -> Result<(Scene, DecimalNumber), 
     Ok((scene, number))
 }
 
-pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
+pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution, String> {
     let (scene, _number) = build(backend)?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }

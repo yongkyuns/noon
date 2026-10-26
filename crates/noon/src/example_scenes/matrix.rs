@@ -1,6 +1,6 @@
 //! Shared retained Matrix scene for native and direct WASM hosts.
 
-use crate::{ExecutionSession, LatexBackend, Matrix, Scene};
+use crate::{LatexBackend, Matrix, Scene};
 
 pub fn build(backend: &mut impl LatexBackend) -> Result<(Scene, Matrix), String> {
     let mut scene = Scene::new();
@@ -12,7 +12,7 @@ pub fn build(backend: &mut impl LatexBackend) -> Result<(Scene, Matrix), String>
     Ok((scene, matrix))
 }
 
-pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
+pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution, String> {
     let (scene, _matrix) = build(backend)?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }

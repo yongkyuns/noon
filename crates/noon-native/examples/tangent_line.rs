@@ -14,6 +14,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let second = scene.geometry(second_options)?;
 
     scene.add_many(&[(&circle).into(), (&first).into(), (&second).into()])?;
-    noon_native::run(scene.execution_session()?)?;
+    noon_native::run(scene.into_execution()?)?;
     Ok(())
 }

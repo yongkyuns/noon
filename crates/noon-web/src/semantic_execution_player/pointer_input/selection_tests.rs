@@ -11,7 +11,8 @@ fn player() -> SemanticExecutionPlayer {
     circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
+            .unwrap();
     player.pause();
     player.set_pointer_fill_selection(Some(4.0)).unwrap();
     player.initial_delta_json().unwrap();

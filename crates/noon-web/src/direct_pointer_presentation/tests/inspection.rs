@@ -6,14 +6,17 @@ use noon::{AnimationOptions, IndicateOptions};
 const CENTER: Vec2 = Vec2::new(400.0, 200.0);
 fn scroll(f: &mut Fixture, point: Vec2, delta: f64) -> Result<Option<bool>, String> {
     f.host
-        .scroll(&mut f.session, &mut f.binding, 1, SIZE, point, delta)
+        .scroll(&mut f.execution, &mut f.binding, 1, SIZE, point, delta)
 }
 fn present(f: &mut Fixture) {
     let frame = f
         .host
-        .capture(&f.session, f.session.inspection_camera().unwrap())
+        .capture(
+            f.execution.session(),
+            f.execution.session().inspection_camera().unwrap(),
+        )
         .unwrap();
-    f.session.take_renderer_publication();
+    f.execution.session_mut().take_renderer_publication();
     f.host.did_present(frame);
 }
 
@@ -27,10 +30,13 @@ fn direct_inspection_keeps_anchor_and_uses_the_composed_camera_for_picking() {
     circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
     circle.set_translation(2.0, 0.0).unwrap();
     scene.add(&circle).unwrap();
-    f.session = scene.execution_session().unwrap();
-    f.session.enable_pointer_fill_selection(4.0).unwrap();
+    f.execution = scene.into_execution().unwrap();
+    f.execution
+        .session_mut()
+        .enable_pointer_fill_selection(4.0)
+        .unwrap();
     present(&mut f);
-    let original = f.session.frame().clone();
+    let original = f.execution.session().frame().clone();
     let point = Vec2::new(450.0, 150.0);
     let anchor = f
         .host
@@ -45,7 +51,7 @@ fn direct_inspection_keeps_anchor_and_uses_the_composed_camera_for_picking() {
         Some(true)
     );
     assert!(f.host.presented.is_none());
-    assert_eq!(f.session.frame(), &original);
+    assert_eq!(f.execution.session().frame(), &original);
     present(&mut f);
     let frame = f.host.presented.as_ref().unwrap();
     let current = frame.position(point).unwrap().scene();
@@ -59,18 +65,21 @@ fn direct_inspection_keeps_anchor_and_uses_the_composed_camera_for_picking() {
         wire.surface_y = Some(y);
         assert!(f.send(wire).unwrap());
     }
-    assert_eq!(f.session.selected_pointer_target(), Some(circle.node_id()));
+    assert_eq!(
+        f.execution.session().selected_pointer_target(),
+        Some(circle.node_id())
+    );
 }
 
 #[test]
 fn direct_inspection_before_presentation_does_not_mutate_or_bind_input() {
     let mut f = Fixture::new();
-    let before = f.session.frame().clone();
+    let before = f.execution.session().frame().clone();
     for _ in 0..100 {
         assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
     }
-    assert_eq!(f.session.frame(), &before);
-    assert_eq!(f.session.inspection_view_revision(), 0);
+    assert_eq!(f.execution.session().frame(), &before);
+    assert_eq!(f.execution.session().inspection_view_revision(), 0);
     assert!(f.binding.is_none());
     assert_eq!(f.sequence, 0);
     present(&mut f);
@@ -82,16 +91,16 @@ fn direct_inspection_burst_does_not_relabel_or_queue_unpresented_samples() {
     let mut f = Fixture::new();
     present(&mut f);
     scroll(&mut f, CENTER, -100.0).unwrap();
-    let revision = f.session.inspection_view_revision();
-    let camera = f.session.inspection_camera().unwrap();
+    let revision = f.execution.session().inspection_view_revision();
+    let camera = f.execution.session().inspection_camera().unwrap();
     for _ in 0..100 {
         assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
     }
-    assert_eq!(f.session.inspection_view_revision(), revision);
-    assert_eq!(f.session.inspection_camera().unwrap(), camera);
+    assert_eq!(f.execution.session().inspection_view_revision(), revision);
+    assert_eq!(f.execution.session().inspection_camera().unwrap(), camera);
     present(&mut f);
-    assert!(!f.host.needs_refresh(&f.session));
-    assert!(f.session.wake_state().is_quiescent());
+    assert!(!f.host.needs_refresh(f.execution.session()));
+    assert!(f.execution.session().wake_state().is_quiescent());
 }
 
 #[test]
@@ -109,15 +118,18 @@ fn direct_inspection_aba_and_old_surface_geometry_do_not_authorize_zoom() {
     );
     f.host.presented = old;
     assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
-    assert_eq!(f.session.inspection_view_revision(), 2);
+    assert_eq!(f.execution.session().inspection_view_revision(), 2);
     f.host.set_view(2, SIZE).unwrap();
     let frame = f
         .host
-        .capture(&f.session, f.session.inspection_camera().unwrap())
+        .capture(
+            f.execution.session(),
+            f.execution.session().inspection_camera().unwrap(),
+        )
         .unwrap();
     f.host.did_present(frame);
     assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
-    assert_eq!(f.session.inspection_view_revision(), 2);
+    assert_eq!(f.execution.session().inspection_view_revision(), 2);
 }
 
 #[test]
@@ -133,14 +145,17 @@ fn direct_inspection_invalid_input_and_noop_preserve_a_held_contact() {
     assert!(scroll(&mut f, Vec2::new(f32::NAN, 0.0), 1.0).is_err());
     assert!(f
         .host
-        .scroll(&mut f.session, &mut f.binding, 1, Vec2::ZERO, CENTER, 1.0)
+        .scroll(&mut f.execution, &mut f.binding, 1, Vec2::ZERO, CENTER, 1.0)
         .is_err());
     assert_eq!(scroll(&mut f, CENTER, 0.0).unwrap(), Some(false));
     assert_eq!(f.binding, binding);
     assert_eq!(f.host.presented, frame);
-    assert_eq!(f.session.inspection_view_revision(), 0);
+    assert_eq!(f.execution.session().inspection_view_revision(), 0);
     f.send(input(BrowserPointerKind::Release)).unwrap();
-    assert_eq!(f.session.selected_pointer_target(), Some(f.target));
+    assert_eq!(
+        f.execution.session().selected_pointer_target(),
+        Some(f.target)
+    );
 }
 
 #[test]
@@ -153,13 +168,16 @@ fn direct_inspection_retires_press_without_a_second_cancellation() {
     assert_eq!(f.sequence, sequence);
     present(&mut f);
     assert!(f.send(input(BrowserPointerKind::Release)).is_err());
-    assert_eq!(f.session.selected_pointer_target(), None);
+    assert_eq!(f.execution.session().selected_pointer_target(), None);
     for kind in [BrowserPointerKind::Press, BrowserPointerKind::Release] {
         let mut wire = input(kind);
         wire.source_id = 2;
         assert!(f.send(wire).unwrap());
     }
-    assert_eq!(f.session.selected_pointer_target(), Some(f.target));
+    assert_eq!(
+        f.execution.session().selected_pointer_target(),
+        Some(f.target)
+    );
 }
 
 #[test]
@@ -170,14 +188,16 @@ fn direct_inspection_callback_rejection_preserves_receipt_and_gesture() {
     let binding = f.binding;
     let frame = f.host.presented.clone();
     let phase = f
-        .session
+        .execution
+        .session_mut()
         .begin_required_callback_phase(0.0, [f.target])
         .unwrap();
     assert!(scroll(&mut f, CENTER, -100.0).is_err());
     assert_eq!(f.binding, binding);
     assert_eq!(f.host.presented, frame);
-    assert_eq!(f.session.inspection_view_revision(), 0);
-    f.session
+    assert_eq!(f.execution.session().inspection_view_revision(), 0);
+    f.execution
+        .session_mut()
         .commit_required_callback_phase(phase.finish())
         .unwrap();
 }
@@ -187,48 +207,44 @@ fn direct_inspection_and_real_indicate_restore_independently() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let original = scene.live(&mut session).effective(&circle).unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().unwrap();
+    let original = execution.live().effective(&circle).unwrap();
+    let segment = execution
+        .live()
         .declare_and_activate_indicate(
             &circle,
             IndicateOptions::default(),
             AnimationOptions::new().run_time(1.0),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let midpoint = scene.live(&mut session).effective(&circle).unwrap();
+    execution.live().advance_segment_to(segment, 0.5).unwrap();
+    let midpoint = execution.live().effective(&circle).unwrap();
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
     let frame = host
-        .capture(&session, session.inspection_camera().unwrap())
+        .capture(
+            execution.session(),
+            execution.session().inspection_camera().unwrap(),
+        )
         .unwrap();
     host.did_present(frame);
     assert_eq!(
-        host.scroll(&mut session, &mut None, 1, SIZE, CENTER, -100.0)
+        host.scroll(&mut execution, &mut None, 1, SIZE, CENTER, -100.0)
             .unwrap(),
         Some(true)
     );
     assert_eq!(
-        scene
-            .live(&mut session)
-            .effective(&circle)
-            .unwrap()
-            .transform,
+        execution.live().effective(&circle).unwrap().transform,
         midpoint.transform
     );
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    let final_state = scene.live(&mut session).effective(&circle).unwrap();
+    execution.live().advance_segment_to(segment, 1.0).unwrap();
+    execution.live().complete_segment(segment).unwrap();
+    let final_state = execution.live().effective(&circle).unwrap();
     assert_eq!(final_state.transform, original.transform);
     assert_eq!(final_state.style, original.style);
-    assert!(session.inspection_camera().unwrap().height < session.camera().unwrap().height);
+    assert!(
+        execution.session().inspection_camera().unwrap().height
+            < execution.session().camera().unwrap().height
+    );
 }

@@ -315,7 +315,7 @@ pub async fn create_latex_text_renderer(
     compiler: &mut WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::latex_text::session(compiler).map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 #[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
@@ -325,7 +325,7 @@ pub async fn create_numeric_decimal_renderer(
     compiler: &mut WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::numeric_decimal::session(compiler).map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 #[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
@@ -335,5 +335,5 @@ pub async fn create_variable_renderer(
     compiler: &mut WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::variable::session(compiler).map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

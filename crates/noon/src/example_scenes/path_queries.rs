@@ -1,7 +1,7 @@
 //! Paired path sampling example for native Rust, direct Rust/WASM and Python.
-use crate::{ExecutionSession, Scene};
+use crate::Scene;
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let precise = 1.0 + 2.0_f64.powi(-40);
@@ -243,7 +243,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             .live(&mut session)
             .advance_segment_to(reveal, reveal.end_time())?;
         scene.live(&mut session).complete_segment(reveal)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

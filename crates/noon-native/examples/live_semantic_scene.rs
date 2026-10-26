@@ -24,6 +24,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
-    noon_native::run(session)?;
+    noon_native::run(scene.into_execution_with_session(session)?)?;
     Ok(())
 }

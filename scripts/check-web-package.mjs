@@ -140,6 +140,10 @@ const expectedJavascriptSurface = [
   "driveLiveSegmentFromWallTime(",
   "completeLiveSegment(",
   "export class CanonicalAuthoringSceneContext",
+  "liveBindClickGlowPulse(",
+  "liveClearClickAction(",
+  "retireExecutionSource(",
+  "discardExecutionPlayer(",
   "liveAddLineToWithSamples(",
   "export class WasmMobjectLayoutObservation",
   "queryMobjectLayout(",
@@ -369,6 +373,10 @@ const expectedTypeSurface = [
   "driveLiveSegmentFromWallTime(wall_time_ms: number): WasmLiveSegmentDrive",
   "completeLiveSegment(): void",
   "export class CanonicalAuthoringSceneContext",
+  "liveBindClickGlowPulse(target: WasmAuthoringMobjectHandle, intensity: number, run_time: number, rate_function: string, lag_ratio: number, reverse_rate_function: boolean): void",
+  "liveClearClickAction(target: WasmAuthoringMobjectHandle): void",
+  "retireExecutionSource(): void",
+  "discardExecutionPlayer(player: SemanticExecutionPlayer): void",
   "queryFamilyLayout(handle: WasmAuthoringFamilyHandle): WasmMobjectLayoutObservation",
   "liveMoveFamilyToPoint(",
   "liveMoveFamilyToMobject(",
@@ -638,6 +646,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectGlowPulseSmokeRenderer(",
     "export function createDirectBlurSmokeRenderer(",
+    "export function createDirectClickGlowPulseRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(",
     "export function createDirectBackEasingsRenderer(",
@@ -730,6 +739,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyTransformIndicateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectGlowPulseSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectBlurSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectClickGlowPulseRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyArrangementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectBackEasingsRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -818,6 +828,17 @@ function classDeclaration(name) {
   if (start < 0) throw new Error(`WASM declarations are missing class ${name}`);
   const next = declarations.indexOf("export class ", start + 1);
   return declarations.slice(start, next < 0 ? undefined : next);
+}
+// The authoring context has a same-named method. Require retirement on the
+// direct renderer itself, where a genuine source disposal must precede free().
+const canvasJavascriptStart = javascript.indexOf("export class ExecutionCanvasRenderer {");
+if (canvasJavascriptStart < 0) throw new Error("WASM JavaScript is missing ExecutionCanvasRenderer");
+const canvasJavascriptEnd = javascript.indexOf("\nexport ", canvasJavascriptStart + 1);
+const canvasJavascript = javascript.slice(canvasJavascriptStart,
+  canvasJavascriptEnd < 0 ? undefined : canvasJavascriptEnd);
+if (!canvasJavascript.includes("retireExecutionSource()") ||
+    !classDeclaration("ExecutionCanvasRenderer").includes("retireExecutionSource(): void;")) {
+  throw new Error("WASM direct renderer is missing explicit source retirement");
 }
 const geometryOptionsDeclaration = classDeclaration("WasmManimGeometryOptions");
 if (!classDeclaration("WasmAuthoringFamilyHandle").includes("vectorBoundaryPoints(): Float64Array;")) {

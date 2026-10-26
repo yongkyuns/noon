@@ -2,10 +2,10 @@
 
 use std::{f64::consts::PI, rc::Rc};
 
-use crate::{ExecutionSession, Mobject, MobjectTarget, Scene};
+use crate::{Mobject, MobjectTarget, Scene};
 
 /// A grid of nine geometry constructors, paired with `specialized_geometry.py`.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let store = || Rc::clone(scene.integration_store());
     let dot = Mobject::manim_dot(store(), -4.0, 2.0, 0.3).map_err(|error| error.to_string())?;
@@ -68,7 +68,7 @@ pub fn session() -> Result<ExecutionSession, String> {
                 .collect::<Vec<_>>(),
         )
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -76,14 +76,19 @@ mod tests {
     #[test]
     fn specialized_geometry_reaches_the_shared_native_runtime() {
         let mut session = super::session().unwrap();
-        assert_eq!(session.frame().objects.len(), 9);
+        assert_eq!(session.session().frame().objects.len(), 9);
         assert!(session
+            .session()
             .frame()
             .objects
             .iter()
             .all(|object| object.geometry().is_some()));
-        session.take_frame_changes();
-        session.advance_to(0.0).unwrap();
-        assert!(session.take_frame_changes().object_indices().is_empty());
+        session.session_mut().take_frame_changes();
+        session.session_mut().advance_to(0.0).unwrap();
+        assert!(session
+            .session_mut()
+            .take_frame_changes()
+            .object_indices()
+            .is_empty());
     }
 }

@@ -5549,3 +5549,6 @@ mod graph_tests;
 
 #[cfg(test)]
 mod click_indicate_tests;
+
+#[cfg(test)]
+mod click_glow_pulse_tests;

@@ -244,7 +244,7 @@ pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
 /// runtime pins retired identities and retains local inverse revisions; no frame
 /// images, second scene, special signal clock, or host callbacks are recorded.
 /// After sealing, ordinary ExecutionSession::seek restores those revisions.
-pub fn train_playback() -> Result<crate::ExecutionSession, String> {
+pub fn train_playback() -> Result<crate::SceneExecution, String> {
     let record = || -> Result<_, Box<dyn std::error::Error>> {
         let (scene, mut continuation) = train_scene()?;
         let mut execution = scene.execution_session()?;
@@ -261,8 +261,9 @@ pub fn train_playback() -> Result<crate::ExecutionSession, String> {
             }
         }
         execution.seal_replay()?;
-        execution.seek(0.0)?;
-        Ok(execution)
+        let mut source = scene.into_execution_with_session(execution)?;
+        source.seek(0.0)?;
+        Ok(source)
     };
     record().map_err(|error| error.to_string())
 }
@@ -473,9 +474,9 @@ mod tests {
     #[test]
     fn finite_signal_trains_restore_retired_membership_with_existing_replay_retention() {
         let mut session = super::train_playback().unwrap();
-        assert!(session.replay_is_sealed());
+        assert!(session.session().replay_is_sealed());
         let reference = session.seek(2.0).unwrap().clone();
-        let retained = session.replay_stats();
+        let retained = session.session().replay_stats();
         for (time, expected_signals) in [
             (4.2, 0),
             (1.5, 10),
@@ -501,7 +502,7 @@ mod tests {
                 .count();
             assert_eq!(visible, expected_signals, "retained signals at t={time}");
         }
-        let after = session.replay_stats();
+        let after = session.session().replay_stats();
         assert_eq!(after.revisions_retained, retained.revisions_retained);
         assert_eq!(after.payloads_retained, retained.payloads_retained);
     }

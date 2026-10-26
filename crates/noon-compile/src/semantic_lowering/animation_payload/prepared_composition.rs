@@ -3,7 +3,7 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 use noon_core::{
     validate_track_definition, AnimationOptions, CompositionTimeMapError, CompositionTimeMapStep,
     GeometryResource, ObjectId, PreparedSemanticMutationTransaction, Property, RateFunction,
-    SemanticLoweringError, SemanticObjectProperty, SemanticTransactionNodeRef,
+    SemanticLoweringError, SemanticNodeId, SemanticObjectProperty, SemanticTransactionNodeRef,
     SemanticTransactionReadError, StoredGeometry, TimelineError, TrackDefinition, TrackId,
     TrackTiming, TrackValues,
 };
@@ -277,16 +277,19 @@ where
     let schedule =
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
-    lower_prepared_animation_activation(prepared, schedule, effective_properties)
+    lower_prepared_animation_activation(prepared, schedule, &HashSet::new(), effective_properties)
 }
 
 /// Lower payloads from the schedule of this prepared transaction without scheduling again.
 ///
 /// The caller may first extend that same transaction with its derived scalar tracks.
 /// Consuming the projection keeps timing and payloads together in the returned activation.
+/// `input_temporary_glow` contains exact generations proven to remain owned by
+/// active input invocations; it never identifies a persistent attachment by value.
 pub fn lower_prepared_animation_activation<F>(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     schedule: PreparedSemanticAnimationScheduleProjection,
+    input_temporary_glow: &HashSet<SemanticNodeId>,
     mut effective_properties: F,
 ) -> Result<PreparedSemanticAnimationActivation, PreparedSemanticAnimationLoweringError>
 where
@@ -296,7 +299,7 @@ where
     // Only allocator-proven neutral attachments for this activation's pulse
     // targets can coexist with an effect-free motion target. Never reinterpret
     // a stale, replaced or merely same-named persistent attachment as temporary.
-    let mut temporary_attachments = HashSet::new();
+    let mut temporary_attachments = input_temporary_glow.clone();
     let mut pulse_targets = HashSet::new();
     for leaf in schedule.leaves().iter().filter(|leaf| {
         matches!(
@@ -1707,16 +1710,17 @@ mod tests {
             AnimationOptions::new().run_time(6.0),
         )
         .unwrap();
-        let projection = lower_prepared_animation_activation(&prepared, schedule, |object| {
-            captures += 1;
-            (object == index.execution_object_id(left).unwrap())
-                .then_some(effective(Vec2::new(0.5, 0.0)))
-                .or_else(|| {
-                    (object == index.execution_object_id(right).unwrap())
-                        .then_some(effective(Vec2::new(-0.5, 0.0)))
-                })
-        })
-        .unwrap();
+        let projection =
+            lower_prepared_animation_activation(&prepared, schedule, &HashSet::new(), |object| {
+                captures += 1;
+                (object == index.execution_object_id(left).unwrap())
+                    .then_some(effective(Vec2::new(0.5, 0.0)))
+                    .or_else(|| {
+                        (object == index.execution_object_id(right).unwrap())
+                            .then_some(effective(Vec2::new(-0.5, 0.0)))
+                    })
+            })
+            .unwrap();
 
         assert_eq!(projection.root(), root.into());
         assert_eq!(projection.start_time(), 4.0);

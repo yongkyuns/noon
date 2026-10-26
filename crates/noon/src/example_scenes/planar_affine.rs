@@ -1,7 +1,7 @@
 //! Paired with ordinary_planar_affine.py on native and direct Rust/WASM.
-use crate::{ExecutionSession, LayoutAnchor, ManimRotationPivot as Pivot, Scene, SemanticVec3};
+use crate::{LayoutAnchor, ManimRotationPivot as Pivot, Scene, SemanticVec3};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut rectangle = scene.rectangle(1.5, 0.7)?;
@@ -27,7 +27,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|e| e.to_string())
 }

@@ -1,7 +1,7 @@
 //! Shared center/edge/point scaling, paired with ordinary_scale_pivots.py.
-use crate::{ExecutionSession, LayoutAnchor, ManimRotationPivot as Pivot, Scene};
+use crate::{LayoutAnchor, ManimRotationPivot as Pivot, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut line = scene.line((-3., 1.), (-1., 1.5))?;
@@ -80,7 +80,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

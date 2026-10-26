@@ -227,27 +227,33 @@ fn worker_inspection_during_real_indicate_preserves_restoration_and_authored_gua
         .unwrap();
     let midpoint = scene.live(&mut session).effective(&circle).unwrap();
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
-    let mut p = SemanticExecutionPlayer::from_session(session, 2.0, 7).unwrap();
+    let semantics = std::rc::Rc::clone(scene.integration_store());
+    let root = scene.root();
+    let mut p = SemanticExecutionPlayer::from_scene_execution(
+        scene.into_execution_with_session(session).unwrap(),
+        2.0,
+        7,
+    )
+    .unwrap();
     p.pause();
     register(&mut p, 1);
     let r = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, r));
     assert_eq!(scroll(&mut p, Some(r), zoom_in()), Ok(Some(true)));
     assert_eq!(p.session.frame().time, 0.5);
-    assert!(scene
-        .live(&mut p.session)
+    assert!(noon::LiveSession::new(&semantics, root, &mut p.session)
         .set_translation(&circle, 9.0, 0.0)
         .is_err());
     let inspection = p.session.inspection_camera().unwrap();
-    scene
-        .live(&mut p.session)
+    noon::LiveSession::new(&semantics, root, &mut p.session)
         .advance_segment_to(segment, 1.0)
         .unwrap();
-    scene
-        .live(&mut p.session)
+    noon::LiveSession::new(&semantics, root, &mut p.session)
         .complete_segment(segment)
         .unwrap();
-    let final_state = scene.live(&mut p.session).effective(&circle).unwrap();
+    let final_state = noon::LiveSession::new(&semantics, root, &mut p.session)
+        .effective(&circle)
+        .unwrap();
     assert_eq!(final_state.transform, original.transform);
     assert_eq!(final_state.style, original.style);
     assert_eq!(delta(&mut p).retained.camera, inspection);
@@ -267,9 +273,14 @@ fn worker_scroll_does_not_bypass_a_pending_callback_and_retries_after_completion
         .unwrap();
     // A callback commit can publish a new epoch. Use an actual new displayed
     // frame; never rewrite the old packet's collection receipt to permit retry.
+    let mut target = PlayerPointerTarget {
+        session: &mut p.session,
+        semantics: p.semantics.as_ref().unwrap(),
+        translation_drag_undo: &mut p.translation_drag_undo,
+    };
     p.worker_pointer_presentation
         .set_view(
-            &mut p.session,
+            &mut target,
             &mut p.browser_pointer_binding,
             &mut p.next_native_event_sequence,
             PointerPresentationView {

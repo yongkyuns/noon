@@ -71,6 +71,7 @@ mod brace_authoring;
 mod camera_authoring;
 mod camera_motion_authoring;
 mod camera_profile_authoring;
+mod click_action;
 mod compact_value_authoring;
 mod composite_entry;
 mod coordinate_authoring;
@@ -341,7 +342,10 @@ pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use scene::{Scene, SceneSection, SceneSectionNavigation, SectionNavigation, SectionType};
+pub use scene::{
+    Scene, SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation,
+    SectionNavigation, SectionType,
+};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{

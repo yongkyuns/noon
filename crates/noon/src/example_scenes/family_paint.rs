@@ -1,7 +1,7 @@
 //! Paired with ordinary_family_paint.py on the shared native/direct WASM engine.
-use crate::{Color, ExecutionSession, Scene};
+use crate::{Color, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut a = scene.square(0.6).map_err(|error| error.to_string())?;
     let mut b = scene.square(0.6).map_err(|error| error.to_string())?;
@@ -90,7 +90,9 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

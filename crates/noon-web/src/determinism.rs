@@ -177,10 +177,10 @@ pub fn verify_example_replay(
         _ => Err(format!("unknown direct replay example: {example}")),
     }
     .map_err(ReplayVerificationError::Fixture)?;
-    verify_execution_replay(&session, targets, forward_sample_count)
+    verify_execution_replay(session.session(), targets, forward_sample_count)
 }
 
-fn create_morph_fade_session() -> Result<ExecutionSession, String> {
+fn create_morph_fade_session() -> Result<noon::SceneExecution, String> {
     use noon::{
         AnimationCompositionRequest as Request, AnimationOptions, FadeEndpoint, RateFunction,
         Scene, SemanticAnimationCompositionKind, SemanticFadeDirection, TransformToRequest,
@@ -230,7 +230,9 @@ fn create_morph_fade_session() -> Result<ExecutionSession, String> {
         .live(&mut session)
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(all(
@@ -265,7 +267,7 @@ mod tests {
     #[test]
     fn replay_equality_includes_the_effective_renderer_coordinate_frame() {
         let session = noon::example_scenes::exact_property_tracks::session().unwrap();
-        let expected = session.frame();
+        let expected = session.session().frame();
         let mut actual = expected.clone();
         assert!(normalized_frames_equal(&actual, expected));
 

@@ -116,7 +116,7 @@ fn live_offset_line_rotation_resolves_center_edge_and_origin_in_shared_rust() {
 #[test]
 fn paired_affine_example_reaches_the_normal_retained_session() {
     let session = noon::example_scenes::planar_affine::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 4);
+    assert_eq!(session.session().frame().objects.len(), 4);
 }
 
 #[test]

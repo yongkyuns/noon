@@ -9,6 +9,32 @@ use noon_core::{
 };
 
 #[test]
+fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    let semantics = std::rc::Rc::clone(scene.integration_store());
+    let root = scene.root();
+    let mut session = scene.execution_session().unwrap();
+    session.advance_to(0.25).unwrap();
+    let frame = session.frame().clone();
+    let publication = session.publication_context();
+    let player = SemanticExecutionPlayer::from_scene_execution(
+        scene.into_execution_with_session(session).unwrap(),
+        1.0,
+        105,
+    )
+    .unwrap();
+    assert!(std::rc::Rc::ptr_eq(
+        player.semantics.as_ref().unwrap(),
+        &semantics
+    ));
+    assert_eq!(player.semantic_root, Some(root));
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.session.publication_context(), publication);
+}
+
+#[test]
 fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
     let mut scene = noon::Scene::new();
     let resource =
@@ -16,8 +42,18 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
     scene
         .audio(resource, noon_core::AudioClipOptions::default())
         .unwrap();
+    let live = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        101,
+    )
+    .unwrap();
+    assert_eq!(live.finite_audio_duration(), Some(1.0));
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 99).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 99)
+            .unwrap();
     assert!(player.has_audio_wasm());
     assert_eq!(player.finite_audio_duration(), Some(1.0));
     assert_eq!(player.clock.loop_duration(), None);
@@ -41,21 +77,84 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
         player.begin_replay_retention().is_err(),
         "sequential source audio remains explicitly gated"
     );
-    assert!(SemanticExecutionPlayer::from_session(
-        scene.execution_session().unwrap(),
+    assert!(SemanticExecutionPlayer::from_scene_execution(
+        noon::Scene::new().into_execution().unwrap(),
         f64::NAN,
         100
     )
     .is_err());
-    let live = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
-        std::rc::Rc::clone(scene.integration_store()),
-        scene.root(),
+}
+
+#[test]
+fn paused_worker_audio_tick_survives_new_scene_in_shared_authoring_store() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    let resource =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.1; 8_000], 32_000).unwrap();
+    scene
+        .audio(resource.clone(), noon_core::AudioClipOptions::default())
+        .unwrap();
+    let semantics = std::rc::Rc::clone(scene.integration_store());
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 107)
+            .unwrap();
+    player.tick_callback_phase_json(1_000.0).unwrap();
+    player.tick_callback_phase_json(1_250.0).unwrap();
+    player.pause();
+    player.tick_callback_phase_json(1_300.0).unwrap();
+    assert_eq!(player.time(), 0.25);
+    assert!(!player.session.interactions_active());
+    player.session.take_frame_changes();
+    let frame = player.session.frame().clone();
+    let publication = player.session.publication_context();
+
+    // Python Run creates a new root in the same authoring arena before the
+    // audio transition asks the old, paused player for its final clock sample.
+    let mut replacement = noon::Scene::with_integration_store(std::rc::Rc::clone(&semantics));
+    let replacement_circle = replacement.circle(0.75).unwrap();
+    replacement.add(&replacement_circle).unwrap();
+    replacement
+        .audio(resource, noon_core::AudioClipOptions::default())
+        .unwrap();
+    let revision = replacement.revision();
+    assert_ne!(revision, publication.scene_revision());
+    assert_ne!(Some(replacement.root()), player.semantic_root);
+    player.pause();
+    let mut expected_clock = player.clock.clone();
+    assert_eq!(expected_clock.scene_time(1_500.0).unwrap(), 0.25);
+    assert!(player.tick_callback_phase_json(1_500.0).unwrap().is_none());
+    assert_eq!(player.clock, expected_clock);
+    assert!(!player.is_playing());
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(player.session.take_frame_changes().is_empty());
+    assert_eq!(semantics.borrow().scene_revision(), revision);
+
+    player.retire_execution_source().unwrap();
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(player.session.take_frame_changes().is_empty());
+    assert_eq!(semantics.borrow().scene_revision(), revision);
+    let mut next = SemanticExecutionPlayer::from_scene_execution(
+        replacement.into_execution().unwrap(),
         1.0,
-        101,
+        108,
     )
     .unwrap();
-    assert_eq!(live.finite_audio_duration(), Some(1.0));
+    next.pause();
+    assert!(next.tick_callback_phase_json(1_600.0).unwrap().is_none());
+    assert!(std::rc::Rc::ptr_eq(
+        next.semantics.as_ref().unwrap(),
+        &semantics
+    ));
+    assert!(next.has_audio_wasm());
+    assert!(!next.is_playing());
+    assert_eq!(next.time(), 0.0);
+    assert_eq!(
+        next.session.publication_context().scene_revision(),
+        revision
+    );
 }
 
 #[test]
@@ -63,7 +162,7 @@ fn worker_audio_sections_use_shared_strict_nonwrapping_navigation() {
     let scene = noon::example_scenes::background_music_lesson::scene().unwrap();
     let navigation = scene.section_navigation();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 30.0, 102)
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 30.0, 102)
             .unwrap();
     player.set_section_navigation(navigation);
     player.pause();
@@ -97,11 +196,6 @@ fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport
     assert!(session.has_playback_controls());
     // The profile rejection must precede even playback-clock validation, which
     // itself precedes resource encoding. No partial worker player is returned.
-    let error = SemanticExecutionPlayer::from_session(session, f64::NAN, 101)
-        .err()
-        .expect("worker transport must not silently discard scene control actions");
-    assert!(error.contains("scene playback controls"));
-    assert!(error.contains("#2263"));
     let error = SemanticExecutionPlayer::from_live_session(
         scene.execution_session().unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
@@ -113,6 +207,15 @@ fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport
     .expect("live worker entry must reject the same unsupported controls");
     assert!(error.contains("scene playback controls"));
     assert_eq!(scene.revision(), revision);
+    let error = SemanticExecutionPlayer::from_scene_execution(
+        scene.into_execution_with_session(session).unwrap(),
+        f64::NAN,
+        101,
+    )
+    .err()
+    .expect("worker transport must not silently discard scene control actions");
+    assert!(error.contains("scene playback controls"));
+    assert!(error.contains("#2263"));
 }
 
 #[test]
@@ -129,8 +232,6 @@ fn worker_profile_gate_preserves_existing_click_indicate_admission() {
         .unwrap();
     let session = scene.execution_session().unwrap();
     assert!(!session.has_playback_controls());
-    let player = SemanticExecutionPlayer::from_session(session, 1.0, 103).unwrap();
-    assert!(!player.resource_bundle_bytes().is_empty());
     let live_player = SemanticExecutionPlayer::from_live_session(
         scene.execution_session().unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
@@ -140,6 +241,13 @@ fn worker_profile_gate_preserves_existing_click_indicate_admission() {
     )
     .unwrap();
     assert!(!live_player.resource_bundle_bytes().is_empty());
+    let player = SemanticExecutionPlayer::from_scene_execution(
+        scene.into_execution_with_session(session).unwrap(),
+        1.0,
+        103,
+    )
+    .unwrap();
+    assert!(!player.resource_bundle_bytes().is_empty());
 }
 
 fn translation_drag_player() -> (SemanticExecutionPlayer, noon_core::SemanticNodeId) {
@@ -182,7 +290,7 @@ fn submit_drag_input(
     );
     let mut target = pointer_input::PlayerPointerTarget {
         session: &mut player.session,
-        semantics: player.semantics.as_ref(),
+        semantics: player.semantics.as_ref().unwrap(),
         translation_drag_undo: &mut player.translation_drag_undo,
     };
     crate::browser_pointer_input::BrowserPointerTarget::submit_pointer(&mut target, &token, input)
@@ -240,6 +348,7 @@ fn clicked_indicate_live_player() -> SemanticExecutionPlayer {
     ] {
         session
             .submit_native_pointer_input(
+                &mut store,
                 &token,
                 NativePointerInput::new(
                     sequence,
@@ -552,6 +661,90 @@ fn external_sample_interaction_ticks_hold_authored_time_and_settle_idle() {
         player.advance_interactions_delta_json(1_416.0).unwrap(),
         None
     );
+}
+
+#[test]
+fn scalar_live_evaluate_backwards_retires_click_glow_and_commits_clock_after_success() {
+    let mut scene = noon::Scene::new();
+    let mut target = scene.circle(0.8).unwrap();
+    target.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    target.disable_stroke().unwrap();
+    scene.add(&target).unwrap();
+    scene
+        .on_click_glow_pulse(&target, 2.0, AnimationOptions::new())
+        .unwrap();
+    let tracker = scene.value_tracker(0.0).unwrap();
+    scene
+        .play_value(&tracker, 4.0)
+        .rate_func(RateFunction::Linear)
+        .run_time(2.0)
+        .unwrap();
+    let semantics = std::rc::Rc::clone(scene.integration_store());
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 106)
+            .unwrap();
+    player.live_evaluate(1.0).unwrap();
+    assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+    player
+        .session
+        .configure_native_pointer_input(
+            NativePointerId {
+                source: 17,
+                pointer: 0,
+            },
+            1,
+        )
+        .unwrap();
+    for (sequence, kind) in [
+        (
+            1,
+            NativePointerInputKind::Press {
+                position: drag_position(0.0),
+                button: 0,
+            },
+        ),
+        (
+            2,
+            NativePointerInputKind::Release {
+                position: drag_position(0.0),
+                button: 0,
+            },
+        ),
+    ] {
+        submit_drag_input(&mut player, sequence, kind);
+    }
+    player.advance_interactions_delta_json(1_000.0).unwrap();
+    player.advance_interactions_delta_json(1_500.0).unwrap();
+    let temporary = semantics
+        .borrow()
+        .effect_by_name(target.node_id(), "glow")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        player.session.frame().objects[0]
+            .effect
+            .as_ref()
+            .unwrap()
+            .definition
+            .intensity(),
+        2.0
+    );
+    let frame = player.session.frame().clone();
+    let publication = player.session.publication_context();
+    let clock = player.clock.clone();
+    assert!(player.live_evaluate(2.25).is_err());
+    assert_eq!(player.clock, clock);
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.session.publication_context(), publication);
+    assert!(semantics.borrow().node(temporary).is_some());
+
+    player.live_evaluate(0.25).unwrap();
+    assert_eq!(player.time(), 0.25);
+    assert_eq!(player.live_effective_signal(&tracker).unwrap(), 0.5);
+    assert_eq!(player.clock.scene_time(3_000.0).unwrap(), 0.25);
+    assert!(!player.session.interactions_active());
+    assert!(player.session.frame().objects[0].effect.is_none());
+    assert!(semantics.borrow().node(temporary).is_none());
 }
 
 #[test]
@@ -1522,7 +1715,7 @@ fn finite_source_player() -> SemanticExecutionPlayer {
     scene.bind_position(&circle, &position).unwrap();
     scene.play_value(&tracker, 2.0).run_time(1.125).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.125, 43)
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.125, 43)
             .unwrap();
     player.pause();
     player
@@ -1588,7 +1781,8 @@ fn finite_source_admission_cannot_replace_required_callback_execution() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 44).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 44)
+            .unwrap();
     player.pause();
     assert_eq!(player.fresh_finite_source_duration(), None);
     assert!(player.finite_source_probe_json(1.0).is_err());
@@ -1626,12 +1820,18 @@ fn animated_player() -> SemanticExecutionPlayer {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    SemanticExecutionPlayer::from_session(session, 2.0, 42).unwrap()
+    SemanticExecutionPlayer::from_scene_execution(
+        scene.into_execution_with_session(session).unwrap(),
+        2.0,
+        42,
+    )
+    .unwrap()
 }
 
 #[test]
 fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() {
     let mut store = SemanticStore::new();
+    let root = store.insert_family();
     let opacity = store.insert_semantic_input_signal(0.25_f64).unwrap();
     let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
     store
@@ -1648,15 +1848,19 @@ fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() 
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
     }));
-    store.attach_to_scene(object).unwrap();
+    store.add_semantic_family_member(root, object).unwrap();
     store
         .bind_semantic_signal(opacity, object, SemanticObjectProperty::ObjectOpacity)
         .unwrap();
     store
         .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
         .unwrap();
-    let session = ExecutionSession::from_semantic_store(&store).unwrap();
-    let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 61).unwrap();
+    let scene =
+        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
+            .unwrap();
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 61)
+            .unwrap();
 
     player
         .set_native_state_input_json(
@@ -1675,6 +1879,7 @@ fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() 
 #[test]
 fn rejected_native_input_keeps_frame_and_player_event_sequence_unchanged() {
     let mut store = SemanticStore::new();
+    let root = store.insert_family();
     let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
     store
         .bind_semantic_native_event_input(clicks, NativeEventSource::PointerDown { button: 0 })
@@ -1682,15 +1887,19 @@ fn rejected_native_input_keeps_frame_and_player_event_sequence_unchanged() {
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
     }));
-    store.attach_to_scene(object).unwrap();
+    store.add_semantic_family_member(root, object).unwrap();
     store
         .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
         .unwrap();
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_updater(object, HostCallbackId::new(9), 0.0, None);
     transaction.apply(&mut store).unwrap();
-    let session = ExecutionSession::from_semantic_store(&store).unwrap();
-    let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 62).unwrap();
+    let scene =
+        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
+            .unwrap();
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 62)
+            .unwrap();
     let frame = player.session.frame().clone();
 
     let error = player
@@ -3480,7 +3689,8 @@ fn unchanged_static_ticks_do_not_retransmit_geometry() {
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 1)
+            .unwrap();
     player.initial_delta_json().unwrap();
     assert!(player.tick_delta_json(0.0).unwrap().is_none());
     assert!(player.tick_delta_json(500.0).unwrap().is_none());
@@ -3493,7 +3703,8 @@ fn generic_wake_settles_a_playing_static_session() {
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 1)
+            .unwrap();
     player.initial_delta_json().unwrap();
 
     let wake = player.execution_wake(8_000.0).unwrap();
@@ -3510,9 +3721,12 @@ fn sealed_static_replay_does_not_invent_elapsed_history() {
         let mut scene = noon::Scene::new();
         let circle = scene.circle(0.4).unwrap();
         scene.add(&circle).unwrap();
-        let mut player =
-            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 10.0, 72)
-                .unwrap();
+        let mut player = SemanticExecutionPlayer::from_scene_execution(
+            scene.into_execution().unwrap(),
+            10.0,
+            72,
+        )
+        .unwrap();
         player.seek_delta_json(time).unwrap();
         player.begin_replay_retention().unwrap();
         player.seal_replay().unwrap();
@@ -3701,7 +3915,8 @@ fn opaque_callback_history_is_explicitly_non_looping() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
+            .unwrap();
 
     assert_eq!(player.clock.loop_duration(), None);
     assert!(!player.session.has_replay_timeline_work());
@@ -3875,7 +4090,8 @@ fn shared_session_text_uses_the_mixed_resource_boundary() {
         .unwrap();
     scene.add(&label).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 8).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 8)
+            .unwrap();
 
     let bundle = RetainedResourceBundle::decode_binary(&player.resource_bundle_bytes()).unwrap();
     assert_eq!(bundle.text_count(), 1);
@@ -3912,7 +4128,8 @@ fn spatial_text_content_is_installed_even_when_the_2d_text_accessor_hides_it() {
         .unwrap();
 
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 88).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.0, 88)
+            .unwrap();
     let bundle = RetainedResourceBundle::decode_binary(&player.resource_bundle_bytes()).unwrap();
     assert_eq!(bundle.text_count(), 3);
     let mut mirror =

@@ -7,6 +7,7 @@ use noon::integration::{
 };
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
+    SceneExecution,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
@@ -29,6 +30,7 @@ mod viewport_tests;
 pub(crate) trait NativeExecutionSource {
     fn frame_time(&self) -> f64;
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError>;
+    fn retire_execution_source(&mut self) -> Result<(), NativeHostError>;
     fn camera(&self) -> Result<Camera2DState, NativeHostError> {
         self.session().inspection_camera().map_err(Into::into)
     }
@@ -115,23 +117,28 @@ pub(crate) trait NativeExecutionSource {
     fn static_session_mut(&mut self) -> Option<&mut ExecutionSession> {
         None
     }
+
+    #[cfg(test)]
+    fn static_execution_mut(&mut self) -> Option<&mut SceneExecution> {
+        None
+    }
 }
 
 pub(crate) struct StaticExecutionSource {
-    session: ExecutionSession,
+    session: SceneExecution,
     callbacks: RustHostCallbackTable,
     finite_transport_end: Option<f64>,
 }
 
 impl StaticExecutionSource {
-    pub(crate) fn new(session: ExecutionSession, callbacks: RustHostCallbackTable) -> Self {
-        // This source consumes its complete plan. Supported input can only
-        // change viewer state, so retaining the admitted endpoint avoids
-        // rescanning timeline events at each pause, seek, or pointer occurrence.
-        let finite_transport_end = session.finite_playback_end_time().filter(|&end| {
-            session.frame().time.is_finite()
-                && session.frame().time >= 0.0
-                && session.frame().time <= end
+    pub(crate) fn new(session: SceneExecution, callbacks: RustHostCallbackTable) -> Self {
+        // This source consumes its complete authored plan. Admitted interaction
+        // attachment maintenance preserves its endpoint, so retaining that bound
+        // avoids rescanning timeline events at each pause, seek, or pointer occurrence.
+        let finite_transport_end = session.session().finite_playback_end_time().filter(|&end| {
+            session.session().frame().time.is_finite()
+                && session.session().frame().time >= 0.0
+                && session.session().frame().time <= end
         });
         Self {
             session,
@@ -142,6 +149,12 @@ impl StaticExecutionSource {
 }
 
 impl NativeExecutionSource for StaticExecutionSource {
+    fn retire_execution_source(&mut self) -> Result<(), NativeHostError> {
+        self.session
+            .retire_execution_source()
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
         self.session
             .advance_interactions(wall_time_seconds)
@@ -150,7 +163,7 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 
     fn frame_time(&self) -> f64 {
-        self.session.frame().time
+        self.session.session().frame().time
     }
 
     fn scroll_inspection_view(
@@ -161,40 +174,44 @@ impl NativeExecutionSource for StaticExecutionSource {
         delta_pixels: f64,
     ) -> Result<bool, NativeHostError> {
         self.session
+            .session_mut()
             .scroll_inspection_view(displayed, current_view, surface, delta_pixels)
             .map_err(Into::into)
     }
 
     fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
-        let query = self.session.query_viewports(bounds);
+        let query = self.session.session_mut().query_viewports(bounds);
         self.session
+            .session_mut()
             .renderer_viewport_query(query)
             .expect("fresh viewport query shares this publication")
     }
 
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {
         self.session
+            .session()
             .inset_2d_views()
             .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
     fn timeline(&self) -> TimelineWakeState {
-        self.session.wake_state().timeline()
+        self.session.session().wake_state().timeline()
     }
 
     fn frame_pending(&self) -> bool {
-        self.session.wake_state().frame_pending()
+        self.session.session().wake_state().frame_pending()
     }
 
     fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
         self.callbacks
-            .advance_to(&mut self.session, requested_time)
+            .advance_to(self.session.session_mut(), requested_time)
             .map(|_| ())
             .map_err(NativeHostError::from)
     }
 
     fn finite_transport_end(&self) -> Option<f64> {
         self.session
+            .session()
             .supports_immutable_playback()
             .then_some(self.finite_transport_end)
             .flatten()
@@ -228,11 +245,13 @@ impl NativeExecutionSource for StaticExecutionSource {
         view_revision: u64,
     ) -> Result<NativePointerInputToken, NativeHostError> {
         self.session
+            .session_mut()
             .configure_native_pointer_input(pointer, view_revision)
             .map_err(Into::into)
     }
     fn native_pointer_input_token(&self) -> Result<NativePointerInputToken, NativeHostError> {
         self.session
+            .session()
             .native_pointer_input_token()
             .map_err(Into::into)
     }
@@ -252,6 +271,7 @@ impl NativeExecutionSource for StaticExecutionSource {
         value: NativeInputValue,
     ) -> Result<(), NativeHostError> {
         self.session
+            .session_mut()
             .set_native_state_input(source, value)
             .map(|_| ())
             .map_err(Into::into)
@@ -259,13 +279,14 @@ impl NativeExecutionSource for StaticExecutionSource {
 
     fn emit_native_event(&mut self, event: NativeEventOccurrence) -> Result<(), NativeHostError> {
         self.session
+            .session_mut()
             .emit_native_event(event)
             .map(|_| ())
             .map_err(Into::into)
     }
 
     fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.session.take_renderer_publication()
+        self.session.session_mut().take_renderer_publication()
     }
 
     fn admit_retained_publication(
@@ -280,17 +301,23 @@ impl NativeExecutionSource for StaticExecutionSource {
         frame: &PointerFrameSnapshot,
     ) -> Result<(), NativeHostError> {
         self.session
+            .session_mut()
             .refresh_pointer_hover(frame, frame.view())
             .map(|_| ())
             .map_err(Into::into)
     }
 
     fn session(&self) -> &ExecutionSession {
-        &self.session
+        self.session.session()
     }
 
     #[cfg(test)]
     fn static_session_mut(&mut self) -> Option<&mut ExecutionSession> {
+        Some(self.session.session_mut())
+    }
+
+    #[cfg(test)]
+    fn static_execution_mut(&mut self) -> Option<&mut SceneExecution> {
         Some(&mut self.session)
     }
 }
@@ -321,6 +348,12 @@ where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
 {
+    fn retire_execution_source(&mut self) -> Result<(), NativeHostError> {
+        self.program
+            .retire_execution_source()
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
         self.program
             .advance_interactions(wall_time_seconds)

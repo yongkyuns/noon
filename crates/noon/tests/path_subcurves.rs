@@ -150,7 +150,7 @@ fn subpath_observations_use_world_tolerance_and_keep_snapshot_immutable() {
 fn paired_subcurve_example_runs_through_the_shared_runtime() {
     let mut session = noon::example_scenes::path_subcurves::session().unwrap();
     session.seek(0.1).unwrap();
-    assert_eq!(session.frame().objects.len(), 2);
+    assert_eq!(session.session().frame().objects.len(), 2);
 }
 
 #[test]

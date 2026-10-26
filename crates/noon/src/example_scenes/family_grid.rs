@@ -1,8 +1,8 @@
 //! Unequal row/column sizes and center-preserving live grid placement.
 //! Paired with ordinary_family_grid.py.
-use crate::{ExecutionSession, FamilyGridOptions, GridFlow, Scene};
+use crate::{FamilyGridOptions, GridFlow, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut members = Vec::new();
     for (width, height) in [(2.0, 1.0), (1.0, 0.5), (0.5, 2.0), (1.0, 1.0)] {
@@ -67,5 +67,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }

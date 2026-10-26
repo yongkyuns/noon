@@ -14,6 +14,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     scene.add_many(&[MobjectTarget::Family(field.family())])?;
-    noon_native::run(scene.execution_session()?)?;
+    noon_native::run(scene.into_execution()?)?;
     Ok(())
 }

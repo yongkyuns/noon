@@ -44,7 +44,7 @@ pub(super) fn channels(
 ) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
     // A motion/style target captured before an absent pulse has no authored
     // effect destination. Only the activation owner's exact candidate-created
-    // generation may account for that additional source attachment.
+    // or input-owned temporary generation can account for that source attachment.
     if let [temporary] = source {
         let definition = temporary.definition;
         if target.is_empty()

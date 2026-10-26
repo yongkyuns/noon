@@ -24,7 +24,7 @@ pub async fn create_direct_raster_image_sampling_renderer(
         opacity,
     )
     .map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 fn js_error(error: impl std::fmt::Display) -> JsValue {

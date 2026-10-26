@@ -27,7 +27,7 @@ fn input(
     )
 }
 
-fn click(session: &mut ExecutionSession, sequence: u64, x: f32) {
+fn click(store: &mut SemanticStore, session: &mut ExecutionSession, sequence: u64, x: f32) {
     let position =
         |x| NativePointerPosition::new(Vec2::new(x, 0.0), Vec2::new(300.0, 150.0)).unwrap();
     let press = input(
@@ -39,7 +39,9 @@ fn click(session: &mut ExecutionSession, sequence: u64, x: f32) {
         },
     );
     let token = session.native_pointer_input_token().unwrap();
-    session.submit_native_pointer_input(&token, press).unwrap();
+    session
+        .submit_native_pointer_input(store, &token, press)
+        .unwrap();
     let release = input(
         session,
         sequence + 1,
@@ -50,7 +52,7 @@ fn click(session: &mut ExecutionSession, sequence: u64, x: f32) {
     );
     let token = session.native_pointer_input_token().unwrap();
     session
-        .submit_native_pointer_input(&token, release)
+        .submit_native_pointer_input(store, &token, release)
         .unwrap();
 }
 
@@ -97,14 +99,66 @@ fn fixture(
 }
 
 #[test]
+fn idle_interaction_ticks_reject_foreign_stores_and_invalid_time_without_publication() {
+    let (mut store, _, _, _, mut session) = fixture(0);
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    let revision = store.scene_revision();
+    let mut foreign = SemanticStore::new();
+    assert!(matches!(
+        session.advance_interactions(&mut foreign, 1.0),
+        Err(ExecutionSessionInputError::Publication(
+            crate::ExecutionSessionPublicationError::ForeignSemanticStore
+        ))
+    ));
+    for time in [f64::NAN, f64::INFINITY, -1.0] {
+        assert!(matches!(
+            session.advance_interactions(&mut store, time),
+            Err(ExecutionSessionInputError::Interaction(_))
+        ));
+    }
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(store.scene_revision(), revision);
+    assert!(!session.interactions_active());
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn active_interaction_tick_rejects_an_unpublished_store_without_advancing() {
+    let (mut store, _, target, _, mut session) = fixture(0);
+    click(&mut store, &mut session, 1, 0.0);
+    session.advance_interactions(&mut store, 1.0).unwrap();
+    session.take_frame_changes();
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    let mut edit = SemanticMutationTransaction::new();
+    edit.set_click_indicate(target, None);
+    edit.apply(&mut store).unwrap();
+    let revision = store.scene_revision();
+    assert_ne!(revision, publication.scene_revision());
+    assert!(matches!(
+        session.advance_interactions(&mut store, 1.2),
+        Err(ExecutionSessionInputError::Publication(
+            crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+        ))
+    ));
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(store.scene_revision(), revision);
+    assert!(session.interactions_active());
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
 fn click_indicate_is_local_and_does_not_change_authored_revisions() {
-    let (store, _, target, _, mut session) = fixture(1_000);
+    let (mut store, _, target, _, mut session) = fixture(1_000);
     let authored_revision = store.scene_revision();
     let publication = session.publication_context();
-    click(&mut session, 1, 0.0);
+    click(&mut store, &mut session, 1, 0.0);
     assert!(session.interactions_active());
-    session.advance_interactions(0.0).unwrap();
-    session.advance_interactions(0.2).unwrap();
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.advance_interactions(&mut store, 0.2).unwrap();
     assert_eq!(store.scene_revision(), authored_revision);
     assert_eq!(session.frame().time, 0.0);
     assert_eq!(
@@ -134,22 +188,22 @@ fn click_indicate_is_local_and_does_not_change_authored_revisions() {
 
 #[test]
 fn bound_click_indicates_progress_independently_and_ignore_active_retriggers() {
-    let (_, _, first, second, mut session) = fixture(0);
+    let (mut store, _, first, second, mut session) = fixture(0);
     let first_object = session.execution_object_id(first).unwrap();
     let second_object = session.execution_object_id(second).unwrap();
 
-    click(&mut session, 1, 0.0);
-    session.advance_interactions(0.0).unwrap();
-    session.advance_interactions(0.1).unwrap();
+    click(&mut store, &mut session, 1, 0.0);
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.advance_interactions(&mut store, 0.1).unwrap();
 
     // A duplicate on the first target is ignored; the second target acquires
     // its own transient driver while the first one is still active.
-    click(&mut session, 3, 0.0);
-    click(&mut session, 5, 5.0);
+    click(&mut store, &mut session, 3, 0.0);
+    click(&mut store, &mut session, 5, 5.0);
     assert!(session.interactions_active());
 
-    session.advance_interactions(0.2).unwrap();
-    session.advance_interactions(0.3).unwrap();
+    session.advance_interactions(&mut store, 0.2).unwrap();
+    session.advance_interactions(&mut store, 0.3).unwrap();
     let first_midpoint = session.runtime.effective_object(first_object).unwrap();
     let second_midpoint = session.runtime.effective_object(second_object).unwrap();
     assert!(first_midpoint.transform.scale.x > 1.0);
@@ -159,7 +213,7 @@ fn bound_click_indicates_progress_independently_and_ignore_active_retriggers() {
 
     // The first action finishes on its original deadline while the later
     // second action is still at its midpoint.
-    session.advance_interactions(0.4).unwrap();
+    session.advance_interactions(&mut store, 0.4).unwrap();
     let first_restored = session.runtime.effective_object(first_object).unwrap();
     let second_still_active = session.runtime.effective_object(second_object).unwrap();
     assert_eq!(first_restored.transform.scale, Vec2::new(1.0, 1.0));
@@ -168,7 +222,7 @@ fn bound_click_indicates_progress_independently_and_ignore_active_retriggers() {
     assert_eq!(second_still_active.style.fill, Some(YELLOW));
     assert!(session.interactions_active());
 
-    session.advance_interactions(0.61).unwrap();
+    session.advance_interactions(&mut store, 0.61).unwrap();
     let second_restored = session.runtime.effective_object(second_object).unwrap();
     assert_eq!(second_restored.transform.scale, Vec2::new(1.0, 1.0));
     assert_eq!(second_restored.style.fill, Some(noon_core::WHITE));
@@ -207,9 +261,9 @@ fn click_indicate_overlaps_an_authored_segment_and_restores_independently() {
     session.advance_to(0.5).unwrap();
     let scripted_midpoint = session.frame().objects[scripted_index].appearance;
     assert!(scripted_midpoint > 0.0 && scripted_midpoint < 1.0);
-    click(&mut session, 1, 0.0);
-    session.advance_interactions(10.0).unwrap();
-    session.advance_interactions(10.2).unwrap();
+    click(&mut store, &mut session, 1, 0.0);
+    session.advance_interactions(&mut store, 10.0).unwrap();
+    session.advance_interactions(&mut store, 10.2).unwrap();
     assert!(
         session.frame().objects[target_index].transform.scale.x > target_baseline.transform.scale.x
     );
@@ -222,7 +276,7 @@ fn click_indicate_overlaps_an_authored_segment_and_restores_independently() {
     session.advance_to(0.75).unwrap();
     assert!(session.frame().objects[scripted_index].appearance < scripted_midpoint);
     assert!(session.interactions_active());
-    session.advance_interactions(10.4).unwrap();
+    session.advance_interactions(&mut store, 10.4).unwrap();
     assert_eq!(session.frame().objects[target_index], target_baseline);
     assert_eq!(session.frame().time, 0.75);
 
@@ -243,17 +297,17 @@ fn binding_refreshes_through_replace_remove_detach_and_reattach() {
     session
         .apply_semantic_transaction_at_root(&mut store, root, replace)
         .unwrap();
-    click(&mut session, 1, 0.0);
+    click(&mut store, &mut session, 1, 0.0);
     assert!(session.interactions_active());
-    session.advance_interactions(0.0).unwrap();
-    session.advance_interactions(0.25).unwrap();
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.advance_interactions(&mut store, 0.25).unwrap();
     assert!(!session.interactions_active());
     let mut clear = SemanticMutationTransaction::new();
     clear.set_click_indicate(target, None);
     session
         .apply_semantic_transaction_at_root(&mut store, root, clear)
         .unwrap();
-    click(&mut session, 3, 0.0);
+    click(&mut store, &mut session, 3, 0.0);
     assert!(!session.interactions_active());
     let mut restore = SemanticMutationTransaction::new();
     restore.set_click_indicate(target, Some(binding(0.2)));
@@ -265,23 +319,23 @@ fn binding_refreshes_through_replace_remove_detach_and_reattach() {
     session
         .apply_semantic_transaction_at_root(&mut store, root, detach)
         .unwrap();
-    click(&mut session, 5, 0.0);
+    click(&mut store, &mut session, 5, 0.0);
     assert!(!session.interactions_active());
     let mut attach = SemanticMutationTransaction::new();
     attach.add_member(root, target);
     session
         .apply_semantic_transaction_at_root(&mut store, root, attach)
         .unwrap();
-    click(&mut session, 7, 0.0);
+    click(&mut store, &mut session, 7, 0.0);
     assert!(session.interactions_active());
 }
 
 #[test]
 fn authored_change_while_active_never_restores_captured_style() {
     let (mut store, root, target, _, mut session) = fixture(0);
-    click(&mut session, 1, 0.0);
-    session.advance_interactions(0.0).unwrap();
-    session.advance_interactions(0.1).unwrap();
+    click(&mut store, &mut session, 1, 0.0);
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.advance_interactions(&mut store, 0.1).unwrap();
     let mut update = SemanticMutationTransaction::new();
     update.replace_style(
         target,
@@ -293,7 +347,7 @@ fn authored_change_while_active_never_restores_captured_style() {
     session
         .apply_semantic_transaction_at_root(&mut store, root, update)
         .unwrap();
-    session.advance_interactions(0.5).unwrap();
+    session.advance_interactions(&mut store, 0.5).unwrap();
     let object = session.execution_object_id(target).unwrap();
     let index = session
         .frame()
@@ -406,11 +460,11 @@ fn click_action_runs_while_an_unrelated_source_segment_is_pending() {
                 .rate_func(noon_core::RateFunction::Linear),
         )
         .unwrap();
-    click(&mut session, 1, 0.0);
+    click(&mut store, &mut session, 1, 0.0);
     assert!(session.interactions_active());
-    session.advance_interactions(0.0).unwrap();
+    session.advance_interactions(&mut store, 0.0).unwrap();
     session.advance_to(0.2).unwrap();
-    session.advance_interactions(0.2).unwrap();
+    session.advance_interactions(&mut store, 0.2).unwrap();
     assert!(!session.segment_state(segment).is_complete());
     let effect = session.execution_object_id(target).unwrap();
     let moving = session.execution_object_id(moving).unwrap();
@@ -462,9 +516,9 @@ fn overlapping_source_scale_supersedes_click_effect_while_unrelated_track_contin
     let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
     session.configure_native_pointer_input(POINTER, 1).unwrap();
 
-    click(&mut session, 1, 0.0);
-    session.advance_interactions(0.0).unwrap();
-    session.advance_interactions(0.1).unwrap();
+    click(&mut store, &mut session, 1, 0.0);
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.advance_interactions(&mut store, 0.1).unwrap();
     assert!(session.interactions_active());
     let segment = session
         .activate_animation_segment(
@@ -476,7 +530,7 @@ fn overlapping_source_scale_supersedes_click_effect_while_unrelated_track_contin
         )
         .unwrap();
     session.advance_segment_to(segment, 0.5).unwrap();
-    session.advance_interactions(0.2).unwrap();
+    session.advance_interactions(&mut store, 0.2).unwrap();
 
     let target_row = session
         .runtime
@@ -524,7 +578,7 @@ fn overlapping_source_scale_supersedes_click_effect_while_unrelated_track_contin
         Some(noon_core::WHITE)
     );
     assert!(!session.interactions_active());
-    click(&mut session, 3, 0.0);
+    click(&mut store, &mut session, 3, 0.0);
     assert!(
         session.interactions_active(),
         "fresh click may acquire the released channels"
@@ -571,7 +625,12 @@ fn completed_create_and_wait_allow_click_with_nonreplayable_drag_policy() {
         .unwrap();
     assert!(session.seal_replay().is_err());
     session.configure_native_pointer_input(POINTER, 1).unwrap();
-    click(&mut session, 1, 0.0);
+    click(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        1,
+        0.0,
+    );
     assert!(
         session.interactions_active(),
         "first-pass completed Create must not suppress native click"

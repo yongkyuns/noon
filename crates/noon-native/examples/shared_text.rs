@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     label.shift(1.0, 0.0)?;
     scene.add(&label)?;
 
-    let session = scene.execution_session()?;
+    let session = scene.into_execution()?;
     noon_native::run(session)?;
     Ok(())
 }

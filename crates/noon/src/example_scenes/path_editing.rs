@@ -1,8 +1,8 @@
 //! Shared persistent corner editing, paired with ordinary_path_editing.py.
-use crate::{ExecutionSession, ManimGeometryOptions, Scene};
+use crate::{ManimGeometryOptions, Scene};
 use noon_core::{Vec2, VectorPath};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut path = scene.geometry(ManimGeometryOptions::path(VectorPath::new())?)?;
@@ -45,7 +45,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }
