@@ -261,6 +261,11 @@ test("source retirement waits for its owner and reuses the renderer for a paused
   await client.retireExecutionSource();
   assert.deepEqual(released, ["semantic-old"], "retry after success is an idle lifecycle no-op");
 
+  const rendererMetrics = client.metrics();
+  await waitForRequest(render, "metrics");
+  replyRender(render, "metrics", "metrics", { metrics: { presentedFrames: 9 } });
+  assert.equal((await rendererMetrics).metrics.presentedFrames, 9);
+
   const replacement = client.reconcileSemanticExecution(
     { contextId: "semantic-new" }, { authoringClient: authoring },
   );

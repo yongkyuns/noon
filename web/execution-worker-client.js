@@ -795,9 +795,9 @@ export class ExecutionWorkerClient {
     const [render, engine] = await Promise.all([
       this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages,
         profileGpuCompletion, includeGpuIdentity }),
-      this.#requestEngine("metrics", {}),
+      this.#engineWorker === null ? null : this.#requestEngine("metrics", {}),
     ]);
-    return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
+    return { ...render, engineMetrics: engine?.metrics ?? null, renderHost: this.#renderHost };
   }
 
   resize(width, height, devicePixelRatio = 1) {
@@ -957,7 +957,14 @@ export class ExecutionWorkerClient {
   }
 
   async #requestRender(type, payload, transfer = []) {
-    await this.ready();
+    if (this.#ready !== null) {
+      await this.ready();
+    } else if (this.#renderWorker === null || this.#session === 0) {
+      throw new Error("ExecutionWorkerClient has not been started");
+    }
+    // Successful source retirement releases Runtime ownership, while the
+    // retained renderer still owns its last picture and diagnostic counters.
+    // Query those actual counters without inventing a replacement engine.
     return this.#request(
       this.#renderWorker,
       "render",
