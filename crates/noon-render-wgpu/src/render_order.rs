@@ -471,7 +471,7 @@ fn project_mega_render_batches(
             .mega_path_segments
             .get(path_batch_index)
             .and_then(|segment| segment.as_ref())
-            .filter(|_| !preparer.path_range_has_gradient(&ordered_batch.instance_range))
+            .filter(|_| !preparer.path_range_has_paint(&ordered_batch.instance_range))
             .filter(|_| {
                 !preparer
                     .mega_path_detached
@@ -523,9 +523,9 @@ fn projected_frame<'a>(
     stats: RenderStats,
 ) -> PreparedFrame<'a> {
     PreparedFrame {
-        fill_gradients: &preparer.fill_gradients,
-        gradient_changes: &preparer.gradient_changes,
-        gradient_indices: &preparer.gradient_indices,
+        fill_paints: &preparer.fill_paints,
+        paint_changes: &preparer.paint_changes,
+        paint_indices: &preparer.paint_indices,
         time,
         circle_ids: &preparer.circle_ids,
         circles: &preparer.circles,

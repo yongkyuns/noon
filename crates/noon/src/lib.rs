@@ -257,7 +257,9 @@ pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayo
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
-pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
+pub use image_authoring::{
+    ImageMobjectOptions, ImagePaintOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION,
+};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
 pub use inspection_view::{InspectionView2D, InspectionViewError};
@@ -314,9 +316,12 @@ pub use noon_core::{
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
 pub use noon_core::{GradientStop, LinearGradient, LinearGradientError, PaintTransitionError};
+pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
 #[cfg(test)]
 mod gradient_authoring_tests;
+#[cfg(test)]
+mod image_paint_authoring_tests;
 pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,

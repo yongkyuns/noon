@@ -858,11 +858,15 @@ fn manim_line_endpoints_preserve_f64_transform_and_color_prefers_visible_fill() 
         circle.path_query().unwrap().start().unwrap()
     );
     assert_eq!(endpoints.end, circle.path_query().unwrap().end().unwrap());
-    let resource_style = SemanticStyle {
-        fill: Some(SemanticPaint::Resource(7)),
-        stroke: Some(SemanticPaint::Solid(Color::RED)),
-        ..SemanticStyle::default()
-    };
+    let mut textured = scene.circle(1.0).unwrap();
+    textured
+        .set_fill_image(
+            crate::ImagePaintOptions::rgba8(1, 1, vec![255, 0, 0, 255]).unwrap(),
+            Some(1.0),
+        )
+        .unwrap();
+    let mut resource_style = textured.state().unwrap().style;
+    resource_style.stroke = Some(SemanticPaint::Solid(Color::RED));
     assert!(style::manim_color_from_semantic(&resource_style).is_err());
     assert_eq!(
         style::manim_color_from_semantic(&SemanticStyle {

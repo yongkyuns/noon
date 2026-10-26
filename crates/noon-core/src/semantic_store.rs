@@ -890,7 +890,21 @@ impl Clone for SemanticStore {
                         state.remap_resource(handle);
                     }
                 }
+                if let SemanticNodeKind::Animation(state) = &mut node.kind {
+                    state.remap_image_resources(|mut handle| {
+                        if self.raster_image_resources.get(handle).is_some() {
+                            handle.arena = image_namespace;
+                        }
+                        handle
+                    });
+                }
                 if let Some(state) = node.object_state.as_mut() {
+                    state.style.remap_image_resources(|mut handle| {
+                        if self.raster_image_resources.get(handle).is_some() {
+                            handle.arena = image_namespace;
+                        }
+                        handle
+                    });
                     match &mut state.content {
                         crate::SemanticObjectContent::Geometry(
                             crate::StoredGeometry::Resource(handle),
@@ -914,6 +928,14 @@ impl Clone for SemanticStore {
                         }
                         _ => {}
                     }
+                } else if let Some(mut style) = node.family_style().cloned() {
+                    style.remap_image_resources(|mut handle| {
+                        if self.raster_image_resources.get(handle).is_some() {
+                            handle.arena = image_namespace;
+                        }
+                        handle
+                    });
+                    node.set_family_style(style);
                 }
             }
         }
@@ -1219,6 +1241,9 @@ impl SemanticStore {
         &mut self,
         state: SemanticAnimationState,
     ) -> SemanticNodeId {
+        for handle in state.image_resources() {
+            self.retain_semantic_image_resource(handle);
+        }
         let id = self.insert_kind(SemanticNodeKind::Animation(state));
         self.register_semantic_references_for_owner(id);
         id
@@ -1937,8 +1962,15 @@ impl SemanticStore {
         self.incoming_references.remove(&id);
         self.table_layouts.remove(&id);
 
+        if let SemanticNodeKind::Animation(state) = node.kind() {
+            for handle in state.image_resources() {
+                self.release_semantic_image_resource(handle);
+            }
+        }
         if let Some(state) = node.semantic_object_state() {
             self.release_semantic_object_resources(state);
+        } else if let Some(style) = node.family_style() {
+            self.release_semantic_style_resources(style);
         }
 
         let slot = &mut self.slots[id.slot as usize];

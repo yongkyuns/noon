@@ -238,10 +238,11 @@ fn apply_effective_track_endpoint(
         (Property::Fill, TrackValues::Paint { transition }) => {
             let (paint, opacity) = transition.sample(if at_end { 1.0 } else { 0.0 }).ok()?;
             match paint {
-                Some(noon_core::SemanticPaint::LinearGradient(gradient)) => {
-                    value.fill_paint = Some(std::sync::Arc::new(
-                        noon_core::SemanticPaint::LinearGradient(gradient),
-                    ));
+                Some(
+                    paint @ (noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::Image(_)),
+                ) => {
+                    value.fill_paint = Some(std::sync::Arc::new(paint));
                     value.style.fill = Some(noon_core::Color::rgba(1.0, 1.0, 1.0, opacity as f32));
                 }
                 Some(noon_core::SemanticPaint::Solid(mut color)) => {
@@ -253,7 +254,6 @@ fn apply_effective_track_endpoint(
                     value.fill_paint = None;
                     value.style.fill = None;
                 }
-                _ => return None,
             }
         }
         (Property::Stroke, TrackValues::Color { from, to }) => {

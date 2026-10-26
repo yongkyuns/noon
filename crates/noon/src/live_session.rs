@@ -1632,7 +1632,7 @@ impl<'a> LiveSession<'a> {
         if effective.fill_paint.is_some()
             || matches!(
                 mobject.state()?.style.fill,
-                Some(noon_core::SemanticPaint::Resource(_))
+                Some(noon_core::SemanticPaint::Image(_))
             )
         {
             return Err(crate::AuthoringError::Unsupported(
@@ -3861,12 +3861,26 @@ mod tests {
     }
 
     #[test]
-    fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
-        let authored = SemanticStyle {
-            fill: Some(SemanticPaint::Resource(7)),
-            ..SemanticStyle::default()
-        };
-        assert!(target_style_from_effective(&authored, Style::default(), None).is_err());
+    fn target_style_capture_preserves_image_mapping_and_authored_opacity_precision() {
+        let mut scene = Scene::new();
+        let mut object = scene.circle(1.0).unwrap();
+        object
+            .set_fill_image(
+                crate::ImagePaintOptions::rgba8(1, 1, vec![255, 0, 0, 255]).unwrap(),
+                Some(0.12345678912345678),
+            )
+            .unwrap();
+        object.set_object_opacity(0.8765432123456789).unwrap();
+        scene.add(&object).unwrap();
+        let authored = object.state().unwrap().style;
+        let mut session = scene.execution_session().unwrap();
+        let live = scene.live(&mut session);
+        let observed = live.effective(&object).unwrap();
+        assert_eq!(
+            target_style_from_effective(&authored, observed.style, observed.fill_paint.as_ref())
+                .unwrap(),
+            authored
+        );
     }
 
     #[test]

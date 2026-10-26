@@ -1325,6 +1325,11 @@ fn lower_prepared_entry(
         lowered.base_style,
     );
     compiled.effect = effect::lower_prepared_attachment(prepared, object)?;
+    if let Some(paint) = lowered.fill_paint.as_deref() {
+        resource_additions
+            .capture_paint_from_arena(prepared.store().raster_image_resources(), paint)
+            .map_err(SemanticPublicationLoweringError::Resource)?;
+    }
     compiled.fill_paint = lowered.fill_paint;
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
@@ -1569,6 +1574,11 @@ fn lower_semantic_publication(
             }
         }
         if flags.style {
+            if let Some(paint) = state.style.fill.as_ref() {
+                resource_additions
+                    .capture_paint_from_arena(prepared.store().raster_image_resources(), paint)
+                    .map_err(SemanticPublicationLoweringError::Resource)?;
+            }
             mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,

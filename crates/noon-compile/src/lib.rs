@@ -448,16 +448,49 @@ impl CompiledResources {
         source: &RasterImageResourceArena,
         content: SemanticImageContent,
     ) -> Result<RasterImageContentRef, CompiledResourceError> {
-        let handle = content.resource();
-        let resource = match self.images.entry(handle) {
+        let resource = self.capture_image_resource(source, content.resource())?;
+        Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
+    pub fn capture_paint_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        paint: &noon_core::SemanticPaint,
+    ) -> Result<(), CompiledResourceError> {
+        if let Some(image) = paint.as_image() {
+            self.capture_image_resource(source, image.resource())?;
+        }
+        Ok(())
+    }
+
+    pub fn capture_paint_track_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        values: &TrackValues,
+    ) -> Result<(), CompiledResourceError> {
+        if let TrackValues::Paint { transition } = values {
+            for (paint, _) in transition.endpoints() {
+                if let Some(paint) = paint {
+                    self.capture_paint_from_arena(source, paint)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn capture_image_resource(
+        &mut self,
+        source: &RasterImageResourceArena,
+        handle: RasterImageResourceHandle,
+    ) -> Result<&Arc<RasterImageResource>, CompiledResourceError> {
+        Ok(match self.images.entry(handle) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
                 source
                     .get_shared(handle)
                     .ok_or(CompiledResourceError::MissingImage(handle))?,
             ),
-        };
-        Ok(RasterImageContentRef::from_resource(content, resource))
+        })
     }
 
     /// Capture one producer-owned immutable text resource and its font/path
@@ -2062,6 +2095,11 @@ impl CompiledScene {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
                 validate_compiled_object(object)?;
+                validate_execution_paint_resources(
+                    &self.resources,
+                    None,
+                    object.fill_paint.as_deref(),
+                )?;
                 validate_execution_content_resource(
                     &self.resources,
                     None,
@@ -2366,6 +2404,7 @@ impl CompiledScene {
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 execution_patch::validate_fill_paint(*object, fill_paint.as_deref())?;
+                validate_execution_paint_resources(&self.resources, None, fill_paint.as_deref())?;
                 let source = &self.objects[index as usize];
                 if fill_paint.is_some()
                     && (!continuous_fill_content_supported(&source.content)
@@ -2622,6 +2661,7 @@ impl CompiledScene {
         &self,
         track: &TrackDefinition,
     ) -> Result<CompiledTrack, CompilePatchError> {
+        validate_execution_paint_track_resources(&self.resources, None, &track.values)?;
         let object_index = self
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
@@ -2910,6 +2950,40 @@ fn validate_execution_content(
                 .ok_or(CompilePatchError::InvalidContentBounds(object))
         }
     }
+}
+
+fn validate_execution_paint_resources(
+    resources: &CompiledResources,
+    additions: Option<&CompiledResources>,
+    paint: Option<&noon_core::SemanticPaint>,
+) -> Result<(), CompilePatchError> {
+    if let Some(image) = paint.and_then(noon_core::SemanticPaint::as_image) {
+        let handle = image.resource();
+        if RasterImageResourceLookup::get(resources, handle)
+            .or_else(|| {
+                additions.and_then(|resources| RasterImageResourceLookup::get(resources, handle))
+            })
+            .is_none()
+        {
+            return Err(CompilePatchError::Resource(
+                CompiledResourceError::MissingImage(handle),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_execution_paint_track_resources(
+    resources: &CompiledResources,
+    additions: Option<&CompiledResources>,
+    values: &TrackValues,
+) -> Result<(), CompilePatchError> {
+    if let TrackValues::Paint { transition } = values {
+        for (paint, _) in transition.endpoints() {
+            validate_execution_paint_resources(resources, additions, paint)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_execution_content_resource(

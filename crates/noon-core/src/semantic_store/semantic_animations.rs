@@ -107,6 +107,17 @@ impl SemanticObjectTrackProperty {
 }
 
 impl<R> SemanticObjectTrackValues<R> {
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        let transition = match self {
+            Self::Paint { transition } => Some(transition),
+            _ => None,
+        };
+        transition
+            .into_iter()
+            .flat_map(|transition| transition.image_resources())
+    }
     const fn value_kind(&self) -> SemanticObjectTrackValueKind {
         match self {
             Self::Paint { .. } => SemanticObjectTrackValueKind::Paint,
@@ -560,6 +571,35 @@ pub struct SemanticAnimationState {
 }
 
 impl SemanticAnimationState {
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        let values = match self.intent() {
+            SemanticAnimationIntent::ObjectPropertyTrack { values, .. } => Some(values),
+            _ => None,
+        };
+        values
+            .into_iter()
+            .flat_map(SemanticObjectTrackValues::image_resources)
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        if let SemanticAnimationIntent::ObjectPropertyTrack {
+            values: SemanticObjectTrackValues::Paint { transition },
+            ..
+        } = &mut self.intent
+        {
+            if transition.images().is_none() {
+                return;
+            }
+            let mut mapped = transition.as_ref().clone();
+            mapped.remap_image_resources(remap);
+            *transition = std::sync::Arc::new(mapped);
+        }
+    }
     pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
         Self {
             intent,

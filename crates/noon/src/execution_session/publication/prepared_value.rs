@@ -57,6 +57,7 @@ impl<'session, 'store> PreparedPublication<'session, 'store> {
             .runtime
             .prepare_authored_value_publication(
                 plan.value_transaction(),
+                plan.resource_additions().clone(),
                 session.publication_context(),
                 semantic.proposed_scene_revision(),
             )

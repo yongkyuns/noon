@@ -1670,10 +1670,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
                 SemanticMutation::SetFamilyColor { node, color } => {
                     let node = resolve_node_ref(node, &committed_nodes);
-                    store
-                        .node_mut(node)
-                        .expect("preflighted family")
-                        .set_family_color(color);
+                    store.mutate_semantic_style(node, |family| family.set_family_color(color));
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyColor { node });
                 }
@@ -1685,13 +1682,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     background_stroke_opacity,
                 } => {
                     let node = resolve_node_ref(node, &committed_nodes);
-                    let family = store.node_mut(node).expect("preflighted family");
-                    family.set_family_style(style);
-                    family.set_family_background_stroke_style(
-                        background_stroke_color,
-                        background_stroke_width,
-                        background_stroke_opacity,
-                    );
+                    store.mutate_semantic_style(node, |family| {
+                        family.set_family_style(style);
+                        family.set_family_background_stroke_style(
+                            background_stroke_color,
+                            background_stroke_width,
+                            background_stroke_opacity,
+                        );
+                    });
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyStyle { node });
                 }

@@ -3552,9 +3552,9 @@ impl GpuRenderer {
         if !views.is_empty() {
             let limit = device.limits().max_texture_dimension_2d;
             let limits = self.viewport_size.map(|size| size.min(limit));
-            let images = self
-                .images
-                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format));
+            let images = self.images.get_or_insert_with(|| {
+                RasterImageGpuRenderer::new(device, self.target_format, &self.image_texture_layout)
+            });
             for (index, view) in views.iter().enumerate() {
                 let size = view.capture_size;
                 let uniform =
@@ -3667,6 +3667,22 @@ impl GpuRenderer {
             &mut Vec<crate::UploadWrite>,
         )>,
     ) -> RetainedUploadStats {
+        let images = if prepared.images.objects.is_empty()
+            && prepared.images.paints.is_empty()
+            && self.images.is_none()
+        {
+            RasterImageUploadStats::default()
+        } else {
+            self.images
+                .get_or_insert_with(|| {
+                    RasterImageGpuRenderer::new(
+                        device,
+                        self.target_format,
+                        &self.image_texture_layout,
+                    )
+                })
+                .upload(device, queue, prepared.images)
+        };
         let geometry = if let Some((observed, writes)) = observed_uploads.as_mut() {
             let mut trace = |buffer, range, offset, bytes: &[u8]| {
                 if observed_geometry_write_matches(observed, buffer, &range) {
@@ -3735,13 +3751,6 @@ impl GpuRenderer {
             uploaded
         } else {
             TextGpuUploadStats::default()
-        };
-        let images = if prepared.images.objects.is_empty() && self.images.is_none() {
-            RasterImageUploadStats::default()
-        } else {
-            self.images
-                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format))
-                .upload(device, queue, prepared.images)
         };
         RetainedUploadStats {
             images,

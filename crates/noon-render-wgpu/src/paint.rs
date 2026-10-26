@@ -7,7 +7,7 @@ use noon_runtime::FrameState;
 use crate::{FramePreparer, PreparedFrame, RenderPrimitive};
 
 impl PreparedFrame<'_> {
-    pub(crate) fn gradient_indices(
+    pub(crate) fn paint_indices(
         &self,
         primitive: RenderPrimitive,
         range: std::ops::Range<u32>,
@@ -18,12 +18,12 @@ impl PreparedFrame<'_> {
             RenderPrimitive::Path { .. } => 2,
             _ => return None,
         };
-        Some(self.gradient_indices[group].range(range))
+        Some(self.paint_indices[group].range(range))
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PreparedGradient {
+pub(crate) struct PreparedPaint {
     pub definition: Arc<SemanticPaint>,
     pub bounds: Rect,
     pub transform: Transform2D,
@@ -31,9 +31,9 @@ pub(crate) struct PreparedGradient {
 }
 
 impl FramePreparer {
-    pub(crate) fn sync_gradient_routes(&mut self) {
-        for id in self.gradient_routes_pending.drain(..) {
-            let next = self.fill_gradients.get(&id).and_then(|paint| {
+    pub(crate) fn sync_paint_routes(&mut self) {
+        for id in self.paint_routes_pending.drain(..) {
+            let next = self.fill_paints.get(&id).and_then(|paint| {
                 match self.slots.get(paint.source_index) {
                     Some(crate::PreparedSlot::Circle(index)) => Some((0, *index as u32)),
                     Some(crate::PreparedSlot::Rectangle(index)) => Some((1, *index as u32)),
@@ -41,28 +41,28 @@ impl FramePreparer {
                     _ => None,
                 }
             });
-            let previous = self.gradient_routes.get(&id).copied();
+            let previous = self.paint_routes.get(&id).copied();
             if previous == next {
                 continue;
             }
-            if let Some((group, index)) = self.gradient_routes.remove(&id) {
-                self.gradient_indices[group].remove(&index);
+            if let Some((group, index)) = self.paint_routes.remove(&id) {
+                self.paint_indices[group].remove(&index);
             }
             if let Some((group, index)) = next {
-                self.gradient_routes.insert(id, (group, index));
-                self.gradient_indices[group].insert(index);
+                self.paint_routes.insert(id, (group, index));
+                self.paint_indices[group].insert(index);
             }
         }
     }
-    pub(crate) fn path_range_has_gradient(&self, range: &std::ops::Range<u32>) -> bool {
-        !self.fill_gradients.is_empty()
+    pub(crate) fn path_range_has_paint(&self, range: &std::ops::Range<u32>) -> bool {
+        !self.fill_paints.is_empty()
             && range.clone().any(|index| {
                 self.path_ids
                     .get(index as usize)
-                    .is_some_and(|id| self.fill_gradients.contains_key(id))
+                    .is_some_and(|id| self.fill_paints.contains_key(id))
             })
     }
-    pub(crate) fn sync_fill_gradient(&mut self, frame: &FrameState, index: usize) {
+    pub(crate) fn sync_fill_paint(&mut self, frame: &FrameState, index: usize) {
         let Some(object) = frame.objects.get(index) else {
             return;
         };
@@ -74,36 +74,36 @@ impl FramePreparer {
                 object
                     .geometry()
                     .and_then(|geometry| geometry.local_bounds())
-                    .map(|bounds| PreparedGradient {
+                    .map(|bounds| PreparedPaint {
                         definition: definition.clone(),
                         bounds,
                         transform: frame.render_transform(index),
                         source_index: index,
                     })
             });
-        if next.is_some() || self.fill_gradients.contains_key(&object.id) {
-            self.gradient_routes_pending.push(object.id);
+        if next.is_some() || self.fill_paints.contains_key(&object.id) {
+            self.paint_routes_pending.push(object.id);
         }
-        if self.fill_gradients.get(&object.id) == next.as_ref() {
+        if self.fill_paints.get(&object.id) == next.as_ref() {
             return;
         }
-        if self.fill_gradients.contains_key(&object.id) != next.is_some() {
+        if self.fill_paints.contains_key(&object.id) != next.is_some() {
             self.visible_projection_ready = false;
             if matches!(
                 self.slots.get(index),
                 Some(crate::PreparedSlot::Path { .. })
             ) {
-                self.gradient_order_changes.push(index);
+                self.paint_order_changes.push(index);
             }
         }
         match next {
             Some(value) => {
-                self.fill_gradients.insert(object.id, value);
+                self.fill_paints.insert(object.id, value);
             }
             None => {
-                self.fill_gradients.remove(&object.id);
+                self.fill_paints.remove(&object.id);
             }
         }
-        self.gradient_changes.push(object.id);
+        self.paint_changes.push(object.id);
     }
 }

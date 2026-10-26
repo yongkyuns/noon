@@ -93,12 +93,10 @@ pub(crate) fn target_style_from_effective(
     effective: Style,
     fill_paint: Option<&std::sync::Arc<noon_core::SemanticPaint>>,
 ) -> Result<SemanticStyle, AuthoringError> {
-    if matches!(authored.fill.as_ref(), Some(SemanticPaint::Resource(_)))
-        || matches!(
-            authored.stroke.as_ref(),
-            Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_))
-        )
-    {
+    if matches!(
+        authored.stroke.as_ref(),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))
+    ) {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));

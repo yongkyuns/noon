@@ -66,7 +66,7 @@ fn gradient_only_prepared_publication_is_atomic_and_local_in_100k_scene() {
     let before = runtime.publication_context();
     let next_scene = before.scene_revision().checked_next().unwrap();
     let prepared = runtime
-        .prepare_authored_value_publication(&edits, before, next_scene)
+        .prepare_authored_value_publication(&edits, Default::default(), before, next_scene)
         .unwrap()
         .unwrap();
     assert!(runtime.frame().objects[50_000].fill_paint.is_none());
@@ -74,7 +74,7 @@ fn gradient_only_prepared_publication_is_atomic_and_local_in_100k_scene() {
     drop(prepared);
     assert!(runtime.frame_changes().is_empty());
     let prepared = runtime
-        .prepare_authored_value_publication(&edits, before, next_scene)
+        .prepare_authored_value_publication(&edits, Default::default(), before, next_scene)
         .unwrap()
         .unwrap();
     runtime.commit_prepared_authored_value_publication(prepared);
@@ -98,6 +98,7 @@ fn gradient_only_prepared_publication_is_atomic_and_local_in_100k_scene() {
     let prepared = runtime
         .prepare_authored_value_publication(
             &edits,
+            Default::default(),
             context,
             context.scene_revision().checked_next().unwrap(),
         )
@@ -139,6 +140,7 @@ fn invalid_gradient_in_late_patch_preserves_all_earlier_values() {
     assert!(runtime
         .prepare_authored_value_publication(
             &edits,
+            Default::default(),
             context,
             context.scene_revision().checked_next().unwrap()
         )
@@ -180,6 +182,7 @@ fn gradient_base_survives_completed_solid_history_and_out_of_order_seek() {
     let prepared = runtime
         .prepare_authored_value_publication(
             &transaction(0, Some(paint.clone())),
+            Default::default(),
             context,
             context.scene_revision().checked_next().unwrap(),
         )
@@ -444,4 +447,59 @@ fn bounded_rates_cannot_panic_paint_sampling_and_overshoot_rejects_atomically() 
             .apply_execution_patch(&ExecutionPatch::RemoveTrack(track.id))
             .unwrap();
     }
+}
+
+#[test]
+fn prepared_image_value_publication_owns_pixels_but_installs_them_only_at_commit() {
+    use noon_compile::CompiledResources;
+    use noon_core::{
+        ImageMapping, ImagePaint, RasterImageResourceArena, RasterImageResourceLookup,
+        RasterImageSampling, SemanticPaint,
+    };
+    let mut arena = RasterImageResourceArena::new();
+    let handle = arena.intern_rgba8(1, 1, [17, 73, 191, 128]).unwrap();
+    let paint = SemanticPaint::Image(Arc::new(ImagePaint::new(
+        handle,
+        ImageMapping::default(),
+        RasterImageSampling::Linear,
+    )));
+    let mut additions = CompiledResources::default();
+    additions.capture_paint_from_arena(&arena, &paint).unwrap();
+    let edits = transaction(0, Some(Arc::new(paint)));
+    let mut runtime = runtime(2);
+    runtime.take_frame_changes();
+    runtime.take_spatial_changes();
+    let before = runtime.frame().clone();
+    let context = runtime.publication_context();
+    let next = context.scene_revision().checked_next().unwrap();
+    assert!(runtime
+        .prepare_authored_value_publication(&edits, CompiledResources::default(), context, next)
+        .is_err());
+    assert_eq!(runtime.frame(), &before);
+    assert_eq!(runtime.publication_context(), context);
+    let prepared = runtime
+        .prepare_authored_value_publication(&edits, additions.clone(), context, next)
+        .unwrap()
+        .unwrap();
+    assert!(runtime.raster_image_resources().get(handle).is_none());
+    drop(prepared);
+    assert_eq!(runtime.frame(), &before);
+    assert!(runtime.take_frame_changes().is_empty());
+    let prepared = runtime
+        .prepare_authored_value_publication(&edits, additions, context, next)
+        .unwrap()
+        .unwrap();
+    drop(arena);
+    runtime.commit_prepared_authored_value_publication(prepared);
+    assert_eq!(
+        runtime
+            .raster_image_resources()
+            .get(handle)
+            .unwrap()
+            .rgba8(),
+        &[17, 73, 191, 128]
+    );
+    assert_eq!(runtime.take_frame_changes(), FrameChanges::objects(vec![0]));
+    assert!(runtime.take_spatial_changes().is_empty());
+    assert!(runtime.frame().objects[1].fill_paint.is_none());
 }

@@ -1661,7 +1661,10 @@ pub(super) fn lower_affine_channels(
             && !has_binding(source, SemanticObjectProperty::FillOpacity))
         || (from.fill_paint.as_deref()
             != match target.style.fill.as_ref() {
-                Some(paint @ noon_core::SemanticPaint::LinearGradient(_)) => Some(paint),
+                Some(
+                    paint @ (noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::Image(_)),
+                ) => Some(paint),
                 _ => None,
             }
             && !has_binding(source, SemanticObjectProperty::FillOpacity));
@@ -1671,7 +1674,7 @@ pub(super) fn lower_affine_channels(
     let continuous_fill = from.fill_paint.is_some()
         || matches!(
             target.style.fill,
-            Some(noon_core::SemanticPaint::LinearGradient(_))
+            Some(noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Image(_))
         );
     let fill_values = if continuous_fill {
         let transition = noon_core::PaintTransition::new(
@@ -1771,14 +1774,10 @@ pub(super) fn lower_affine_lifecycle_channels(
     if endpoint.point_color.is_some()
         && (matches!(
             source.style.fill.as_ref(),
-            Some(
-                noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Resource(_)
-            )
+            Some(noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Image(_))
         ) || matches!(
             source.style.stroke.as_ref(),
-            Some(
-                noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Resource(_)
-            )
+            Some(noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Image(_))
         ) || from.fill_paint.is_some())
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
@@ -2630,7 +2629,7 @@ pub(super) fn lower_transform_channels(
     if from.fill_paint.is_some()
         || matches!(
             target.style.fill,
-            Some(noon_core::SemanticPaint::LinearGradient(_))
+            Some(noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Image(_))
         )
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);

@@ -235,23 +235,30 @@ impl SemanticTransform {
     }
 }
 
-/// Paint representation is intentionally extensible before gradients/text enter
-/// the public API. The renderer may specialize solid colors aggressively.
+/// Immutable authored paint values. The renderer may specialize solids while
+/// retaining the same value definition for continuous and resource paints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticPaint {
     Solid(Color),
     /// Continuous local paint; opacity remains on the owning semantic style.
     LinearGradient(std::sync::Arc<crate::LinearGradient>),
-    /// Stable resource identity for a future gradient/pattern paint resource.
-    Resource(u64),
+    /// Local image mapping over an existing immutable raster resource.
+    Image(std::sync::Arc<crate::ImagePaint>),
 }
 
 impl SemanticPaint {
     pub fn as_linear_gradient(&self) -> Option<&std::sync::Arc<crate::LinearGradient>> {
         match self {
             Self::LinearGradient(gradient) => Some(gradient),
-            Self::Solid(_) | Self::Resource(_) => None,
+            Self::Solid(_) | Self::Image(_) => None,
+        }
+    }
+
+    pub fn as_image(&self) -> Option<&crate::ImagePaint> {
+        match self {
+            Self::Image(image) => Some(image),
+            Self::Solid(_) | Self::LinearGradient(_) => None,
         }
     }
 }
@@ -317,6 +324,36 @@ impl Default for SemanticStyle {
 }
 
 impl SemanticStyle {
+    pub fn image_resources(&self) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        [
+            self.fill.as_ref(),
+            self.stroke.as_ref(),
+            self.background_stroke.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(SemanticPaint::as_image)
+        .map(|image| image.resource())
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        mut remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        for paint in [
+            &mut self.fill,
+            &mut self.stroke,
+            &mut self.background_stroke,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let SemanticPaint::Image(image) = paint {
+                let handle = remap(image.resource());
+                std::sync::Arc::make_mut(image).remap_resource(handle);
+            }
+        }
+    }
     /// Capture a lowered effective fill, retaining authored precision exactly
     /// when its value still lowers to the same paint and alpha.
     pub fn capture_effective_fill(
@@ -345,7 +382,12 @@ impl SemanticStyle {
             }
             _ => None,
         };
-        if lowered == fill && !matches!(self.fill, Some(SemanticPaint::LinearGradient(_))) {
+        if lowered == fill
+            && !matches!(
+                self.fill,
+                Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))
+            )
+        {
             (self.fill.clone(), self.fill_opacity)
         } else {
             (fill.map(SemanticPaint::Solid), 1.0)
@@ -360,7 +402,7 @@ impl SemanticStyle {
                     && color.blue.is_finite()
                     && color.alpha.is_finite()
             }
-            Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) | None => true,
+            Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_)) | None => true,
         };
         paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
@@ -433,7 +475,7 @@ impl SemanticStyle {
         }?;
         match paint {
             SemanticPaint::Solid(color) => Some(*color),
-            SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_) => None,
+            SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) => None,
         }
     }
 

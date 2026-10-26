@@ -2842,25 +2842,23 @@ fn apply_paint_track(
     let (paint, opacity) = transition
         .sample(progress)
         .expect("validated continuous fill sample");
-    let (fill, gradient) = match paint {
+    let (fill, field) = match paint {
         Some(noon_core::SemanticPaint::Solid(mut color)) => {
             color.alpha = (f64::from(color.alpha) * opacity) as f32;
             (Some(color), None)
         }
-        Some(noon_core::SemanticPaint::LinearGradient(gradient)) => (
+        Some(
+            paint @ (noon_core::SemanticPaint::LinearGradient(_)
+            | noon_core::SemanticPaint::Image(_)),
+        ) => (
             Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)),
-            Some(std::sync::Arc::new(
-                noon_core::SemanticPaint::LinearGradient(gradient),
-            )),
+            Some(std::sync::Arc::new(paint)),
         ),
         None => (None, None),
-        Some(noon_core::SemanticPaint::Resource(_)) => {
-            unreachable!("checked fill transition excludes unresolved paint")
-        }
     };
-    let changed = row.style.fill != fill || *row.fill_paint != gradient;
+    let changed = row.style.fill != fill || *row.fill_paint != field;
     row.style.fill = fill;
-    *row.fill_paint = gradient;
+    *row.fill_paint = field;
     changed
 }
 

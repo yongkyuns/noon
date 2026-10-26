@@ -305,6 +305,7 @@ fn live_glow_value_publication_pixels() {
                 runtime
                     .prepare_authored_value_publication(
                         &transaction,
+                        Default::default(),
                         context,
                         context.scene_revision().checked_next().unwrap(),
                     )

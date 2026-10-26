@@ -361,14 +361,21 @@ impl RetainedFamilyExecutionDeltaEncoder {
             .retained
             .objects
             .iter()
-            .filter_map(|object| match object.content {
-                crate::TransportObjectContent::Image { image, .. }
-                    if !self.resources.contains_image(image) =>
-                {
-                    Some(noon_core::RasterImageResourceHandle::from(image))
-                }
-                _ => None,
+            .flat_map(|object| {
+                let content = match object.content {
+                    crate::TransportObjectContent::Image { image, .. } => {
+                        Some(noon_core::RasterImageResourceHandle::from(image))
+                    }
+                    _ => None,
+                };
+                let paint = object
+                    .fill_paint
+                    .as_deref()
+                    .and_then(noon_core::SemanticPaint::as_image)
+                    .map(|image| image.resource());
+                [content, paint].into_iter().flatten()
             })
+            .filter(|handle| !self.resources.contains_image((*handle).into()))
             .collect::<std::collections::BTreeSet<_>>();
         let new_texts = text_handles
             .into_iter()

@@ -806,6 +806,15 @@ pub async fn create_direct_shadow_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct Rust/WASM image fill through the same authoring/runtime/renderer as native.
+#[wasm_bindgen(js_name = createDirectImageFillSmokeRenderer)]
+pub async fn create_direct_image_fill_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::image_fill::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 #[wasm_bindgen(js_name = createDirectLinearGradientSmokeRenderer)]
 pub async fn create_direct_linear_gradient_smoke_renderer(
     canvas: OffscreenCanvas,

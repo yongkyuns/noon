@@ -38,12 +38,60 @@ pub(crate) fn validate_definition(
 ) -> Result<(), SemanticExecutionValueError> {
     match paint {
         SemanticPaint::LinearGradient(gradient) => validate_gradient(gradient),
-        SemanticPaint::Solid(_) | SemanticPaint::Resource(_) => {
-            Err(SemanticExecutionValueError::UnsupportedPaintProfile {
-                field: SemanticExecutionField::FillPaint,
-            })
-        }
+        SemanticPaint::Image(image) => validate_image(image),
+        SemanticPaint::Solid(_) => Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+            field: SemanticExecutionField::FillPaint,
+        }),
     }
+}
+
+pub(crate) fn validate_image(
+    image: &noon_core::ImagePaint,
+) -> Result<(), SemanticExecutionValueError> {
+    let transform = image.mapping().transform();
+    let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
+        field: SemanticExecutionField::FillPaint,
+    };
+    if transform
+        .translation()
+        .into_iter()
+        .chain(transform.scale())
+        .any(|value| !(value as f32).is_finite())
+        || transform.scale().into_iter().any(|value| {
+            (value as f32).abs() < f32::MIN_POSITIVE || !(1.0 / value as f32).is_finite()
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Finite execution projection of the shared f64 image mapping. The norm
+/// margin covers every rotation, including an animated sweep between endpoints;
+/// it also bounds translated coordinates before narrowing to shader arithmetic.
+/// This does not promise alias-free minification or arbitrary f64 UV precision.
+pub fn project_image_mapping(
+    mapping: noon_core::ImageMapping,
+    local_size: [f64; 2],
+    image_size: [u32; 2],
+) -> Result<[[f32; 3]; 2], SemanticExecutionValueError> {
+    let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
+        field: SemanticExecutionField::FillPaint,
+    };
+    let rows = mapping
+        .image_uv_affine(local_size, image_size)
+        .map_err(|_| invalid())?;
+    let translation = mapping.transform().translation();
+    let displacement = 2.0 + translation[0].abs() + translation[1].abs();
+    if rows.iter().any(|row| {
+        let norm = row[0].hypot(row[1]);
+        norm < 4.0 * f64::from(f32::MIN_POSITIVE)
+            || norm * displacement + 2.0 > f64::from(f32::MAX) / 4.0
+            || row.iter().any(|v| !(*v as f32).is_finite())
+    }) {
+        return Err(invalid());
+    }
+    Ok(rows.map(|row| row.map(|v| v as f32)))
 }
 
 pub(crate) fn validate_transition(
@@ -52,7 +100,14 @@ pub(crate) fn validate_transition(
     let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
         field: SemanticExecutionField::FillPaint,
     };
-    let [from, to] = transition.gradients();
+    if let Some([from, to]) = transition.images() {
+        validate_image(from)?;
+        validate_image(to)?;
+        return Ok(());
+    }
+    let [from, to] = transition
+        .gradients()
+        .expect("closed checked gradient/image transition");
     validate_gradient(from)?;
     validate_gradient(to)?;
     if from.start() != to.start() || from.end() != to.end() {
@@ -66,7 +121,11 @@ pub(crate) fn validate_transition(
             .fold(0.0, f64::max);
         // Two rounded endpoints can differ from their f64 values by half an
         // ULP per coordinate. Bound the entire axis sweep, not sampled times.
-        if transition.minimum_axis_length() <= 4.0 * f64::from(f32::EPSILON) * coordinate_scale {
+        if transition
+            .minimum_axis_length()
+            .expect("gradient transition")
+            <= 4.0 * f64::from(f32::EPSILON) * coordinate_scale
+        {
             return Err(invalid());
         }
     }
@@ -94,14 +153,16 @@ pub fn lower_fill(
     state: &SemanticObjectState,
     store: &SemanticStore,
 ) -> Result<Option<Arc<SemanticPaint>>, SemanticLoweringError> {
-    let Some(SemanticPaint::LinearGradient(gradient)) = state.style.fill.as_ref() else {
+    let Some(paint @ (SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))) =
+        state.style.fill.as_ref()
+    else {
         return Ok(None);
     };
     let invalid = || SemanticLoweringError::UnsupportedPaintProfile {
         node,
         field: SemanticExecutionField::FillPaint,
     };
-    validate_gradient(gradient).map_err(|error| error.with_node(node))?;
+    validate_definition(paint).map_err(|error| error.with_node(node))?;
     if super::projection::object_requires_spatial_lowering(state, store)
         || state.role() != SemanticObjectRole::Ordinary
     {
@@ -127,7 +188,17 @@ pub fn lower_fill(
     if !extent.x.is_finite() || !extent.y.is_finite() || extent.x <= 0.0 || extent.y <= 0.0 {
         return Err(invalid());
     }
-    Ok(Some(Arc::new(SemanticPaint::LinearGradient(Arc::clone(
-        gradient,
-    )))))
+    if let SemanticPaint::Image(image) = paint {
+        let resource = store
+            .raster_image_resources()
+            .get(image.resource())
+            .ok_or_else(invalid)?;
+        project_image_mapping(
+            image.mapping(),
+            [f64::from(extent.x), f64::from(extent.y)],
+            [resource.width(), resource.height()],
+        )
+        .map_err(|_| invalid())?;
+    }
+    Ok(Some(Arc::new(paint.clone())))
 }

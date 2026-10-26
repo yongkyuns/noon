@@ -1,7 +1,10 @@
 //! Checked immutable endpoints for the ordinary Fill channel.
 use std::sync::Arc;
 
-use crate::{Color, GradientStop, LinearGradient, LinearGradientError, SemanticPaint};
+use crate::{
+    Color, GradientStop, ImagePaint, ImagePaintError, LinearGradient, LinearGradientError,
+    SemanticPaint,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintTransitionError {
@@ -11,17 +14,19 @@ pub enum PaintTransitionError {
     DifferentStopCounts,
     DegenerateAxis,
     Gradient(LinearGradientError),
+    Image(ImagePaintError),
 }
 
 impl std::fmt::Display for PaintTransitionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedPaint => f.write_str("continuous fill transitions require at least one linear gradient and no unresolved resource paint"),
+            Self::UnsupportedPaint => f.write_str("paint transitions require compatible gradient endpoints or two image paints using the same resource"),
             Self::InvalidOpacity => f.write_str("paint transition opacity must be finite and in [0, 1]"),
             Self::InvalidProgress => f.write_str("paint transition progress must be finite and in [0, 1]"),
             Self::DifferentStopCounts => f.write_str("animated gradients require matching stop counts"),
             Self::DegenerateAxis => f.write_str("gradient axis would collapse or lose coordinate precision during interpolation"),
             Self::Gradient(error) => error.fmt(f),
+            Self::Image(error) => error.fmt(f),
         }
     }
 }
@@ -30,6 +35,17 @@ impl From<LinearGradientError> for PaintTransitionError {
     fn from(error: LinearGradientError) -> Self {
         Self::Gradient(error)
     }
+}
+impl From<ImagePaintError> for PaintTransitionError {
+    fn from(error: ImagePaintError) -> Self {
+        Self::Image(error)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum PreparedPaintTransition {
+    Gradient([Arc<LinearGradient>; 2]),
+    Image(Box<[ImagePaint; 2]>),
 }
 
 /// Prepared value endpoints, with no scene identity, scheduling or mutable state.
@@ -47,7 +63,7 @@ pub struct PaintTransition {
     to: Option<SemanticPaint>,
     to_opacity: f64,
     #[serde(skip)]
-    gradients: [Arc<LinearGradient>; 2],
+    prepared: PreparedPaintTransition,
 }
 
 #[derive(serde::Deserialize)]
@@ -77,6 +93,17 @@ impl PaintTransition {
         {
             return Err(PaintTransitionError::InvalidOpacity);
         }
+        if let (Some(SemanticPaint::Image(a)), Some(SemanticPaint::Image(b))) = (&from, &to) {
+            a.interpolate(**b, 0.0)?;
+            let prepared = PreparedPaintTransition::Image(Box::new([**a, **b]));
+            return Ok(Self {
+                from,
+                from_opacity,
+                to,
+                to_opacity,
+                prepared,
+            });
+        }
         let gradient = |paint: &Option<SemanticPaint>| match paint {
             Some(SemanticPaint::LinearGradient(gradient)) => Some(gradient.clone()),
             _ => None,
@@ -88,7 +115,7 @@ impl PaintTransition {
             |paint: &Option<SemanticPaint>| -> Result<Arc<LinearGradient>, PaintTransitionError> {
                 match paint {
                     Some(SemanticPaint::LinearGradient(gradient)) => Ok(gradient.clone()),
-                    Some(SemanticPaint::Resource(_)) => Err(PaintTransitionError::UnsupportedPaint),
+                    Some(SemanticPaint::Image(_)) => Err(PaintTransitionError::UnsupportedPaint),
                     Some(SemanticPaint::Solid(_)) | None => {
                         let color = match paint {
                             Some(SemanticPaint::Solid(color)) => *color,
@@ -117,17 +144,28 @@ impl PaintTransition {
             from_opacity,
             to,
             to_opacity,
-            gradients,
+            prepared: PreparedPaintTransition::Gradient(gradients),
         })
     }
 
-    pub fn gradients(&self) -> &[Arc<LinearGradient>; 2] {
-        &self.gradients
+    pub fn gradients(&self) -> Option<&[Arc<LinearGradient>; 2]> {
+        match &self.prepared {
+            PreparedPaintTransition::Gradient(gradients) => Some(gradients),
+            PreparedPaintTransition::Image(_) => None,
+        }
+    }
+
+    pub fn images(&self) -> Option<&[ImagePaint; 2]> {
+        match &self.prepared {
+            PreparedPaintTransition::Image(images) => Some(images),
+            PreparedPaintTransition::Gradient(_) => None,
+        }
     }
 
     /// Analytic minimum axis length over the complete interpolation interval.
-    pub fn minimum_axis_length(&self) -> f64 {
-        minimum_axis_length(&self.gradients[0], &self.gradients[1])
+    pub fn minimum_axis_length(&self) -> Option<f64> {
+        self.gradients()
+            .map(|[from, to]| minimum_axis_length(from, to))
     }
 
     pub fn endpoints(&self) -> [(Option<&SemanticPaint>, f64); 2] {
@@ -135,6 +173,31 @@ impl PaintTransition {
             (self.from.as_ref(), self.from_opacity),
             (self.to.as_ref(), self.to_opacity),
         ]
+    }
+
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        self.endpoints()
+            .into_iter()
+            .filter_map(|(paint, _)| paint.and_then(SemanticPaint::as_image))
+            .map(|image| image.resource())
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        mut remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        let mut from = self.from.clone();
+        let mut to = self.to.clone();
+        for paint in [&mut from, &mut to].into_iter().flatten() {
+            if let SemanticPaint::Image(image) = paint {
+                let handle = remap(image.resource());
+                std::sync::Arc::make_mut(image).remap_resource(handle);
+            }
+        }
+        *self = Self::new(from, self.from_opacity, to, self.to_opacity)
+            .expect("resource remapping preserves checked paint interpolation");
     }
 
     pub fn sample(&self, alpha: f64) -> Result<(Option<SemanticPaint>, f64), PaintTransitionError> {
@@ -151,7 +214,18 @@ impl PaintTransition {
         if self.from == self.to {
             return Ok((self.from.clone(), opacity));
         }
-        let [from, to] = &self.gradients;
+        let [from, to] = match &self.prepared {
+            PreparedPaintTransition::Image(images) => {
+                let [from, to] = images.as_ref();
+                return Ok((
+                    Some(SemanticPaint::Image(Arc::new(
+                        from.interpolate(*to, alpha)?,
+                    ))),
+                    opacity,
+                ));
+            }
+            PreparedPaintTransition::Gradient(gradients) => gradients,
+        };
         let point = |a: [f64; 2], b: [f64; 2]| [mix(a[0], b[0], alpha), mix(a[1], b[1], alpha)];
         let stops = from
             .stops()

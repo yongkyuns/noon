@@ -549,6 +549,22 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let Some(image) = object
+                .fill_paint
+                .as_deref()
+                .and_then(noon_core::SemanticPaint::as_image)
+            {
+                let handle = image.resource().into();
+                if self
+                    .resources
+                    .resolve_image_handle(handle, image.sampling().into())
+                    .is_none()
+                {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownImageResource(handle).into(),
+                    );
+                }
+            }
             if let TransportObjectContent::Image { image, sampling } = object.content {
                 if self
                     .resources

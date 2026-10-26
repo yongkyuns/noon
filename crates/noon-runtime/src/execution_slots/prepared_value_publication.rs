@@ -1,4 +1,4 @@
-use noon_compile::{ExecutionMutationTransaction, ExecutionPatch};
+use noon_compile::{CompiledResources, ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{
     ExecutionRevision, FrameEpoch, Property, PublicationContext, SceneRevision, Style, Transform2D,
 };
@@ -76,6 +76,7 @@ pub struct PreparedAuthoredValuePublication {
     scene_revision: SceneRevision,
     execution_revision: ExecutionRevision,
     frame_epoch: FrameEpoch,
+    resource_additions: CompiledResources,
     writes: Vec<PreparedAuthoredValueWrite>,
 }
 
@@ -87,6 +88,7 @@ impl SceneInstance {
     pub fn prepare_authored_value_publication(
         &self,
         transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
@@ -124,9 +126,10 @@ impl SceneInstance {
 
         // Validate every submitted write, including one superseded by a later value,
         // before retaining only the final value in each object/property lane.
-        self.compiled.preflight_execution_transaction(transaction)?;
+        self.compiled
+            .preflight_execution_transaction_with_resources(transaction, &resource_additions)?;
         let mut writes = Vec::new();
-        let mut execution_changed = false;
+        let mut execution_changed = !self.compiled.resources().contains_all(&resource_additions);
         for patch in final_value_writes(transaction) {
             let (object, prepared) = match patch {
                 ExecutionPatch::SetTransform { object, .. } => (*object, 0_u8),
@@ -226,6 +229,7 @@ impl SceneInstance {
             scene_revision,
             execution_revision,
             frame_epoch,
+            resource_additions,
             writes,
         }))
     }
@@ -234,8 +238,8 @@ impl SceneInstance {
     /// transaction has crossed the point of no return.
     ///
     /// The execution-session `PreparedPublication` owns exclusive access between
-    /// preparation and this call. No check, lookup, allocation, or fallible compile
-    /// operation remains here.
+    /// preparation and this call. The complete immutable resource set is already
+    /// owned and validated; no fallible compilation or preparation remains here.
     pub fn commit_prepared_authored_value_publication(
         &mut self,
         prepared: PreparedAuthoredValuePublication,
@@ -243,6 +247,8 @@ impl SceneInstance {
         debug_assert_eq!(prepared.runtime, self.runtime_identity());
         debug_assert_eq!(prepared.expected, self.publication_context());
         self.last_patch_stats = crate::RuntimePatchStats::default();
+        self.compiled
+            .merge_prepared_resources(prepared.resource_additions);
 
         for write in prepared.writes {
             if !write.changes_execution() {

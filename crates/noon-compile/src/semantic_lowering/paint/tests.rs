@@ -118,3 +118,37 @@ fn animation_admission_checks_interior_gpu_axis_and_moving_stop_precision() {
         "an opening hard edge has arbitrarily small GPU intervals"
     );
 }
+
+#[test]
+fn image_projection_bounds_rotated_coordinates_before_narrowing() {
+    use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImageUvTransform};
+    let mapping = |translation, scale, angle| {
+        ImageMapping::new(
+            ImageFit::Stretch,
+            [0.5; 2],
+            ImageAddressMode::Repeat,
+            ImageUvTransform::new(translation, scale, angle).unwrap(),
+        )
+        .unwrap()
+    };
+    for angle in [0.0, 0.7, 1.57, 7.0] {
+        assert!(project_image_mapping(
+            mapping([0.2, -0.3], [-0.7, 1.2], angle),
+            [4.0, 2.0],
+            [3, 2]
+        )
+        .is_ok());
+        // Both axis coefficients can fit individually near a diagonal while a
+        // later rotation would overflow. Reject that entire authored profile.
+        assert!(
+            project_image_mapping(mapping([0.0; 2], [1e-38, 1.0], angle), [4.0, 2.0], [3, 2])
+                .is_err()
+        );
+        assert!(project_image_mapping(
+            mapping([1e30, 0.0], [1e-12, 1.0], angle),
+            [4.0, 2.0],
+            [3, 2]
+        )
+        .is_err());
+    }
+}

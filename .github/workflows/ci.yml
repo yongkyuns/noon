@@ -81,6 +81,7 @@ on:
       - "tests/visual-effects/**"
       - "scripts/glow-worker-*.mjs"
       - "scripts/linear-gradient-qualification.mjs"
+      - "scripts/image-fill-qualification.mjs"
       - "crates/noon-web/src/glow_worker_smoke.rs"
       - "crates/noon-web/src/retained_execution_canvas.rs"
       - "crates/noon-web/src/retained_execution_transport.rs"
@@ -239,6 +240,10 @@ jobs:
           cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture
+      - name: Qualify public Rust image paint on native GPU
+        run: |
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture
       - name: Qualify public Rust animated linear paint on native GPU
         # The linear-paint oracle uses the same public Scene and retained GPU path.
         # Absence of the requested native adapter is a failure.
@@ -484,6 +489,8 @@ jobs:
         run: node scripts/blur-qualification.mjs
       - name: Qualify paired Rust and Python Shadow authoring on WebGPU and WebGL2
         run: node scripts/shadow-qualification.mjs
+      - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2
+        run: node scripts/image-fill-qualification.mjs
       - name: Qualify retained worker glow images and recovery
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker

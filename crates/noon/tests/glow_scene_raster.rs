@@ -59,6 +59,7 @@ struct Surface {
     text: RetainedTextGpuState,
     target: wgpu::Texture,
     effect_stats: noon_render_wgpu::RetainedEffectStats,
+    upload_stats: noon_render_wgpu::RetainedUploadStats,
 }
 impl Surface {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -94,6 +95,7 @@ impl Surface {
             text,
             target,
             effect_stats: Default::default(),
+            upload_stats: Default::default(),
         }
     }
     fn render(
@@ -129,7 +131,8 @@ impl Surface {
             .preparer
             .prepare_planned_publication_visible(device, &publication, visible, metrics)
             .unwrap();
-        self.renderer
+        self.upload_stats = self
+            .renderer
             .upload_retained(device, queue, &prepared, &mut self.text);
         let mut encoder = device.create_command_encoder(&Default::default());
         self.effect_stats = self
@@ -2588,4 +2591,403 @@ fn shadow_scene_and_output_units_reprepare_under_view_changes() {
         }
     }
     eprintln!("Shadow view samples=6 max_rgba8_error={maximum_error} scene_units=true output_units=true no_semantic_mutation=true");
+}
+
+/// Literal physical fitted rectangles and a standalone reconstruction kernel.
+/// This reference never calls ImageMapping or the engine's CPU pixel sampler.
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
+    use noon::{
+        ImageAddressMode as Address, ImageFit as Fit, ImageMapping, ImagePaintOptions,
+        ImageUvTransform, RasterImageSampling as Sampling,
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    eprintln!("image paint adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let bytes = vec![
+        255, 0, 0, 255, 0, 255, 255, 0, 0, 0, 255, 128, 240, 100, 10, 64, 20, 240, 100, 192, 150,
+        20, 240, 255,
+    ];
+    let mut profiles = 0;
+    let mut channels = 0;
+    let mut max_error = 0;
+    for geometry in 0..3 {
+        for fit in [Fit::Stretch, Fit::Cover, Fit::Contain] {
+            for address in [Address::Transparent, Address::Clamp, Address::Repeat] {
+                for sampling in [Sampling::Nearest, Sampling::Linear, Sampling::Bicubic] {
+                    let mut scene = Scene::new();
+                    let mut source = match geometry {
+                        0 => scene.rectangle(4.0, 2.0).unwrap(),
+                        1 => scene.circle(2.0).unwrap(),
+                        _ => scene
+                            .path(
+                                noon_core::VectorPath::new()
+                                    .move_to(Vec2::new(-2.0, -1.0))
+                                    .line_to(Vec2::new(2.0, -1.0))
+                                    .line_to(Vec2::new(1.0, 1.0))
+                                    .line_to(Vec2::new(-2.0, 1.0))
+                                    .close(),
+                                noon_core::SemanticStyle::default(),
+                            )
+                            .unwrap(),
+                    };
+                    source.disable_stroke().unwrap();
+                    source.set_object_opacity(0.6).unwrap();
+                    let mut options = ImagePaintOptions::rgba8(3, 2, bytes.clone()).unwrap();
+                    options.set_sampling(sampling);
+                    source.set_fill_image(options, Some(0.7)).unwrap();
+                    let mut bitmap = scene.image_rgba8(3, 2, bytes.clone()).unwrap();
+                    bitmap.shift(20.0, 20.0).unwrap();
+                    scene.add(&bitmap).unwrap();
+                    scene.add(&source).unwrap();
+                    let mut session = scene.execution_session().unwrap();
+                    let mut surface = Surface::new(&device, &queue);
+                    for pose in 0..4 {
+                        let (translation, scale, angle) = match pose {
+                            0 => ([0.0, 0.0], [1.0, 1.0], 0.0_f64),
+                            1 => ([0.173, -0.231], [0.63, 1.37], 0.37_f64),
+                            _ => ([-0.29, 0.413], [-0.71, 0.58], -0.61_f64),
+                        };
+                        let mapping = ImageMapping::new(
+                            fit,
+                            [0.23, 0.71],
+                            address,
+                            ImageUvTransform::new(translation, scale, angle).unwrap(),
+                        )
+                        .unwrap();
+                        scene
+                            .live(&mut session)
+                            .set_fill_image_mapping(&source, mapping, Some(0.7))
+                            .unwrap();
+                        if pose == 3 {
+                            let mut live = scene.live(&mut session);
+                            live.set_scale(&source, -0.9, 1.2).unwrap();
+                            live.set_rotation(&source, 0.413).unwrap();
+                            live.shift(&source, 0.17, -0.23).unwrap();
+                        }
+                        let pixels = surface.render_on(
+                            &device,
+                            &queue,
+                            &mut session,
+                            wgpu::Color::TRANSPARENT,
+                        );
+                        assert_eq!(
+                            surface.upload_stats.images.textures_uploaded,
+                            usize::from(pose == 0)
+                        );
+                        assert_eq!(
+                            surface.upload_stats.images.pixel_bytes_uploaded,
+                            if pose == 0 { 24 } else { 0 }
+                        );
+                        assert_eq!(
+                            surface.render_on(
+                                &device,
+                                &queue,
+                                &mut session,
+                                wgpu::Color::TRANSPARENT
+                            ),
+                            pixels
+                        );
+                        assert_eq!(surface.upload_stats.images, Default::default());
+                        let size = [4.0, if geometry == 1 { 4.0 } else { 2.0 }];
+                        for y in (13..47).step_by(3) {
+                            for x in (20..60).step_by(3) {
+                                let mut local = [
+                                    (f64::from(x) + 0.5 - 40.0) / 10.0,
+                                    (30.0 - f64::from(y) - 0.5) / 10.0,
+                                ];
+                                if pose == 3 {
+                                    let dx = local[0] - 0.17;
+                                    let dy = local[1] + 0.23;
+                                    local = [
+                                        (0.413_f64.cos() * dx + 0.413_f64.sin() * dy) / -0.9,
+                                        (-0.413_f64.sin() * dx + 0.413_f64.cos() * dy) / 1.2,
+                                    ];
+                                }
+                                let interior = if geometry == 1 {
+                                    local[0] * local[0] + local[1] * local[1] < 3.0
+                                } else if geometry == 2 {
+                                    local[0] > -1.75
+                                        && local[1].abs() < 0.75
+                                        && local[0] < 1.5 - 0.5 * local[1] - 0.25
+                                } else {
+                                    local[0].abs() < 1.75 && local[1].abs() < 0.75
+                                };
+                                if !interior {
+                                    continue;
+                                }
+                                let normalized =
+                                    [local[0] / size[0] + 0.5, local[1] / size[1] + 0.5];
+                                let delta = [
+                                    normalized[0] - 0.5 - translation[0],
+                                    normalized[1] - 0.5 - translation[1],
+                                ];
+                                let placed = [
+                                    (angle.cos() * delta[0] + angle.sin() * delta[1]) / scale[0]
+                                        + 0.5,
+                                    (-angle.sin() * delta[0] + angle.cos() * delta[1]) / scale[1]
+                                        + 0.5,
+                                ];
+                                let factor = match fit {
+                                    Fit::Stretch => 1.0,
+                                    Fit::Cover => (size[0] / 3.0).max(size[1] / 2.0),
+                                    Fit::Contain => (size[0] / 3.0).min(size[1] / 2.0),
+                                };
+                                let physical = if fit == Fit::Stretch {
+                                    size
+                                } else {
+                                    [3.0 * factor, 2.0 * factor]
+                                };
+                                let lower = [
+                                    (size[0] - physical[0]) * 0.23,
+                                    (size[1] - physical[1]) * 0.71,
+                                ];
+                                let uv = [
+                                    (placed[0] * size[0] - lower[0]) / physical[0],
+                                    1.0 - (placed[1] * size[1] - lower[1]) / physical[1],
+                                ];
+                                let mut expected = [0.0; 4];
+                                if fit != Fit::Contain || uv.iter().all(|v| (0.0..=1.0).contains(v))
+                                {
+                                    expected =
+                                        independent_image_sample(&bytes, uv, sampling, address);
+                                }
+                                let expected = expected.map(|v| {
+                                    (((v * 0.7 * 0.6).clamp(0.0, 1.0) * 65535.0 + 0.5).floor()
+                                        / 256.0)
+                                        .floor() as u8
+                                });
+                                let start = ((y * SIZE[0] + x) * 4) as usize;
+                                for (actual, expected) in
+                                    pixels[start..start + 4].iter().zip(expected)
+                                {
+                                    let error = actual.abs_diff(expected);
+                                    max_error = max_error.max(error);
+                                    channels += 1;
+                                    assert!(error<=1, "geometry={geometry} fit={fit:?} address={address:?} sampling={sampling:?} pose={pose} ({x},{y}) uv={uv:?} actual={:?} expected={expected}", &pixels[start..start+4]);
+                                }
+                            }
+                        }
+                        profiles += 1;
+                    }
+                    assert_eq!(surface.renderer.image_residency_stats().textures, 1);
+                    assert_eq!(surface.renderer.image_residency_stats().pixel_bytes, 24);
+                    scene.live(&mut session).remove(&bitmap).unwrap();
+                    surface.render(&device, &queue, &mut session);
+                    assert_eq!(surface.upload_stats.images.textures_retired, 0);
+                    assert_eq!(surface.renderer.image_residency_stats().textures, 1);
+                    scene
+                        .live(&mut session)
+                        .set_fill(&source, 0.2, 0.4, 0.8, 1.0)
+                        .unwrap();
+                    surface.render(&device, &queue, &mut session);
+                    assert_eq!(surface.upload_stats.images.textures_retired, 1);
+                    assert_eq!(surface.renderer.image_residency_stats().textures, 0);
+                }
+            }
+        }
+    }
+    eprintln!("image fill independent reference: {profiles} profiles, {channels} channels, max byte error {max_error}");
+}
+
+fn independent_image_sample(
+    bytes: &[u8],
+    uv: [f64; 2],
+    sampling: noon::RasterImageSampling,
+    address: noon::ImageAddressMode,
+) -> [f64; 4] {
+    use noon::{ImageAddressMode as Address, RasterImageSampling as Sampling};
+    let tap = |x: i32, y: i32| -> [f64; 4] {
+        let (x, y) = match address {
+            Address::Transparent if !(0..3).contains(&x) || !(0..2).contains(&y) => {
+                return [0.0; 4]
+            }
+            Address::Repeat => (x.rem_euclid(3), y.rem_euclid(2)),
+            _ => (x.clamp(0, 2), y.clamp(0, 1)),
+        };
+        let i = ((y * 3 + x) * 4) as usize;
+        let a = f64::from(bytes[i + 3]) / 255.0;
+        [
+            f64::from(bytes[i]) / 255.0 * a,
+            f64::from(bytes[i + 1]) / 255.0 * a,
+            f64::from(bytes[i + 2]) / 255.0 * a,
+            a,
+        ]
+    };
+    if sampling == Sampling::Nearest {
+        return tap((uv[0] * 3.0).floor() as i32, (uv[1] * 2.0).floor() as i32);
+    }
+    let position = [uv[0] * 3.0 - 0.5, uv[1] * 2.0 - 0.5];
+    let base = position.map(|v| v.floor() as i32);
+    let fraction = [
+        position[0] - f64::from(base[0]),
+        position[1] - f64::from(base[1]),
+    ];
+    let kernel = |distance: f64| {
+        let t = distance.abs();
+        if sampling == Sampling::Linear {
+            (1.0 - t).max(0.0)
+        } else if t <= 1.0 {
+            t.powi(3) - 2.0 * t.powi(2) + 1.0
+        } else if t < 2.0 {
+            -t.powi(3) + 5.0 * t.powi(2) - 8.0 * t + 4.0
+        } else {
+            0.0
+        }
+    };
+    let mut result = [0.0; 4];
+    for y in -1..=2 {
+        for x in -1..=2 {
+            let color = tap(base[0] + x, base[1] + y);
+            let weight = kernel(f64::from(x) - fraction[0]) * kernel(f64::from(y) - fraction[1]);
+            for channel in 0..4 {
+                result[channel] += color[channel] * weight;
+            }
+        }
+    }
+    result[3] = result[3].clamp(0.0, 1.0);
+    for channel in 0..3 {
+        result[channel] = result[channel].clamp(0.0, result[3]);
+    }
+    result
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
+    use noon::effects::{Blur, EffectOffset, Glow, GlowSource, Shadow};
+    use noon::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintOptions, ImageUvTransform};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let make = |scope: f64, silhouette: bool| {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.8).unwrap();
+        source.disable_stroke().unwrap();
+        if silhouette {
+            source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        } else {
+            source
+                .set_fill_image(
+                    ImagePaintOptions::rgba8(3, 2, noon::example_scenes::image_fill::pixels())
+                        .unwrap(),
+                    Some(0.73),
+                )
+                .unwrap();
+        }
+        source.set_object_opacity(scope).unwrap();
+        scene.add(&source).unwrap();
+        (scene, source)
+    };
+    let mut samples = 0;
+    for kind in 0..4 {
+        let (plain_scene, plain_source) = make(1.0, false);
+        let mut plain = plain_scene.execution_session().unwrap();
+        let mut reference = Surface::new(&device, &queue);
+        let (mask_scene, _) = make(1.0, true);
+        let mut mask = mask_scene.execution_session().unwrap();
+        let mask_pixels = Surface::new(&device, &queue).render_on(
+            &device,
+            &queue,
+            &mut mask,
+            wgpu::Color::TRANSPARENT,
+        );
+        let (scene, mut source) = make(0.37, false);
+        let definition: noon::effects::EffectDefinition = match kind {
+            0 => Blur::new(EffectUpdate::default().radius(Pixels(3.25)))
+                .unwrap()
+                .into(),
+            1 => Shadow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(3.25))
+                    .offset(EffectOffset::Pixels([2.5, -1.25]))
+                    .color(Color::rgba(0.2, 0.7, 0.8, 0.6)),
+            )
+            .unwrap()
+            .into(),
+            _ => Glow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(3.25))
+                    .color(Color::RED)
+                    .intensity(START)
+                    .source(if kind == 2 {
+                        GlowSource::Painted
+                    } else {
+                        GlowSource::Silhouette
+                    }),
+            )
+            .unwrap()
+            .into(),
+        };
+        source.add_effect(definition, "surface").unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut surface = Surface::new(&device, &queue);
+        for stage in 0..2 {
+            if stage == 1 {
+                let mapping = ImageMapping::new(
+                    ImageFit::Cover,
+                    [0.5; 2],
+                    ImageAddressMode::Clamp,
+                    ImageUvTransform::new([0.173, -0.231], [0.63, 1.37], 0.37).unwrap(),
+                )
+                .unwrap();
+                scene
+                    .live(&mut session)
+                    .set_fill_image_mapping(&source, mapping, None)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .set_fill_image_mapping(&plain_source, mapping, None)
+                    .unwrap();
+            }
+            let ordinary =
+                reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+            let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            let expected = match kind {
+                0 => expected_rgba_blur(&ordinary, 3.25, 0.37),
+                1 => expected_shadow(&ordinary, 3.25, [2.5, -1.25], [0.2, 0.7, 0.8, 0.6], 0.37),
+                _ => expected_image_glow(
+                    &ordinary,
+                    if kind == 2 { &ordinary } else { &mask_pixels },
+                    0.0,
+                    0.37,
+                    wgpu::Color::TRANSPARENT,
+                ),
+            };
+            assert!(
+                error(&actual, &expected) <= 1,
+                "image fill filter={kind} stage={stage}, max byte error {}",
+                error(&actual, &expected)
+            );
+            // Silhouette Glow retains the painted source and a separate geometry mask.
+            assert_eq!(
+                surface.effect_stats.source_passes,
+                1 + usize::from(kind == 3)
+            );
+            if stage == 1 {
+                assert_eq!(surface.upload_stats.images, Default::default());
+            }
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                actual
+            );
+            assert_eq!(surface.effect_stats.source_passes, 0);
+            assert_eq!(surface.effect_stats.blur_passes, 0);
+            assert_eq!(surface.effect_stats.bytes_uploaded, 0);
+            assert_eq!(surface.effect_stats.texture_allocations, 0);
+            samples += 1;
+        }
+        scene
+            .live(&mut session)
+            .remove_effect(&source, "surface")
+            .unwrap();
+        surface.render(&device, &queue, &mut session);
+        assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
+    }
+    eprintln!("image fill source/filter qualification: {samples} whole-image comparisons, max allowed byte error 1");
 }

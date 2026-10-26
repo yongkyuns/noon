@@ -6,7 +6,7 @@ use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
 mod derived_display;
-mod linear_gradient;
+mod paint;
 mod source_capture;
 pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
 mod gaussian_blur;
@@ -512,7 +512,7 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
-    fill_gradients: Option<Box<linear_gradient::LinearGradientGpu>>,
+    fill_paints: Option<Box<paint::PaintGpu>>,
     effect_captures: Option<Box<analytic_glow::EffectCaptureGpu>>,
     retained_effects: retained_text::glow_publication::RetainedEffectPublication,
     spatial: mesh::SpatialGpuState,
@@ -534,6 +534,7 @@ pub struct GpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_bind_group_layout: wgpu::BindGroupLayout,
+    image_texture_layout: wgpu::BindGroupLayout,
     inset_camera_buffers: Vec<wgpu::Buffer>,
     inset_camera_bind_groups: Vec<wgpu::BindGroup>,
     inset_views: Vec<Inset2DGpuView>,
@@ -854,6 +855,7 @@ impl GpuRenderer {
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout: camera_layout,
+            image_texture_layout: raster_image_gpu::texture_layout(device),
             inset_camera_buffers: Vec::new(),
             inset_camera_bind_groups: Vec::new(),
             inset_views: Vec::new(),
@@ -879,7 +881,7 @@ impl GpuRenderer {
             derived_display,
             images: None,
             effect_captures: None,
-            fill_gradients: None,
+            fill_paints: None,
             retained_effects: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
@@ -1328,10 +1330,10 @@ impl GpuRenderer {
             &mut trace,
         );
 
-        let gradients = self.upload_fill_gradients(device, queue, prepared);
+        let paints = self.upload_fill_paints(device, queue, prepared);
         UploadStats {
-            bytes_uploaded: bytes_uploaded + gradients.bytes_uploaded,
-            buffer_reallocations: buffer_reallocations + gradients.buffer_reallocations,
+            bytes_uploaded: bytes_uploaded + paints.bytes_uploaded,
+            buffer_reallocations: buffer_reallocations + paints.buffer_reallocations,
         }
     }
 
@@ -1738,7 +1740,7 @@ impl GpuRenderer {
         for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
             let mut start = instance_range.start;
             if let Some(indices) =
-                prepared.gradient_indices(resolved.batch.primitive, instance_range.clone())
+                prepared.paint_indices(resolved.batch.primitive, instance_range.clone())
             {
                 for &index in indices {
                     if start < index {
@@ -1757,7 +1759,7 @@ impl GpuRenderer {
                             binding,
                         );
                     }
-                    if let Some(drawn) = self.draw_gradient_instance(
+                    if let Some(drawn) = self.draw_paint_instance(
                         pass,
                         prepared,
                         resolved.batch.primitive,

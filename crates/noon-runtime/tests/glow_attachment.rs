@@ -101,6 +101,7 @@ fn attach_remove_and_new_generation_preserve_the_object_and_only_dirty_rendering
         assert!(
             rt.prepare_authored_value_publication(
                 &tx([patch.clone()]),
+                Default::default(),
                 before,
                 before.scene_revision().checked_next().unwrap()
             )
