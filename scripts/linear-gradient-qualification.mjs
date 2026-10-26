@@ -5,15 +5,17 @@ import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_GRADIENT_ARTIFACTS ?? "ci-artifacts/linear-gradient",
-  cases: [0.25, 1, 1.5, 2.25, 2.75, 3.5, 4.25].map(sampleTime => ({
-    id: `linear-gradient-${sampleTime}`, file: "linear_gradient.py",
-    factory: "createDirectLinearGradientSmokeRenderer", objectCount: 1,
-    duration: 4.25, sampleTime, playback: "live",
+  cases: [false, true].flatMap(glow =>
+    [0.25, 1, 1.5, 2.25, 2.75, 3.5, ...(glow ? [4.2, 4.5] : [4.25])].map(sampleTime => ({
+    id: `linear-gradient-${glow ? "glow-" : ""}${sampleTime}`,
+    file: glow ? "gradient_glow.py" : "linear_gradient.py", glow,
+    factory: glow ? "createDirectGradientGlowSmokeRenderer" : "createDirectLinearGradientSmokeRenderer", objectCount: 1,
+    duration: glow ? 4.5 : 4.25, sampleTime, playback: "live",
     // Quiet waits retain their last picture and timer deadline in the direct host.
     directHeldSampleTime: sampleTime === 0.25 ? 0 : undefined,
-    boundaries: [0.5, 1.5, 1.75, 2.75, 3, 4],
-    stopAtSourceCompletion: sampleTime === 4.25,
-  })),
+    boundaries: [0.5, 1.5, 1.75, 2.75, 3, 4, ...(glow ? [4.25] : [])],
+    stopAtSourceCompletion: sampleTime === (glow ? 4.5 : 4.25),
+  }))),
   prepareContext: disableAuthoringJspi,
   qualifyPixels({fixture, rust, python}) {
     const time = fixture.sampleTime;
@@ -36,6 +38,7 @@ await qualifyPairedAuthoring({
           const a = Math.min(1, time - 3);
           rgb = [1 - a * u, 0, a * u]; opacity = 1;
         }
+        if (fixture.glow) opacity = 1;
         const expected = [...rgb.map(c => Math.floor(Math.floor(c * opacity * 65535 + 0.5) / 256)), 255];
         const offset = (y * image.width + x) * 4;
         const actual = image.data.subarray(offset, offset + 4);
@@ -43,8 +46,17 @@ await qualifyPairedAuthoring({
           `${fixture.id} (${x},${y}): ${[...actual]} != ${expected}`);
         checks++;
       }
+      if (fixture.glow) {
+        const x = Math.ceil(image.width / 2 + 2 * image.height / 8) + 3;
+        const y = Math.floor(image.height / 2);
+        const at = (y * image.width + x) * 4;
+        const halo = image.data.subarray(at, at + 3);
+        if (time === 4.5) assert.deepEqual([...halo], [0, 0, 0], "removed glow left a halo");
+        else assert.ok([...halo].some(c => c >= 3), "painted source lost its halo");
+        checks++;
+      }
     }
     return { interiorPixelComparisons: checks, maximumByteError: 1,
-      reference: "independent temporal/local-box formula; Cairo LDR quantization on black" };
+      reference: "independent temporal/local-box formula; Cairo LDR quantization on black; glow presence and exact removal" };
   },
 });

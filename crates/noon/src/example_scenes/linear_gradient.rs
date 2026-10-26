@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub struct PaintedSurface {
     panel: Mobject,
     stage: u8,
+    glow: bool,
 }
 
 fn paint(vertical: bool) -> Result<Arc<LinearGradient>, String> {
@@ -38,8 +39,21 @@ impl LiveContinuation for PaintedSurface {
                 let target = live.target_editor(&self.panel).map_err(message)?;
                 match self.stage {
                     1 => {
-                        live.set_fill_gradient(&target, paint(true)?, Some(0.5))
+                        live.set_fill_gradient(
+                            &target,
+                            paint(true)?,
+                            Some(if self.glow { 1.0 } else { 0.5 }),
+                        )
+                        .map_err(message)?;
+                        if self.glow {
+                            live.set_glow(
+                                &target,
+                                crate::effects::GlowUpdate::default()
+                                    .radius(crate::effects::Pixels(10.0))
+                                    .intensity(1.4),
+                            )
                             .map_err(message)?;
+                        }
                     }
                     3 => {
                         live.set_fill(&target, 1.0, 0.0, 0.0, 1.0)
@@ -59,7 +73,11 @@ impl LiveContinuation for PaintedSurface {
                 )
             }
             2 | 4 | 6 => live.wait_segment(0.25),
-            7 => return Ok(ContinuationStep::Finished),
+            7 if self.glow => {
+                live.remove_glow(&self.panel).map_err(message)?;
+                live.wait_segment(0.25)
+            }
+            7 | 8 => return Ok(ContinuationStep::Finished),
             _ => return Err("painted surface resumed after completion".into()),
         }
         .map_err(message)?;
@@ -69,6 +87,15 @@ impl LiveContinuation for PaintedSurface {
 }
 
 pub fn program() -> Result<LiveProgram<PaintedSurface>, String> {
+    program_inner(false)
+}
+
+/// The same paint lifecycle with a reusable glow, paired with gradient_glow.py.
+pub fn glow_program() -> Result<LiveProgram<PaintedSurface>, String> {
+    program_inner(true)
+}
+
+fn program_inner(glow: bool) -> Result<LiveProgram<PaintedSurface>, String> {
     let mut scene = Scene::new();
     let mut panel =
         Mobject::manim_rectangle(std::rc::Rc::clone(scene.integration_store()), 4.0, 2.0)
@@ -77,9 +104,23 @@ pub fn program() -> Result<LiveProgram<PaintedSurface>, String> {
     panel
         .set_fill_gradient(paint(false)?, Some(1.0))
         .map_err(message)?;
+    if glow {
+        panel
+            .set_glow(
+                crate::effects::GlowUpdate::default()
+                    .color(Color::WHITE)
+                    .radius(crate::effects::Pixels(6.0))
+                    .intensity(0.4),
+            )
+            .map_err(message)?;
+    }
     scene.add(&panel).map_err(message)?;
     scene
-        .into_live_program(PaintedSurface { panel, stage: 0 })
+        .into_live_program(PaintedSurface {
+            panel,
+            stage: 0,
+            glow,
+        })
         .map_err(message)
 }
 

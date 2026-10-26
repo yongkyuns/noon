@@ -1208,11 +1208,30 @@ impl SceneInstance {
             new_channel.map(|channel| channel.object_index as usize),
         );
         let mut evaluation = EvaluationStats::default();
+        let paint_only = affected_channels
+            .iter()
+            .flatten()
+            .all(|channel| channel.property == Property::Fill);
         for object_index in affected_objects.into_iter().flatten() {
+            let before = paint_only.then(|| {
+                (
+                    FrameRowState::from_frame(&self.frame, object_index),
+                    self.frame.objects[object_index].content.clone(),
+                    self.frame.objects[object_index].text_bounds,
+                )
+            });
             self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
-            self.mark_changed(object_index);
+            if before.is_some_and(|(row, content, text_bounds)| {
+                !row.spatially_differs_from_frame(&self.frame, object_index)
+                    && content == self.frame.objects[object_index].content
+                    && text_bounds == self.frame.objects[object_index].text_bounds
+            }) {
+                self.changes.insert(object_index);
+            } else {
+                self.mark_changed(object_index);
+            }
             patch_stats.objects_recomputed += 1;
         }
         patch_stats.groups_evaluated = evaluation.groups_evaluated;
@@ -1237,6 +1256,8 @@ impl SceneInstance {
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))? as usize;
         let before = self.frame.objects[index].clone();
+        let style_spatial_before = matches!(patch, ExecutionPatch::SetStyle { .. })
+            .then(|| FrameRowState::from_frame(&self.frame, index));
         self.compiled.apply_execution_patch(patch)?;
 
         match patch {
@@ -1344,7 +1365,15 @@ impl SceneInstance {
             self.reapply_reactive_for_object(index);
             self.reapply_numeric_text_for_object(index);
             if self.frame.objects[index] != before {
-                self.mark_changed(index);
+                if style_spatial_before.is_some_and(|previous| {
+                    !previous.spatially_differs_from_frame(&self.frame, index)
+                        && before.content == self.frame.objects[index].content
+                        && before.text_bounds == self.frame.objects[index].text_bounds
+                }) {
+                    self.changes.insert(index);
+                } else {
+                    self.mark_changed(index);
+                }
             }
         }
         Ok(())

@@ -60,6 +60,9 @@ on:
       - "crates/noon-render-wgpu/src/gpu/analytic_glow*"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
+      - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
+      - "crates/noon-render-wgpu/src/gpu/linear_gradient.rs"
+      - "crates/noon-render-wgpu/src/linear_gradient.rs"
       - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*"
       - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**"
       - "crates/noon-render-wgpu/src/gpu/mod.rs"
@@ -223,6 +226,7 @@ jobs:
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture
       - name: Qualify public Rust animated linear paint on native GPU
         # The linear-paint oracle uses the same public Scene and retained GPU path.
         # Absence of the requested native adapter is a failure.

@@ -337,6 +337,85 @@ fn unsupported_source_changes_reject_in_both_transaction_orders_and_direct_edits
 }
 
 #[test]
+fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
+    let glow = Arc::new(noon_compile::CompiledGlow {
+        attachment: noon_core::SemanticNodeId::new(7, 0),
+        definition: noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.4)).unwrap(),
+    });
+    let attach = ExecutionPatch::SetGlowAttachment {
+        object: ObjectId::new(0),
+        expected: None,
+        glow: Some(glow.clone()),
+    };
+    let style = ExecutionPatch::SetStyle {
+        object: ObjectId::new(0),
+        style: Style::default(),
+        fill_gradient: Some(gradient(2)),
+    };
+    let track = ExecutionPatch::AddTrack(paint_track(0, 0.0));
+    for paint in [style, track] {
+        for glow_first in [false, true] {
+            let mut runtime = runtime(2);
+            runtime.take_frame_changes();
+            runtime.take_spatial_changes();
+            let mutations = if glow_first {
+                vec![attach.clone(), paint.clone()]
+            } else {
+                vec![paint.clone(), attach.clone()]
+            };
+            runtime
+                .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations(
+                    mutations,
+                ))
+                .unwrap();
+            let changes = runtime.take_frame_changes();
+            assert_eq!(changes.object_indices(), &[0]);
+            let spatial = runtime.take_spatial_changes();
+            assert!(
+                spatial.is_empty(),
+                "paint={paint:?} glow_first={glow_first}: {spatial:?}"
+            );
+            runtime.seek(0.5).unwrap();
+            assert_eq!(
+                runtime.frame().objects[0].glow.as_deref(),
+                Some(glow.as_ref())
+            );
+            assert!(runtime.frame().objects[0].fill_gradient.is_some());
+            // Content remains independently checked; supported geometry can be
+            // replaced without discarding either appearance input.
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetContent {
+                    object: ObjectId::new(0),
+                    content: GeometryRef::circle(0.5).into(),
+                    text_bounds: None,
+                })
+                .unwrap();
+            assert!(runtime.frame().objects[0].fill_gradient.is_some());
+            assert_eq!(
+                runtime.frame().objects[0].glow.as_deref(),
+                Some(glow.as_ref())
+            );
+            runtime.take_spatial_changes();
+            let mut style = runtime.frame().objects[0].style;
+            style.stroke = Some(Color::WHITE);
+            style.stroke_width = 0.25;
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetStyle {
+                    object: ObjectId::new(0),
+                    style,
+                    fill_gradient: runtime.frame().objects[0].fill_gradient.clone(),
+                })
+                .unwrap();
+            assert_eq!(
+                runtime.take_spatial_changes().object_indices(),
+                &[0],
+                "stroke bounds must still invalidate spatial state"
+            );
+        }
+    }
+}
+
+#[test]
 fn bounded_rates_cannot_panic_paint_sampling_and_overshoot_rejects_atomically() {
     use noon_core::RateFunction;
     let mut runtime = runtime(1);

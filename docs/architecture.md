@@ -1097,6 +1097,15 @@ Planar geometry (including stroke-only paths), Text/MathTypst and immutable rast
 
 Raster-image capture borrows the existing image texture and sampling pipeline with a disposable normalized instance binding. Intrinsic sampled texel alpha is image coverage in both source modes; painted coverage also includes fill modulation, while silhouette coverage ignores that modulation. Final object opacity and appearance apply once after filtering. Immutable pixel resources, source painter anchors and ordinary no-effect instances remain shared and unchanged. Image source preparation remains separate from glow parameters and does not introduce image fills inside vector geometry or a general custom-shader API.
 
+Continuous local gradient fills use that same isolated vector draw path for glow.
+Capture borrows the ordinary gradient program and retained paint binding, with
+only final scope opacity removed from its instance. Painted coverage includes
+stop alpha and fill opacity; silhouette coverage uses the unpainted geometry.
+The immutable paint definition participates in source invalidation even when
+its packed carrier row is unchanged. Parameter-only glow edits reuse the source
+and blur. Mixed-frame scratch identities are resolved through the canonical
+per-object draw range, rather than assuming they equal semantic object IDs.
+
 A backend may internally use render bundles, display-list-like recordings, bind-group caches, instance groups or other derived accelerators, but those are disposable renderer optimizations. A recorded drawing command stream is not the Execution Plan and cannot replace semantic/runtime data needed for mutation, hit testing, reactive dependencies or live authoring.
 
 Where backend/host support allows it, CPU/runtime work for a later frame may overlap renderer/GPU work from an earlier frame as long as `FrameEpoch`, `ResourceVersion` and `SubmissionSerial` rules make publication and lifetime coherent.

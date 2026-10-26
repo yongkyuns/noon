@@ -1409,7 +1409,6 @@ impl CompiledScene {
                 track,
                 continuous_fill_content_supported(&self.objects[object_index as usize].content),
                 self.objects[object_index as usize].spatial.is_some(),
-                staged.is_some() || resident_glow.is_some(),
             )
             .map_err(CompilePatchError::InvalidTrack)?;
             candidates
@@ -1462,7 +1461,6 @@ impl CompiledScene {
             if let Some(gradient) = &object.fill_gradient {
                 if !continuous_fill_content_supported(&object.content)
                     || object.spatial.is_some()
-                    || object.glow.is_some()
                     || semantic_lowering::paint::validate_definition(gradient).is_err()
                 {
                     return Err(CompileError::InvalidTrack(
@@ -2358,8 +2356,7 @@ impl CompiledScene {
                 let source = &self.objects[index as usize];
                 if fill_gradient.is_some()
                     && (!continuous_fill_content_supported(&source.content)
-                        || source.spatial.is_some()
-                        || source.glow.is_some())
+                        || source.spatial.is_some())
                 {
                     return Err(CompilePatchError::InvalidTrack(
                         TimelineError::InvalidPaintValues,
@@ -2377,7 +2374,6 @@ impl CompiledScene {
                     self.objects[index as usize].glow.as_deref(),
                     glow,
                 )?;
-                self.require_continuous_paint_source(index, false)?;
                 self.objects[index as usize].glow = Some(Arc::clone(glow));
             }
             ExecutionPatch::SetGlowAttachment {
@@ -2761,7 +2757,6 @@ fn validate_paint_track(
         track,
         continuous_fill_content_supported(&object.content),
         object.spatial.is_some(),
-        object.glow.is_some(),
     )
 }
 
@@ -2769,10 +2764,9 @@ pub(crate) fn validate_paint_track_profile(
     track: &TrackDefinition,
     supported_content: bool,
     spatial: bool,
-    glow: bool,
 ) -> Result<(), TimelineError> {
     if let TrackValues::Paint { transition } = &track.values {
-        if !supported_content || spatial || glow {
+        if !supported_content || spatial {
             return Err(TimelineError::InvalidPaintValues);
         }
         semantic_lowering::paint::validate_transition(transition)
@@ -2954,9 +2948,7 @@ fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchErro
 
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
     if object.fill_gradient.is_some()
-        && (!continuous_fill_content_supported(&object.content)
-            || object.spatial.is_some()
-            || object.glow.is_some())
+        && (!continuous_fill_content_supported(&object.content) || object.spatial.is_some())
     {
         return Err(CompilePatchError::InvalidTrack(
             TimelineError::InvalidPaintValues,

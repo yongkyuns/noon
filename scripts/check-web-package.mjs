@@ -640,6 +640,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyStateSmokeRenderer(",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectGlowPulseSmokeRenderer(",
+    "export function createDirectGradientGlowSmokeRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(",
     "export function createDirectBackEasingsRenderer(",
