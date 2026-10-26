@@ -306,6 +306,7 @@ export class ExecutionWorkerClient {
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
+      this.#rememberPlaybackDuration(ready.engine, loopDurationSeconds);
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
@@ -513,7 +514,7 @@ export class ExecutionWorkerClient {
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
-      this.#loopDurationSeconds = duration;
+      this.#rememberPlaybackDuration(candidateReady, duration);
       this.#fatalOwner = null;
       retireSemanticEndpoint(oldEngine);
       if (previousSemanticContextId !== contextId) {
@@ -1303,14 +1304,19 @@ export class ExecutionWorkerClient {
     }
   }
 
+  #rememberPlaybackDuration(engine, requestedDuration) {
+    // Rust admits the finite endpoint. This is only the client's seek bound;
+    // audio-device availability cannot change it. Ordinary looping playback
+    // without a finite endpoint retains its explicitly requested duration.
+    this.#loopDurationSeconds = Number.isFinite(engine.durationSeconds) && engine.durationSeconds > 0
+      ? engine.durationSeconds : requestedDuration;
+  }
+
   async #prepareAudio(engine) {
     globalThis.document?.removeEventListener?.("visibilitychange", this.#visibilityChanged);
     globalThis.window?.removeEventListener?.("pagehide", this.#audioInterrupted);
     await this.#audioDevice.install(engine.audioResources);
     if (!this.#audioDevice.available) return;
-    if (Number.isFinite(engine.durationSeconds) && engine.durationSeconds > 0) {
-      this.#loopDurationSeconds = engine.durationSeconds;
-    }
     document.addEventListener("visibilitychange", this.#visibilityChanged);
     window.addEventListener("pagehide", this.#audioInterrupted);
   }
