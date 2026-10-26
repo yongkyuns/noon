@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn image_fill_transients_reject_at_plan_construction() {
         let mut resources = noon_core::RasterImageResourceArena::default();
-        let handle = resources.admit_rgba8(1, 1, vec![255; 4]).unwrap().0;
+        let handle = resources.intern_rgba8(1, 1, vec![255; 4]).unwrap();
         let image = Arc::new(noon_core::ImagePaint::new(
             handle,
             noon_core::ImageMapping::default(),

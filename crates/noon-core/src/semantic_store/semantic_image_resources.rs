@@ -567,14 +567,16 @@ mod tests {
             .unwrap()
             .resource();
         let family = store.insert_family();
-        let mut style = crate::SemanticStyle::default();
-        style.fill = Some(crate::SemanticPaint::Image(Arc::new(
-            crate::ImagePaint::new(
-                handle,
-                crate::ImageMapping::default(),
-                RasterImageSampling::Linear,
-            ),
-        )));
+        let style = crate::SemanticStyle {
+            fill: Some(crate::SemanticPaint::Image(Arc::new(
+                crate::ImagePaint::new(
+                    handle,
+                    crate::ImageMapping::default(),
+                    RasterImageSampling::Linear,
+                ),
+            ))),
+            ..crate::SemanticStyle::default()
+        };
         let revision = store.scene_revision();
         let resources = store.raster_image_resources().stats();
         let mut transaction = SemanticMutationTransaction::new();

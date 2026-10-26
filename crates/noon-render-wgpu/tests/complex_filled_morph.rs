@@ -29,6 +29,7 @@ fn frame(progress: f32, unrelated: usize) -> FrameState {
     let objects = (0..=unrelated)
         .map(|index| FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

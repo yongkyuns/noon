@@ -19,6 +19,7 @@ fn retained_geometry_frame(
         time: 0.5,
         objects: vec![FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

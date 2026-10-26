@@ -21,6 +21,7 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         objects: (0..OBJECT_COUNT)
             .map(|index| FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -52,6 +53,7 @@ fn single_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
