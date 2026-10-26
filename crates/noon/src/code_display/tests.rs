@@ -175,6 +175,17 @@ fn line_numbers_share_baselines_and_align_their_right_edge() {
 #[test]
 fn smaller_numbered_gutters_preserve_baselines_and_count_digits_without_the_sign() {
     let mut scene = Scene::new();
+    let reference = scene
+        .text(
+            crate::Text::new("0")
+                .with_font(DEFAULT_NATIVE_TEXT_FONT_FAMILY)
+                .with_font_size(11.0),
+        )
+        .unwrap();
+    let (_, reference) = resource(&reference);
+    // Cairo/Pango quantizes advances at each authored size. Compare with the
+    // ordinary Text contract at 11 points, not a linear ratio of 24-point ink.
+    let expected_advance = reference.runs[0].glyphs[0].advance.x;
     for (start, digits, expected) in [
         (-1, 2, ["-01", "00", "01"]),
         (98, 2, ["98", "99", "100"]),
@@ -211,10 +222,8 @@ fn smaller_numbered_gutters_preserve_baselines_and_count_digits_without_the_sign
             close(text.runs[0].font_size, 11.0);
             close(baseline(number), baseline(&code.line(index).unwrap()));
             close(logical_right(number), logical_right(&numbers[0]));
-            close(
-                text.runs[0].glyphs[0].advance.x,
-                source_advance * 11.0 / 24.0,
-            );
+            close(text.runs[0].glyphs[0].advance.x, expected_advance);
+            assert!(text.runs[0].glyphs[0].advance.x < source_advance);
             assert_eq!(
                 state.style.fill,
                 Some(noon_core::SemanticPaint::Solid(Color::GRAY))
