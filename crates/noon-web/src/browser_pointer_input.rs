@@ -121,7 +121,7 @@ pub(crate) fn submit_browser_pointer_input(
     binding: &mut Option<BrowserPointerBinding>,
     next_sequence: &mut u64,
     wire: BrowserPointerInput,
-) -> Result<(), String> {
+) -> Result<NativePointerInputPublication, String> {
     if wire.cancellation().is_none() {
         return Err("positional browser input requires a presented frame".into());
     }
@@ -134,7 +134,7 @@ pub(crate) fn submit_presented_browser_pointer_input(
     next_sequence: &mut u64,
     wire: BrowserPointerInput,
     frame: &PointerFrameSnapshot,
-) -> Result<(), BrowserPointerAdmissionError> {
+) -> Result<NativePointerInputPublication, BrowserPointerAdmissionError> {
     submit_pointer(
         target,
         binding,
@@ -156,7 +156,7 @@ pub(crate) fn submit_captured_browser_pointer_input(
     next_sequence: &mut u64,
     wire: BrowserPointerInput,
     frame: &PointerFrameSnapshot,
-) -> Result<(), BrowserPointerAdmissionError> {
+) -> Result<NativePointerInputPublication, BrowserPointerAdmissionError> {
     submit_pointer(
         target,
         binding,
@@ -563,7 +563,7 @@ fn submit_pointer(
     next_sequence: &mut u64,
     wire: BrowserPointerInput,
     presented: Option<(&PointerFrameSnapshot, PositionalAdmission)>,
-) -> Result<(), BrowserPointerAdmissionError> {
+) -> Result<NativePointerInputPublication, BrowserPointerAdmissionError> {
     // Validate the entire wire record before even configuring a source. A bad
     // press, overflowed coordinate or exhausted sequence must not clear buttons.
     let pointer = wire.pointer()?;
@@ -665,7 +665,7 @@ fn submit_pointer(
         },
         kind,
     );
-    target
+    let publication = target
         .submit_pointer(&token, input)
         .map_err(|error| error.to_string())?;
     *next_sequence = next;
@@ -683,7 +683,7 @@ fn submit_pointer(
     if wire.cancellation().is_some() {
         binding.as_mut().expect("configured source").retired = true;
     }
-    Ok(())
+    Ok(publication)
 }
 
 /// Validate DOM numeric identities before narrowing at the JavaScript ABI.

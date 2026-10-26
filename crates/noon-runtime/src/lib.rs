@@ -2,6 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+mod audio;
+pub use audio::{
+    AudioGainEnvelope, AudioGainPoint, AudioLoopRegion, AudioMixError, AudioMixFormat,
+    AudioPlaybackClip, AudioPlaybackError, PreparedAudioMix, MAX_AUDIO_MIX_BLOCK_FRAMES,
+};
 mod compaction;
 mod derived_display_evaluation;
 pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};
@@ -61,7 +66,8 @@ use noon_compile::{
 };
 use noon_core::{
     continuous_time_map_interval, mapped_continuous_progress, mapped_continuous_progress_f64,
-    FamilyAnimationState, PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
+    mapped_continuous_raw_progress_f64, FamilyAnimationState, PublicationContext,
+    RetainedFamilyAnimationPlan, TrackTiming,
 };
 use noon_core::{
     Color, GeometryRef, ObjectId, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition,
@@ -398,14 +404,41 @@ impl SceneInstance {
     /// Current effective visual bounds for one live retained object.
     pub fn effective_object_bounds(&self, id: ObjectId) -> Option<noon_core::Rect> {
         let index = self.frame_index_for_object(id)?;
+        self.retained_object_bounds_at_index(index, self.frame.render_transform(index), true)
+    }
+
+    /// Project the current retained content at a candidate affine transform.
+    /// This is a read-only bounds query, not time evaluation or a state edit.
+    pub fn retained_object_layout_bounds_at(
+        &self,
+        id: ObjectId,
+        transform: noon_core::Transform2D,
+    ) -> Option<noon_core::Rect> {
+        let index = self.frame_index_for_object(id)?;
+        self.retained_object_bounds_at_index(index, transform, false)
+    }
+
+    fn retained_object_bounds_at_index(
+        &self,
+        index: usize,
+        transform: noon_core::Transform2D,
+        conservative: bool,
+    ) -> Option<noon_core::Rect> {
         let object = self.frame.objects.get(index)?;
         crate::spatial_index::effective_object_conservative_bounds_with_resources(
             self.frame.render_geometry(index),
             object
                 .text_bounds
                 .or_else(|| object.content.image().map(|image| image.local_bounds())),
-            self.frame.render_transform(index),
-            object.style,
+            transform,
+            if conservative {
+                object.style
+            } else {
+                Style {
+                    stroke: None,
+                    ..object.style
+                }
+            },
             self,
         )
     }
@@ -443,8 +476,18 @@ impl SceneInstance {
         cached_bounds: Option<noon_core::Rect>,
     ) -> Option<EffectiveObjectProperties> {
         self.object_slot_is_live(object_index).then(|| {
-            let cached_bounds = cached_bounds
-                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id));
+            let object = &self.frame.objects[object_index];
+            // Index bounds include stroke expansion; callback getters need
+            // geometry layout. Reuse the cache only when those bounds coincide.
+            let cached_bounds = if object.style.stroke.is_none() || object.style.stroke_width == 0.0
+            {
+                cached_bounds.or_else(|| self.effective_object_bounds(object.id))
+            } else {
+                self.retained_object_layout_bounds_at(
+                    object.id,
+                    self.frame.render_transform(object_index),
+                )
+            };
             EffectiveObjectProperties::from_frame(&self.frame, object_index, cached_bounds)
         })
     }
@@ -686,6 +729,13 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
+    /// Sparse view relations from the same selected plan revision as the frame.
+    pub fn inset_2d_views(
+        &self,
+    ) -> impl Iterator<Item = (ObjectId, noon_compile::CompiledInset2DView)> + '_ {
+        self.compiled.inset_2d_views()
+    }
+
     pub fn apply_execution_patch(
         &mut self,
         patch: &ExecutionPatch,
@@ -827,6 +877,15 @@ impl SceneInstance {
         }
         if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
             self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetInset2DView { object, .. } = patch {
+            self.compiled.apply_execution_patch(patch)?;
+            // A relation-only publication must wake presentation, even when the
+            // rectangle's geometry and pose did not change.
+            if let Some(index) = self.compiled.object_index(*object) {
+                self.mark_changed(index as usize);
+            }
             return Ok(&self.frame);
         }
         if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {
@@ -2773,15 +2832,25 @@ fn apply_glow_channel(
         tracks[..group.cursor]
             .iter()
             .rev()
-            .find_map(|track| world_track_progress(track, time).map(|alpha| (track, alpha)))
+            .find_map(|track| glow_track_progress(track, time).map(|alpha| (track, alpha)))
     };
-    let Some((track, alpha)) = selected else {
-        return false;
+    let (track, alpha, restore_base) = match selected {
+        Some((track, alpha)) => (track, alpha, false),
+        None => {
+            // A returning parent can move every mapped driver back before its
+            // child start. Rebuild this parameter from base, as a fresh seek
+            // would, while retaining independently driven glow parameters.
+            let Some(track) = tracks.first() else {
+                return false;
+            };
+            (track, 0.0, true)
+        }
     };
     let TrackValues::Glow {
         attachment,
         from,
         to,
+        ..
     } = track.values
     else {
         unreachable!("validated glow channel");
@@ -2789,11 +2858,12 @@ fn apply_glow_channel(
     let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
         return false; // an old generation can never control a replacement
     };
-    let patch = if tracks.last().is_some_and(|last| last.id == track.id)
-        && track.reconciled
-        && time >= track.timing.start_time + track.timing.duration
+    let patch = if restore_base
+        || (tracks.last().is_some_and(|last| last.id == track.id)
+            && track.reconciled
+            && time >= track.timing.start_time + track.timing.duration)
     {
-        let Some(base) = base else {
+        let Some(base) = base.filter(|base| base.attachment == attachment) else {
             return false;
         };
         match track.property {
@@ -3251,6 +3321,28 @@ fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
         return Some(track.timing.evaluate_progress_f64(raw));
     }
     mapped_continuous_progress_f64(track.timing, &track.time_map, time)
+}
+
+fn glow_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
+    let progress = if matches!(
+        track.values,
+        TrackValues::Glow {
+            end_behavior: noon_core::GlowTrackEndBehavior::RestoreSource,
+            ..
+        }
+    ) {
+        let raw = mapped_continuous_raw_progress_f64(track.timing, &track.time_map, time)?;
+        if raw >= 1.0 {
+            track.values.terminal_progress_f64(track.timing)
+        } else {
+            track.timing.evaluate_progress_f64(raw)
+        }
+    } else {
+        world_track_progress(track, time)?
+    };
+    // Admission rejects genuinely overshooting leaf rates. Bounded polynomial
+    // rates can still exceed an endpoint by a few f64 rounding bits.
+    Some(progress.clamp(0.0, 1.0))
 }
 
 fn sample_camera_profile(

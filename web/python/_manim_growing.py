@@ -16,7 +16,7 @@ import _manim_compat as _compat
 
 def _point(value: object) -> _base.Vec2:
     if isinstance(value, (_base.Mobject, _compat.Group)):
-        return value.get_center()
+        value = value.get_center()
     return _base._as_vec2(value)
 
 

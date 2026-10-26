@@ -49,6 +49,9 @@ mod effects;
 mod semantic_declarations;
 pub use effects::*;
 
+mod audio;
+pub use audio::SemanticAudioClipState;
+
 mod semantic_signals;
 pub use semantic_signals::*;
 
@@ -363,6 +366,8 @@ pub enum SemanticNodeKind {
     Animation(SemanticAnimationState),
     /// Non-renderable appearance attachment in this same generational arena.
     Effect(SemanticEffectState),
+    /// Scope-owned audio declaration in this same generational arena.
+    AudioClip(SemanticAudioClipState),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -415,6 +420,10 @@ pub struct SemanticNode {
     /// header allocation; structural edits then reuse the Vec capacity.
     #[allow(clippy::box_collection)]
     effects: Option<Box<Vec<SemanticNodeId>>>,
+    /// Audio declarations have scope membership without painter membership.
+    /// Scopes without clips allocate no collection.
+    #[allow(clippy::box_collection)]
+    scoped_audio_clips: Option<Box<BTreeSet<SemanticNodeId>>>,
 }
 
 impl SemanticNode {
@@ -817,6 +826,7 @@ pub struct SemanticStore {
     geometry_resources: crate::GeometryResourceArena,
     text_resources: crate::TextResourceArena,
     raster_image_resources: crate::RasterImageResourceArena,
+    audio_resources: crate::AudioResourceArena,
     font_resources: crate::FontResourceArena,
     // Bounded compiler registries supply deterministic complete identities. This
     // store-local index maps those identities to one immutable retained resource;
@@ -833,6 +843,7 @@ pub struct SemanticStore {
     // Derived cardinality, maintained at allocator insertion/retirement. It lets
     // the declaration-only effect profile reject execution without scene scans.
     effect_nodes: usize,
+    audio_clip_nodes: usize,
     scene_head: Option<SemanticNodeId>,
     scene_tail: Option<SemanticNodeId>,
     scene_nodes: usize,
@@ -865,11 +876,20 @@ impl Clone for SemanticStore {
         font_resources.fork_namespace();
         let raster_image_resources = self.raster_image_resources.clone();
         let image_namespace = raster_image_resources.namespace();
+        let audio_resources = self.audio_resources.clone();
+        let audio_namespace = audio_resources.namespace();
         let mut slots = self.slots.clone();
         for slot in &mut slots {
             if let Some(node) = slot.node.as_mut() {
                 // A cloned store has independent member-container lifetimes.
                 node.members.observation = None;
+                if let SemanticNodeKind::AudioClip(state) = &mut node.kind {
+                    let mut handle = state.definition().resource();
+                    if self.audio_resources.get(handle).is_some() {
+                        handle.arena = audio_namespace;
+                        state.remap_resource(handle);
+                    }
+                }
                 if let Some(state) = node.object_state.as_mut() {
                     match &mut state.content {
                         crate::SemanticObjectContent::Geometry(
@@ -929,6 +949,7 @@ impl Clone for SemanticStore {
             geometry_resources,
             text_resources,
             raster_image_resources,
+            audio_resources,
             font_resources,
             compiled_text_resources,
             compiled_text_resource_order,
@@ -940,6 +961,7 @@ impl Clone for SemanticStore {
             free_head: self.free_head,
             live_nodes: self.live_nodes,
             effect_nodes: self.effect_nodes,
+            audio_clip_nodes: self.audio_clip_nodes,
             scene_head: self.scene_head,
             scene_tail: self.scene_tail,
             scene_nodes: self.scene_nodes,
@@ -1223,6 +1245,7 @@ impl SemanticStore {
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
         self.effect_nodes += usize::from(matches!(kind, SemanticNodeKind::Effect(_)));
+        self.audio_clip_nodes += usize::from(matches!(kind, SemanticNodeKind::AudioClip(_)));
         let id = self
             .preview_node_allocations()
             .next()
@@ -1251,6 +1274,7 @@ impl SemanticStore {
             graph_declaration: None,
             updating_suspended: false,
             effects: None,
+            scoped_audio_clips: None,
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -1430,6 +1454,12 @@ impl SemanticStore {
     /// Identity, source identity and family relationships are preserved. The
     /// operation writes only this node and the former tail node, if any.
     pub fn attach_to_scene(&mut self, id: SemanticNodeId) -> Result<bool, SemanticStoreError> {
+        if matches!(
+            self.node(id).map(SemanticNode::kind),
+            Some(SemanticNodeKind::AudioClip(_))
+        ) {
+            return Err(SemanticStoreError::AudioClipCannotBeMember(id));
+        }
         if matches!(
             self.node(id).map(SemanticNode::kind),
             Some(SemanticNodeKind::Effect(_))
@@ -1715,6 +1745,12 @@ impl SemanticStore {
         }
         if matches!(
             self.node(member).map(SemanticNode::kind),
+            Some(SemanticNodeKind::AudioClip(_))
+        ) {
+            return Err(SemanticStoreError::AudioClipCannotBeMember(member));
+        }
+        if matches!(
+            self.node(member).map(SemanticNode::kind),
             Some(SemanticNodeKind::Effect(_))
         ) {
             return Err(SemanticStoreError::EffectCannotBeMember(member));
@@ -1853,6 +1889,17 @@ impl SemanticStore {
             .ok_or(SemanticStoreError::UnknownNode(id))?
             .clone();
         let mut writes = 0;
+        for clip in node.scoped_audio_clips() {
+            if self.node(clip).is_some() {
+                self.remove_node(clip)?;
+                writes += self.last_mutation.slots_written;
+            }
+        }
+        if let Some(clip) = node.semantic_audio_clip_state() {
+            self.unlink_audio_clip(id, clip.scope());
+            writes += usize::from(self.node(clip.scope()).is_some());
+            self.release_semantic_audio_resource(clip.definition().resource());
+        }
         for &effect in node.effect_ids() {
             if self.node(effect).is_some() {
                 self.remove_node(effect)?;
@@ -1897,6 +1944,8 @@ impl SemanticStore {
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
         self.effect_nodes -= usize::from(matches!(removed.kind, SemanticNodeKind::Effect(_)));
+        self.audio_clip_nodes -=
+            usize::from(matches!(removed.kind, SemanticNodeKind::AudioClip(_)));
         slot.generation = slot
             .generation
             .checked_add(1)
@@ -1976,6 +2025,8 @@ pub enum SemanticStoreError {
     NotFamily(SemanticNodeId),
     NotEffect(SemanticNodeId),
     EffectCannotBeMember(SemanticNodeId),
+    NotAudioClip(SemanticNodeId),
+    AudioClipCannotBeMember(SemanticNodeId),
     NotFamilyMember {
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -1998,6 +2049,12 @@ impl std::fmt::Display for SemanticStoreError {
                 id.generation()
             ),
             Self::NotEffect(id) => write!(formatter, "semantic node {id:?} is not an effect"),
+            Self::NotAudioClip(id) => {
+                write!(formatter, "semantic node {id:?} is not an audio clip")
+            }
+            Self::AudioClipCannotBeMember(id) => {
+                write!(formatter, "audio clip {id:?} is not painter membership")
+            }
             Self::EffectCannotBeMember(id) => {
                 write!(formatter, "effect {id:?} is not painter membership")
             }
@@ -2210,7 +2267,7 @@ mod tests {
                 vector_items: Arc::from([]),
                 render_items: Arc::from([]),
                 parts: Arc::from([]),
-                bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ZERO).into(),
                 baseline: 0.0,
                 layout_artifact: None,
             })

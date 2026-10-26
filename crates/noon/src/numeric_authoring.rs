@@ -684,7 +684,7 @@ fn compose_numeric_text_resource_from_children(
         source,
         tokens,
         children,
-        font_size,
+        f64::from(font_size),
         crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE,
     )
     .map_err(numeric_resource_error)
@@ -694,7 +694,10 @@ fn numeric_resource_error(error: NumericTextResourceError) -> TextAuthoringError
     match error {
         NumericTextResourceError::Format(_) => unreachable!("composition does not format values"),
         NumericTextResourceError::InvalidFontSize { bits } => {
-            TextAuthoringError::InvalidFontSize(f32::from_bits(bits))
+            TextAuthoringError::InvalidFontSize(f64::from_bits(bits) as f32)
+        }
+        NumericTextResourceError::UnrepresentableBounds => {
+            TextAuthoringError::Semantic(crate::AuthoringError::NonFiniteObjectState)
         }
         NumericTextResourceError::InvalidResource(error) => TextAuthoringError::Text(error),
         NumericTextResourceError::InvalidSourceSpan
@@ -798,7 +801,7 @@ fn numeric_presentation_baseline(
         .ok_or(TextAuthoringError::Text(
             noon_core::TextResourceValidationError::InvalidSourceSpan,
         ))?;
-    TextPresentationBaseline::new(f64::from(font_size), f64::from(resource.bounds.height()))
+    TextPresentationBaseline::new(f64::from(font_size), resource.bounds.height())
         .ok_or(TextAuthoringError::InvalidFontSize(font_size))
 }
 
@@ -966,7 +969,7 @@ mod tests {
             vector_items: Arc::from([]),
             render_items: Arc::from([]),
             parts: Arc::from([]),
-            bounds,
+            bounds: bounds.into(),
             baseline: 0.0,
             layout_artifact: None,
         }
@@ -1064,8 +1067,12 @@ mod tests {
                     font_size,
                 )
                 .unwrap();
-                let scale = font_size * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
-                assert!((resource.bounds.width() - (5.0 * scale + 0.001 * font_size)).abs() < 1e-6);
+                let scale =
+                    f64::from(font_size) * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
+                assert!(
+                    (resource.bounds.width() - (5.0 * scale + 0.001 * f64::from(font_size))).abs()
+                        < 1e-6
+                );
             }
         }
     }

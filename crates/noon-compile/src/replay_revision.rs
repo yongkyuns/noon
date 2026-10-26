@@ -20,10 +20,19 @@ struct SavedRow {
     order: Option<Option<u32>>,
 }
 
+#[derive(Clone, Debug)]
+struct SavedInset2DView {
+    object_index: u32,
+    view: Option<crate::CompiledInset2DView>,
+}
+
 /// One compiler-owned opposite revision, proportional to the affected payloads.
 #[derive(Clone, Debug)]
 pub struct CompiledReplayRevision {
     rows: Vec<SavedRow>,
+    // At most one relation per addressed patch. Keep rare metadata boxed rather
+    // than widening every retained ordinary row or saving a view-list snapshot.
+    inset_2d_view: Option<Box<SavedInset2DView>>,
     channels: Vec<CompiledChannelKey>,
     tracks: Vec<(TrackId, Option<CompiledTrack>)>,
     // Reserve both sides of changed camera metadata. Exchanging revisions must
@@ -37,15 +46,19 @@ pub struct CompiledReplayRevision {
 
 impl CompiledReplayRevision {
     pub fn object_indices(&self) -> impl Iterator<Item = u32> + '_ {
-        self.rows.iter().map(|row| row.index)
+        self.rows
+            .iter()
+            .map(|row| row.index)
+            .chain(self.inset_2d_view.iter().map(|saved| saved.object_index))
     }
     pub fn channels(&self) -> impl Iterator<Item = CompiledChannelKey> + '_ {
         self.channels.iter().copied()
     }
-    /// Reserve one payload for each affected track even when the saved side is
+    /// Reserve each affected track or inset relation even when its saved side is
     /// absent. Exchanges therefore cannot grow beyond the admitted scope budget.
     pub fn retention_cost(&self) -> usize {
-        self.rows.len()
+        usize::from(self.inset_2d_view.is_some())
+            + self.rows.len()
             + self.channels.len()
             + self.tracks.len()
             + self.camera_motion_payloads
@@ -64,6 +77,7 @@ impl CompiledScene {
         let mut channels = BTreeSet::new();
         let mut tracks = BTreeSet::new();
         let mut order = false;
+        let mut inset_2d_view = None;
         let index = |object: ObjectId| self.object_index(object);
         match patch {
             ExecutionPatch::CreateObject(object) => {
@@ -75,7 +89,19 @@ impl CompiledScene {
                 rows.insert(slot);
                 order = true;
             }
+            ExecutionPatch::SetInset2DView { object, .. } => {
+                inset_2d_view = Some(Box::new(SavedInset2DView {
+                    object_index: index(*object)?,
+                    view: self.inset_2d_views.get(object).copied(),
+                }));
+            }
             ExecutionPatch::RemoveObject(object) => {
+                if let Some(view) = self.inset_2d_views.get(object) {
+                    inset_2d_view = Some(Box::new(SavedInset2DView {
+                        object_index: index(*object)?,
+                        view: Some(*view),
+                    }));
+                }
                 let slot = index(*object)?;
                 rows.insert(slot);
                 for channel in self.channels_for_object_index(slot) {
@@ -167,6 +193,7 @@ impl CompiledScene {
             _ => 0,
         };
         Some(CompiledReplayRevision {
+            inset_2d_view,
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
             rows: rows
@@ -253,6 +280,14 @@ impl CompiledScene {
             saved.object = current;
             saved.order = current_order;
         }
+        if let Some(saved) = &mut revision.inset_2d_view {
+            let display = self.objects[saved.object_index as usize].id;
+            let current = self.inset_2d_views.remove(&display);
+            if let Some(view) = saved.view.take() {
+                self.inset_2d_views.insert(display, view);
+            }
+            saved.view = current;
+        }
         for (id, saved) in &mut revision.tracks {
             let current = self.track_locators.remove(id).map(|locator| {
                 let channel = CompiledChannelKey::new(locator.object_index, locator.property);
@@ -291,3 +326,72 @@ fn path_motion_command_count(values: &noon_core::TrackValues) -> usize {
 
 #[cfg(feature = "prepared-prefix")]
 mod prefix;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CompiledInset2DView;
+    use noon_core::{GeometryRef, Style, Transform2D, Vec2};
+
+    #[test]
+    fn inset_revision_cost_is_sparse_and_identity_links_survive_compaction() {
+        let ids = [ObjectId::new(1), ObjectId::new(2), ObjectId::new(3)];
+        let mut scene = CompiledScene::compile_objects(
+            ids.map(|id| {
+                CompiledObject::new(
+                    id,
+                    GeometryRef::Rectangle {
+                        size: Vec2::new(2.0, 1.0),
+                    },
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )
+            })
+            .to_vec(),
+            &[],
+        )
+        .unwrap();
+        let set = ExecutionPatch::SetInset2DView {
+            object: ids[2],
+            view: Some(CompiledInset2DView {
+                camera_frame: ids[1],
+                capture_own_display: false,
+            }),
+        };
+        let mut revision = scene.prepare_replay_revision(&set).unwrap();
+        assert_eq!(revision.retention_cost(), 1);
+        assert_eq!(revision.object_indices().collect::<Vec<_>>(), vec![2]);
+        scene.apply_execution_patch(&set).unwrap();
+        let expected = scene.inset_2d_views().collect::<Vec<_>>();
+        scene.exchange_replay_revision(&mut revision);
+        assert!(scene.inset_2d_views().next().is_none());
+        scene.exchange_replay_revision(&mut revision);
+        assert_eq!(scene.inset_2d_views().collect::<Vec<_>>(), expected);
+        let remove = ExecutionPatch::RemoveObject(ids[0]);
+        assert_eq!(
+            scene
+                .prepare_replay_revision(&remove)
+                .unwrap()
+                .retention_cost(),
+            1,
+            "an ordinary row must not retain an absent inset payload"
+        );
+        scene.apply_execution_patch(&remove).unwrap();
+        drop(revision); // A maintenance barrier ends the old row-index lifetime.
+        scene.compact_retired_object_slots().unwrap();
+        assert_eq!(scene.inset_2d_views().collect::<Vec<_>>(), expected);
+        let invalid = ExecutionPatch::SetInset2DView {
+            object: ids[2],
+            view: Some(CompiledInset2DView {
+                camera_frame: ids[2],
+                capture_own_display: false,
+            }),
+        };
+        assert!(scene
+            .preflight_execution_transaction(&crate::ExecutionMutationTransaction::from_mutations(
+                [invalid.clone()]
+            ))
+            .is_err());
+        assert!(scene.apply_execution_patch(&invalid).is_err());
+        assert_eq!(scene.inset_2d_views().collect::<Vec<_>>(), expected);
+    }
+}

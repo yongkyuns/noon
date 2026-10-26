@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from numbers import Real
 
 import noon as _base
+from _manim_rate_functions import there_and_back as _there_and_back
 from _noon_errors import engine_call
 
 
@@ -99,6 +100,28 @@ class Glow:
     @property
     def source(self):
         return str(self._definition.source)
+
+
+class GlowPulse:
+    """Temporarily animate one leaf's canonical glow intensity in shared Rust.
+
+    Construction is inert. Playback captures the effective intensity, restores
+    its still-owned channel at the mapped child endpoint. An unadopted temporary
+    binding retires at the enclosing segment's completion barrier. Color, radius and source
+    remain ordinary persistent glow parameters.
+    """
+    __slots__ = ("mobject", "intensity", "anim_args")
+
+    def __init__(
+        self, mobject, *, intensity, run_time=1.0,
+        rate_func=_there_and_back, **kwargs,
+    ):
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("GlowPulse target must be a leaf Mobject")
+        self.mobject = mobject
+        self.intensity = _number(intensity, "intensity")
+        # Timing validation and option precedence use the ordinary Rust resolver.
+        self.anim_args = dict(kwargs, run_time=run_time, rate_func=rate_func)
 
 
 class EffectHandle:

@@ -568,6 +568,7 @@ function createRuntimeClient() {
 }
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
+  if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
     playbackControls = new PlaygroundPlaybackControls(
@@ -585,7 +586,10 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
     // A completion observation must not overwrite an in-flight user command.
     playbackControls.observe(playbackState);
   } else if (playbackState !== null) {
-    playbackControls.sync({ ...playbackState, durationSeconds });
+    playbackControls.sync({ ...playbackState, durationSeconds,
+      hasAudio: playbackState.hasAudio ?? false,
+      canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
+    });
   }
 }
 
@@ -739,9 +743,11 @@ async function ensureExecutionReady() {
   status.dataset.executionMode = player.mode;
   const playbackState = await player.state();
   playbackControls?.sync({
+    ...playbackState,
+    hasAudio: playbackState.hasAudio ?? false,
     time: playbackState.time,
     playing: playbackState.playing,
-    durationSeconds: playbackDurationSeconds,
+    durationSeconds: playbackState.hasAudio ? playbackState.durationSeconds : playbackDurationSeconds,
     canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
   });
 }

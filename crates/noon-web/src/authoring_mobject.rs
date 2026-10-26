@@ -97,9 +97,28 @@ use noon_core::SemanticNodeId;
 use noon_core::SemanticStore;
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn point_array_to_js(array: noon::PointArrayObservation) -> js_sys::Array {
+    let (points, shape) = array.into_parts();
+    let coordinates = crate::authoring_geometry::flat_points_3d(points);
+    let dimensions = shape
+        .dimensions()
+        .iter()
+        .map(|&axis| axis as f64)
+        .collect::<Vec<_>>();
+    let result = js_sys::Array::new();
+    result.push(&js_sys::Float64Array::from(coordinates.as_slice()));
+    result.push(&js_sys::Float64Array::from(dimensions.as_slice()));
+    result
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_sys::Array {
     let result = js_sys::Array::new();
-    let coordinates: Vec<_> = tree.points.into_iter().flat_map(|(x, y)| [x, y]).collect();
+    let coordinates: Vec<_> = tree
+        .points
+        .into_iter()
+        .flat_map(|point| [point.x, point.y, point.z])
+        .collect();
     result.push(&wasm_bindgen::JsValue::from(js_sys::Float64Array::from(
         coordinates.as_slice(),
     )));
@@ -711,6 +730,43 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = contentCriticalPoint3D)]
+        pub fn content_critical_point_3d(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.anchor
+                .critical_point_3d(noon::SemanticVec3::new(
+                    direction_x,
+                    direction_y,
+                    direction_z,
+                ))
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scale3d)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn scale_3d(
+            &self,
+            scale_x: f64,
+            scale_y: f64,
+            scale_z: f64,
+            x: f64,
+            y: f64,
+            z: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .scale_3d(
+                    noon::SemanticVec3::new(scale_x, scale_y, scale_z),
+                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = alignPathPoints)]
         pub fn align_path_points(&self, other: &WasmLayoutAnchor) -> Result<(), JsValue> {
             self.anchor
@@ -810,6 +866,25 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[allow(clippy::too_many_arguments)]
+        pub fn stretch(
+            &self,
+            factor: f64,
+            dimension: u32,
+            x: f64,
+            y: f64,
+            z: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .stretch(
+                    factor,
+                    dimension.try_into().map_err(js_error)?,
+                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = dimensionLength)]
         pub fn dimension_length(&self, dimension: u32) -> Result<f64, JsValue> {
             self.anchor
@@ -826,13 +901,10 @@ mod wasm {
             stretch: bool,
             x: f64,
             y: f64,
+            z: f64,
             about_point: bool,
         ) -> Result<(), JsValue> {
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
+            let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
             self.anchor
                 .rescale_to_fit_with_pivot(
                     length,
@@ -881,13 +953,10 @@ mod wasm {
             stretch: bool,
             x: f64,
             y: f64,
+            z: f64,
             about_point: bool,
         ) -> Result<(), JsValue> {
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
+            let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
             self.anchor
                 .match_dim_size_with_pivot(
                     &target.anchor,
@@ -1046,8 +1115,19 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = shiftBy)]
-        pub fn shift_by(&self, delta_x: f64, delta_y: f64) -> Result<(), JsValue> {
-            self.layout.shift(delta_x, delta_y).map_err(js_error)
+        pub fn shift_by(
+            &self,
+            delta_x: f64,
+            delta_y: f64,
+            delta_z: Option<f64>,
+        ) -> Result<(), JsValue> {
+            self.layout
+                .shift_3d(noon_core::SemanticVec3::new(
+                    delta_x,
+                    delta_y,
+                    delta_z.unwrap_or(0.0),
+                ))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = moveToPoint)]
@@ -1162,19 +1242,32 @@ mod wasm {
     /// Derived typed lookup used only to reconstruct host wrapper identities.
     #[wasm_bindgen]
     pub struct WasmFamilyCopy {
-        copied: noon::FamilyCopy,
+        copied: noon::SemanticCopy<noon::CompositeEntryHandle>,
     }
 
     impl WasmFamilyCopy {
-        pub(crate) fn from_copy(copied: noon::FamilyCopy) -> Self {
+        pub(crate) fn from_entry_copy(
+            copied: noon::SemanticCopy<noon::CompositeEntryHandle>,
+        ) -> Self {
             Self { copied }
+        }
+
+        pub(crate) fn from_object_copy(copied: noon::MobjectCopy) -> Self {
+            Self {
+                copied: copied.into_entry_copy(),
+            }
+        }
+        pub(crate) fn from_copy(copied: noon::FamilyCopy) -> Self {
+            Self {
+                copied: copied.into_entry_copy(),
+            }
         }
     }
 
     #[wasm_bindgen]
     impl WasmFamilyCopy {
-        pub fn root(&self) -> WasmAuthoringFamilyHandle {
-            WasmAuthoringFamilyHandle::from_semantic_family(self.copied.root().clone())
+        pub fn root(&self) -> JsValue {
+            crate::authoring_composite::entry_handle(self.copied.root().clone())
         }
 
         #[wasm_bindgen(js_name = mobjectFor)]
@@ -1426,6 +1519,37 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = setEmptyPointArray)]
+        pub fn set_empty_point_array(&self, dimensions: Vec<f64>) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_empty_point_array(crate::authoring_geometry::point_array_shape(&dimensions)?)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = setPoints3D)]
+        pub fn set_points_3d(&self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.semantic_family()?
+                .set_points_3d(&points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendPoints)]
+        pub fn append_points(&self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.semantic_family()?
+                .append_points_f64(&points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendPoints3D)]
+        pub fn append_points_3d(&self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.semantic_family()?
+                .append_points_3d(&points)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = clearPoints)]
         pub fn clear_points(&self) -> Result<(), JsValue> {
             self.semantic_family()?
@@ -1506,6 +1630,61 @@ mod wasm {
             noon::MobjectTarget::from(&family)
                 .all_points()
                 .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = requiresContentBoundary)]
+        pub fn requires_content_boundary(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .requires_content_boundary()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = allPoints3D)]
+        pub fn all_points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .all_points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointArray)]
+        pub fn point_array(&self) -> Result<js_sys::Array, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .point_array()
+                .map(super::point_array_to_js)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = criticalPoint3D)]
+        pub fn critical_point_3d(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            vector_boundary: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            let target = noon::MobjectTarget::from(&family);
+            let direction = noon_core::SemanticVec3::new(direction_x, direction_y, direction_z);
+            let point = if vector_boundary {
+                target.vector_critical_point_3d(direction)
+            } else {
+                target.critical_point_3d(direction)
+            };
+            point
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = vectorBoundaryPoints3D)]
+        pub fn vector_boundary_points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .vector_boundary_points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
                 .map_err(js_error)
         }
 
@@ -2135,6 +2314,13 @@ mod wasm {
             })
         }
 
+        /// Translation selects semantic identity and never requires layout bounds.
+        pub fn shift(&self, x: f64, y: f64, z: Option<f64>) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .shift_3d(noon_core::SemanticVec3::new(x, y, z.unwrap_or(0.0)))
+                .map_err(js_error)
+        }
+
         /// Read an immutable layout observation from the shared semantic family.
         pub fn layout(&self) -> Result<WasmAuthoringFamilyLayout, JsValue> {
             Ok(WasmAuthoringFamilyLayout {
@@ -2187,6 +2373,20 @@ mod wasm {
             self.semantic_family()?
                 .copy_with_references(&references.copy_references().map_err(js_error)?)
                 .map(WasmFamilyCopy::from_copy)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = promoteOwnPoints)]
+        pub fn promote_own_points(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            let source = self.semantic_family()?;
+            noon::MobjectTarget::from(&source)
+                .promote_own_points_with_references(
+                    &references.copy_references().map_err(js_error)?,
+                )
+                .map(WasmFamilyCopy::from_entry_copy)
                 .map_err(js_error)
         }
 
@@ -2287,7 +2487,7 @@ mod wasm {
             batch: crate::WasmSceneMembershipBatch,
         ) -> Result<Vec<u8>, JsValue> {
             batch
-                .edit_family(&self.semantic_family()?)
+                .edit_family((&self.semantic_family()?).into())
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(js_error)
         }
@@ -2320,6 +2520,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = replaceMembers)]
+        pub fn replace_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .replace_members(&batch.copy_references().map_err(js_error)?)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = invertMembers)]
         pub fn invert_members(&self, recursive: bool) -> Result<(), JsValue> {
             self.semantic_family()?.invert(recursive).map_err(js_error)
@@ -2397,6 +2606,13 @@ mod wasm {
         }
         pub fn points(&self) -> Result<Vec<f64>, JsValue> {
             self.value.points().map(flat_points).map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = points3D)]
+        pub fn points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
         }
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
@@ -2508,6 +2724,46 @@ mod wasm {
         pub fn vertex_groups(&self) -> js_sys::Array {
             point_groups(self.value.vertex_groups())
         }
+        #[wasm_bindgen(js_name = startAnchors3D)]
+        pub fn start_anchors_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .start_anchors_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = firstHandles3D)]
+        pub fn first_handles_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .first_handles_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = secondHandles3D)]
+        pub fn second_handles_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .second_handles_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = endAnchors3D)]
+        pub fn end_anchors_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .end_anchors_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = anchors3D)]
+        pub fn anchors_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .anchors_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = startAnchors)]
         pub fn start_anchors(&self) -> Vec<f64> {
             self.value
@@ -2847,6 +3103,34 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = criticalPoint3D)]
+        pub fn critical_point_3d(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            vector_boundary: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            let target = noon::MobjectTarget::from(&self.handle);
+            let direction = noon_core::SemanticVec3::new(direction_x, direction_y, direction_z);
+            let point = if vector_boundary {
+                target.vector_critical_point_3d(direction)
+            } else {
+                target.critical_point_3d(direction)
+            };
+            point
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoints3D)]
+        pub fn path_boundary_points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = pathBoundaryPoints)]
         pub fn path_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
             noon::MobjectTarget::from(&self.handle)
@@ -2933,6 +3217,29 @@ mod wasm {
             noon::MobjectTarget::from(&self.handle)
                 .all_points()
                 .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = requiresContentBoundary)]
+        pub fn requires_content_boundary(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .requires_content_boundary()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = allPoints3D)]
+        pub fn all_points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .all_points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointArray)]
+        pub fn point_array(&self) -> Result<js_sys::Array, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .point_array()
+                .map(super::point_array_to_js)
                 .map_err(js_error)
         }
 
@@ -3266,6 +3573,69 @@ mod wasm {
                 .map(|plan| WasmFamilySlicePlan { plan })
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = editMembership)]
+        pub fn edit_membership(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            batch
+                .edit_family((&self.handle).into())
+                .map(|changed| changed.into_iter().map(u8::from).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = prependMembers)]
+        pub fn prepend_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .prepend_many(&batch.copy_references().map_err(js_error)?)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = insertMember)]
+        pub fn insert_member(
+            &self,
+            index: usize,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(js_error)?;
+            let [member] = members.as_slice() else {
+                return Err(js_error("insertion requires exactly one member"));
+            };
+            self.handle.insert_member(index, *member).map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = replaceMembers)]
+        pub fn replace_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .replace_members(&batch.copy_references().map_err(js_error)?)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = copyFamily)]
+        pub fn copy_family(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            self.handle
+                .copy_with_references(&references.copy_references().map_err(js_error)?)
+                .map(WasmFamilyCopy::from_object_copy)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = promoteOwnPoints)]
+        pub fn promote_own_points(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .promote_own_points_with_references(
+                    &references.copy_references().map_err(js_error)?,
+                )
+                .map(WasmFamilyCopy::from_entry_copy)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             self.handle
@@ -3300,17 +3670,38 @@ mod wasm {
             self.handle.set_points_f64(&points).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setEmptyPointArray)]
+        pub fn set_empty_point_array(&mut self, dimensions: Vec<f64>) -> Result<(), JsValue> {
+            self.handle
+                .set_empty_point_array(crate::authoring_geometry::point_array_shape(&dimensions)?)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setPoints3D)]
+        pub fn set_points_3d(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.handle.set_points_3d(&points).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = appendPoints)]
         pub fn append_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
             self.handle.append_points_f64(&points).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = appendPoints3D)]
+        pub fn append_points_3d(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.handle.append_points_3d(&points).map_err(js_error)
+        }
+
         /// Replace world-space corners through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPointsAsCorners)]
         pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.set_points_as_corners(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.handle
+                .set_points_as_corners_3d(&points)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setPointsAsCornersWithSamples)]
@@ -3319,14 +3710,14 @@ mod wasm {
             values: Vec<f64>,
             sample_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_3d(&values)?;
             let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
                 JsValue::from(js_sys::TypeError::new(
                     "set_points_as_corners requires four samples",
                 ))
             })?;
             self.handle
-                .set_points_as_corners_with_samples(&points, &sample_values)
+                .set_points_as_corners_3d_with_samples(&points, &sample_values)
                 .map_err(js_error)
         }
 
@@ -3336,9 +3727,14 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = startNewPath)]
-        pub fn start_new_path(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
-            self.handle.start_new_path(point).map_err(js_error)
+        pub fn start_new_path(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            point_z: f64,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
+            self.handle.start_new_path_3d(point).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = startNewPathWithStride)]
@@ -3346,11 +3742,12 @@ mod wasm {
             &mut self,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
             stride: i32,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.handle
-                .start_new_path_with_stride(point, stride)
+                .start_new_path_3d_with_stride(point, stride)
                 .map_err(js_error)
         }
 
@@ -3359,11 +3756,12 @@ mod wasm {
             &mut self,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.handle
-                .add_line_to_with_stride(point, stride.unwrap_or(4))
+                .add_line_to_3d_with_stride(point, stride.unwrap_or(4))
                 .map_err(js_error)
         }
 
@@ -3372,15 +3770,16 @@ mod wasm {
             &mut self,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
                 JsValue::from_str("add_line_to requires four constructor interpolation samples")
             })?;
             self.handle
-                .add_line_to_with_stride_and_samples(point, stride, &bezier_t_values)
+                .add_line_to_3d_with_stride_and_samples(point, stride, &bezier_t_values)
                 .map_err(js_error)
         }
 
@@ -3389,14 +3788,16 @@ mod wasm {
             &mut self,
             control_x: f64,
             control_y: f64,
+            control_z: f64,
             anchor_x: f64,
             anchor_y: f64,
+            anchor_z: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control = crate::authoring_geometry::point(control_x, control_y)?;
-            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            let control = crate::authoring_geometry::point_3d(control_x, control_y, control_z)?;
+            let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.handle
-                .add_quadratic_bezier_curve_to_with_stride(control, anchor, stride.unwrap_or(4))
+                .add_quadratic_bezier_curve_to_3d_with_stride(control, anchor, stride.unwrap_or(4))
                 .map_err(js_error)
         }
 
@@ -3405,17 +3806,20 @@ mod wasm {
             &mut self,
             control1_x: f64,
             control1_y: f64,
+            control1_z: f64,
             control2_x: f64,
             control2_y: f64,
+            control2_z: f64,
             anchor_x: f64,
             anchor_y: f64,
+            anchor_z: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
-            let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
-            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            let control1 = crate::authoring_geometry::point_3d(control1_x, control1_y, control1_z)?;
+            let control2 = crate::authoring_geometry::point_3d(control2_x, control2_y, control2_z)?;
+            let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.handle
-                .add_cubic_bezier_curve_to_with_stride(
+                .add_cubic_bezier_curve_to_3d_with_stride(
                     control1,
                     control2,
                     anchor,
@@ -3457,42 +3861,48 @@ mod wasm {
             &mut self,
             anchor1_x: f64,
             anchor1_y: f64,
+            anchor1_z: f64,
             handle1_x: f64,
             handle1_y: f64,
+            handle1_z: f64,
             handle2_x: f64,
             handle2_y: f64,
+            handle2_z: f64,
             anchor2_x: f64,
             anchor2_y: f64,
+            anchor2_z: f64,
         ) -> Result<(), JsValue> {
-            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
-            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
-            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
-            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            let anchor1 = crate::authoring_geometry::point_3d(anchor1_x, anchor1_y, anchor1_z)?;
+            let handle1 = crate::authoring_geometry::point_3d(handle1_x, handle1_y, handle1_z)?;
+            let handle2 = crate::authoring_geometry::point_3d(handle2_x, handle2_y, handle2_z)?;
+            let anchor2 = crate::authoring_geometry::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
             self.handle
-                .add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+                .add_cubic_bezier_curve_3d(anchor1, handle1, handle2, anchor2)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addCubicBezierCurves)]
         pub fn add_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.handle
-                .add_cubic_bezier_curves(&curves)
+                .add_cubic_bezier_curves_3d(&curves)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setCubicBezierCurves)]
         pub fn set_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.handle
-                .set_cubic_bezier_curves(&curves)
+                .set_cubic_bezier_curves_3d(&curves)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addPointsAsCorners)]
         pub fn add_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.add_points_as_corners(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.handle
+                .add_points_as_corners_3d(&points)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addPointsAsCornersWithStride)]
@@ -3502,9 +3912,9 @@ mod wasm {
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_3d(&values)?;
             self.handle
-                .add_points_as_corners_with_stride(&points, stride, &bezier_t_values)
+                .add_points_as_corners_3d_with_stride(&points, stride, &bezier_t_values)
                 .map_err(js_error)
         }
 
@@ -3665,8 +4075,10 @@ mod wasm {
                 .1)
         }
 
-        pub fn shift(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.handle.shift(x, y).map_err(js_error)
+        pub fn shift(&mut self, x: f64, y: f64, z: Option<f64>) -> Result<(), JsValue> {
+            self.handle
+                .shift_3d(noon_core::SemanticVec3::new(x, y, z.unwrap_or(0.0)))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = moveTo)]

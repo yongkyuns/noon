@@ -6,6 +6,9 @@ pub mod analytic_profile;
 pub mod area_helpers;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+pub mod background_audio;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod background_music_lesson;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub mod bar_chart;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
@@ -29,7 +32,9 @@ pub mod family_transform_indicate;
 pub mod following_graph_camera;
 pub mod foreground_matching;
 pub mod foreground_membership;
+pub mod glow_pulse;
 pub mod graph_queries;
+pub mod image_glow;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;
@@ -44,11 +49,13 @@ pub mod moving_zoomed_scene_around;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;
 pub mod object_membership;
+pub mod object_membership_queries;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod point_promotion;
 pub mod pointer_input_trace;
 pub mod polar_plane;
 pub mod raster_image;

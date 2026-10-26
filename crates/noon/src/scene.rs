@@ -1,5 +1,7 @@
 //! Direct authoring scope over one family in the shared semantic store.
+mod audio;
 mod image;
+mod sections;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,
@@ -9,6 +11,7 @@ use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
     SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
 };
+pub use sections::{SceneSectionNavigation, SectionNavigation};
 use std::{cell::RefCell, rc::Rc};
 
 /// Presentation/export intent attached to one authored section boundary.
@@ -57,7 +60,7 @@ pub(crate) fn click_indicate_declaration(
         || options.remover.unwrap_or(false)
         || options.introducer.unwrap_or(false)
     {
-        return Err(AuthoringError::InvalidClickIndicateOptions);
+        return Err(AuthoringError::InvalidClickActionOptions);
     }
     Ok(SemanticClickIndicate::new(
         indication.scale_factor,
@@ -796,22 +799,28 @@ impl Scene {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.shift_family_3d(family, noon_core::SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_family_3d(
+        &mut self,
+        family: &MobjectFamily,
+        delta: noon_core::SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         if let Some(execution) = self.execution.as_mut() {
             return crate::family_layout::publish_shift_family(
                 &self.store,
                 self.root,
                 execution,
                 family,
-                x,
-                y,
+                delta,
             );
         }
         MobjectTarget::Family(family).require_store(&self.store)?;
-        let transaction = crate::family_authoring::FamilyTranslation::begin(
+        let transaction = crate::family_authoring::FamilyTranslation::begin_3d(
             &self.store.borrow(),
             family.node_id(),
-            x,
-            y,
+            delta,
         )?
         .transaction(&self.store.borrow())?;
         self.apply_semantic_transaction(transaction)
@@ -1079,6 +1088,28 @@ impl Scene {
         );
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
+    /// Bind a visible analytic Circle or Rectangle to a viewer playback action.
+    ///
+    /// The common Rust input/picking path emits the typed request only after a
+    /// successful click transaction. The playback owner applies it using the
+    /// same admitted transport as its external controls. This declaration does
+    /// not advance the authoring cursor or change the authored audio gain.
+    /// Output support covers finite immutable native Rust and direct Rust/WASM
+    /// sessions; broader source/callback profiles remain under #2263.
+    pub fn on_click_playback(
+        &mut self,
+        target: &Mobject,
+        control: crate::PlaybackControl,
+    ) -> Result<(), crate::AuthoringError> {
+        self.require_object(target)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_click_action(
+            target.node_id(),
+            Some(noon_core::SemanticClickAction::Playback(control)),
+        );
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Validate the bounded ordinary leaf-affine operation without creating a
     /// declaration, session, track, or runtime identity.
     pub fn can_ordinary_transform_to(

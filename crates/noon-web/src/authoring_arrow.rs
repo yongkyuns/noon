@@ -451,7 +451,7 @@ impl WasmAuthoringArrowHandle {
 
     pub(crate) fn rebind_from_family_copy(
         &self,
-        copied: &noon::FamilyCopy,
+        copied: &noon::SemanticCopy<noon::CompositeEntryHandle>,
         vector_index: Option<u32>,
     ) -> Result<Self, JsValue> {
         let published = match (&self.published, vector_index) {

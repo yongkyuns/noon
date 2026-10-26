@@ -114,7 +114,7 @@ fn text_resource_payload_is_included() {
         vector_items: Arc::from([]),
         render_items: Arc::from([]),
         parts: Arc::from([]),
-        bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+        bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
         baseline: 0.0,
         layout_artifact: None,
     });

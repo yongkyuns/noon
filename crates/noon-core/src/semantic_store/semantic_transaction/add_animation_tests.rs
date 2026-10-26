@@ -1232,3 +1232,63 @@ fn exact_object_track_validation_is_atomic_and_checks_endpoint_provenance() {
     assert_eq!(*from, committed.resolve(local_from).unwrap());
     assert_eq!(*to, committed.resolve(local_to).unwrap());
 }
+
+#[test]
+fn explicit_transform_start_survives_preparation_commit_and_redeclaration_without_base_edit() {
+    let mut store = SemanticStore::new();
+    let source = object(&mut store, 1.0);
+    let target = object(&mut store, 1.0);
+    let authored = store.semantic_object_state_checked(source).unwrap().clone();
+    let start = crate::SemanticTransform2_5D {
+        translation: SemanticVec3::new(3.0, 2.0, 0.0),
+        scale: SemanticVec3::new(0.3, 0.7, 1.0),
+        rotation_z: 0.0,
+    };
+    let mut transaction = SemanticMutationTransaction::new();
+    let token = transaction.create_transform_animation_with_start(
+        source,
+        target,
+        start,
+        AnimationOptions::new(),
+    );
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(prepared.transform_start(token).unwrap(), Some(start));
+    let result = prepared.commit();
+    let animation = result.resolve(token).unwrap();
+    let state = store.semantic_animation_state(animation).unwrap().clone();
+    assert_eq!(state.transform_start(), Some(start));
+    let mut transaction = SemanticMutationTransaction::new();
+    let copy = transaction.create_animation(state);
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(prepared.transform_start(copy).unwrap(), Some(start));
+    prepared.commit();
+    assert_eq!(
+        store.semantic_object_state_checked(source).unwrap(),
+        &authored
+    );
+}
+
+#[test]
+fn nonfinite_transform_start_fails_before_semantic_publication() {
+    let mut store = SemanticStore::new();
+    let source = object(&mut store, 1.0);
+    let target = object(&mut store, 1.0);
+    let revision = store.scene_revision();
+    let len = store.len();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_transform_animation_with_start(
+        source,
+        target,
+        crate::SemanticTransform2_5D {
+            rotation_z: f64::NAN,
+            ..Default::default()
+        },
+        AnimationOptions::new(),
+    );
+    assert!(matches!(
+        transaction.prepare(&mut store),
+        Err(SemanticMutationTransactionError::InvalidTransformStart { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.len(), len);
+}

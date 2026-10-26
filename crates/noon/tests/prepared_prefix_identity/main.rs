@@ -19,7 +19,7 @@ const B: SemanticClickIndicate = SemanticClickIndicate::new(1.75, Color::RED, 1.
 fn state(binding: SemanticClickIndicate) -> SemanticObjectState {
     let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.65 });
     state.style.fill = Some(SemanticPaint::Solid(Color::BLUE));
-    state.set_click_indicate(Some(binding));
+    state.set_click_action(Some(noon_core::SemanticClickAction::Indicate(binding)));
     state
 }
 

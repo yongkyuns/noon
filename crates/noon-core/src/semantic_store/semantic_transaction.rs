@@ -10,15 +10,15 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, ManimCamera3DProfile, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticBarMetadata, SemanticClickIndicate, SemanticDecimalNumber, SemanticFadeDirection,
-    SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
-    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialCompositionDomain,
-    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticBarMetadata, SemanticClickAction, SemanticClickIndicate, SemanticDecimalNumber,
+    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
+    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
+    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
+    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
+    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
+    SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticStore, SemanticStoreError,
+    SemanticStyle, SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
     SemanticTransactionTableLayout, SemanticTransform, SemanticTransformInterpolation,
     SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
     TextPresentationBaseline, VectorPath,
@@ -43,7 +43,10 @@ use family_edges::FamilyEdgePreflight;
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
 use node_addition::SemanticPendingPathObject;
-use node_addition::{commit_add_node, preflight_add_node, validate_spatial_material_resource};
+use node_addition::{
+    commit_add_node, preflight_add_node, validate_audio_clip_definition,
+    validate_spatial_material_resource,
+};
 
 mod provisional;
 use provisional::{
@@ -67,6 +70,12 @@ pub use provisional::{
 /// rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
+    /// Replace one complete validated clip definition without changing its
+    /// semantic identity or family/root scope.
+    ReplaceAudioClip {
+        clip: SemanticNodeId,
+        definition: crate::AudioClipDefinition,
+    },
     UpdateEffect {
         effect: SemanticNodeId,
         update: crate::GlowUpdate,
@@ -97,10 +106,10 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         transform: SemanticTransform,
     },
-    /// Replace or clear one object-owned click indication declaration.
-    SetClickIndicate {
+    /// Replace or clear one object-owned click action declaration.
+    SetClickAction {
         object: SemanticTransactionNodeRef,
-        binding: Option<SemanticClickIndicate>,
+        binding: Option<SemanticClickAction>,
     },
     SetInset2DView {
         object: SemanticTransactionNodeRef,
@@ -273,7 +282,7 @@ impl SemanticMutation {
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
             | Self::SetCameraMotions { object, .. }
-            | Self::SetClickIndicate { object, .. }
+            | Self::SetClickAction { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -329,6 +338,11 @@ impl SemanticMutation {
                 creation: SemanticNodeCreation::Effect { owner, .. },
                 ..
             } => vec![*owner],
+            Self::AddNode {
+                creation: SemanticNodeCreation::AudioClip { scope, .. },
+                ..
+            } => vec![*scope],
+            Self::ReplaceAudioClip { clip, .. } => vec![(*clip).into()],
             Self::UpdateEffect { effect, .. } => vec![(*effect).into()],
             Self::SetSignal { .. }
             | Self::AddScalarSignalTrack { .. }
@@ -351,6 +365,7 @@ impl SemanticMutation {
     /// space without reserving or manufacturing semantic identity before preflight.
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
+            Self::ReplaceAudioClip { clip, .. } => Some(*clip),
             Self::UpdateEffect { effect, .. } => Some(*effect),
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
@@ -363,7 +378,7 @@ impl SemanticMutation {
             | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
-            | Self::SetClickIndicate { object, .. }
+            | Self::SetClickAction { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -394,6 +409,7 @@ impl SemanticMutation {
 
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
+            Self::ReplaceAudioClip { clip, .. } => Some(SemanticMutationKey::AudioClip(*clip)),
             Self::UpdateEffect { .. } => None, // each explicit parameter has its own key
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
             Self::AddScalarSignalTrack { .. } | Self::SetScalarSignalAt { .. } => None,
@@ -406,9 +422,7 @@ impl SemanticMutation {
             Self::SetObjectTransform { object, .. } => {
                 Some(SemanticMutationKey::ObjectTransform(*object))
             }
-            Self::SetClickIndicate { object, .. } => {
-                Some(SemanticMutationKey::ClickIndicate(*object))
-            }
+            Self::SetClickAction { object, .. } => Some(SemanticMutationKey::ClickAction(*object)),
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
@@ -478,6 +492,7 @@ impl SemanticMutation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum SemanticMutationKey {
+    AudioClip(SemanticNodeId),
     EffectParameter {
         effect: SemanticNodeId,
         parameter: crate::GlowParameter,
@@ -490,7 +505,7 @@ pub(super) enum SemanticMutationKey {
     ObjectTransform(SemanticTransactionNodeRef),
     CameraMotions(SemanticTransactionNodeRef),
     ObjectContent(SemanticTransactionNodeRef),
-    ClickIndicate(SemanticTransactionNodeRef),
+    ClickAction(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
     SpatialCompositionDomain(SemanticTransactionNodeRef),
@@ -526,6 +541,11 @@ pub(super) enum SemanticMutationKey {
 /// is introduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticMutationImpact {
+    /// Scope-local audio creation, replacement, or retirement.
+    AudioClip {
+        scope: SemanticNodeId,
+        clip: SemanticNodeId,
+    },
     /// Structural attachment/order/lifetime change on one owner.
     EffectAttachment {
         owner: SemanticNodeId,
@@ -567,7 +587,7 @@ pub enum SemanticMutationImpact {
     ObjectContent {
         object: SemanticNodeId,
     },
-    ClickIndicate {
+    ClickAction {
         object: SemanticNodeId,
     },
     /// Retained BarChart source metadata changed without changing render data.
@@ -662,7 +682,7 @@ pub struct SemanticMutationTransaction {
 
 pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
-    staged_effects: HashMap<SemanticNodeId, crate::EffectDefinition>,
+    staged_effects: HashMap<SemanticNodeId, crate::SemanticEffectState>,
     animation_effect_snapshots:
         HashMap<SemanticLocalNodeToken, Box<crate::SemanticTransformEffectSnapshot>>,
     pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
@@ -703,6 +723,41 @@ impl Default for SemanticMutationTransaction {
 }
 
 impl SemanticMutationTransaction {
+    /// Author a clip in a family/root scope using the scene-global allocator.
+    /// PCM and timing are validated before any transaction changes publish.
+    pub fn create_audio_clip(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        definition: crate::AudioClipDefinition,
+    ) -> SemanticLocalNodeToken {
+        self.create_node(SemanticNodeCreation::AudioClip {
+            scope: scope.into(),
+            definition,
+        })
+    }
+
+    pub fn replace_audio_clip(
+        &mut self,
+        clip: SemanticNodeId,
+        definition: crate::AudioClipDefinition,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::ReplaceAudioClip { clip, definition });
+        self
+    }
+
+    /// Build an ordered membership program, including remove/re-add of an edge.
+    ///
+    /// This reuses the same sparse ordered preflight as staged membership edits.
+    /// Identity, cycle and atomic-publication checks still apply. Duplicate
+    /// non-membership writes remain errors; `new()` retains strict edge uniqueness.
+    pub fn ordered_membership() -> Self {
+        Self {
+            allow_repeated_membership_mutations: true,
+            ..Self::default()
+        }
+    }
+
     /// Create an ordered named appearance attachment using the ordinary allocator.
     /// This initial semantic slice supports leaf owners only; renderer admission
     /// remains separately gated until effect lowering is available.
@@ -716,6 +771,7 @@ impl SemanticMutationTransaction {
             owner: owner.into(),
             name: name.into(),
             definition: definition.into(),
+            copy_provenance: None,
         })
     }
 
@@ -876,18 +932,27 @@ impl SemanticMutationTransaction {
         self.replace_style(object, style)
     }
 
-    /// Replace the one authored primary-click indication on an object. `None`
+    /// Replace the one authored primary-click action on an object. `None`
     /// clears the declaration without creating a second interaction registry.
+    pub fn set_click_action(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        binding: Option<SemanticClickAction>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetClickAction {
+            object: object.into(),
+            binding,
+        });
+        self
+    }
+
+    /// Author a restoring indication through the common click-action mutation.
     pub fn set_click_indicate(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
         binding: Option<SemanticClickIndicate>,
     ) -> &mut Self {
-        self.mutations.push(SemanticMutation::SetClickIndicate {
-            object: object.into(),
-            binding,
-        });
-        self
+        self.set_click_action(object, binding.map(SemanticClickAction::Indicate))
     }
 
     /// Bind ordinary rectangles as an inset display and camera in one publication.
@@ -1576,6 +1641,25 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage an affine Transform with an explicit start, without rewriting the
+    /// target's authored transform. Used when a pure expression specializes to
+    /// the ordinary affine channels; validation/publication remain transactional.
+    pub fn create_transform_animation_with_start(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        start: crate::SemanticTransform2_5D,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.create_transform_animation(target, target_state, options);
+        let Some(SemanticMutation::AddAnimation { animation, .. }) = self.mutations.last_mut()
+        else {
+            unreachable!("the preceding operation staged one Transform")
+        };
+        animation.transform_start = Some(Box::new(start));
+        token
+    }
+
     /// Stage a typed world-pose animation for one existing semantic object.
     pub fn create_world_transform_animation(
         &mut self,
@@ -1737,6 +1821,27 @@ impl SemanticMutationTransaction {
                     scale_factor,
                     color,
                     scale_center,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage an inert intensity pulse without capturing source values or attachments.
+    pub fn create_glow_pulse_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        intensity: f64,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::GlowPulse {
+                    target: target.into(),
+                    intensity,
                 },
                 options,
             ),
@@ -2219,6 +2324,10 @@ impl SemanticMutationTransaction {
                     SemanticNodeCreation::Effect {
                         owner: SemanticTransactionNodeRef::Pending(owner),
                         ..
+                    }
+                    | SemanticNodeCreation::AudioClip {
+                        scope: SemanticTransactionNodeRef::Pending(owner),
+                        ..
                     },
             } = mutation
             {
@@ -2645,7 +2754,7 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
-                SemanticMutation::SetClickIndicate { object, binding } => {
+                SemanticMutation::SetClickAction { object, binding } => {
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
                         &mut staged_object_order,
@@ -2663,14 +2772,14 @@ impl SemanticMutationTransaction {
                                 )
                             )
                     }) {
-                        return Err(SemanticMutationTransactionError::InvalidClickIndicate {
+                        return Err(SemanticMutationTransactionError::InvalidClickAction {
                             index,
                             object: *object,
                         });
                     }
-                    let did_change = state.click_indicate() != *binding;
+                    let did_change = state.click_action() != *binding;
                     if did_change {
-                        state.set_click_indicate(*binding);
+                        state.set_click_action(*binding);
                     }
                     changed.push(did_change);
                 }
@@ -3462,25 +3571,48 @@ impl SemanticMutationTransaction {
                 } => {
                     changed.push(family_edges.reorder(&catalog, *family, *member, *before, index)?);
                 }
+                SemanticMutation::ReplaceAudioClip { clip, definition } => {
+                    let state = store
+                        .semantic_audio_clip_state(*clip)
+                        .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
+                    validate_audio_clip_definition(store, definition, index)?;
+                    changed.push(state.definition() != definition);
+                }
                 SemanticMutation::UpdateEffect { effect, update } => {
                     let state = store
                         .semantic_effect_state(*effect)
                         .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
-                    let previous = staged_effects
-                        .get(effect)
-                        .copied()
-                        .unwrap_or_else(|| state.definition());
-                    let next = previous.update(*update).map_err(|error| {
+                    let previous = staged_effects.get(effect).unwrap_or(state);
+                    let next = previous.updated(*update).map_err(|error| {
                         SemanticMutationTransactionError::EffectParameter {
                             index,
                             effect: *effect,
                             error,
                         }
                     })?;
-                    changed.push(next != previous);
+                    changed.push(&next != previous);
                     staged_effects.insert(*effect, next);
                 }
                 SemanticMutation::AddNode { token, creation } => {
+                    if let SemanticNodeCreation::AudioClip { scope, .. } = creation {
+                        catalog.ensure_family(*scope, index)?;
+                        match scope {
+                            SemanticTransactionNodeRef::Existing(scope) => {
+                                if removed_nodes.contains(scope) {
+                                    return Err(SemanticMutationTransactionError::NodeCreationUsesRemovedNode { index, node: *scope });
+                                }
+                            }
+                            SemanticTransactionNodeRef::Pending(scope) => {
+                                if !available_pending_owners.contains(scope) {
+                                    return Err(
+                                        SemanticMutationTransactionError::AudioClipScopeOrder {
+                                            index,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if let SemanticNodeCreation::Effect { owner, name, .. } = creation {
                         catalog.ensure_object(*owner, index)?;
                         if name.is_empty() {
@@ -3579,6 +3711,7 @@ impl SemanticMutationTransaction {
                         }
                         SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Signal { .. }
+                        | SemanticNodeCreation::AudioClip { .. }
                         | SemanticNodeCreation::Effect { .. } => {}
                     }
                     changed.push(!removed_pending.contains(token));
@@ -3673,7 +3806,7 @@ impl SemanticMutationTransaction {
                     object: *object,
                 });
             }
-            if state.click_indicate().is_some_and(|binding| {
+            if state.click_action().is_some_and(|binding| {
                 !binding.is_valid()
                     || !state.signal_bindings().is_empty()
                     || !matches!(
@@ -3681,12 +3814,12 @@ impl SemanticMutationTransaction {
                         Some(StoredGeometry::Circle { .. } | StoredGeometry::Rectangle { .. })
                     )
             }) {
-                return Err(SemanticMutationTransactionError::InvalidClickIndicate {
+                return Err(SemanticMutationTransactionError::InvalidClickAction {
                     index: self
                         .mutations
                         .iter()
                         .position(|mutation| {
-                            matches!(mutation, SemanticMutation::SetClickIndicate { object: target, .. } if target == object)
+                            matches!(mutation, SemanticMutation::SetClickAction { object: target, .. } if target == object)
                         })
                         .unwrap_or(0),
                     object: *object,
@@ -4296,6 +4429,17 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    InvalidAudioResource {
+        index: usize,
+        handle: crate::AudioResourceHandle,
+    },
+    AudioClipDefinition {
+        index: usize,
+        error: crate::AudioClipError,
+    },
+    AudioClipScopeOrder {
+        index: usize,
+    },
     DuplicateEffectParameter {
         index: usize,
         effect: SemanticNodeId,
@@ -4469,7 +4613,7 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticNodeId,
     },
-    DuplicateClickIndicate {
+    DuplicateClickAction {
         index: usize,
         object: SemanticNodeId,
     },
@@ -4603,7 +4747,13 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationAngle {
         index: usize,
     },
+    InvalidTransformStart {
+        index: usize,
+    },
     InvalidIndicateEndpoint {
+        index: usize,
+    },
+    InvalidGlowPulseIntensity {
         index: usize,
     },
     InvalidDrawBorderThenFillOutline {
@@ -4669,7 +4819,7 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
-    InvalidClickIndicate {
+    InvalidClickAction {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
@@ -4728,6 +4878,9 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidAudioResource { index, handle } => write!(formatter, "mutation {index}: unknown or foreign audio resource {handle:?}"),
+            Self::AudioClipDefinition { index, error } => write!(formatter, "mutation {index}: audio clip: {error}"),
+            Self::AudioClipScopeOrder { index } => write!(formatter, "mutation {index}: audio clip scope must precede its declaration"),
             Self::DuplicateEffectParameter { index, effect, parameter } => write!(formatter, "mutation {index}: duplicate write to effect {effect:?} parameter {parameter:?}"),
             Self::InvalidEffectAttachment { index, reason } => write!(formatter, "mutation {index}: {reason}"),
             Self::EffectParameter { index, effect, error } => write!(formatter, "mutation {index}: effect {effect:?}: {error}"),
@@ -4927,9 +5080,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
-            Self::DuplicateClickIndicate { index, object } => write!(
+            Self::DuplicateClickAction { index, object } => write!(
                 formatter,
-                "semantic transaction mutation {index} repeats click Indicate on object {}:{}",
+                "semantic transaction mutation {index} repeats click action on object {}:{}",
                 object.slot(),
                 object.generation()
             ),
@@ -5164,6 +5317,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic mutation {index} has invalid Indicate scale, color, or center"
             ),
+            Self::InvalidGlowPulseIntensity { index } => write!(
+                formatter,
+                "semantic mutation {index} has GlowPulse intensity outside finite [0, 8]"
+            ),
             Self::InvalidDrawBorderThenFillOutline { index } => write!(
                 formatter,
                 "semantic mutation {index} has an invalid DrawBorderThenFill outline"
@@ -5199,6 +5356,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidObjectPropertyTrack { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} has an invalid exact object property track"
+            ),
+            Self::InvalidTransformStart { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid explicit affine Transform start"
             ),
             Self::NonFinitePropertyValue {
                 index,
@@ -5245,9 +5406,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot assign invalid BarChart metadata to object {object:?}"
             ),
-            Self::InvalidClickIndicate { index, object } => write!(
+            Self::InvalidClickAction { index, object } => write!(
                 formatter,
-                "semantic transaction mutation {index} cannot assign click Indicate to unsupported or invalid object {object:?}"
+                "semantic transaction mutation {index} cannot assign click action to unsupported or invalid object {object:?}"
             ),
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,

@@ -15,14 +15,14 @@ use crate::{SemanticNodeId, TextResourceHandle};
 pub struct SemanticNumericTextBinding {
     signal: SemanticNodeId,
     token_resources: Arc<[(Arc<str>, TextResourceHandle)]>,
-    point_to_scene_scale_bits: u32,
+    point_to_scene_scale_bits: u64,
 }
 
 impl SemanticNumericTextBinding {
     pub fn new(
         signal: SemanticNodeId,
         token_resources: Arc<[(Arc<str>, TextResourceHandle)]>,
-        point_to_scene_scale: f32,
+        point_to_scene_scale: f64,
     ) -> Self {
         Self {
             signal,
@@ -39,8 +39,8 @@ impl SemanticNumericTextBinding {
         &self.token_resources
     }
 
-    pub const fn point_to_scene_scale(&self) -> f32 {
-        f32::from_bits(self.point_to_scene_scale_bits)
+    pub const fn point_to_scene_scale(&self) -> f64 {
+        f64::from_bits(self.point_to_scene_scale_bits)
     }
 
     pub fn is_valid(&self) -> bool {

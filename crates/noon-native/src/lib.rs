@@ -8,8 +8,12 @@
 #![forbid(unsafe_code)]
 
 mod execution_source;
+mod playback_controls;
 mod pointer_input;
 mod selection_overlay;
+
+#[cfg(feature = "audio")]
+mod audio_output;
 
 #[cfg(test)]
 mod realtime_tests;
@@ -53,7 +57,7 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 };
 
 /// Minimal platform configuration for a native Noon viewport.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NativeViewportConfig {
     pub title: String,
     pub width: u32,
@@ -61,6 +65,14 @@ pub struct NativeViewportConfig {
     /// Opt in to session-owned cursor-anchored inspection zoom. Authored camera
     /// values and time remain unchanged; ordinary native viewports default off.
     pub inspection_zoom: bool,
+    /// Enable native keyboard playback and viewer-audio controls for a complete
+    /// finite replayable session. Authored scene buttons use the same commands.
+    /// Space toggles playback, arrows seek five seconds or adjust volume,
+    /// Page Up/Down select sections, Home restarts, and M toggles mute.
+    pub playback_controls: bool,
+    /// Immutable labels from the same authored Scene as the execution session.
+    /// This metadata contains no playhead and never schedules execution.
+    pub section_navigation: noon::SceneSectionNavigation,
 }
 
 impl Default for NativeViewportConfig {
@@ -70,12 +82,17 @@ impl Default for NativeViewportConfig {
             width: 960,
             height: 540,
             inspection_zoom: false,
+            playback_controls: false,
+            section_navigation: noon::SceneSectionNavigation::default(),
         }
     }
 }
 
 #[derive(Debug)]
 pub enum NativeHostError {
+    AudioOutputUnavailable,
+    Audio(String),
+    PlaybackControlsUnavailable,
     Platform(String),
     Gpu(String),
     Runtime(EvaluationError),
@@ -90,6 +107,13 @@ pub enum NativeHostError {
 impl std::fmt::Display for NativeHostError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioOutputUnavailable => formatter.write_str(
+                "native device audio requires the noon-native audio feature (#2263)",
+            ),
+            Self::Audio(message) => write!(formatter, "native audio error: {message}"),
+            Self::PlaybackControlsUnavailable => formatter.write_str(
+                "native playback controls require a freshly lowered finite scene without live execution edits, source continuations, required callbacks, retained history, or external input/effective drivers (#2263)",
+            ),
             Self::Platform(message) => write!(formatter, "native platform error: {message}"),
             Self::Gpu(message) => write!(formatter, "native GPU error: {message}"),
             Self::Runtime(error) => error.fmt(formatter),
@@ -227,6 +251,19 @@ fn run_source(
     source: Box<dyn NativeExecutionSource>,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
+    // Profile admission precedes window/device allocation. The host must not
+    // silently omit authored audio or consume a click without its control action.
+    if source.session().has_audio() {
+        #[cfg(not(feature = "audio"))]
+        return Err(NativeHostError::AudioOutputUnavailable);
+        #[cfg(feature = "audio")]
+        audio_output::admit_profile(source.as_ref())?;
+    }
+    if (config.playback_controls || source.session().has_playback_controls())
+        && source.finite_transport_end().is_none()
+    {
+        return Err(NativeHostError::PlaybackControlsUnavailable);
+    }
     if config.width == 0 || config.height == 0 {
         return Err(NativeHostError::Platform(
             "initial viewport dimensions must be positive".to_owned(),
@@ -286,6 +323,19 @@ struct NativeApp {
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
     realtime_clock: Option<RealtimeClock>,
+    // Viewer intent and presentation admission on the existing host clock;
+    // Runtime remains the only authored-time and replay authority.
+    playback_paused: bool,
+    playback_picture_pending: bool,
+    finite_transport_end: Option<f64>,
+    viewer_volume: f64,
+    viewer_muted: bool,
+    #[cfg(feature = "audio")]
+    audio_output: Option<audio_output::NativeAudioOutput>,
+    #[cfg(feature = "audio")]
+    releasing_audio_output: Option<audio_output::NativeAudioOutput>,
+    #[cfg(feature = "audio")]
+    audio_picture_ready: bool,
     interaction_wall_origin: Instant,
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
@@ -327,12 +377,31 @@ impl NativeApp {
     }
 
     fn from_source(source: Box<dyn NativeExecutionSource>, config: NativeViewportConfig) -> Self {
+        let finite_transport_end =
+            if config.playback_controls || source.session().has_playback_controls() {
+                source.finite_transport_end()
+            } else if source.session().has_audio() {
+                source.session().finite_timeline_end_time()
+            } else {
+                None
+            };
         Self {
             execution: source,
             config,
             window: None,
             gpu: None,
             realtime_clock: None,
+            playback_paused: false,
+            playback_picture_pending: false,
+            finite_transport_end,
+            viewer_volume: 1.0,
+            viewer_muted: false,
+            #[cfg(feature = "audio")]
+            audio_output: None,
+            #[cfg(feature = "audio")]
+            releasing_audio_output: None,
+            #[cfg(feature = "audio")]
+            audio_picture_ready: false,
             interaction_wall_origin: Instant::now(),
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
@@ -373,6 +442,10 @@ impl NativeApp {
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: NativeHostError) {
+        #[cfg(feature = "audio")]
+        {
+            self.stop_audio();
+        }
         if self.error.is_none() {
             self.error = Some(error);
         }
@@ -436,6 +509,9 @@ impl NativeApp {
         timeline: TimelineWakeState,
         now: Instant,
     ) -> Option<RealtimeClock> {
+        if self.playback_paused || self.playback_picture_pending {
+            return None;
+        }
         if matches!(timeline, TimelineWakeState::Quiescent) {
             // Publication/continuation barriers suppress timeline wakes but
             // do not pause an unfinished source. Retire only genuinely idle
@@ -446,6 +522,14 @@ impl NativeApp {
             return None;
         }
         if self.realtime_clock.is_none() {
+            #[cfg(feature = "audio")]
+            if self.audio_remaining() {
+                // Cold preparation and suspension hold both consumers. The
+                // first admitted device buffer supplies one common wall anchor;
+                // only this existing native clock advances the scene.
+                self.realtime_clock = self.audio_output.as_ref().and_then(|output| output.clock());
+                return self.realtime_clock;
+            }
             self.realtime_clock = Some(RealtimeClock::new(now, self.execution.frame_time()));
         }
         self.realtime_clock
@@ -458,12 +542,21 @@ impl NativeApp {
     }
 
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
+        if self.playback_paused || self.playback_picture_pending {
+            return Ok(());
+        }
         self.resume_ready_preserving_clock(now)?;
         let timeline = self.execution.timeline();
         let Some(clock) = self.realtime_clock_for_timeline(timeline, now) else {
             return Ok(());
         };
         let requested = clock.scene_time_at(now).max(self.execution.frame_time());
+        let requested = self
+            .finite_transport_end
+            .map_or(requested, |end| requested.min(end));
+        let was_finished = self
+            .finite_transport_end
+            .is_some_and(|end| self.execution.frame_time() >= end);
         match timeline {
             TimelineWakeState::Continuous => self.execution.advance_to(requested)?,
             TimelineWakeState::Deadline(scene_time) => {
@@ -482,6 +575,13 @@ impl NativeApp {
         // intentional pause. Their wall time stays in this epoch and is sampled
         // on the next available wake; it is never subtracted from playback.
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
+        if !was_finished
+            && self
+                .finite_transport_end
+                .is_some_and(|end| self.execution.frame_time() >= end)
+        {
+            self.update_playback_title();
+        }
         Ok(())
     }
 
@@ -495,7 +595,8 @@ impl NativeApp {
 
         self.resume_ready_preserving_clock(Instant::now())?;
         if !self.publication_pending()
-            && matches!(self.execution.timeline(), TimelineWakeState::Quiescent)
+            && (self.playback_paused
+                || matches!(self.execution.timeline(), TimelineWakeState::Quiescent))
             && !self.execution.session().interactions_active()
         {
             return Ok(());
@@ -673,7 +774,7 @@ impl NativeApp {
                 self.last_text_draw_calls = _draw.text.draw_calls;
             }
             window.pre_present_notify();
-            gpu.queue.submit(Some(encoder.finish()));
+            let _submission = gpu.queue.submit(Some(encoder.finish()));
             gpu.queue.present(surface_texture);
             if reconfigure_after_present {
                 gpu.surface.configure(&gpu.device, &gpu.config);
@@ -681,6 +782,24 @@ impl NativeApp {
             let presented = publication.context();
             debug_assert_eq!(pointer_frame.publication(), presented);
             self.execution.admit_presented_frame(&pointer_frame)?;
+            #[cfg(feature = "audio")]
+            if !self.audio_picture_ready {
+                if let Some(output) = self.audio_output.as_ref() {
+                    // One cold/resume barrier, never a per-frame GPU fence.
+                    // Queue submission alone does not mean the first picture
+                    // has finished its shader/resource preparation.
+                    gpu.device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: Some(_submission),
+                            timeout: Some(Duration::from_secs(10)),
+                        })
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    self.audio_picture_ready = true;
+                    if self.releasing_audio_output.is_none() && !self.playback_paused {
+                        output.admit();
+                    }
+                }
+            }
             self.pointer.presented = Some(pointer_frame);
             self.pointer.refresh_pending = false;
             self.last_selection_presentation = highlight;
@@ -689,6 +808,7 @@ impl NativeApp {
                 self.presented_frame_time = Some(self.execution.frame_time());
             }
             self.force_full_redraw = false;
+            self.playback_picture_pending = false;
             if reconfigure_after_present {
                 // The submitted image belongs to the old surface configuration.
                 self.rebind_pointer_view()?;
@@ -696,6 +816,12 @@ impl NativeApp {
             return Ok(());
         }
         unreachable!("the final bounded preparation pass always presents")
+    }
+
+    fn set_wait_mode(&self, event_loop: &ActiveEventLoop, flow: ControlFlow) {
+        #[cfg(feature = "audio")]
+        let flow = self.audio_control_flow(flow);
+        event_loop.set_control_flow(flow);
     }
 
     fn publication_pending(&self) -> bool {
@@ -727,6 +853,11 @@ impl NativeApp {
 
 impl ApplicationHandler for NativeApp {
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "audio")]
+        if let Err(error) = self.suspend_audio(Instant::now()) {
+            self.fail(event_loop, error);
+            return;
+        }
         if let Err(error) = self
             .pointer_focus_lost()
             .and_then(|()| self.rebind_pointer_view())
@@ -776,6 +907,13 @@ impl ApplicationHandler for NativeApp {
                 Err(error) => self.fail(event_loop, error),
             }
         }
+        #[cfg(feature = "audio")]
+        if self.error.is_none() {
+            if let Err(error) = self.prepare_audio() {
+                self.fail(event_loop, error);
+            }
+        }
+        self.update_playback_title();
     }
 
     fn window_event(
@@ -792,8 +930,21 @@ impl ApplicationHandler for NativeApp {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                #[cfg(feature = "audio")]
+                {
+                    self.stop_audio();
+                }
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
+                #[cfg(feature = "audio")]
+                if size.width == 0 || size.height == 0 {
+                    if let Err(error) = self.suspend_audio(Instant::now()) {
+                        self.fail(event_loop, error);
+                        return;
+                    }
+                }
                 if let Err(error) = self.dispatch_viewport_size(&window, size) {
                     self.fail(event_loop, error);
                     return;
@@ -814,6 +965,12 @@ impl ApplicationHandler for NativeApp {
                 }
                 if let Err(error) = self.rebind_pointer_view() {
                     self.fail(event_loop, error);
+                }
+                #[cfg(feature = "audio")]
+                if size.width > 0 && size.height > 0 && self.error.is_none() {
+                    if let Err(error) = self.prepare_audio() {
+                        self.fail(event_loop, error);
+                    }
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -853,7 +1010,16 @@ impl ApplicationHandler for NativeApp {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let Err(error) = self.dispatch_keyboard(event.physical_key, event.state) {
+                let result = self
+                    .dispatch_playback_key(event.physical_key, event.state, event.repeat)
+                    .and_then(|handled| {
+                        if handled {
+                            Ok(())
+                        } else {
+                            self.dispatch_keyboard(event.physical_key, event.state)
+                        }
+                    });
+                if let Err(error) = result {
                     self.fail(event_loop, error);
                 }
             }
@@ -890,12 +1056,17 @@ impl ApplicationHandler for NativeApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "audio")]
+        if let Err(error) = self.check_audio(Instant::now()) {
+            self.fail(event_loop, error);
+            return;
+        }
         let Some(window) = self.window.as_ref().cloned() else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         };
         if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
 
@@ -910,43 +1081,61 @@ impl ApplicationHandler for NativeApp {
         }
         if self.publication_pending() {
             window.request_redraw();
-            event_loop.set_control_flow(ControlFlow::Wait);
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
 
         if self.execution.session().interactions_active() {
             window.request_redraw();
-            event_loop.set_control_flow(ControlFlow::Poll);
+            self.set_wait_mode(event_loop, ControlFlow::Poll);
+            return;
+        }
+        if self.playback_paused {
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
         let timeline = self.execution.timeline();
         let now = Instant::now();
         let clock = self.realtime_clock_for_timeline(timeline, now);
+        #[cfg(feature = "audio")]
+        if clock.is_none() && self.audio_picture_ready && self.audio_remaining() {
+            // The prepared picture is already visible. Wait for the admitted
+            // device anchor without repeatedly redrawing a frozen scene.
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
+            return;
+        }
         match timeline {
             TimelineWakeState::Continuous => {
                 window.request_redraw();
-                event_loop.set_control_flow(ControlFlow::Poll);
+                self.set_wait_mode(event_loop, ControlFlow::Poll);
             }
             TimelineWakeState::Deadline(scene_time) => {
                 let Some(clock) = clock else {
                     window.request_redraw();
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.set_wait_mode(event_loop, ControlFlow::Wait);
                     return;
                 };
                 let Some(deadline) = clock.wall_deadline(scene_time) else {
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.set_wait_mode(event_loop, ControlFlow::Wait);
                     return;
                 };
                 if deadline <= now {
                     window.request_redraw();
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.set_wait_mode(event_loop, ControlFlow::Wait);
                 } else {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                    self.set_wait_mode(event_loop, ControlFlow::WaitUntil(deadline));
                 }
             }
             TimelineWakeState::Quiescent => {
-                event_loop.set_control_flow(ControlFlow::Wait);
+                self.set_wait_mode(event_loop, ControlFlow::Wait);
             }
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "audio")]
+        {
+            self.stop_audio();
         }
     }
 }
@@ -1155,6 +1344,69 @@ mod tests {
     use noon_core::{AnimationOptions, RateFunction};
 
     use super::*;
+
+    #[test]
+    #[cfg(not(feature = "audio"))]
+    fn native_host_rejects_audio_before_opening_a_window() {
+        let mut scene = Scene::new();
+        scene
+            .audio(
+                noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.0; 8_000], 32_000)
+                    .unwrap(),
+                noon_core::AudioClipOptions::default(),
+            )
+            .unwrap();
+        assert!(matches!(
+            run(scene.execution_session().unwrap()),
+            Err(NativeHostError::AudioOutputUnavailable)
+        ));
+    }
+
+    #[test]
+    fn native_host_admits_finite_scene_controls_without_an_audio_device() {
+        let mut scene = Scene::new();
+        let mut button = scene.rectangle(1.7, 0.65).unwrap();
+        button.set_fill(0.2, 0.4, 0.5, 1.0).unwrap();
+        scene.add(&button).unwrap();
+        scene
+            .on_click_playback(&button, noon::PlaybackControl::TogglePlayback)
+            .unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(!session.has_audio());
+        assert!(session.has_playback_controls());
+        assert!(matches!(
+            run_with_config(session, NativeViewportConfig { width: 0, ..Default::default() }),
+            Err(NativeHostError::Platform(message)) if message == "initial viewport dimensions must be positive"
+        ));
+    }
+
+    #[test]
+    fn native_profile_gate_preserves_existing_click_indicate_admission() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(0.5).unwrap();
+        scene.add(&circle).unwrap();
+        scene
+            .on_click_indicate(
+                &circle,
+                noon::IndicateOptions::default(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(!session.has_playback_controls());
+        // The pre-existing configuration error proves this supported interaction
+        // passes profile admission without requiring a real event loop/window.
+        let error = run_with_config(
+            session,
+            NativeViewportConfig {
+                width: 0,
+                ..NativeViewportConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, NativeHostError::Platform(ref message)
+            if message == "initial viewport dimensions must be positive"));
+    }
 
     struct NativeWaitContinuation {
         resumes: Rc<Cell<usize>>,
@@ -1400,7 +1652,7 @@ mod tests {
         let restart_wall = original_wall + Duration::from_secs(30);
         app.static_session_mut()
             .activate_animation(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1517,7 +1769,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         session
             .activate_animation(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -1739,6 +1991,7 @@ mod tests {
                 width: 320,
                 height: 180,
                 inspection_zoom: false,
+                ..Default::default()
             },
         );
         app.exit_after_present = Some(0.0);
@@ -1779,6 +2032,7 @@ mod tests {
                 width: 320,
                 height: 180,
                 inspection_zoom: false,
+                ..Default::default()
             },
         );
         app.exit_after_present = Some(endpoint);

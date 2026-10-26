@@ -1,5 +1,7 @@
 import initNoonWeb, {
   WasmAuthoringStore,
+  WasmAudioSource,
+  WasmAudioClipOptions,
   WasmAuthoringFamilyHandle,
   WasmGlow,
   WasmGlowUpdate,
@@ -29,6 +31,7 @@ import initNoonWeb, {
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
   resolveCreateAnimationOptions,
+  resolveGlowPulseAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
@@ -305,6 +308,8 @@ async function initializePyodide() {
     authoringStore.createManimGeometry(options);
   self.noonCreateAuthoringArrowHandle = (options) =>
     authoringStore.createManimArrow(options);
+  self.noonAudioSource = WasmAudioSource;
+  self.noonAudioClipOptions = (...args) => new WasmAudioClipOptions(...args);
   self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
     authoringStore.createSvgFromString(source, shouldCenter, height, width);
   self.noonTextColorBatch = () => new WasmTextColorBatch();
@@ -484,6 +489,7 @@ async function initializePyodide() {
     : authoringStore.createFamily(batch, zIndex, drawEnabled);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveCreateAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveCreateAnimationOptions, ...args);
+  self.noonResolveGlowPulseAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveGlowPulseAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>
     resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);
   const bindingsReadyAt = performance.now();

@@ -20,16 +20,16 @@ class OrdinaryFamilyTransformIndicate(Scene):
         self.play(
             family.animate(run_time=2, rate_func=linear, lag_ratio=0.5).shift(RIGHT)
         )
-        assert abs(left.get_center().x + 1) < 1e-6
-        assert abs(right.get_center().x - 1) < 1e-6
+        assert abs(left.get_center()[0] + 1) < 1e-6
+        assert abs(right.get_center()[0] - 1) < 1e-6
         self.play(Indicate(family, run_time=2, lag_ratio=0.5))
-        assert abs(left.get_center().x + 1) < 1e-6
-        assert abs(right.get_center().x - 1) < 1e-6
+        assert abs(left.get_center()[0] + 1) < 1e-6
+        assert abs(right.get_center()[0] - 1) < 1e-6
         self.wait(0.25)
         copied = family.copy()
         assert copied[0].saved_state is not left.saved_state
-        assert abs(copied[0].saved_state.get_center().x + 2) < 1e-6
+        assert abs(copied[0].saved_state.get_center()[0] + 2) < 1e-6
         copied[0].shift(RIGHT)
         left.become(copied[0])
         self.wait(0.25)
-        assert abs(left.get_center().x) < 1e-6
+        assert abs(left.get_center()[0]) < 1e-6

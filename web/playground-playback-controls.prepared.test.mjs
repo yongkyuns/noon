@@ -278,3 +278,17 @@ test("explicit busy work disables prepared commands while mere source progress d
   assert.deepEqual(f.calls, [["restartPlayback", undefined]]);
   assert.equal(f.output.value, "0.00 / — s");
 });
+
+test("admitting prepared history clears a previous scene's audio controls", () => {
+  const f = fixture({ time: 0, playing: false, hasAudio: true, audioReady: false,
+    durationSeconds: 5, sections: [{ name: "Audio lesson", time: 0 }] });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, false);
+  assert.equal(f.toggle.textContent, "Play with sound");
+  f.setState(prepared());
+  assert.equal(audio.hidden, true);
+  assert.equal(f.toggle.textContent, "Play");
+  assert.equal(f.controls.durationSeconds, null);
+  assert.equal(f.input.hidden, false);
+  assert.deepEqual(f.calls, []);
+});

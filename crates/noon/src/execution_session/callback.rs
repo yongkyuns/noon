@@ -2268,3 +2268,211 @@ impl ExecutionSession {
 
 #[cfg(test)]
 mod tests;
+
+impl crate::ExecutionSession {
+    /// Specialize one pure follower in a flat parallel composition. Axis-aligned
+    /// positive affine layout bounds and unchanging content make replacement
+    /// affine in the driver's progress. Generate ordinary Transform endpoints;
+    /// no callback trace or runtime evaluator lives
+    /// here. Any failed proof keeps the original host interval intact.
+    pub(crate) fn specialize_layout_replace(
+        &self,
+        store: &noon_core::SemanticStore,
+        request: &crate::execution_session::SemanticCompositionRequest,
+        play_options: noon_core::AnimationOptions,
+    ) -> Option<crate::execution_session::SemanticCompositionRequest> {
+        use crate::execution_session::SemanticCompositionRequest as Request;
+        use noon_core::{AnimationOptions, RateFunction, SemanticAnimationCompositionKind as Kind};
+        let bounded = |o: AnimationOptions| {
+            matches!(
+                o.rate_func,
+                None | Some(RateFunction::Linear | RateFunction::Smooth)
+            ) && o.lag_ratio.unwrap_or(0.0) == 0.0
+                && o.path_arc.unwrap_or(0.0) == 0.0
+                && !o.remover.unwrap_or(false)
+                && !o.introducer.unwrap_or(false)
+        };
+        let Request::Composition {
+            kind: Kind::Parallel,
+            children,
+            options,
+        } = request
+        else {
+            return None;
+        };
+        if !bounded(*options)
+            || !bounded(play_options)
+            || !self.callback_schedule.is_empty()
+            || self.derived_display_plan.is_some()
+            || self.translation_drag.has_targets()
+        {
+            return None;
+        }
+        let mut follower = None;
+        for child in children {
+            match child {
+                Request::LayoutReplaceInterval {
+                    target,
+                    layout_target,
+                    options,
+                    ..
+                } => {
+                    if follower
+                        .replace((*target, *layout_target, *options))
+                        .is_some()
+                    {
+                        return None;
+                    }
+                }
+                Request::TransformTo { .. } => {}
+                _ => return None,
+            }
+        }
+        let (source, target, interval) = follower?;
+        if source == target || !bounded(interval) {
+            return None;
+        }
+        let mut driver = None;
+        for child in children {
+            if let Request::TransformTo {
+                source: node,
+                target_state,
+                interpolation,
+                options,
+                ..
+            } = child
+            {
+                if *node == source {
+                    return None;
+                }
+                if *node == target
+                    && (*interpolation != noon_core::SemanticTransformInterpolation::Affine
+                        || driver.replace((*target_state, *options)).is_some())
+                {
+                    return None;
+                }
+            }
+        }
+        let (end, driver_options) = driver?;
+        // A family may own geometry without children. That does not make it a
+        // leaf: family layout/transform semantics remain outside this profile.
+        if [source, target, end].into_iter().any(|node| {
+            !matches!(
+                store.node(node).map(|node| node.kind()),
+                Some(noon_core::SemanticNodeKind::AuthoringObject)
+            )
+        }) {
+            return None;
+        }
+        if !bounded(driver_options)
+            || driver_options.run_time.unwrap_or(1.0) <= 0.0
+            || driver_options.run_time.unwrap_or(1.0) != interval.run_time.unwrap_or(1.0)
+        {
+            return None;
+        }
+        let source_state = store.semantic_object_state_checked(source).ok()?;
+        let target_state = store.semantic_object_state_checked(target).ok()?;
+        let end_state = store.semantic_object_state_checked(end).ok()?;
+        if target_state.content != end_state.content {
+            return None;
+        }
+        // The segment publication barrier keeps authored content stable. Native
+        // click effects bypass that barrier, so their targets cannot be folded.
+        let read = |node| {
+            let state = store.semantic_object_state_checked(node).ok()?;
+            if !self.reachability.is_object_reachable(node)
+                || state.spatial_properties().is_some()
+                || state.content.text().is_some()
+                || !state.signal_bindings().is_empty()
+                || state.click_action().is_some()
+                || store.node(node)?.members_iter().next().is_some()
+                || !store.semantic_updater_registrations(node).ok()?.is_empty()
+                || !store.animation_effect_snapshot(node).ok()?.is_empty()
+            {
+                return None;
+            }
+            let observed = self.effective_semantic_object(store, node).ok()?;
+            if !observed.authored_content_layout_applicable()
+                || self.runtime.object_has_effective_driver(observed.object.id)
+            {
+                return None;
+            }
+            let transform = observed.object.transform;
+            if transform.rotation != 0.0 || transform.scale.x <= 0.0 || transform.scale.y <= 0.0 {
+                return None;
+            }
+            Some((observed.object.id, transform, observed.object.style))
+        };
+        let (source_id, source_transform, _) = read(source)?;
+        let (target_id, target_transform, _) = read(target)?;
+        let end_transform = end_state.transform.as_planar()?;
+        if end_transform.rotation_z != 0.0
+            || end_transform.scale.x <= 0.0
+            || end_transform.scale.y <= 0.0
+        {
+            return None;
+        }
+        let end_transform = Transform2D {
+            translation: end_transform.translation.lower_xy_f32().ok()?,
+            scale: end_transform.scale.lower_xy_f32().ok()?,
+            rotation: 0.0,
+        };
+        let source_bounds = self
+            .runtime
+            .retained_object_layout_bounds_at(source_id, source_transform)?;
+        if source_bounds.width() <= 0.0 || source_bounds.height() <= 0.0 {
+            return None;
+        }
+        let fit = |transform| {
+            let target_bounds = self
+                .runtime
+                .retained_object_layout_bounds_at(target_id, transform)?;
+            let rows = BTreeMap::from([
+                (source, (source_transform, Some(source_bounds))),
+                (target, (transform, Some(target_bounds))),
+            ]);
+            crate::family_callback_layout::prepare_layout_replace_rows(
+                &[source],
+                &[target],
+                &rows,
+                crate::LayoutDimension::Width,
+                false,
+            )
+            .ok()?
+            .first()
+            .map(|row| row.transform)
+        };
+        let authored = source_state.transform.as_planar()?;
+        let from = crate::semantic_mobject::semantic_transform_with_effective_affine(
+            authored,
+            fit(target_transform)?,
+        );
+        let mut to = source_state.clone();
+        to.set_transform(
+            crate::semantic_mobject::semantic_transform_with_effective_affine(
+                authored,
+                fit(end_transform)?,
+            )
+            .into(),
+        );
+        let children = children
+            .iter()
+            .map(|child| {
+                if matches!(child, Request::LayoutReplaceInterval { .. }) {
+                    Request::ResolvedLayoutReplace {
+                        target: source,
+                        endpoints: Box::new((from, to.clone())),
+                        options: driver_options,
+                    }
+                } else {
+                    child.clone()
+                }
+            })
+            .collect();
+        Some(Request::Composition {
+            kind: Kind::Parallel,
+            children,
+            options: *options,
+        })
+    }
+}

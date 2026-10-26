@@ -163,6 +163,7 @@ pub struct NativePointerInputPublication {
     selection_query: Option<super::PointerFillQuery>,
     selection_click: Option<super::PointerSelectionClick>,
     selection_changed: bool,
+    playback_control: Option<noon_core::PlaybackControl>,
 }
 
 impl NativePointerInputPublication {
@@ -174,6 +175,14 @@ impl NativePointerInputPublication {
     /// Exactly-once successful click, only after the whole input commit succeeds.
     pub const fn selection_click(self) -> Option<super::PointerSelectionClick> {
         self.selection_click
+    }
+
+    /// A scene-authored viewer request from this committed click. Dispatch it
+    /// after input returns through the existing admitted playback path, never
+    /// while the input transaction or its displayed-frame checks are pending.
+    /// Observing this receipt does not seek, play audio, or mutate authored state.
+    pub const fn playback_control(self) -> Option<noon_core::PlaybackControl> {
+        self.playback_control
     }
 
     /// An interactive presentation may use this to request overlay work. It does
@@ -241,14 +250,14 @@ pub(super) struct PreparedNativePointerPublication {
     input: NativePointerInput,
     previous: PublicationContext,
     selection: super::selection::PreparedPointerSelection,
-    action: Option<noon_runtime::PreparedTransientAnimation>,
+    action: Option<super::interactions::PreparedClickAction>,
 }
 
 pub(super) struct PreparedNativePointerMetadata {
     input: NativePointerInput,
     previous: PublicationContext,
     selection: super::selection::PreparedPointerSelection,
-    action: Option<noon_runtime::PreparedTransientAnimation>,
+    action: Option<super::interactions::PreparedClickAction>,
 }
 
 impl ExecutionSession {
@@ -260,6 +269,7 @@ impl ExecutionSession {
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
         self.runtime.has_click_indicate_bindings()
+            || self.has_playback_controls()
             || self.translation_drag.has_targets()
             || self.pointer_selection.enabled()
             || !self
@@ -396,7 +406,7 @@ impl ExecutionSession {
         let previous = self.preflight_native_pointer_input(token, input)?;
         let selection = self.prepare_pointer_selection(token, input)?;
         let action = (!suppress_click_action)
-            .then(|| self.prepare_click_animation(selection.click))
+            .then(|| self.prepare_click_action(selection.click))
             .transpose()?
             .flatten();
 
@@ -466,11 +476,16 @@ impl ExecutionSession {
         self.last_native_event_sequence = Some(input.sequence());
         self.pointer_selection = selection.state;
         self.pointer_selection.hover.accept(input);
-        if let Some(action) = action {
-            self.runtime
-                .start_transient_animation(action)
-                .expect("admitted native input cannot change authored revision or time");
-        }
+        let playback_control = match action {
+            Some(super::interactions::PreparedClickAction::Animation(animation)) => {
+                self.runtime
+                    .start_transient_animation(animation)
+                    .expect("admitted native input cannot change authored revision or time");
+                None
+            }
+            Some(super::interactions::PreparedClickAction::Playback(control)) => Some(control),
+            None => None,
+        };
         Ok(NativePointerInputPublication {
             input,
             previous,
@@ -478,6 +493,7 @@ impl ExecutionSession {
             selection_query: selection.query,
             selection_click: selection.click,
             selection_changed: selection.changed,
+            playback_control,
         })
     }
 

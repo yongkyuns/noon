@@ -284,7 +284,7 @@ mod tests {
                             vector_items: Default::default(),
                             render_items: Default::default(),
                             parts: Default::default(),
-                            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+                            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO).into(),
                             baseline: 0.0,
                             layout_artifact: None,
                         },

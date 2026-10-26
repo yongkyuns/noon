@@ -472,7 +472,7 @@ mod admission {
                     match browser_pointer_input::submit_captured_browser_pointer_input(
                         target, binding, sequence, input, &frame,
                     ) {
-                        Ok(()) => {
+                        Ok(_) => {
                             self.rejected = None;
                             if !target.translation_drag_active() {
                                 self.presented_frame = None;
@@ -509,7 +509,7 @@ mod admission {
                         input,
                         &issued.frame,
                     ) {
-                        Ok(()) => {
+                        Ok(_) => {
                             self.rejected = None;
                             if !drag_active && target.translation_drag_active() {
                                 // Acquisition alone pins a mapping. Later receipt

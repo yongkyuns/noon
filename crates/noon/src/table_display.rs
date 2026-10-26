@@ -2442,25 +2442,31 @@ mod tests {
                 (bounds.min_y + bounds.max_y) * 0.5,
             )
         };
-        assert_eq!(
+        // Bounds with different widths can cancel to neighboring f64 centers.
+        // Keep alignment within 1e-15; all pinned-reference comparisons retain
+        // their unchanged 1e-12 comparator and complete coordinate assertions.
+        let assert_aligned = |left: f64, right: f64| {
+            assert!((left - right).abs() < 1e-15, "{left} != {right}");
+        };
+        assert_aligned(
             center(row_a_family.layout_bounds().unwrap().unwrap()).1,
-            center(entry_bounds[0]).1
+            center(entry_bounds[0]).1,
         );
-        assert_eq!(
+        assert_aligned(
             center(row_b_family.layout_bounds().unwrap().unwrap()).1,
-            center(entry_bounds[1]).1
+            center(entry_bounds[1]).1,
         );
-        assert_eq!(
+        assert_aligned(
             center(column.layout_bounds().unwrap().unwrap()).0,
-            center(entry_bounds[0]).0
+            center(entry_bounds[0]).0,
         );
-        assert_eq!(
+        assert_aligned(
             center(corner.layout_bounds().unwrap().unwrap()).0,
-            center(row_a_family.layout_bounds().unwrap().unwrap()).0
+            center(row_a_family.layout_bounds().unwrap().unwrap()).0,
         );
-        assert_eq!(
+        assert_aligned(
             center(corner.layout_bounds().unwrap().unwrap()).1,
-            center(column.layout_bounds().unwrap().unwrap()).1
+            center(column.layout_bounds().unwrap().unwrap()).1,
         );
     }
 }

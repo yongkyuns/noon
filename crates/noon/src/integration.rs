@@ -28,9 +28,10 @@ mod path_edits;
 mod pixel_readback;
 
 pub use export_frames::{
-    ExportEndReason, ExportFrame, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
-    ExportFramePolicyStatus, ExportFrameSummary, ExportFrames, ExportFramesError,
-    ExportFramesStatus, ExportSample, ExportSampleKind, ExportStop,
+    ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
+    ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus, ExportFrameSummary,
+    ExportFrames, ExportFramesError, ExportFramesStatus, ExportSample, ExportSampleKind,
+    ExportStop,
 };
 pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,
@@ -61,7 +62,10 @@ pub use crate::execution_session::{
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
-pub use crate::family_points::{publish_clear_family_points, publish_family_points};
+pub use crate::family_points::{
+    publish_append_family_points, publish_append_family_points_3d, publish_clear_family_points,
+    publish_empty_family_point_array, publish_family_points, publish_family_points_3d,
+};
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fade, effective_style_with_fade_to,
     effective_style_with_fill, effective_style_with_fill_color, effective_style_with_fill_opacity,
@@ -70,11 +74,13 @@ pub use crate::host_callbacks::{
 };
 pub use crate::path_alignment::{publish_alignment, publish_root_alignment};
 pub use crate::path_queries::{
-    effective_all_points, effective_boundary_point, effective_center_of_mass,
-    effective_extremum_along_dim, effective_length_over_dim, effective_mobject_point_count,
+    effective_all_points, effective_all_points_3d, effective_boundary_point,
+    effective_center_of_mass, effective_critical_point_3d, effective_extremum_along_dim,
+    effective_length_over_dim, effective_mobject_point_count,
     effective_path_boundary_extremum_along_dim, effective_path_boundary_point,
-    effective_path_boundary_points, effective_path_query, effective_point_reduction_tree,
-    effective_vector_boundary_points,
+    effective_path_boundary_points, effective_path_boundary_points_3d, effective_path_query,
+    effective_point_array, effective_point_reduction_tree, effective_requires_content_boundary,
+    effective_vector_boundary_points, effective_vector_boundary_points_3d,
 };
 pub use crate::point_matching::publish_match_points;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
@@ -98,8 +104,9 @@ pub use noon_core::{
     NativePointerInput, NativePointerInputKind, NativePointerPosition,
 };
 pub use noon_runtime::{
-    EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState, RendererPublication,
-    RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
+    AudioMixError, AudioMixFormat, EffectiveObjectProperties, FrameChanges, FrameObjectState,
+    FrameState, PreparedAudioMix, RendererPublication, RuntimeIdentity, RuntimeWakeState,
+    TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
 /// Construct one detached family through an explicitly supplied live execution
@@ -209,7 +216,13 @@ pub fn publish_family_shift(
     x: f64,
     y: f64,
 ) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_shift_family(store, root, execution, family, x, y)
+    crate::family_layout::publish_shift_family(
+        store,
+        root,
+        execution,
+        family,
+        noon_core::SemanticVec3::new(x, y, 0.0),
+    )
 }
 
 /// Publish linear family arrangement without constructing a `LiveSession` facade.

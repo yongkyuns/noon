@@ -44,20 +44,20 @@ class ManimFadeEndpointTests(unittest.TestCase):
                 result = Result()
                 result.runTime = (
                     play_run_time
-                    if math.isfinite(play_run_time)
+                    if play_run_time is not None
                     else animation_run_time
-                    if math.isfinite(animation_run_time)
+                    if animation_run_time is not None
                     else 1.0
                 )
                 result.rateFunc = play_rate_func or animation_rate_func or "smooth"
                 result.lagRatio = (
                     play_lag_ratio
-                    if math.isfinite(play_lag_ratio)
+                    if play_lag_ratio is not None
                     else animation_lag_ratio
-                    if math.isfinite(animation_lag_ratio)
+                    if animation_lag_ratio is not None
                     else default_lag_ratio
                 )
-                result.pathArc = path_arc if math.isfinite(path_arc) else 0.0
+                result.pathArc = path_arc if path_arc is not None else 0.0
                 result.reverseRateFunction = reverse_rate_function == 1
                 return result
 
@@ -71,6 +71,7 @@ class ManimFadeEndpointTests(unittest.TestCase):
             import _manim_rate_functions
             import _manim_animate  # noqa: F401
 
+            import noon
             from noon import ORIGIN, FadeIn, FadeOut, RIGHT, Scene, Square, UP
 
             from _typed_geometry_test_support import identity_only_wrapper as identity
@@ -97,24 +98,24 @@ class ManimFadeEndpointTests(unittest.TestCase):
             point_fade = FadeIn(canonical_target, target_position=point_reference)
             assert canonical_target.center_reads == 0
             assert point_reference.center_reads == 1
-            assert point_fade._fade_point == RIGHT * 3.0
+            assert point_fade._fade_point == noon._as_vec2(RIGHT * 3.0)
 
             target = identity(Square)
             fade_in = FadeIn(target, shift=UP, scale=0.5, run_time=2.0)
             assert fade_in.target is target and target._scene is None
-            assert fade_in._fade_shift_vector == UP
+            assert fade_in._fade_shift_vector == noon._as_vec2(UP)
             assert fade_in._fade_scale_factor == 0.5
             assert fade_in.anim_args == {"run_time": 2.0}
             fade_out = FadeOut(target, shift=RIGHT * 2.0, scale=1.5, run_time=0.8)
-            assert fade_out._fade_shift_vector == RIGHT * 2.0
+            assert fade_out._fade_shift_vector == noon._as_vec2(RIGHT * 2.0)
             assert fade_out._fade_scale_factor == 1.5
             point = FadeIn(target, target_position=RIGHT * 3.0, run_time=1.25)
             assert point._fade_point_target
-            assert point._fade_point == RIGHT * 3.0
-            assert point._fade_shift_vector == ORIGIN
+            assert point._fade_point == noon._as_vec2(RIGHT * 3.0)
+            assert point._fade_shift_vector == noon._as_vec2(ORIGIN)
             precedence = FadeIn(target, shift=UP, target_position=RIGHT * 8.0)
             assert not precedence._fade_point_target
-            assert precedence._fade_shift_vector == UP
+            assert precedence._fade_shift_vector == noon._as_vec2(UP)
             # The paired Rust/Python affine-fade examples qualify actual endpoints
             # through shared execution; this unit test only protects call coercion.
             """

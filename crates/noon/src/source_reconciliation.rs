@@ -482,7 +482,7 @@ fn stage_object_delta(
         || current.transform != candidate.transform
         || current.style != candidate.style
         || current.z_index() != candidate.z_index()
-        || current.click_indicate() != candidate.click_indicate();
+        || current.click_action() != candidate.click_action();
     if persistent_change && !current.signal_bindings().is_empty() {
         return Err(SourceReconciliationError::ActiveDeclarationDriver {
             source: source.clone(),
@@ -512,8 +512,8 @@ fn stage_object_delta(
         transaction.set_z_index(object, candidate.z_index());
         changed = true;
     }
-    if current.click_indicate() != candidate.click_indicate() {
-        transaction.set_click_indicate(object, candidate.click_indicate());
+    if current.click_action() != candidate.click_action() {
+        transaction.set_click_action(object, candidate.click_action());
         changed = true;
     }
     Ok(changed)
@@ -726,7 +726,7 @@ mod tests {
         let mut execution = scene.execution_session().unwrap();
         let segment = execution
             .activate_animation_segment(
-                &store.borrow(),
+                &mut store.borrow_mut(),
                 animation,
                 AnimationOptions::new().run_time(1.0),
             )

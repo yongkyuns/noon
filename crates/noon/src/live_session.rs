@@ -13,6 +13,7 @@ mod coordinates;
 mod family_layout;
 mod image;
 mod path_editing;
+mod point_promotion;
 mod spatial;
 pub use family_layout::LiveLayoutTarget;
 
@@ -218,6 +219,16 @@ pub enum AnimationCompositionRequest<'a> {
         callback: noon_core::HostCallbackId,
         options: AnimationOptions,
     },
+    /// Declare the pure default-width, non-stretch layout replacement. The
+    /// fallback must perform that same operation. A compatible flat parallel
+    /// affine driver specializes it to ordinary Transform channels; other
+    /// profiles retain the required host callback and its replay restriction.
+    LayoutReplaceInterval {
+        target: &'a Mobject,
+        layout_target: &'a Mobject,
+        fallback: noon_core::HostCallbackId,
+        options: AnimationOptions,
+    },
     /// Animate one mesh/camera/light through the shared effective world-pose track.
     WorldTransform {
         target: &'a Mobject,
@@ -254,6 +265,12 @@ pub enum AnimationCompositionRequest<'a> {
     Indicate {
         target: &'a Mobject,
         indication: IndicateOptions,
+        options: AnimationOptions,
+    },
+    /// Restore only glow intensity captured when this leaf activates.
+    GlowPulse {
+        target: &'a Mobject,
+        intensity: f64,
         options: AnimationOptions,
     },
     FamilyIndicate {
@@ -369,8 +386,11 @@ pub enum AnimationCompositionRequest<'a> {
 }
 
 impl<'a> TransformToRequest<'a> {
-    /// Complete an animated method target, including its exact painter priority.
-    /// Ordinary Transform/MoveToTarget interpolation leaves priority unchanged.
+    /// Complete an animated method target, including its exact painter priority
+    /// and explicitly edited glow parameters. Omitted copied glow parameters
+    /// preserve their activation-effective values, so disjoint edits compose.
+    /// Ordinary Transform/MoveToTarget uses the complete target appearance and
+    /// leaves priority unchanged.
     pub const fn method_target(mut self) -> Self {
         self.complete_priority = true;
         self
@@ -1095,21 +1115,23 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Publish one atomic batch of direct family additions.
-    pub fn add_family_members(
+    pub fn add_family_members<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         members: &[MobjectTarget<'_>],
     ) -> Result<Vec<bool>, LiveSessionError> {
+        let family = family.into();
         self.edit_family_members(family, members, true)
     }
 
     /// Move the unique incoming direct members to the front of one live family.
-    pub fn prepend_family_members(
+    pub fn prepend_family_members<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         members: &[MobjectTarget<'_>],
     ) -> Result<(), LiveSessionError> {
-        self.require_family(family)?;
+        let family = family.into();
+        self.require_membership_root(family)?;
         let transaction = crate::family_authoring::family_prepend_transaction(family, members)
             .map_err(LiveSessionError::from)?;
         if !transaction.mutations().is_empty() {
@@ -1119,13 +1141,14 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Insert or reposition one direct family member through one live commit.
-    pub fn insert_family_member(
+    pub fn insert_family_member<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         index: usize,
         member: MobjectTarget<'_>,
     ) -> Result<(), LiveSessionError> {
-        self.require_family(family)?;
+        let family = family.into();
+        self.require_membership_root(family)?;
         let transaction = crate::family_authoring::family_insert_transaction(family, index, member)
             .map_err(LiveSessionError::from)?;
         if !transaction.mutations().is_empty() {
@@ -1149,21 +1172,22 @@ impl<'a> LiveSession<'a> {
         Ok(())
     }
 
-    pub fn remove_family_members(
+    pub fn remove_family_members<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         members: &[MobjectTarget<'_>],
     ) -> Result<Vec<bool>, LiveSessionError> {
+        let family = family.into();
         self.edit_family_members(family, members, false)
     }
 
     fn edit_family_members(
         &mut self,
-        family: &MobjectFamily,
+        family: MobjectTarget<'_>,
         members: &[MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, LiveSessionError> {
-        self.require_family(family)?;
+        self.require_membership_root(family)?;
         let (transaction, changed) =
             crate::family_authoring::family_membership_transaction(family, members, adding)
                 .map_err(LiveSessionError::from)?;
@@ -1469,6 +1493,34 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Capture full-coordinate owned points and ordered child occurrences from
+    /// this session's coherent publication, retaining recursive alias order.
+    pub fn point_reduction_tree(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointReductionTree, LiveSessionError> {
+        crate::path_queries::effective_point_reduction_tree(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
+    pub fn point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointArrayObservation, LiveSessionError> {
+        crate::path_queries::effective_point_array(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
+    /// Choose existing point versus retained-content boundary semantics from
+    /// this publication, without consulting host wrapper types.
+    pub fn requires_content_boundary(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<bool, LiveSessionError> {
+        crate::path_queries::effective_requires_content_boundary(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
     pub fn effective_layout(
@@ -1633,9 +1685,10 @@ impl<'a> LiveSession<'a> {
 
     /// Activate one predeclared animation in this session.
     ///
-    /// This performs no semantic declaration or target creation: the supplied
-    /// handle is replayable authored state, while activation atomically adds
-    /// execution-local tracks and captures the current effective affine source.
+    /// The supplied declaration and target identities remain replayable authored
+    /// state. Activation captures current effective values and atomically adds
+    /// execution-local tracks, including neutral temporary glow enrollment when
+    /// an authored pulse targets a leaf without a canonical attachment.
     /// The returned segment can be driven with [`Self::advance_segment_to`] and
     /// observed with [`Self::segment_state`]. Call [`Self::complete_segment`]
     /// at its coherent endpoint before sequential authoring resumes.
@@ -1646,13 +1699,13 @@ impl<'a> LiveSession<'a> {
         animation
             .require_store(self.store)
             .map_err(LiveSessionError::Animation)?;
-        let store = self.store.borrow();
+        let mut store = self.store.borrow_mut();
         let options = store
             .semantic_animation_state(animation.node_id())
             .map_err(|error| LiveSessionError::Animation(error.to_string()))?
             .options();
         self.session
-            .activate_animation_segment(&store, animation.node_id(), options)
+            .activate_animation_segment(&mut store, animation.node_id(), options)
             .map_err(Into::into)
     }
 
@@ -1760,6 +1813,25 @@ impl<'a> LiveSession<'a> {
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Pulse one leaf's intensity using the ordinary composition clock.
+    /// An absent glow is enrolled neutrally and removed at segment completion,
+    /// unless an explicit persistent edit adopts that exact attachment.
+    pub fn declare_and_activate_glow_pulse(
+        &mut self,
+        target: &Mobject,
+        intensity: f64,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::GlowPulse {
+                target,
+                intensity,
+                options,
+            },
+            AnimationOptions::new(),
+        )
     }
 
     /// Indicate an ordered semantic family and restore every effective source state.
@@ -2239,6 +2311,21 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
+            AnimationCompositionRequest::LayoutReplaceInterval {
+                target,
+                layout_target,
+                fallback,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                self.require_mobject(layout_target)?;
+                Request::LayoutReplaceInterval {
+                    target: target.node_id(),
+                    layout_target: layout_target.node_id(),
+                    fallback: *fallback,
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::WorldTransform {
                 target,
                 transform,
@@ -2315,6 +2402,18 @@ impl<'a> LiveSession<'a> {
                 Request::MatchingSourceFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::GlowPulse {
+                target,
+                intensity,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::GlowPulse {
+                    target: target.node_id(),
+                    intensity: *intensity,
                     options: *options,
                 }
             }
@@ -2741,13 +2840,22 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.shift_3d(mobject, SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_3d(
+        &mut self,
+        mobject: &Mobject,
+        delta: SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
-        if !x.is_finite() || !y.is_finite() {
+        if !delta.is_finite() {
             // Invalid live property values use the canonical publication validator
             // and its structured diagnostic, before any root/descendant edit.
             let mut translation = self.authored(mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
+            translation.x += delta.x;
+            translation.y += delta.y;
+            translation.z += delta.z;
             return self.set_property(mobject, SemanticObjectProperty::Translation, translation);
         }
         crate::family_layout::publish_shift_root(
@@ -2755,8 +2863,7 @@ impl<'a> LiveSession<'a> {
             self.root,
             self.session,
             mobject.node_id(),
-            x,
-            y,
+            delta,
         )
         .map_err(|error| match error {
             // The shared authoring helper retains the publication cause; the
@@ -2779,13 +2886,20 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.shift_family_3d(family, SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_family_3d(
+        &mut self,
+        family: &MobjectFamily,
+        delta: SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         crate::family_layout::publish_shift_family(
             self.store,
             self.root,
             self.session,
             family,
-            x,
-            y,
+            delta,
         )
         .map_err(LiveSessionError::from)
     }
@@ -3602,6 +3716,25 @@ impl<'a> LiveSession<'a> {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         mobject.validate().map_err(Into::into)
+    }
+
+    fn require_membership_root(&self, root: MobjectTarget<'_>) -> Result<(), LiveSessionError> {
+        match root {
+            MobjectTarget::Object(object) => self.require_mobject(object),
+            MobjectTarget::Family(family) => self.require_family(family),
+        }
+    }
+
+    /// Replace an object or family's children through one coherent live publication.
+    pub fn replace_members(
+        &mut self,
+        root: MobjectTarget<'_>,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<(), LiveSessionError> {
+        self.require_membership_root(root)?;
+        let transaction = crate::object_membership::replace_members_transaction(root, members)?;
+        self.apply(transaction)?;
+        Ok(())
     }
 
     pub(crate) fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {

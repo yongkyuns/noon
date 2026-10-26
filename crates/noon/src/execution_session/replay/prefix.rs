@@ -14,7 +14,9 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
-            || !self.inset_2d_views.is_empty()
+            || self.runtime.inset_2d_views().next().is_some()
+            || self.has_audio()
+            || self.has_playback_controls()
             || !self.signal_timeline.is_empty()
             || !self.reactive_projection.is_empty()
         {

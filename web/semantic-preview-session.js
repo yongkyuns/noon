@@ -79,7 +79,7 @@ export class SemanticPreviewSession {
       const attached = new Promise((resolve) => { resolveAttached = resolve; });
       let registered = false;
       let initialTime;
-      const attach = async (descriptor, continuation) => {
+      const attach = async (descriptor, continuation, completedDuration = null) => {
         this.#assertActive();
         if (registered) throw new Error("preview source registered multiple execution contexts");
         registered = true;
@@ -92,7 +92,7 @@ export class SemanticPreviewSession {
         this.#assertActive();
         const ready = await this.#execution.startSemanticExecution(descriptor, {
           authoringClient: this.#authoring,
-          loopDurationSeconds,
+          loopDurationSeconds: completedDuration > 0 ? completedDuration : loopDurationSeconds,
           transportMode: "transferable",
           ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
         });
@@ -104,7 +104,11 @@ export class SemanticPreviewSession {
           throw new Error("preview host returned invalid initial frame time");
         }
         if (!continuation && initialTime !== 0) {
-          throw new RangeError("static preview has only its authored time-zero frame");
+          throw new RangeError("completed preview requires its original authored time-zero frame");
+        }
+        if (!continuation && completedDuration > 0 &&
+            ready?.engine?.finiteSourceDuration !== completedDuration) {
+          throw new Error("completed timed preview requires Rust finite time-zero admission");
         }
         if (initialTime > this.#limits.maxTimeSeconds) {
           throw new RangeError("preview sampling limit exceeded");
@@ -127,15 +131,15 @@ export class SemanticPreviewSession {
           throw new Error("preview source returned an invalid duration");
         }
         if (!registered) {
-          // A static construct returns the existing completed semantic context.
-          // Timed sources still require their live continuation; never replace
-          // their forward execution with an endpoint-only scene.
-          if (result.kind !== "semantic_scene" || result.duration !== 0
+          // Complete declarations may return a finite time-zero context. Rust
+          // must admit it; completed continuations cannot become endpoint-only
+          // replacements for their original forward execution.
+          if (result.kind !== "semantic_scene"
               || !result.semanticExecution
               || result.semanticExecution.continuationGeneration != null) {
             throw new Error("preview source produced no semantic continuation");
           }
-          await attach(result.semanticExecution, false);
+          await attach(result.semanticExecution, false, result.duration);
         }
         this.#duration = result.duration;
         this.#sourceState = "completed";
@@ -161,7 +165,7 @@ export class SemanticPreviewSession {
     if (timeSeconds < this.#lastRequestedTime) {
       throw new RangeError("preview playback cannot move backwards");
     }
-    if (!this.#continuation && timeSeconds !== 0) {
+    if (!this.#continuation && this.#duration === 0 && timeSeconds !== 0) {
       throw new RangeError("static preview has only its authored time-zero frame");
     }
     if (timeSeconds > this.#limits.maxTimeSeconds || this.#samples >= this.#limits.maxSamples) {
@@ -190,7 +194,7 @@ export class SemanticPreviewSession {
     // Forward the existing endpoint option; normal samples remain strict.
     // A completion probe retains the actual endpoint, never its requested bound.
     const sample = !this.#continuation
-      ? await this.#execution.advanceTo(time)
+      ? await this.#execution.advanceTo(time, stopAtSourceCompletion ? { stopAtSourceCompletion: true } : {})
       : stopAtSourceCompletion
       ? await this.#execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true })
       : await this.#execution.sampleToAuthoredTime(time);

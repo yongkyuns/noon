@@ -166,6 +166,20 @@ impl Scene {
         continuation: C,
     ) -> Result<LiveProgram<C>, noon_compile::SemanticExecutionLoweringError> {
         let execution = self.execution_session()?;
+        if execution.has_audio() {
+            return Err(
+                noon_compile::SemanticExecutionLoweringError::AudioExecutionUnavailable {
+                    operation: "live source continuation",
+                },
+            );
+        }
+        if execution.has_playback_controls() {
+            return Err(
+                noon_compile::SemanticExecutionLoweringError::PlaybackControlsExecutionUnavailable {
+                    operation: "live source continuation",
+                },
+            );
+        }
         self.install_execution(execution);
         Ok(LiveProgram {
             scene: self,

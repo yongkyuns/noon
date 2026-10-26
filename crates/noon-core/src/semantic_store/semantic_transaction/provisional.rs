@@ -769,6 +769,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                         SemanticNodeCreation::PendingPathObject { .. }
                         | SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Effect { .. }
+                        | SemanticNodeCreation::AudioClip { .. }
                         | SemanticNodeCreation::Signal { .. },
                     )
                     | PendingSemanticNode::Animation(_) => {
@@ -844,7 +845,7 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectProperty { object, .. }
         | SemanticMutationKey::ObjectTransform(object)
         | SemanticMutationKey::ObjectContent(object)
-        | SemanticMutationKey::ClickIndicate(object)
+        | SemanticMutationKey::ClickAction(object)
         | SemanticMutationKey::ObjectBarMetadata(object)
         | SemanticMutationKey::ObjectRole(object)
         | SemanticMutationKey::SpatialCompositionDomain(object)
@@ -870,7 +871,9 @@ pub(super) fn duplicate_mutation_error(
                 SemanticTransactionNodeRef::Existing(_) => None,
             })
         }
-        SemanticMutationKey::EffectParameter { .. } | SemanticMutationKey::Signal(_) => None,
+        SemanticMutationKey::EffectParameter { .. }
+        | SemanticMutationKey::AudioClip(_)
+        | SemanticMutationKey::Signal(_) => None,
     };
     if let Some(node) = pending {
         return SemanticMutationTransactionError::DuplicatePendingMutation { index, node };
@@ -883,7 +886,7 @@ pub(super) fn duplicate_mutation_error(
                 parameter,
             }
         }
-        SemanticMutationKey::Signal(target) => {
+        SemanticMutationKey::AudioClip(target) | SemanticMutationKey::Signal(target) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
         SemanticMutationKey::ObjectProperty {
@@ -897,8 +900,8 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectContent(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateContent { index, object }
         }
-        SemanticMutationKey::ClickIndicate(SemanticTransactionNodeRef::Existing(object)) => {
-            SemanticMutationTransactionError::DuplicateClickIndicate { index, object }
+        SemanticMutationKey::ClickAction(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateClickAction { index, object }
         }
         SemanticMutationKey::ObjectBarMetadata(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateBarMetadata { index, object }

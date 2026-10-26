@@ -161,7 +161,7 @@ fn lowered_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Co
     })
 }
 
-fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
+pub(crate) fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
     if *authored as f32 != effective {
         *authored = f64::from(effective);
     }
@@ -189,8 +189,12 @@ pub(crate) fn stage_effect_copy(
     match (node.effect_ids(), observed.object.glow.as_deref()) {
         ([], None) => Ok(()),
         ([attachment], Some(glow)) if *attachment == glow.attachment => {
-            let effect = store.semantic_effect_state(*attachment)?;
-            transaction.create_effect(target, effect.name(), glow.definition);
+            store.copy_effect_into_with_definition(
+                *attachment,
+                target,
+                glow.definition,
+                transaction,
+            )?;
             Ok(())
         }
         // Never rebind a stale generation by name or silently lose an effect.

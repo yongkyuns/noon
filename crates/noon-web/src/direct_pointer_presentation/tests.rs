@@ -70,12 +70,14 @@ impl Fixture {
         self.host.did_present(frame);
     }
     fn send(&mut self, wire: BrowserPointerInput) -> Result<bool, String> {
-        self.host.submit(
-            &mut self.session,
-            &mut self.binding,
-            &mut self.sequence,
-            wire,
-        )
+        self.host
+            .submit(
+                &mut self.session,
+                &mut self.binding,
+                &mut self.sequence,
+                wire,
+            )
+            .map(|publication| publication.is_some())
     }
     fn click(&mut self) {
         assert!(self.send(input(BrowserPointerKind::Press)).unwrap());
@@ -413,7 +415,8 @@ fn binding_reset_is_revalidated_before_positional_admission() {
     wire.surface_x = Some(600.0);
     assert!(!host
         .submit(&mut session, &mut binding, &mut sequence, wire)
-        .unwrap());
+        .unwrap()
+        .is_some());
     assert_eq!(
         session.effective_signal_value(button).unwrap(),
         &ReactiveValue::Bool(false)
@@ -637,7 +640,8 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
             &mut sequence,
             input(BrowserPointerKind::Press),
         )
-        .unwrap());
+        .unwrap()
+        .is_some());
     assert_eq!(
         sequence, 0,
         "the stale occurrence is never admitted or replayed"

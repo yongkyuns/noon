@@ -236,6 +236,26 @@ pub fn resolve_create_animation_options(
     animation: AnimationOptions,
     play: AnimationOptions,
 ) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    resolve_reversible_options_without_path(defaults, animation, play)
+}
+
+/// Resolve a glow pulse's ordinary timing, including explicit reversal.
+///
+/// Capture, channel ownership and restoration remain animation semantics. This
+/// policy only admits reversible positive timing without a geometric path arc.
+pub fn resolve_glow_pulse_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    resolve_reversible_options_without_path(defaults, animation, play)
+}
+
+fn resolve_reversible_options_without_path(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
     let options =
         resolve_animation_options_unchecked(defaults, animation, play).validate_transform()?;
     if options.path_arc.abs() > 1e-12 {
@@ -430,6 +450,54 @@ mod tests {
         assert_eq!(resolved.lag_ratio, 0.0);
         assert_eq!(resolved.path_arc, 0.0);
         assert!(!resolved.reverse_rate_function);
+    }
+
+    #[test]
+    fn glow_pulse_options_preserve_defaults_precedence_and_reversal() {
+        let defaults = AnimationDefaults {
+            rate_func: RateFunction::ThereAndBack,
+            ..AnimationDefaults::MANIM
+        };
+        let initial = resolve_glow_pulse_animation_options(
+            defaults,
+            AnimationOptions::new(),
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(initial.run_time, 1.0);
+        assert_eq!(initial.rate_func, RateFunction::ThereAndBack);
+        let reversed = resolve_glow_pulse_animation_options(
+            defaults,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Smooth)
+                .reverse_rate_function(true),
+            AnimationOptions::new()
+                .run_time(0.6)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+        assert_eq!(reversed.run_time, 0.6);
+        assert_eq!(reversed.rate_func, RateFunction::Linear);
+        assert!(reversed.reverse_rate_function);
+        assert!(matches!(
+            resolve_glow_pulse_animation_options(
+                defaults,
+                AnimationOptions::new().path_arc(0.25),
+                AnimationOptions::new(),
+            ),
+            Err(AnimationOptionsError::UnsupportedPathArc(_))
+        ));
+        for run_time in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.5] {
+            assert!(matches!(
+                resolve_glow_pulse_animation_options(
+                    defaults,
+                    AnimationOptions::new().run_time(run_time),
+                    AnimationOptions::new(),
+                ),
+                Err(AnimationOptionsError::InvalidRunTime(_))
+            ));
+        }
     }
 
     #[test]

@@ -28,7 +28,7 @@ class RendererObservationCallbacks(Scene):
 
         def lift(mobject, _dt):
             center = mobject.get_center()
-            mobject.move_to((center.x, 1.0, 0.0))
+            mobject.move_to((center[0], 1.0, 0.0))
 
         def move_label(mobject, dt):
             mobject.shift((dt, 0.0, 0.0))

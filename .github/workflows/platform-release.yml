@@ -21,6 +21,7 @@ on:
       - '.github/workflows/platform-release.yml'
   pull_request:
     paths:
+      - 'crates/noon-native/**'
       - 'crates/noon/src/semantic_mobject.rs'
       - 'crates/noon/src/semantic_mobject/bounds.rs'
       - 'crates/noon/tests/image_seek.rs'
@@ -76,6 +77,9 @@ jobs:
           key: ${{ runner.os }}-platform-cargo-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-platform-cargo-
+      - name: Install Linux native audio build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
       - name: Compile and test native workspace
         run: cargo test --workspace --all-features --lib --tests
 
@@ -133,7 +137,7 @@ jobs:
           restore-keys: |
             optimized-wasm-cargo-
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-pack@0.15.0
           fallback: none

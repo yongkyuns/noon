@@ -52,6 +52,7 @@ usvg = { version = "=0.48.1", default-features = false }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
 
 [dev-dependencies]
+serde_json = "1"
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["ci-noop", "native"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 pollster = "=1.0.1"

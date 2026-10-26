@@ -349,14 +349,16 @@ fn prepare_value_update(
                 ) {
                     Ok((x, y)) => scale_state_about_center(store, &mut state, x, y, destination)?,
                     Err(_) => {
-                        path = Some(crate::family_affine::world_scaled_path(
+                        let (baked, scaled) = crate::family_affine::world_scaled_replacement(
                             store,
                             &state,
                             1.0,
                             factor,
                             center,
                             destination,
-                        )?);
+                        )?;
+                        state = baked;
+                        path = Some(scaled);
                     }
                 }
             }

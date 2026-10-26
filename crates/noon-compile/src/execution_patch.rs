@@ -8,6 +8,14 @@ use crate::{
     CompiledSpatialState,
 };
 
+/// Sparse lowered relation between ordinary rectangle rows. Geometry and pose
+/// remain owned by those rows; this contains no separately evaluated view state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompiledInset2DView {
+    pub camera_frame: ObjectId,
+    pub capture_own_display: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CompiledGraphDependencyKind {
     Line,
@@ -81,6 +89,12 @@ pub enum ExecutionPatch {
     SetStyle {
         object: ObjectId,
         style: Style,
+    },
+    /// Replace one display's relation. The camera may be detached; the relation
+    /// becomes visible only while both execution rows are live.
+    SetInset2DView {
+        object: ObjectId,
+        view: Option<CompiledInset2DView>,
     },
     /// Replace the authored parameter base of one existing attachment.
     /// Attachment generation, radius units and source mode must be unchanged;

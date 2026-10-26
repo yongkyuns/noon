@@ -235,11 +235,10 @@ impl ExecutionSession {
             click: None,
             changed: false,
         };
-        let Some(max_movement) = prepared
-            .state
-            .max_movement
-            .or_else(|| self.runtime.has_click_indicate_bindings().then_some(4.0))
-        else {
+        let Some(max_movement) = prepared.state.max_movement.or_else(|| {
+            (self.runtime.has_click_indicate_bindings() || self.has_playback_controls())
+                .then_some(4.0)
+        }) else {
             return Ok(prepared);
         };
         let previous_selection = self.selected_pointer_target();

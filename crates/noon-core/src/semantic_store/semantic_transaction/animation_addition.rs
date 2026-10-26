@@ -55,6 +55,10 @@ pub enum SemanticTransactionAnimationIntent {
         target_state: SemanticTransactionNodeRef,
         mode: SemanticFamilyTransformMode,
     },
+    GlowPulse {
+        target: SemanticTransactionNodeRef,
+        intensity: f64,
+    },
     Indicate {
         target: SemanticTransactionNodeRef,
         scale_factor: f64,
@@ -139,6 +143,7 @@ impl SemanticTransactionAnimationIntent {
             } => Some([Some(*source), Some(*target_state), None]),
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
+            | Self::GlowPulse { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -167,6 +172,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
+            | Self::GlowPulse { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -191,6 +197,7 @@ impl SemanticTransactionAnimationIntent {
 pub struct SemanticTransactionAnimation {
     intent: SemanticTransactionAnimationIntent,
     options: AnimationOptions,
+    pub(super) transform_start: Option<Box<crate::SemanticTransform2_5D>>,
 }
 
 impl SemanticTransactionAnimation {
@@ -198,7 +205,11 @@ impl SemanticTransactionAnimation {
         intent: SemanticTransactionAnimationIntent,
         options: AnimationOptions,
     ) -> Self {
-        Self { intent, options }
+        Self {
+            intent,
+            options,
+            transform_start: None,
+        }
     }
 
     pub const fn intent(&self) -> &SemanticTransactionAnimationIntent {
@@ -207,6 +218,10 @@ impl SemanticTransactionAnimation {
 
     pub const fn options(&self) -> AnimationOptions {
         self.options
+    }
+
+    pub fn transform_start(&self) -> Option<crate::SemanticTransform2_5D> {
+        self.transform_start.as_deref().copied()
     }
 
     pub(super) fn from_published(state: SemanticAnimationState) -> Self {
@@ -274,6 +289,12 @@ impl SemanticTransactionAnimation {
                 angle: *angle,
                 hold_origin: *hold_origin,
             },
+            SemanticAnimationIntent::GlowPulse { target, intensity } => {
+                SemanticTransactionAnimationIntent::GlowPulse {
+                    target: (*target).into(),
+                    intensity: *intensity,
+                }
+            }
             SemanticAnimationIntent::Indicate {
                 target,
                 scale_factor,
@@ -364,7 +385,11 @@ impl SemanticTransactionAnimation {
                 }
             }
         };
-        Self { intent, options }
+        Self {
+            intent,
+            options,
+            transform_start: state.transform_start,
+        }
     }
 
     pub(super) fn resolve(
@@ -434,6 +459,12 @@ impl SemanticTransactionAnimation {
                 angle: *angle,
                 hold_origin: *hold_origin,
             },
+            SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
+                SemanticAnimationIntent::GlowPulse {
+                    target: resolve_node_ref(*target, committed),
+                    intensity: *intensity,
+                }
+            }
             SemanticTransactionAnimationIntent::Indicate {
                 target,
                 scale_factor,
@@ -527,7 +558,9 @@ impl SemanticTransactionAnimation {
                 }
             }
         };
-        SemanticAnimationState::new(intent, self.options)
+        let mut state = SemanticAnimationState::new(intent, self.options);
+        state.transform_start = self.transform_start.clone();
+        state
     }
 }
 
@@ -597,6 +630,28 @@ pub(super) fn preflight_transaction_animation(
     family_edges: &FamilyEdgePreflight,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
+    if let Some(start) = animation.transform_start() {
+        if !matches!(
+            animation.intent(),
+            SemanticTransactionAnimationIntent::TransformTo {
+                interpolation: SemanticTransformInterpolation::Affine,
+                ..
+            }
+        ) || ![
+            start.translation.x,
+            start.translation.y,
+            start.translation.z,
+            start.scale.x,
+            start.scale.y,
+            start.scale.z,
+            start.rotation_z,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+        {
+            return Err(SemanticMutationTransactionError::InvalidTransformStart { index });
+        }
+    }
     if matches!(
         animation.intent(),
         SemanticTransactionAnimationIntent::Add { .. }
@@ -686,6 +741,9 @@ pub(super) fn preflight_transaction_animation(
                 *target_state,
                 index,
             )?;
+            if animation.transform_start().is_some() && source_content != target_object.content {
+                return Err(SemanticMutationTransactionError::InvalidTransformStart { index });
+            }
             if (source_content.image().is_some() || target_object.content.image().is_some())
                 && source_content != target_object.content
             {
@@ -772,6 +830,13 @@ pub(super) fn preflight_transaction_animation(
             if !angle.is_finite() {
                 return Err(SemanticMutationTransactionError::InvalidAnimationAngle { index });
             }
+        }
+        SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            crate::Glow::new(crate::GlowUpdate::default().intensity(*intensity)).map_err(|_| {
+                SemanticMutationTransactionError::InvalidGlowPulseIntensity { index }
+            })?;
         }
         SemanticTransactionAnimationIntent::Indicate {
             target,
@@ -1025,6 +1090,9 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
             .insert_semantic_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, options)
             .expect("preflighted semantic Rotate insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::GlowPulse { target, intensity } => store
+            .insert_semantic_glow_pulse_animation(*target, *intensity, options)
+            .expect("preflighted GlowPulse insertion remains valid while transaction owns the store"),
         SemanticAnimationIntent::Indicate {
             target,
             scale_factor,

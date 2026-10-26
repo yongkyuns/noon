@@ -7,6 +7,7 @@ from noon import *
 from math import pi
 
 def near(a, b):
+    assert len(a) == len(b), (a, b)
     assert all(abs(x-y) < 2e-5 for x, y in zip(a, b)), (a, b)
 
 class NumericLabelQualification(Scene):
@@ -72,7 +73,7 @@ class NumericLabelQualification(Scene):
         for label, expected in zip(labels, centers):
             near(label.get_center(), expected + RIGHT)
         near(axes.c2p(0, 0), origin + RIGHT)
-        near(sentinel.get_center(), (4, 2))
+        near(sentinel.get_center(), (4, 2, 0))
         try:
             axes.add_coordinates()
         except NotImplementedError:

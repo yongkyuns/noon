@@ -42,7 +42,7 @@ def _default_mobject_path_func():
 
 
 class Vec2(tuple):
-    """Tuple-compatible 2D vector used by every public frontend concept."""
+    """Explicit planar vector accepted by Noon's 2D conveniences."""
 
     __slots__ = ()
 
@@ -110,8 +110,8 @@ class Vec2(tuple):
 def _as_vec2(value: object) -> Vec2:
     """Accept Noon's Vec2 plus common Manim 2D/3D vector inputs.
 
-    Manim commonly represents 2D directions as three-component NumPy vectors. Noon
-    remains 2D internally, so z=0 is accepted and non-zero z is rejected explicitly.
+    This explicit planar projection accepts three-component inputs with z=0.
+    Full-coordinate operations use their XYZ argument adapter instead.
     """
 
     if isinstance(value, Vec2):
@@ -139,11 +139,97 @@ def _as_vec2(value: object) -> Vec2:
     raise TypeError("expected a two- or three-component vector")
 
 
-ORIGIN = Vec2(0.0, 0.0)
-UP = Vec2(0.0, 1.0)
-DOWN = Vec2(0.0, -1.0)
-LEFT = Vec2(-1.0, 0.0)
-RIGHT = Vec2(1.0, 0.0)
+class _Direction3(tuple):
+    """Immutable three-component arithmetic for Manim coordinates and directions."""
+
+    __slots__ = ()
+
+    def __new__(cls, x, y, z):
+        return tuple.__new__(cls, (
+            _ir._finite_number("direction component", float(value)) for value in (x, y, z)
+        ))
+
+    def __getnewargs__(self):
+        return tuple(self)
+
+    @property
+    def x(self):
+        return self[0]
+
+    @property
+    def y(self):
+        return self[1]
+
+    @property
+    def z(self):
+        return self[2]
+
+    @staticmethod
+    def _array_operand(value):
+        # Let array libraries own their arithmetic/result types, without
+        # importing NumPy on Noon's cold authoring path.
+        return hasattr(type(value), "__array_ufunc__")
+
+    @staticmethod
+    def _components(value):
+        if isinstance(value, Vec2):
+            return (*value, 0.0)
+        components = tuple(value)
+        if len(components) != 3:
+            raise TypeError("direction arithmetic requires three components")
+        return tuple(float(component) for component in components)
+
+    def __add__(self, other):
+        if self._array_operand(other):
+            return NotImplemented
+        return _Direction3(*(left + right for left, right in zip(self, self._components(other))))
+
+    def __radd__(self, other):
+        return self + other
+
+    def __rsub__(self, other):
+        if self._array_operand(other):
+            return NotImplemented
+        return _Direction3(*(right - left for left, right in zip(self, self._components(other))))
+
+    def __sub__(self, other):
+        if self._array_operand(other):
+            return NotImplemented
+        return _Direction3(*(left - right for left, right in zip(self, self._components(other))))
+
+    def __neg__(self):
+        return self * -1
+
+    def __mul__(self, scalar):
+        if self._array_operand(scalar):
+            return NotImplemented
+        factor = float(scalar)
+        return _Direction3(*(component * factor for component in self))
+
+    def __rmul__(self, scalar):
+        return self * scalar
+
+    def __truediv__(self, scalar):
+        if self._array_operand(scalar):
+            return NotImplemented
+        return self * (1 / float(scalar))
+
+    def length(self):
+        return math.hypot(*self)
+
+    def normalized(self):
+        length = self.length()
+        if length == 0.0:
+            raise ValueError("direction must be non-zero")
+        return self / length
+
+
+
+ORIGIN = _Direction3(0.0, 0.0, 0.0)
+UP = _Direction3(0.0, 1.0, 0.0)
+DOWN = _Direction3(0.0, -1.0, 0.0)
+LEFT = _Direction3(-1.0, 0.0, 0.0)
+RIGHT = _Direction3(1.0, 0.0, 0.0)
 UL = UP + LEFT
 UR = UP + RIGHT
 DL = DOWN + LEFT
@@ -295,6 +381,43 @@ class Mobject:
         self.generate_points()
         self.init_colors()
 
+    @property
+    def submobjects(self):
+        """Read direct children from Rust; use membership methods to edit them."""
+        return _semantic_operations()._group_members(self)
+
+    @submobjects.setter
+    def submobjects(self, members):
+        _semantic_operations()._replace_submobjects(self, members)
+
+    def _assert_valid_submobjects(self, submobjects):
+        return self._assert_valid_submobjects_internal(submobjects, Mobject)
+
+    def _assert_valid_submobjects_internal(self, submobjects, mob_class):
+        for index, member in enumerate(submobjects):
+            if not isinstance(member, mob_class):
+                message = (f"Only values of type {mob_class.__name__} can be added "
+                           f"as submobjects of {type(self).__name__}, but the value "
+                           f"{member} (at index {index}) is of type {type(member).__name__}.")
+                if isinstance(member, Mobject):
+                    message += " You can try adding this value into a Group instead."
+                raise TypeError(message)
+            if member is self:
+                raise ValueError(f"Cannot add {type(self).__name__} as a submobject of itself (at index {index}).")
+        return self
+
+    def add(self, *mobjects):
+        return _semantic_operations()._group_add(self, *mobjects)
+
+    def add_to_back(self, *mobjects):
+        return _semantic_operations()._group_add_to_back(self, *mobjects)
+
+    def insert(self, index, mobject):
+        return _semantic_operations()._group_insert(self, index, mobject)
+
+    def remove(self, *mobjects):
+        return _semantic_operations()._group_remove(self, *mobjects)
+
     def get_group_class(self):
         from _manim_compat import Group
         return Group
@@ -376,11 +499,15 @@ class Mobject:
         return self
 
     def null_point_align(self, mobject: Mobject) -> Self:
-        if self.has_points() != mobject.has_points():
-            raise NotImplementedError(
-                "null_point_align requires shared point-to-family promotion"
-            )
+        for left, right in ((self, mobject), (mobject, self)):
+            if left.has_no_points() and right.has_points():
+                right.push_self_into_submobjects()
         return self
+
+    def push_self_into_submobjects(self) -> Self:
+        """Move own points to an appended child through shared Rust semantics."""
+        from _manim_point_promotion import push_self_into_submobjects
+        return push_self_into_submobjects(self)
 
     def align_data(
         self, mobject: Mobject, skip_point_alignment: bool = False
@@ -483,29 +610,29 @@ class Mobject:
     def _apply(self, raw: object) -> Mobject:
         return _callback_operations()._canonical_apply(self, raw)
 
-    def get_edge_center(self: Mobject, direction: object) -> Vec2:
+    def get_edge_center(self: Mobject, direction: object) -> Any:
         return self.get_critical_point(direction)
 
-    def get_corner(self: Mobject, direction: object) -> Vec2:
+    def get_corner(self: Mobject, direction: object) -> Any:
         return self.get_critical_point(direction)
 
-    def get_left(self: Mobject) -> Vec2:
+    def get_left(self: Mobject) -> Any:
         return self.get_critical_point(LEFT)
 
-    def get_right(self: Mobject) -> Vec2:
+    def get_right(self: Mobject) -> Any:
         return self.get_critical_point(RIGHT)
 
-    def get_top(self: Mobject) -> Vec2:
+    def get_top(self: Mobject) -> Any:
         return self.get_critical_point(UP)
 
-    def get_bottom(self: Mobject) -> Vec2:
+    def get_bottom(self: Mobject) -> Any:
         return self.get_critical_point(DOWN)
 
-    def get_zenith(self: Mobject) -> Vec2:
-        return self.get_critical_point(ORIGIN)
+    def get_zenith(self: Mobject) -> Any:
+        return self.get_critical_point((0., 0., 1.))
 
-    def get_nadir(self: Mobject) -> Vec2:
-        return self.get_critical_point(ORIGIN)
+    def get_nadir(self: Mobject) -> Any:
+        return self.get_critical_point((0., 0., -1.))
 
     def get_coord(
         self: Mobject, dim: int, direction: object = ORIGIN
@@ -514,8 +641,8 @@ class Mobject:
         normalized_dim = dim if dim >= 0 else 3 + dim
         if not 0 <= normalized_dim < 3:
             raise IndexError(f"index {dim} is out of bounds for axis 0 with size 3")
-        if normalized_dim == 2:
-            key = 0
+        if isinstance(direction, Vec2) and normalized_dim == 2:
+            key = 0.0
         else:
             key = direction[normalized_dim]
         return self.get_extremum_along_dim(dim=normalized_dim, key=key)
@@ -536,8 +663,6 @@ class Mobject:
         return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
 
     def scale_to_fit_depth(self: Mobject, depth: float, **kwargs: Any) -> Mobject:
-        if self.depth == 0:
-            return self
         return self.rescale_to_fit(depth, 2, stretch=False, **kwargs)
 
     def stretch(self, factor: float, dim: int, *, about_point=None, about_edge=None) -> Mobject:
@@ -554,8 +679,6 @@ class Mobject:
         return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
 
     def stretch_to_fit_depth(self: Mobject, depth: float, **kwargs: Any) -> Mobject:
-        if self.depth == 0:
-            return self
         return self.rescale_to_fit(depth, 2, stretch=True, **kwargs)
 
     def match_width(
@@ -571,10 +694,7 @@ class Mobject:
     def match_depth(
         self: Mobject, mobject: Mobject, **kwargs: Any
     ) -> Mobject:
-        target_depth = mobject.depth
-        if self.depth == 0:
-            return self
-        return self.rescale_to_fit(target_depth, 2, stretch=False, **kwargs)
+        return self.match_dim_size(mobject, 2, **kwargs)
 
     def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
         from _manim_semantic_handles import _rescale_to_fit
@@ -696,10 +816,10 @@ class Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)
 
-    def get_center(self) -> Vec2:
+    def get_center(self) -> Any:
         return _callback_operations()._canonical_get_center(self)
 
-    def get_z_index_reference_point(self) -> Vec2:
+    def get_z_index_reference_point(self) -> Any:
         """Return the center of this object's z-index grouping target."""
         z_index_group = getattr(self, "z_index_group", self)
         return z_index_group.get_center()
@@ -846,6 +966,11 @@ class Mobject:
             )
         )
 
+    def set_points(self, points):
+        """Assign this root's canonical point data through the shared Rust edit."""
+        from _manim_path_editing import set_points
+        return set_points(self, points)
+
     def get_array_attrs(self) -> list[str]:
         return ["points"]
 
@@ -926,8 +1051,7 @@ class Mobject:
 
     @property
     def depth(self) -> float:
-        """Return the zero z extent of Noon’s planar geometry profile."""
-        return 0.0
+        return _semantic_operations()._layout_dimension(self, 2)
 
     @depth.setter
     def depth(self, value: float) -> None:
@@ -936,8 +1060,8 @@ class Mobject:
     def shift(self, direction: object) -> Mobject:
         return _callback_operations()._canonical_shift(self, direction)
 
-    def move_to(self, point: object, *args: object, **kwargs: object) -> Mobject:
-        return _callback_operations()._canonical_move_to(self, point, *args, **kwargs)
+    def move_to(self, point_or_mobject: object, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_move_to(self, point_or_mobject, *args, **kwargs)
 
     def put_start_and_end_on(self, start: object, end: object) -> Self:
         from _manim_shared_geometry import _put_start_and_end_on
@@ -961,15 +1085,10 @@ class Mobject:
         function: Callable[[Any], Any],
     ) -> Self:
         """Map the Rust-backed center and move this object to the result."""
-        center = self.get_center()
-        try:
-            import numpy as np
-        except ModuleNotFoundError as error:
-            if error.name != "numpy":
-                raise
-            point = (center.x, center.y, 0.0)
-        else:
-            point = np.asarray((center.x, center.y, 0.0), dtype=np.float64)
+        from _manim_compat import _manim_point3
+        point = _manim_point3(self.get_center())
+        if isinstance(point, list):
+            point = tuple(point)
         self.move_to(function(point))
         return self
 
@@ -1121,7 +1240,7 @@ class Mobject:
             radius = DEFAULT_FRAME_WIDTH / 2.0 if horizontal else DEFAULT_FRAME_HEIGHT / 2.0
             max_value = radius - kwargs.get("buff", DEFAULT_MOBJECT_TO_EDGE_BUFFER)
             edge_center = self.get_edge_center(direction)
-            projection = edge_center.x * direction.x + edge_center.y * direction.y
+            projection = edge_center[0] * direction.x + edge_center[1] * direction.y
             if projection > max_value:
                 self.to_edge(direction, **kwargs)
         return self
@@ -1129,13 +1248,13 @@ class Mobject:
     def is_off_screen(self) -> bool:
         x_radius = DEFAULT_FRAME_WIDTH / 2.0
         y_radius = DEFAULT_FRAME_HEIGHT / 2.0
-        if self.get_left().x > x_radius:
+        if self.get_left()[0] > x_radius:
             return True
-        if self.get_right().x < -x_radius:
+        if self.get_right()[0] < -x_radius:
             return True
-        if self.get_bottom().y > y_radius:
+        if self.get_bottom()[1] > y_radius:
             return True
-        return self.get_top().y < -y_radius
+        return self.get_top()[1] < -y_radius
 
     def to_edge(
         self,
@@ -1241,7 +1360,7 @@ class Mobject:
     def _copy_for_animate_target(self) -> Mobject:
         return _semantic_operations()._target_mobject(self)
 
-    def get_critical_point(self, direction: object) -> Vec2:
+    def get_critical_point(self, direction: object) -> Any:
         return _semantic_operations()._get_critical_point(self, direction)
 
     def get_extremum_along_dim(self, points=None, dim: int = 0, key: int = 0):
@@ -1323,6 +1442,11 @@ class Mobject:
     def __deepcopy__(self, memo):
         from _manim_compat import deepcopy_semantic_wrapper
         return deepcopy_semantic_wrapper(self, memo)
+
+
+# Compiler capture checks this original descriptor, including after a user
+# replaces the public method. It never executes user code to discover a kernel.
+_CANONICAL_MOBJECT_REPLACE_METHOD = Mobject.replace
 
 
 def _scene_operations():
@@ -1432,6 +1556,43 @@ class Scene:
 
     def declare_wait(self, duration: float = 1.0) -> Scene:
         return _scene_operations()._declare_wait(self, duration)
+
+    def declare_value(
+        self, tracker: object, target: float, *, run_time: float = 1.0,
+        rate_func: object = "smooth",
+    ) -> Scene:
+        """Predeclare a scalar interval on the shared Rust authoring cursor.
+
+        Use with Scene.value_tracker/bind_position before playback. This is an
+        explicit finite declaration, not a Scene.play continuation barrier.
+        """
+        return _scene_operations()._declare_value(
+            self, tracker, target, run_time=run_time, rate_func=rate_func,
+        )
+
+    def audio(
+        self, source: object, *, start_time: float = 0.0,
+        source_start_frame: int = 0, source_end_frame: int | None = None,
+        duration: float | None = None, loop: bool = False, gain: float = 1.0,
+        fade_in: float = 0.0, fade_out: float = 0.0,
+    ) -> Any:
+        """Declare a finite PCM clip before execution without advancing time.
+
+        Times are authored seconds; start_time is absolute and defaults to zero.
+        Source trims are half-open PCM frame indices. A loop requires duration;
+        fades apply once across the clip, including repeated source regions.
+        """
+        from _noon_audio import audio
+        return audio(
+            self, source, start_time=start_time, source_start_frame=source_start_frame,
+            source_end_frame=source_end_frame, duration=duration, loop=loop,
+            gain=gain, fade_in=fade_in, fade_out=fade_out,
+        )
+
+    def on_click_playback(self, target: Mobject, action: object) -> Scene:
+        """Declare a finite viewer control through the normal shared Rust picker."""
+        from _noon_audio import on_click_playback
+        return on_click_playback(self, target, action)
 
     @property
     def time(self) -> float:
@@ -1593,6 +1754,9 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "AudioSource": "_noon_audio",
+    "AudioClip": "_noon_audio",
+    "PlaybackControl": "_noon_audio",
     "typing": "_manim_typing",
     "get_unit_normal": "_manim_user_vector_bases",
     "z_to_vector": "_manim_user_vector_bases",
@@ -1773,6 +1937,7 @@ _PUBLIC_EXPORTS = {
     "SVGMobject": "_manim_svg",
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
+    "GlowPulse": "_noon_effects",
     "Pixels": "_noon_effects",
     "EffectHandle": "_noon_effects",
     "Mesh3D": "_noon_spatial",
@@ -1876,6 +2041,7 @@ __all__ = [
     "PackageNotFoundError",
     "version",
     "Glow",
+    "GlowPulse",
     "Pixels",
     "EffectHandle",
     "NoonError",

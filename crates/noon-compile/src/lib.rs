@@ -5,6 +5,8 @@
 pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
+mod audio;
+pub use audio::CompiledAudioClip;
 mod compaction;
 mod execution_patch;
 mod glow_attachment;
@@ -48,8 +50,8 @@ use noon_core::{
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
 pub use execution_patch::{
-    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, ExecutionMutationTransaction,
-    ExecutionPatch,
+    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, CompiledInset2DView,
+    ExecutionMutationTransaction, ExecutionPatch,
 };
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
@@ -186,6 +188,7 @@ impl CompiledGlow {
                             .expect("glow property"),
                         to: noon_core::GlowTrackValue::from_definition(property, target)
                             .expect("glow property"),
+                        end_behavior: noon_core::GlowTrackEndBehavior::Sample,
                     },
                 ));
             }
@@ -232,7 +235,7 @@ pub struct CompiledNumericTextDriver {
     pub object_index: u32,
     pub format: noon_core::DecimalFormat,
     pub font_size: f32,
-    pub point_to_scene_scale: f32,
+    pub point_to_scene_scale: f64,
     pub token_resources: Arc<[(Arc<str>, noon_core::TextResourceHandle)]>,
 }
 
@@ -271,6 +274,7 @@ impl CompiledObject {
 /// Dependency-closed immutable resources retained by one compiled execution plan.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CompiledResources {
+    audio: BTreeMap<noon_core::AudioResourceHandle, Arc<noon_core::AudioResource>>,
     images: BTreeMap<RasterImageResourceHandle, Arc<RasterImageResource>>,
     texts: BTreeMap<TextResourceHandle, Arc<TextResource>>,
     fonts: BTreeMap<FontResourceHandle, Arc<FontResource>>,
@@ -315,10 +319,14 @@ impl GeometryResourceLookup for CompiledResources {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledResourceError {
+    MissingAudio(noon_core::AudioResourceHandle),
+    AudioDefinitionMismatch(noon_core::AudioResourceHandle),
+    ConflictingAudio(noon_core::AudioResourceHandle),
     MissingImage(RasterImageResourceHandle),
     ImageDimensionsMismatch(RasterImageResourceHandle),
     ConflictingImage(RasterImageResourceHandle),
     MissingText(TextResourceHandle),
+    UnrepresentableTextBounds(TextResourceHandle),
     MissingFont(FontResourceKey),
     MissingGeometry(GeometryResourceHandle),
     ConflictingText(TextResourceHandle),
@@ -330,6 +338,14 @@ pub enum CompiledResourceError {
 impl std::fmt::Display for CompiledResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingAudio(handle) => write!(formatter, "missing audio resource {handle:?}"),
+            Self::AudioDefinitionMismatch(handle) => write!(
+                formatter,
+                "audio definition differs from resource {handle:?}"
+            ),
+            Self::ConflictingAudio(handle) => {
+                write!(formatter, "conflicting audio payload for {handle:?}")
+            }
             Self::MissingImage(handle) => {
                 write!(formatter, "missing raster image resource {handle:?}")
             }
@@ -343,6 +359,12 @@ impl std::fmt::Display for CompiledResourceError {
             Self::MissingText(handle) => write!(
                 formatter,
                 "missing text resource {}@{}",
+                handle.id.get(),
+                handle.version
+            ),
+            Self::UnrepresentableTextBounds(handle) => write!(
+                formatter,
+                "text resource {}@{} bounds cannot be lowered to compact execution coordinates",
                 handle.id.get(),
                 handle.version
             ),
@@ -374,6 +396,17 @@ impl std::fmt::Display for CompiledResourceError {
 }
 
 impl std::error::Error for CompiledResourceError {}
+
+/// Canonical resource bounds remain f64; execution rows carry checked compact data.
+fn compact_text_bounds(
+    handle: TextResourceHandle,
+    resource: &TextResource,
+) -> Result<Rect, CompiledResourceError> {
+    resource
+        .bounds
+        .lower_f32()
+        .map_err(|_| CompiledResourceError::UnrepresentableTextBounds(handle))
+}
 
 fn geometry_resources_equal(left: &GeometryResource, right: &GeometryResource) -> bool {
     match (left, right) {
@@ -459,6 +492,13 @@ impl CompiledResources {
     /// Reject a prepared resource closure that would retarget an immutable
     /// handle already visible through this compiled projection.
     pub fn preflight_merge(&self, additions: &Self) -> Result<(), CompiledResourceError> {
+        for (handle, resource) in &additions.audio {
+            if self.audio.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingAudio(*handle));
+            }
+        }
         for (handle, resource) in &additions.images {
             if self.images.get(handle).is_some_and(|existing| {
                 !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
@@ -519,9 +559,13 @@ impl CompiledResources {
     /// Call only after `preflight_merge` has ruled out handle conflicts.
     pub fn contains_all(&self, additions: &Self) -> bool {
         additions
-            .texts
-            .iter()
-            .all(|(handle, _)| self.texts.contains_key(handle))
+            .audio
+            .keys()
+            .all(|handle| self.audio.contains_key(handle))
+            && additions
+                .texts
+                .iter()
+                .all(|(handle, _)| self.texts.contains_key(handle))
             && additions
                 .fonts
                 .iter()
@@ -578,6 +622,7 @@ impl CompiledResources {
     /// Handles are immutable resource identities, so insertion is infallible after
     /// preparation has resolved every dependency against the owning semantic store.
     pub(crate) fn merge(&mut self, additions: Self) {
+        self.audio.extend(additions.audio);
         self.images.extend(additions.images);
         self.texts.extend(additions.texts);
         self.fonts.extend(additions.fonts);
@@ -592,7 +637,7 @@ impl CompiledResources {
         handle: TextResourceHandle,
     ) -> Result<Rect, CompiledResourceError> {
         if let Some(resource) = self.texts.get(&handle) {
-            return Ok(resource.bounds);
+            return compact_text_bounds(handle, resource);
         }
         let resource = store
             .text_resources()
@@ -639,7 +684,7 @@ impl CompiledResources {
             if !Arc::ptr_eq(existing, &resource) && existing.as_ref() != resource.as_ref() {
                 return Err(CompiledResourceError::ConflictingText(handle));
             }
-            return Ok(existing.bounds);
+            return compact_text_bounds(handle, existing);
         }
 
         let mut additions = Self::default();
@@ -667,7 +712,7 @@ impl CompiledResources {
                 .geometries
                 .insert(item.geometry, geometry_resource);
         }
-        let bounds = resource.bounds;
+        let bounds = compact_text_bounds(handle, &resource)?;
         additions.texts.insert(handle, resource);
         self.preflight_merge(&additions)?;
         self.merge(additions);
@@ -928,6 +973,8 @@ pub(crate) fn graph_tip_execution_content() -> ObjectContentRef {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
+    audio_clips: Vec<CompiledAudioClip>,
+    audio_end_time: Option<f64>,
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
     // of the same execution identity revives that row in place. A future compaction
     // generation may reclaim other retired capacity off the live-edit path.
@@ -942,6 +989,9 @@ pub struct CompiledScene {
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     retired_object_indices: BTreeMap<ObjectId, u32>,
+    // Keyed by stable identity, so compaction needs no row remapping. Ordinary
+    // scenes allocate no entries and ordinary frame rows carry no view payload.
+    inset_2d_views: BTreeMap<ObjectId, CompiledInset2DView>,
     /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
     family_order: Vec<u32>,
     family_ranks: Vec<Option<u32>>,
@@ -1103,6 +1153,7 @@ pub enum CompilePatchError {
     InvalidGlowUpdate {
         object: ObjectId,
     },
+    InvalidInset2DView(ObjectId),
     ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
@@ -1161,6 +1212,7 @@ impl std::fmt::Display for CompilePatchError {
                 "object {} requires a valid click Indicate binding on analytic circle or rectangle content",
                 id.get()
             ),
+            Self::InvalidInset2DView(object) => write!(formatter, "inset display {} cannot capture itself as its camera", object.get()),
             Self::ReplaySealed => formatter
                 .write_str("sealed replay is read-only; discard its retention before editing"),
             Self::TooManyObjects(count) => {
@@ -1504,6 +1556,8 @@ impl CompiledScene {
             painter_ranks[index as usize] = Some(rank as u32);
         }
         let mut compiled = Self {
+            audio_clips: Vec::new(),
+            audio_end_time: None,
             family_order: (0..objects.len() as u32).collect(),
             family_ranks: (0..objects.len() as u32).map(Some).collect(),
             painter_order,
@@ -1515,6 +1569,7 @@ impl CompiledScene {
             track_count,
             object_indices,
             retired_object_indices: BTreeMap::new(),
+            inset_2d_views: BTreeMap::new(),
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
@@ -1537,6 +1592,15 @@ impl CompiledScene {
         };
         compiled.rebuild_spatial_anchor_groups();
         Ok(compiled)
+    }
+
+    /// Relations in the selected execution revision, ordered by display identity.
+    /// A detached camera suppresses capture without discarding the authored link.
+    pub fn inset_2d_views(&self) -> impl Iterator<Item = (ObjectId, CompiledInset2DView)> + '_ {
+        self.inset_2d_views.iter().filter_map(|(&display, &view)| {
+            (self.object_index(display).is_some() && self.object_index(view.camera_frame).is_some())
+                .then_some((display, view))
+        })
     }
 
     /// Stable compiled object slots. Retired slots remain in this slice and have `live == false`.
@@ -1940,6 +2004,10 @@ impl CompiledScene {
                         || glow.is_some()
                 })
             }
+            ExecutionPatch::SetInset2DView { object, view } => {
+                self.object_index(*object).is_none()
+                    || self.inset_2d_views.get(object) != view.as_ref()
+            }
             ExecutionPatch::ReplaceTrack(track) => self.track(track.id).is_none_or(|existing| {
                 self.object_index(track.object) != Some(existing.object_index)
                     || existing.property != track.property
@@ -2040,6 +2108,7 @@ impl CompiledScene {
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
                 self.update_spatial_anchor_group(index, previous.as_ref(), None);
                 self.graph_authored_content.remove(&index);
+                self.inset_2d_views.remove(id);
                 let channels: Vec<_> = self.channels_for_object_index(index).collect();
                 for channel in channels {
                     if let Some(removed) = self.tracks.remove(&channel) {
@@ -2322,6 +2391,19 @@ impl CompiledScene {
                 glow,
             } => {
                 self.apply_glow_attachment(*object, *expected, glow.clone(), &mut stats)?;
+            }
+            ExecutionPatch::SetInset2DView { object, view } => {
+                if self.object_index(*object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                if view.is_some_and(|view| view.camera_frame == *object) {
+                    return Err(CompilePatchError::InvalidInset2DView(*object));
+                }
+                if let Some(view) = view {
+                    self.inset_2d_views.insert(*object, *view);
+                } else {
+                    self.inset_2d_views.remove(object);
+                }
             }
             ExecutionPatch::SetGraphDependencies {
                 owner,
@@ -2677,6 +2759,7 @@ pub(crate) fn validate_glow_track_attachment(
         attachment,
         from,
         to,
+        ..
     } = track.values
     {
         let Some(glow) = glow.filter(|glow| glow.attachment == attachment) else {
@@ -2813,7 +2896,9 @@ fn validate_execution_content_resource(
         .ok_or(CompilePatchError::Resource(
             CompiledResourceError::MissingText(*handle),
         ))?;
-    if text_bounds != Some(resource.bounds) {
+    if text_bounds
+        != Some(compact_text_bounds(*handle, resource).map_err(CompilePatchError::Resource)?)
+    {
         return Err(CompilePatchError::TextBoundsMismatch {
             object,
             resource: *handle,
@@ -3215,6 +3300,50 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn text_bounds_lowering_preserves_canonical_precision_and_rejects_overflow_atomically() {
+        use noon_core::{DRect, DVec2, TextResourceArena, TextSourceKind};
+        let mut texts = TextResourceArena::new();
+        let mut compiled = CompiledResources::default();
+        let resource = |max_x| TextResource {
+            source: Arc::from(""),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([]),
+            vector_items: Arc::from([]),
+            render_items: Arc::from([]),
+            parts: Arc::from([]),
+            bounds: DRect::new(DVec2::new(1.0, 0.0), DVec2::new(max_x, 1.0)),
+            baseline: 0.0,
+            layout_artifact: None,
+        };
+        let fine = texts.insert(resource(1.0 + 1e-10)).unwrap();
+        let compact = compiled
+            .capture_text_from_arenas(
+                &texts,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+                fine,
+            )
+            .unwrap();
+        assert_eq!(compact.width(), 0.0);
+        assert!(compiled.texts[&fine].bounds.width() > 0.0);
+        for max_x in [1e100, f64::INFINITY, f64::NAN] {
+            let invalid = texts.insert(resource(max_x)).unwrap();
+            assert_eq!(
+                compiled.capture_text_from_arenas(
+                    &texts,
+                    &FontResourceArena::new(),
+                    &GeometryResourceArena::new(),
+                    invalid
+                ),
+                Err(CompiledResourceError::UnrepresentableTextBounds(invalid))
+            );
+            assert_eq!(compiled.texts.len(), 1);
+            assert!(compiled.fonts.is_empty());
+            assert!(compiled.geometries.is_empty());
+        }
+    }
 
     fn filled_loop() -> noon_core::VectorPath {
         noon_core::VectorPath::new()

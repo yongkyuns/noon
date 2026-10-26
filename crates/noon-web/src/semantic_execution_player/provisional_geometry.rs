@@ -316,7 +316,7 @@ impl SemanticExecutionPlayer {
             || state.decimal_number().is_some()
             || state.bar_metadata().is_some()
             || state.text_presentation_baseline().is_some()
-            || state.click_indicate().is_some()
+            || state.click_action().is_some()
             || !state.signal_bindings().is_empty()
         {
             return Err(

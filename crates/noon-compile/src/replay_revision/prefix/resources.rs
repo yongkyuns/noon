@@ -197,6 +197,7 @@ mod tests {
                 )),
                 order: None,
             }],
+            inset_2d_view: None,
             channels: Vec::new(),
             tracks: Vec::new(),
             camera_motion_payloads: 0,

@@ -35,6 +35,16 @@ fn local_track(track: &Option<CompiledTrack>) -> bool {
     })
 }
 
+impl CompiledReplayRevision {
+    /// Inset relations are retained by ordinary replay, but not yet presented
+    /// by prepared readers. Bootstrap must inspect saved history as well as the
+    /// current projection so a removed relation cannot disappear from admission.
+    #[doc(hidden)]
+    pub fn changes_inset_2d_view(&self) -> bool {
+        self.inset_2d_view.is_some()
+    }
+}
+
 impl CompiledScene {
     /// Recover the forward sides of a NEW suffix of inverse revisions without
     /// rewinding the producer or cloning its compiled scene/history.
@@ -61,6 +71,7 @@ impl CompiledScene {
         for old in inverse.iter().rev() {
             // Empty revisions denote append-only family plans, not a quiet wait.
             if old.rows.is_empty()
+                || old.inset_2d_view.is_some()
                 || old.camera_motion_payloads != 0
                 || old.path_motion_commands != 0
                 || old.channels.iter().any(|key| !local_property(key.property))
@@ -119,6 +130,7 @@ impl CompiledScene {
             }
             output.push(CompiledReplayRevision {
                 rows,
+                inset_2d_view: None,
                 tracks,
                 channels: old.channels.clone(),
                 camera_motion_payloads: 0,

@@ -42,7 +42,9 @@ fn semantic_lowering_retains_the_action_and_existing_outline_declaration_policy(
     let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.5 });
     state.style.fill = None;
     state.style.stroke = Some(SemanticPaint::Solid(Color::BLUE));
-    state.set_click_indicate(Some(binding(Color::YELLOW)));
+    state.set_click_action(Some(noon_core::SemanticClickAction::Indicate(binding(
+        Color::YELLOW,
+    ))));
     let node = store.insert_semantic_object(state);
     store.attach_to_scene(node).unwrap();
     let mut index = SemanticExecutionIndex::new();
@@ -82,7 +84,7 @@ fn invalid_initial_semantic_actions_do_not_publish_identity() {
     ] {
         let mut store = SemanticStore::new();
         let mut state = SemanticObjectState::new(geometry);
-        state.set_click_indicate(Some(action));
+        state.set_click_action(Some(noon_core::SemanticClickAction::Indicate(action)));
         let node = store.insert_semantic_object(state);
         store.attach_to_scene(node).unwrap();
         if driven {
@@ -216,7 +218,9 @@ fn sparse_preflight_tracks_binding_and_content_changes_before_commit() {
 fn semantic_clear_and_content_replacement_lower_in_a_valid_execution_order() {
     let mut store = SemanticStore::new();
     let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.5 });
-    state.set_click_indicate(Some(binding(Color::YELLOW)));
+    state.set_click_action(Some(noon_core::SemanticClickAction::Indicate(binding(
+        Color::YELLOW,
+    ))));
     let node = store.insert_semantic_object(state);
     store.attach_to_scene(node).unwrap();
     let mut index = SemanticExecutionIndex::new();

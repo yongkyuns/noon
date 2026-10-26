@@ -135,7 +135,7 @@ fn submit_test_frame(
     };
     use noon::integration::PointerFrameView;
     let Some((_, viewport)) = input.coordinates()? else {
-        return submit_browser_pointer_input(target, binding, sequence, input);
+        return submit_browser_pointer_input(target, binding, sequence, input).map(|_| ());
     };
     let view = PointerFrameView::new(
         input.view_revision,
@@ -147,6 +147,7 @@ fn submit_test_frame(
         .capture_pointer_frame(view)
         .map_err(|e| e.to_string())?;
     submit_presented_browser_pointer_input(target, binding, sequence, input, &frame)
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 

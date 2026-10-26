@@ -113,7 +113,7 @@ for (const existing of [false, true]) {
       f.update({ supported: false, player: f.owner, durationSeconds: 7, playbackState: state });
       const expected = existing ? [["duration", 7]]
         : [["create", f.owner, f.pane, { durationSeconds: 7, onError: f.onError }]];
-      expected.push(["controllable", false], ["busy", true], ["sync", { ...state, durationSeconds: 7 }]);
+      expected.push(["controllable", false], ["busy", true], ["sync", { ...state, durationSeconds: 7, hasAudio: false }]);
       assert.deepEqual(f.calls, expected);
       assert.equal(f.status.dataset.playbackControls, "unavailable");
       assert.equal(state.durationSeconds, 99, "the observation must not be mutated");
@@ -156,3 +156,25 @@ test("controls without a reader observation do not invent playback state", () =>
     ["controllable", false], ["busy", false],
   ]);
 });
+
+for (const existing of [false, true]) {
+  test(`${existing ? "warm" : "cold"} audio controls use the accepted audio endpoint and clear audio on replacement`, () => {
+    const f = controlsFixture();
+    if (existing) f.update({ supported: true, player: f.owner, durationSeconds: 2 });
+    f.calls.length = 0;
+    const audio = Object.freeze({ time: 1.25, playing: false, durationSeconds: 9.5,
+      hasAudio: true, audioReady: true, audioMuted: false, audioVolume: 0.75,
+      sections: [{ name: "Introduction", time: 0 }], canUndoTranslationDrag: false });
+    f.update({ supported: true, player: f.owner, durationSeconds: 3, playbackState: audio });
+    const expected = existing ? [["duration", 9.5]]
+      : [["create", f.owner, f.pane, { durationSeconds: 9.5, onError: f.onError }]];
+    expected.push(["controllable", true], ["busy", false], ["sync", audio]);
+    assert.deepEqual(f.calls, expected);
+    f.calls.length = 0;
+    f.update({ supported: true, player: f.owner, durationSeconds: 4,
+      playbackState: Object.freeze({ time: 0, playing: false }) });
+    assert.deepEqual(f.calls.at(-1), ["sync", {
+      time: 0, playing: false, durationSeconds: 4, hasAudio: false, canUndoTranslationDrag: false,
+    }]);
+  });
+}

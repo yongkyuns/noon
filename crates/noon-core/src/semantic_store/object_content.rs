@@ -401,14 +401,47 @@ pub struct SemanticObjectState {
     /// not carry a BarChart-sized role variant.
     bar_metadata: Option<Arc<SemanticBarMetadata>>,
     signal_bindings: Vec<SemanticSignalBinding>,
-    /// One authored primary-click indication. The runtime owns any active
+    /// One authored primary-click action. The runtime owns any active
     /// invocation; this declaration is only the language-neutral trigger/action.
     /// Unbound objects pay one pointer, with allocation only for declared actions.
-    click_indicate: Option<Arc<SemanticClickIndicate>>,
+    click_action: Option<Arc<SemanticClickAction>>,
     /// Camera projection, non-default material, and non-default composition
     /// domain share one optional immutable payload. Ordinary 2D objects keep no
     /// spatial metadata allocation.
     spatial_properties: Option<Arc<SemanticSpatialProperties>>,
+}
+
+/// Typed viewer transport request. The execution session emits it only after a
+/// click's input transaction commits; the admitted playback owner then applies it.
+/// These requests do not author timeline events, change gains, or create a clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaybackControl {
+    /// Toggle the admitted viewer transport between playing and paused.
+    TogglePlayback,
+    /// Seek to the admitted beginning while preserving play/pause state.
+    Restart,
+    /// Seek to the strict previous section through shared section navigation.
+    PreviousSection,
+    /// Seek to the strict next section through shared section navigation.
+    NextSection,
+    /// Toggle viewer mute without editing an authored clip's gain.
+    ToggleAudioMuted,
+}
+
+/// The one authored primary-click action on an analytic object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticClickAction {
+    Indicate(SemanticClickIndicate),
+    Playback(PlaybackControl),
+}
+
+impl SemanticClickAction {
+    pub fn is_valid(self) -> bool {
+        match self {
+            Self::Indicate(indication) => indication.is_valid(),
+            Self::Playback(_) => true,
+        }
+    }
 }
 
 /// Typed authored `click -> Indicate` declaration for one analytic object.
@@ -472,7 +505,7 @@ impl SemanticObjectState {
             text_presentation_baseline: None,
             bar_metadata: None,
             signal_bindings: Vec::new(),
-            click_indicate: None,
+            click_action: None,
             spatial_properties: None,
         }
     }
@@ -498,7 +531,7 @@ impl SemanticObjectState {
             text_presentation_baseline: self.text_presentation_baseline,
             bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
-            click_indicate: self.click_indicate.clone(),
+            click_action: self.click_action.clone(),
             spatial_properties: self.spatial_properties.clone(),
         };
         // Visual copy may replace a camera pose, so retain its projection
@@ -973,12 +1006,12 @@ impl SemanticObjectState {
         &self.signal_bindings
     }
 
-    pub fn click_indicate(&self) -> Option<SemanticClickIndicate> {
-        self.click_indicate.as_deref().copied()
+    pub fn click_action(&self) -> Option<SemanticClickAction> {
+        self.click_action.as_deref().copied()
     }
 
-    pub fn set_click_indicate(&mut self, binding: Option<SemanticClickIndicate>) {
-        self.click_indicate = binding.map(Arc::new);
+    pub fn set_click_action(&mut self, binding: Option<SemanticClickAction>) {
+        self.click_action = binding.map(Arc::new);
     }
 
     pub(crate) fn signal_bindings_mut(&mut self) -> &mut Vec<SemanticSignalBinding> {

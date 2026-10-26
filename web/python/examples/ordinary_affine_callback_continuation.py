@@ -30,10 +30,10 @@ class OrdinaryAffineCallbackContinuation(Scene):
                 else:
                     raise AssertionError("family query bypassed the active callback overlay")
             center = mobject.get_center()
-            mobject.move_to((center.x, 1.0, 0.0))
+            mobject.move_to((center[0], 1.0, 0.0))
 
         def dim_after_lift(mobject, _dt):
-            assert mobject.get_center().y == 1.0
+            assert mobject.get_center()[1] == 1.0
             mobject.set_fill(opacity=0.75)
             mobject.set_object_opacity(0.5)
 
@@ -49,7 +49,7 @@ class OrdinaryAffineCallbackContinuation(Scene):
         assert phase_counts.get(1.0) == 1
         assert len(phase_counts) >= 2
         assert self.time == 1.0
-        assert circle.get_center() == (2.0, 1.0)
+        assert tuple(circle.get_center()) == (2.0, 1.0, 0.0)
         # Registered callbacks keep their Rust-owned effective values after the
         # phase completes; family queries must not materialize raw geometry.
         def reject_raw_projection():
@@ -69,13 +69,13 @@ class OrdinaryAffineCallbackContinuation(Scene):
         copied.set_opacity(0.4)
         assert abs(copied.get_fill_opacity() - 0.4) < 1e-6
         assert abs(copied.get_stroke_opacity() - 0.4) < 1e-6
-        assert family.get_center() == (2.0, 1.0)
+        assert tuple(family.get_center()) == (2.0, 1.0, 0.0)
         assert abs(family.width - 0.8) < 1e-6
         assert abs(family.height - 0.8) < 1e-6
         # A plain live placement can reference the callback's effective bounds.
         probe.next_to(circle, RIGHT, buff=0.1)
-        assert abs(probe.get_center().x - 2.6) < 1e-6
-        assert abs(probe.get_center().y - 1.0) < 1e-6
+        assert abs(probe.get_center()[0] - 2.6) < 1e-6
+        assert abs(probe.get_center()[1] - 1.0) < 1e-6
         before = circle.get_center()
         try:
             circle.next_to(probe, RIGHT, buff=0.1)
@@ -88,4 +88,4 @@ class OrdinaryAffineCallbackContinuation(Scene):
             assert cause.code == "authoring.unsupported_operation"
         else:
             raise AssertionError("placement bypassed the active affine driver")
-        assert circle.get_center() == before
+        assert tuple(circle.get_center()) == tuple(before)

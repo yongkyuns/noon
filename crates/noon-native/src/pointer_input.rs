@@ -87,8 +87,11 @@ impl NativeApp {
             },
             kind,
         );
-        self.execution.submit_native_pointer_input(token, input)?;
+        let publication = self.execution.submit_native_pointer_input(token, input)?;
         self.next_input_sequence = next;
+        if let Some(control) = publication.playback_control() {
+            self.dispatch_playback_control(control, std::time::Instant::now())?;
+        }
         Ok(())
     }
 

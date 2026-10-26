@@ -11,7 +11,7 @@ from _typed_geometry_test_support import identity_only_wrapper
 class FamilyOwnPathTests(unittest.TestCase):
     def query(self, count):
         query = Mock(pointCount=count)
-        query.anchors.return_value = [] if count == 0 else [1 + 2 ** -40, 0., 3., 2.]
+        query.anchors3D.return_value = [] if count == 0 else [1 + 2 ** -40, 0., 7.125, 3., 2., -0.75]
         return query
 
     def test_authored_vector_root_observation_uses_one_native_query_and_no_children(self):
@@ -23,7 +23,7 @@ class FamilyOwnPathTests(unittest.TestCase):
                 value._semantic_family_handle = family
                 with patch.object(handles, '_live_mutation_context', return_value=None), patch.object(handles, '_live_constructor_context', return_value=None), patch.object(handles, '_group_target_context', side_effect=AssertionError('child context search')):
                     result = value.get_anchors()
-                self.assertEqual([list(point) for point in result], [] if count == 0 else [[1 + 2 ** -40, 0.], [3., 2.]])
+                self.assertEqual([list(point) for point in result], [] if count == 0 else [[1 + 2 ** -40, 0., 7.125], [3., 2., -0.75]])
                 family.pathQuery.assert_called_once_with()
                 family.memberKeys.assert_not_called()
                 query.free.assert_called_once_with()

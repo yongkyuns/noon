@@ -70,6 +70,8 @@ pub enum UnsupportedAuthoringOperation {
     ApplyMatrixNonPlanar,
     /// CyclicReplace currently requires one non-empty flat family of object members.
     CyclicReplaceFamilyTopology,
+    /// Own-point promotion cannot discard structured root dependencies.
+    PointPromotionStructuredRoot,
     /// Updater suspension requires the ordered host callback phase for scene-owned nodes.
     UpdaterSuspensionLive,
 }
@@ -107,12 +109,19 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
             Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
             Self::CyclicReplaceFamilyTopology => "CyclicReplace requires one non-empty flat family of object members",
+            Self::PointPromotionStructuredRoot => "own-point promotion requires an ordinary root without structured dependencies",
             Self::UpdaterSuspensionLive => "updater suspension on scene-owned objects requires the ordered callback phase",
         })
     }
 }
 
 impl std::error::Error for UnsupportedAuthoringOperation {}
+
+impl From<noon_core::PointArrayShapeError> for AuthoringError {
+    fn from(error: noon_core::PointArrayShapeError) -> Self {
+        Self::PointArrayShape(error)
+    }
+}
 
 /// Failure of a shared authored object, value, layout or membership operation.
 ///
@@ -122,6 +131,10 @@ impl std::error::Error for UnsupportedAuthoringOperation {}
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    /// Immutable audio PCM preparation or resource admission failed.
+    AudioResource(noon_core::AudioResourceError),
+    /// A finite authored clip has invalid timing, trim, gain, or fades.
+    AudioClip(noon_core::AudioClipError),
     EffectStateReplacementUnavailable,
     GlowParameter(noon_core::GlowParameterError),
     EffectNotFound {
@@ -234,6 +247,7 @@ pub enum AuthoringError {
     ZeroMatchWidth,
     /// A point-coordinate dimension is outside the supplied point width.
     InvalidPointDimension(u32),
+    PointArrayShape(noon_core::PointArrayShapeError),
     /// An operation requires finite bounds for this node.
     MissingLayoutBounds(noon_core::SemanticNodeId),
     /// The requested direct family member index does not exist.
@@ -258,7 +272,7 @@ pub enum AuthoringError {
     InvalidGridOption(&'static str),
     /// Click indication has one restoring timing shape; other animation options
     /// would imply a distinct authored action.
-    InvalidClickIndicateOptions,
+    InvalidClickActionOptions,
     /// A planar flip needs a nonzero XY axis or a pure Z axis.
     InvalidFlipAxis,
     /// An internal arrangement plan has not observed all required bounds.
@@ -288,6 +302,11 @@ pub enum AuthoringError {
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
     GeometryResource(noon_core::GeometryResourceError),
+    /// A nonempty point array has no complete subpath for a closing line.
+    NoSubpathForClose {
+        point_count: usize,
+        stride: i32,
+    },
     /// A path observation received invalid geometry or sampling parameters.
     PathQuery(noon_geometry::PathProportionError),
     /// Current path controls cannot be observed with the active correspondence.
@@ -313,6 +332,8 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioResource(error) => error.fmt(f),
+            Self::AudioClip(error) => error.fmt(f),
             Self::GlowParameter(error) => error.fmt(f),
             Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
@@ -420,7 +441,7 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("too few grid rows and columns to fit all members")
             }
             Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
-            Self::InvalidClickIndicateOptions => {
+            Self::InvalidClickActionOptions => {
                 f.write_str("click Indicate only accepts there-and-back timing without lag, path arc, reversal, lifecycle options")
             }
             Self::InvalidFlipAxis => {
@@ -440,7 +461,10 @@ impl std::fmt::Display for AuthoringError {
             Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
+            Self::NoSubpathForClose { point_count, stride } => write!(f,
+                "path with {point_count} points and stride {stride} has no complete subpath to close"),
             Self::PathQuery(error) => error.fmt(f),
+            Self::PointArrayShape(error) => error.fmt(f),
             Self::MorphQuery(error) => error.fmt(f),
             Self::Boolean(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
@@ -460,6 +484,8 @@ impl std::error::Error for AuthoringError {
         match self {
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),
+            Self::AudioResource(error) => Some(error),
+            Self::AudioClip(error) => Some(error),
             Self::GlowParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
@@ -470,6 +496,7 @@ impl std::error::Error for AuthoringError {
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
+            Self::PointArrayShape(error) => Some(error),
             Self::MorphQuery(error) => Some(error),
             Self::Boolean(error) => Some(error),
             Self::Arc(error) => Some(error),
@@ -518,6 +545,18 @@ impl From<noon_core::SemanticLoweringError> for AuthoringError {
 impl From<noon_core::GeometryResourceError> for AuthoringError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         Self::GeometryResource(error)
+    }
+}
+
+impl From<noon_core::AudioResourceError> for AuthoringError {
+    fn from(error: noon_core::AudioResourceError) -> Self {
+        Self::AudioResource(error)
+    }
+}
+
+impl From<noon_core::AudioClipError> for AuthoringError {
+    fn from(error: noon_core::AudioClipError) -> Self {
+        Self::AudioClip(error)
     }
 }
 

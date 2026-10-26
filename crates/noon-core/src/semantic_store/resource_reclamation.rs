@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    FontResourceHandle, GeometryResourceHandle, RasterImageResourceHandle, SemanticObjectContent,
-    SemanticObjectState, StoredGeometry, TextResourceHandle,
+    AudioResourceHandle, FontResourceHandle, GeometryResourceHandle, RasterImageResourceHandle,
+    SemanticObjectContent, SemanticObjectState, StoredGeometry, TextResourceHandle,
 };
 
 use super::SemanticStore;
@@ -22,6 +22,7 @@ pub(super) struct SemanticResourceReferences {
     registered_texts: HashSet<TextResourceHandle>,
     images: HashMap<RasterImageResourceHandle, usize>,
     fonts: HashMap<FontResourceHandle, usize>,
+    audio: HashMap<AudioResourceHandle, usize>,
 }
 
 #[derive(Debug, Default)]
@@ -30,6 +31,7 @@ pub(super) struct SemanticResourceRetirementCandidates {
     texts: Vec<TextResourceHandle>,
     images: Vec<RasterImageResourceHandle>,
     fonts: Vec<FontResourceHandle>,
+    audio: Vec<AudioResourceHandle>,
 }
 
 impl SemanticResourceReferences {
@@ -55,6 +57,17 @@ impl SemanticResourceReferences {
 }
 
 impl SemanticStore {
+    pub(super) fn retain_semantic_audio_resource(&mut self, handle: AudioResourceHandle) {
+        debug_assert!(self.audio_resources.get(handle).is_some());
+        SemanticResourceReferences::retain(&mut self.resource_references.audio, handle);
+    }
+
+    pub(super) fn release_semantic_audio_resource(&mut self, handle: AudioResourceHandle) {
+        if SemanticResourceReferences::release(&mut self.resource_references.audio, handle) {
+            self.resource_retirement_candidates.audio.push(handle);
+        }
+    }
+
     pub(super) fn retain_semantic_object_resources(&mut self, state: &SemanticObjectState) {
         self.retain_semantic_content_resources(state.content);
         self.retain_semantic_numeric_text_resources(state);
@@ -346,6 +359,7 @@ impl SemanticStore {
             || !self.resource_retirement_candidates.images.is_empty()
             || !self.resource_retirement_candidates.geometries.is_empty()
             || !self.resource_retirement_candidates.fonts.is_empty()
+            || !self.resource_retirement_candidates.audio.is_empty()
         {
             let candidates = std::mem::take(&mut self.resource_retirement_candidates);
             for handle in candidates.texts {
@@ -360,6 +374,11 @@ impl SemanticStore {
             for handle in candidates.images {
                 if !self.resource_references.images.contains_key(&handle) {
                     self.raster_image_resources.remove(handle);
+                }
+            }
+            for handle in candidates.audio {
+                if !self.resource_references.audio.contains_key(&handle) {
+                    self.audio_resources.remove(handle);
                 }
             }
             for handle in candidates.geometries {
@@ -412,6 +431,16 @@ impl SemanticStore {
             .collect::<Vec<_>>();
         for state in &states {
             self.retain_semantic_object_resources(state);
+        }
+        let audio_handles = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter_map(|node| node.semantic_audio_clip_state())
+            .map(|clip| clip.definition().resource())
+            .collect::<Vec<_>>();
+        for handle in audio_handles {
+            self.retain_semantic_audio_resource(handle);
         }
     }
 }

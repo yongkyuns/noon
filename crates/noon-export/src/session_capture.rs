@@ -10,7 +10,7 @@ use noon::integration::RuntimeIdentity;
 use noon::ExecutionSession;
 use noon_core::PublicationContext;
 
-use crate::{gpu, CaptureError, CaptureOptions, CapturePixelFormat, CaptureWork};
+use crate::{gpu, CaptureError, CaptureOptions, CapturePixelFormat, CaptureSummary, CaptureWork};
 
 /// One completed render of an existing runtime publication. This does not admit
 /// an animation endpoint, advance its source, or finalize an output file.
@@ -42,6 +42,9 @@ pub struct SessionFrame<'a> {
 /// This API does not sample time or invoke/complete callbacks. Its caller owns
 /// the shared runtime's continuation and publication-admission protocol. Calling
 /// it repeatedly renders the same state, not a series of animation frames.
+/// This is an explicitly visual capture API: authored audio is neither played
+/// nor encoded. [`crate::output::export_session_file`] combines this capture
+/// boundary with shared mixing and qualified muxing for finite immutable scenes.
 /// Failure poisons this capture object; it cannot replay a consumed publication.
 pub struct SessionCapture {
     gpu: gpu::NativeCapture,
@@ -94,6 +97,13 @@ impl SessionCapture {
             format: CapturePixelFormat::RendererRgba8UnormOpaque,
             rgba: self.gpu.pixels(),
         })
+    }
+
+    pub(crate) fn summary(
+        &self,
+        sampling: noon::integration::ExportFrameSummary,
+    ) -> CaptureSummary {
+        self.gpu.summary(sampling)
     }
 
     fn render_inner(

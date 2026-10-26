@@ -287,6 +287,7 @@ impl SemanticExecutionReachability {
                     }
                 }
                 SemanticMutationImpact::EffectAttachment { .. }
+                | SemanticMutationImpact::AudioClip { .. }
                 | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
@@ -298,7 +299,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::CameraMotions { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
-                | SemanticMutationImpact::ClickIndicate { .. }
+                | SemanticMutationImpact::ClickAction { .. }
                 | SemanticMutationImpact::DecimalNumber { .. }
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
@@ -448,6 +449,7 @@ impl SemanticExecutionReachability {
             SemanticNodeKind::Family(_) => node.semantic_object_state().is_some(),
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::AudioClip(_)
             | SemanticNodeKind::Effect(_) => return Ok(false),
         };
 

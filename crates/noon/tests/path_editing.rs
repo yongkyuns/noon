@@ -1168,18 +1168,31 @@ fn close_path_uses_mutable_stride_subpaths_and_constructor_samples_authored_and_
             let initial = (0..point_count)
                 .map(|index| Vec2::new(index as f32, -(index as f32)))
                 .collect::<Vec<_>>();
-            let target = initial[5];
             let last = *initial.last().unwrap();
-            let mut expected = initial.clone();
+            let mut expected = initial
+                .iter()
+                .map(|point| (f64::from(point.x), f64::from(point.y)))
+                .collect::<Vec<_>>();
             if point_count % 5 != 1 {
-                expected.push(last);
+                expected.push((f64::from(last.x), f64::from(last.y)));
             }
-            expected.extend(
-                samples
-                    .iter()
-                    .skip(1)
-                    .map(|t| last + (target - last) * *t as f32),
-            );
+            // Actual CE v0.21.0 observations, also pinned as
+            // scalar-path-precision.json / mutableStrideClosingCases. These
+            // values deliberately retain the double-precision closing handles.
+            let controls = if point_count == 10 {
+                [
+                    (7.666666666666668, -7.666666666666668),
+                    (6.333333333333334, -6.333333333333334),
+                    (5.0, -5.0),
+                ]
+            } else {
+                [
+                    (8.333333333333334, -8.333333333333334),
+                    (6.666666666666667, -6.666666666666667),
+                    (5.0, -5.0),
+                ]
+            };
+            expected.extend(controls);
 
             let mut scene = Scene::new();
             let mut object = scene
@@ -1210,10 +1223,6 @@ fn close_path_uses_mutable_stride_subpaths_and_constructor_samples_authored_and_
             };
 
             let points = query.points().unwrap();
-            let expected = expected
-                .into_iter()
-                .map(|point| (f64::from(point.x), f64::from(point.y)))
-                .collect::<Vec<_>>();
             assert_eq!(
                 points, expected,
                 "point_count={point_count}, live={live_mode}"

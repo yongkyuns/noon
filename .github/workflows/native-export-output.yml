@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/native-export-output.yml'
       - 'scripts/verify-native-export.py'
+      - 'scripts/ci-install-reference-deps.sh'
+      - 'scripts/ci_reference_apt_sources.py'
+      - 'scripts/test_ci_install_reference_deps.py'
       - 'Cargo.toml'
       - 'rust-toolchain.toml'
       - 'crates/noon-export/**'
@@ -18,6 +21,9 @@ on:
     paths:
       - '.github/workflows/native-export-output.yml'
       - 'scripts/verify-native-export.py'
+      - 'scripts/ci-install-reference-deps.sh'
+      - 'scripts/ci_reference_apt_sources.py'
+      - 'scripts/test_ci_install_reference_deps.py'
       - 'Cargo.toml'
       - 'rust-toolchain.toml'
       - 'crates/noon-export/**'
@@ -64,9 +70,10 @@ jobs:
             ${{ runner.os }}-output-cargo-
             ${{ runner.os }}-capture-cargo-sources-
       - name: Install encoder and software Vulkan, not a virtual display
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+          python3 -S scripts/test_ci_install_reference_deps.py
+          bash scripts/ci-install-reference-deps.sh ffmpeg mesa-vulkan-drivers libvulkan1
           ffmpeg -version > output-proof/ffmpeg.txt
           ffprobe -version > output-proof/ffprobe.txt
       - name: Verify media checker rejects corrupted proofs in all Python modes

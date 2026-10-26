@@ -103,6 +103,7 @@ impl SemanticExecutionIndex {
                     self.update_spatial_anchor_owner(store, node);
                 }
                 SemanticMutationImpact::EffectAttachment { .. }
+                | SemanticMutationImpact::AudioClip { .. }
                 | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
@@ -113,7 +114,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
-                | SemanticMutationImpact::ClickIndicate { .. }
+                | SemanticMutationImpact::ClickAction { .. }
                 | SemanticMutationImpact::DecimalNumber { .. }
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
@@ -281,7 +282,34 @@ impl SemanticExecutionIndex {
         // Scene entrypoint retains its admission guard until effect animation,
         // live publication and every host consumer support this column (#1897).
         let roots = roots.into_iter().collect::<Vec<_>>();
+        // Audio shares the semantic attachment identity and initial projection.
+        // Resource capture occurs before the canonical handoff commits its index.
+        // Empty families are scopes too; overlapping roots must not duplicate clips.
+        let mut audio_clips = Vec::new();
+        if store.has_audio_clips() {
+            let mut seen_scopes = HashSet::new();
+            for &root in &roots {
+                for scope in store.ordered_authoring_nodes(root)? {
+                    if !seen_scopes.insert(scope) {
+                        continue;
+                    }
+                    for clip in store
+                        .node(scope)
+                        .expect("validated authoring traversal")
+                        .scoped_audio_clips()
+                    {
+                        let state = store.semantic_audio_clip_state(clip)?;
+                        audio_clips.push(crate::CompiledAudioClip {
+                            clip,
+                            scope,
+                            definition: *state.definition(),
+                        });
+                    }
+                }
+            }
+        }
         let mut pending = Vec::new();
+        let mut inset_2d_views = std::collections::BTreeMap::new();
         let mut seen = HashSet::new();
 
         for &root in &roots {
@@ -296,6 +324,15 @@ impl SemanticExecutionIndex {
                         semantic_id,
                     ))?;
                 let mut lowered = lower_object_state(semantic_id, state, store)?;
+                if let SemanticObjectRole::Inset2DView(view) = state.role() {
+                    inset_2d_views.insert(
+                        compatibility_object_id(semantic_id),
+                        crate::CompiledInset2DView {
+                            camera_frame: compatibility_object_id(view.camera_frame),
+                            capture_own_display: view.capture_own_display,
+                        },
+                    );
+                }
                 // Attachment topology belongs to this committed scene projection,
                 // not the shared value-lowering helper. Prepared transactions also
                 // lower provisional IDs which intentionally do not exist in the
@@ -341,6 +378,8 @@ impl SemanticExecutionIndex {
             .collect();
 
         Ok(SemanticExecutionProjection {
+            audio_clips,
+            inset_2d_views,
             objects,
             graph_edges,
         })
@@ -362,11 +401,17 @@ impl SemanticExecutionIndex {
 /// the existing `CompiledScene` / `ExecutionSlotTable` path.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionProjection {
+    pub(super) audio_clips: Vec<crate::CompiledAudioClip>,
     objects: Vec<SemanticExecutionObject>,
     graph_edges: Vec<SemanticExecutionGraphEdgeDependency>,
+    pub(super) inset_2d_views: std::collections::BTreeMap<ObjectId, crate::CompiledInset2DView>,
 }
 
 impl SemanticExecutionProjection {
+    pub fn audio_clips(&self) -> &[crate::CompiledAudioClip] {
+        &self.audio_clips
+    }
+
     pub fn objects(&self) -> &[SemanticExecutionObject] {
         &self.objects
     }
@@ -375,12 +420,13 @@ impl SemanticExecutionProjection {
         &self.graph_edges
     }
 
+    /// Number of executable object and audio declarations in this projection.
     pub fn len(&self) -> usize {
-        self.objects.len()
+        self.objects.len() + self.audio_clips.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
+        self.objects.is_empty() && self.audio_clips.is_empty()
     }
 }
 
@@ -481,6 +527,10 @@ impl std::fmt::Display for SemanticExecutionField {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
+    /// An authored clip cannot be omitted by a visual-only execution backend.
+    AudioOutputUnavailable {
+        clip: SemanticNodeId,
+    },
     UnsupportedGlowProfile {
         owner: SemanticNodeId,
     },
@@ -545,6 +595,12 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioOutputUnavailable { clip } => write!(
+                formatter,
+                "audio clip {}:{} cannot be attached during execution; declare audio before execution starts (#2263)",
+                clip.slot(),
+                clip.generation()
+            ),
             Self::UnsupportedGlowProfile { owner } => write!(
                 formatter,
                 "glow on {}:{} requires one attachment on ordinary planar 2D content",
@@ -927,7 +983,13 @@ pub(super) fn validate_glow_source_profile(
                     && resource.bounds.max.y > resource.bounds.min.y
             })
         }
-        _ => false,
+        SemanticObjectContent::Image(image) => {
+            noon_core::SemanticImageContent::supports_style(&state.style)
+                && store
+                    .raster_image_resources()
+                    .get(image.resource())
+                    .is_some_and(|resource| resource.width() > 0 && resource.height() > 0)
+        }
     };
     lower_semantic_style(owner, state)?;
     if !geometry_supported
@@ -1033,7 +1095,7 @@ pub(super) fn lower_object_state(
     };
     Ok(LoweredObjectState {
         glow: None,
-        click_indicate: state.click_indicate().map(std::sync::Arc::new),
+        click_indicate: click_indicate_binding(state).map(std::sync::Arc::new),
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
@@ -1042,6 +1104,15 @@ pub(super) fn lower_object_state(
         decimal_number: state.decimal_number().cloned(),
         spatial,
     })
+}
+
+pub(super) fn click_indicate_binding(
+    state: &SemanticObjectState,
+) -> Option<noon_core::SemanticClickIndicate> {
+    match state.click_action() {
+        Some(noon_core::SemanticClickAction::Indicate(binding)) => Some(binding),
+        _ => None,
+    }
 }
 
 pub(super) fn lower_semantic_transform(
@@ -1432,7 +1503,7 @@ mod tests {
                     vector_items: Arc::from([]),
                     render_items: Arc::from([]),
                     parts: Arc::from([]),
-                    bounds: Rect::new(Vec2::ZERO, Vec2::new(2.0, 1.0)),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::new(2.0, 1.0)).into(),
                     baseline: 0.0,
                     layout_artifact: None,
                 },
@@ -1445,6 +1516,101 @@ mod tests {
         text_state.style.fill = None;
         let text_id = store.insert_semantic_object(text_state.clone());
         validate_glow_source_profile(text_id, &text_state, &store).unwrap();
+    }
+
+    #[test]
+    fn image_glow_lowers_shared_resource_and_preserves_source_and_sampling() {
+        use noon_core::{
+            Glow, GlowSource, GlowUpdate, RasterImageResourceError, RasterImageSampling,
+            SemanticImageContent, SemanticMutationTransaction,
+        };
+
+        for sampling in [
+            RasterImageSampling::Nearest,
+            RasterImageSampling::Linear,
+            RasterImageSampling::Bicubic,
+        ] {
+            for source in [GlowSource::Painted, GlowSource::Silhouette] {
+                let mut store = SemanticStore::new();
+                let owner = store
+                    .with_raster_image_rgba8(
+                        2,
+                        1,
+                        [255_u8, 0, 0, 255, 0, 0, 255, 64],
+                        |store, resource| {
+                            let mut state = SemanticObjectState::new(
+                                SemanticImageContent::with_sampling(resource, sampling),
+                            );
+                            state.style.fill = Some(SemanticPaint::Solid(Color::WHITE));
+                            state.style.fill_opacity = 0.4;
+                            state.style.object_opacity = 0.7;
+                            let owner = attach(store, state);
+                            let mut transaction = SemanticMutationTransaction::new();
+                            transaction.create_effect(
+                                owner,
+                                "glow",
+                                Glow::new(GlowUpdate::default().source(source)).unwrap(),
+                            );
+                            transaction.apply(store).unwrap();
+                            Ok::<_, RasterImageResourceError>(owner)
+                        },
+                    )
+                    .unwrap();
+                let mut index = SemanticExecutionIndex::new();
+                let lowered = index.lower_scene(&store).unwrap();
+                let [row] = lowered.objects() else {
+                    panic!("one image source must remain one execution object");
+                };
+                assert_eq!(row.semantic_id, owner);
+                let image = row.content.image().unwrap();
+                assert_eq!(image.sampling(), sampling);
+                assert!(store
+                    .raster_image_resources()
+                    .get(image.resource())
+                    .is_some());
+                assert_eq!(row.glow.as_ref().unwrap().definition.source(), source);
+                assert!((row.base_style.fill.unwrap().alpha - 0.4).abs() < 1e-6);
+                assert!((row.base_style.opacity - 0.7).abs() < 1e-6);
+                assert_eq!(store.raster_image_resources().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn image_glow_profile_rejects_missing_pixels_recolor_stroke_and_spatial_pose() {
+        use noon_core::{RasterImageResourceError, SemanticImageContent};
+
+        let mut store = SemanticStore::new();
+        let owner = store
+            .with_raster_image_rgba8(1, 1, [255_u8; 4], |store, resource| {
+                let mut state = SemanticObjectState::new(SemanticImageContent::new(resource));
+                state.style.fill = Some(SemanticPaint::Solid(Color::WHITE));
+                Ok::<_, RasterImageResourceError>(attach(store, state))
+            })
+            .unwrap();
+        let original = store.semantic_object_state_checked(owner).unwrap().clone();
+        validate_glow_source_profile(owner, &original, &store).unwrap();
+        let mut missing = original.clone();
+        let mut handle = missing.content.image().unwrap().resource();
+        handle.version += 1;
+        missing.content = SemanticImageContent::new(handle).into();
+        let mut recolored = original.clone();
+        recolored.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        let mut stroked = original.clone();
+        stroked.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        let mut spatial = original.clone();
+        spatial.transform = noon_core::SemanticWorldTransform3D::IDENTITY.into();
+        for unsupported in [missing, recolored, stroked, spatial] {
+            assert!(matches!(
+                validate_glow_source_profile(owner, &unsupported, &store),
+                Err(SemanticLoweringError::UnsupportedGlowProfile { owner: rejected })
+                    if rejected == owner
+            ));
+        }
+        assert_eq!(
+            store.semantic_object_state_checked(owner).unwrap(),
+            &original
+        );
     }
 
     #[test]

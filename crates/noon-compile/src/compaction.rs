@@ -188,11 +188,19 @@ impl CompiledScene {
             || (self.resources.images.is_empty()
                 && self.resources.texts.is_empty()
                 && self.resources.fonts.is_empty()
-                && self.resources.geometries.is_empty())
+                && self.resources.geometries.is_empty()
+                && self.resources.audio.is_empty())
         {
             return 0;
         }
 
+        // Immutable initial audio is independent of painter rows. Keep its PCM
+        // closure when visual slots/resources are compacted (#2263).
+        let audio = self
+            .audio_clips
+            .iter()
+            .map(|clip| clip.definition().resource())
+            .collect::<BTreeSet<_>>();
         let mut images = BTreeSet::new();
         let mut texts = BTreeSet::new();
         let mut fonts = BTreeSet::new();
@@ -307,10 +315,14 @@ impl CompiledScene {
             }
         }
 
-        let before = self.resources.images.len()
+        let before = self.resources.audio.len()
+            + self.resources.images.len()
             + self.resources.texts.len()
             + self.resources.fonts.len()
             + self.resources.geometries.len();
+        self.resources
+            .audio
+            .retain(|handle, _| audio.contains(handle));
         self.resources
             .images
             .retain(|handle, _| images.contains(handle));
@@ -330,6 +342,7 @@ impl CompiledScene {
             .geometry_handles
             .retain(|id, _| geometry_ids.contains(id));
         before
+            - self.resources.audio.len()
             - self.resources.images.len()
             - self.resources.texts.len()
             - self.resources.fonts.len()
@@ -469,7 +482,7 @@ mod tests {
             }]),
             render_items: Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
             baseline: 0.0,
             layout_artifact: None,
         };
@@ -597,7 +610,7 @@ mod tests {
             vector_items: Arc::from([]),
             render_items: Arc::from([]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO).into(),
             baseline: 0.0,
             layout_artifact: None,
         });

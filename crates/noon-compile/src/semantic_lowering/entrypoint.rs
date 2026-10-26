@@ -72,6 +72,12 @@ impl SemanticExecutionLoweringOutput {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticExecutionLoweringError {
+    PlaybackControlsExecutionUnavailable {
+        operation: &'static str,
+    },
+    AudioExecutionUnavailable {
+        operation: &'static str,
+    },
     Object(SemanticLoweringError),
     Reactive(SemanticReactiveLoweringError),
     Compiled(SemanticCompiledSceneError),
@@ -106,6 +112,14 @@ impl From<SemanticCompiledSceneError> for SemanticExecutionLoweringError {
 impl std::fmt::Display for SemanticExecutionLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PlaybackControlsExecutionUnavailable { operation } => write!(
+                formatter,
+                "scene playback controls do not support {operation} yet (#2263)"
+            ),
+            Self::AudioExecutionUnavailable { operation } => write!(
+                formatter,
+                "audio execution does not support {operation} yet (#2263)"
+            ),
             Self::Object(error) => write!(formatter, "semantic object lowering failed: {error}"),
             Self::Reactive(error) => {
                 write!(formatter, "semantic reactive lowering failed: {error}")
@@ -868,7 +882,7 @@ mod tests {
                         TextRenderItem::Vector(0),
                     ]),
                     parts: Arc::from([]),
-                    bounds: Rect::new(Vec2::ZERO, Vec2::new(3.0, 1.0)),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::new(3.0, 1.0)).into(),
                     baseline: 0.0,
                     layout_artifact: None,
                 },
@@ -904,7 +918,7 @@ mod tests {
                         TextRenderItem::Vector(0),
                     ]),
                     parts: Arc::from([]),
-                    bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
                     baseline: 0.0,
                     layout_artifact: None,
                 },

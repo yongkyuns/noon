@@ -260,6 +260,63 @@ def canonical_callback_session_id(scene: _base.Scene) -> int | None:
     return None if session is None else session.session_id
 
 
+def native_layout_replace_target(mobject, callback):
+    """Capture only a direct canonical ``lambda m: m.replace(closed_object)``.
+
+    No user code is invoked. Closed handles are captured by identity when the
+    composition is authored; Rust decides whether their animation can specialize
+    to ordinary affine tracks. Other Python behavior keeps the host barrier.
+    """
+    import dis
+    import types
+
+    if type(callback) is not types.FunctionType:
+        return None
+    code = callback.__code__
+    if (code.co_argcount != 1 or code.co_kwonlyargcount or len(code.co_freevars) != 1
+            or code.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
+                               | inspect.CO_GENERATOR | inspect.CO_COROUTINE
+                               | inspect.CO_ASYNC_GENERATOR)
+            or callback.__defaults__ or callback.__kwdefaults__):
+        return None
+    instructions = []
+    for instruction in dis.get_instructions(callback):
+        if instruction.opname in ("RESUME", "COPY_FREE_VARS", "PRECALL"):
+            continue
+        operation = instruction.opname
+        if operation in ("LOAD_FAST_BORROW", "LOAD_FAST_CHECK"):
+            operation = "LOAD_FAST"
+        if operation == "LOAD_ATTR":
+            operation = "LOAD_METHOD"
+        instructions.append((operation, instruction.argval))
+    if instructions != [
+        ("LOAD_FAST", code.co_varnames[0]), ("LOAD_METHOD", "replace"),
+        ("LOAD_DEREF", code.co_freevars[0]), ("CALL", 1), ("RETURN_VALUE", None),
+    ]:
+        return None
+    try:
+        target = callback.__closure__[0].cell_contents
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(mobject, _base.Mobject) or not isinstance(target, _base.Mobject)
+            or mobject is target):
+        return None
+    # Instance methods, subclasses and custom attribute dispatch may introduce
+    # arbitrary effects even when the bytecode looks like this simple call.
+    if any(inspect.getattr_static(type(value), "__getattribute__") is not object.__getattribute__
+           for value in (mobject, target)):
+        return None
+    if inspect.getattr_static(mobject, "replace") is not _base._CANONICAL_MOBJECT_REPLACE_METHOD:
+        return None
+    scene = inspect.getattr_static(mobject, "_scene", None)
+    handle = inspect.getattr_static(target, "_semantic_handle", None)
+    if (not isinstance(scene, _base.Scene)
+            or inspect.getattr_static(target, "_scene", None) is not scene
+            or handle is None or isinstance(handle, property)):
+        return None
+    return target
+
+
 def reserve_composition_callback(
     scene: _base.Scene, mobject: _base.Mobject, callback: Callable[..., Any]
 ) -> int:
@@ -1726,7 +1783,7 @@ def _canonical_set_x(self: _base.Mobject, x: float, direction: object = _base.OR
     value = _canonical_row(self)
     if value is None:
         return _coordinate_operations()._set_x(self, x, direction)
-    if _base._as_vec2(direction) != _base.ORIGIN:
+    if _base._as_vec2(direction) != _base.Vec2():
         raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(float(x) - row.center().x, 0.0))
@@ -1736,7 +1793,7 @@ def _canonical_set_y(self: _base.Mobject, y: float, direction: object = _base.OR
     value = _canonical_row(self)
     if value is None:
         return _coordinate_operations()._set_y(self, y, direction)
-    if _base._as_vec2(direction) != _base.ORIGIN:
+    if _base._as_vec2(direction) != _base.Vec2():
         raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))

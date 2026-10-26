@@ -1,15 +1,12 @@
 use noon_core::{
     resolve_animation_options as resolve_core_animation_options,
     resolve_create_animation_options as resolve_core_create_animation_options,
+    resolve_glow_pulse_animation_options as resolve_core_glow_pulse_animation_options,
     resolve_transform_animation_options as resolve_core_transform_animation_options,
     AnimationDefaults, AnimationOptions, RateFunction, ResolvedAnimationOptions,
 };
 
 use crate::authoring_error::AuthoringFailure;
-
-fn optional_number(value: f64) -> Option<f64> {
-    (!value.is_nan()).then_some(value)
-}
 
 fn optional_bool(value: i32) -> Option<bool> {
     match value {
@@ -38,14 +35,14 @@ fn parse_optional_rate_func(value: &str) -> Result<Option<RateFunction>, Authori
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_frontend_animation_options(
     default_lag_ratio: f64,
-    animation_run_time: f64,
+    animation_run_time: Option<f64>,
     animation_rate_func: &str,
-    animation_lag_ratio: f64,
-    animation_path_arc: f64,
+    animation_lag_ratio: Option<f64>,
+    animation_path_arc: Option<f64>,
     animation_reverse_rate_function: i32,
-    play_run_time: f64,
+    play_run_time: Option<f64>,
     play_rate_func: &str,
-    play_lag_ratio: f64,
+    play_lag_ratio: Option<f64>,
 ) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
     resolve_frontend_options(
         resolve_core_animation_options,
@@ -64,17 +61,43 @@ pub fn resolve_frontend_animation_options(
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_frontend_create_animation_options(
     default_lag_ratio: f64,
-    animation_run_time: f64,
+    animation_run_time: Option<f64>,
     animation_rate_func: &str,
-    animation_lag_ratio: f64,
-    animation_path_arc: f64,
+    animation_lag_ratio: Option<f64>,
+    animation_path_arc: Option<f64>,
     animation_reverse_rate_function: i32,
-    play_run_time: f64,
+    play_run_time: Option<f64>,
     play_rate_func: &str,
-    play_lag_ratio: f64,
+    play_lag_ratio: Option<f64>,
 ) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
     resolve_frontend_options(
         resolve_core_create_animation_options,
+        default_lag_ratio,
+        animation_run_time,
+        animation_rate_func,
+        animation_lag_ratio,
+        animation_path_arc,
+        animation_reverse_rate_function,
+        play_run_time,
+        play_rate_func,
+        play_lag_ratio,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_frontend_glow_pulse_animation_options(
+    default_lag_ratio: f64,
+    animation_run_time: Option<f64>,
+    animation_rate_func: &str,
+    animation_lag_ratio: Option<f64>,
+    animation_path_arc: Option<f64>,
+    animation_reverse_rate_function: i32,
+    play_run_time: Option<f64>,
+    play_rate_func: &str,
+    play_lag_ratio: Option<f64>,
+) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
+    resolve_frontend_options(
+        resolve_core_glow_pulse_animation_options,
         default_lag_ratio,
         animation_run_time,
         animation_rate_func,
@@ -95,30 +118,30 @@ fn resolve_frontend_options(
         AnimationOptions,
     ) -> Result<ResolvedAnimationOptions, noon_core::AnimationOptionsError>,
     default_lag_ratio: f64,
-    animation_run_time: f64,
+    animation_run_time: Option<f64>,
     animation_rate_func: &str,
-    animation_lag_ratio: f64,
-    animation_path_arc: f64,
+    animation_lag_ratio: Option<f64>,
+    animation_path_arc: Option<f64>,
     animation_reverse_rate_function: i32,
-    play_run_time: f64,
+    play_run_time: Option<f64>,
     play_rate_func: &str,
-    play_lag_ratio: f64,
+    play_lag_ratio: Option<f64>,
 ) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
     let animation_rate_func = parse_optional_rate_func(animation_rate_func)?;
     let play_rate_func = parse_optional_rate_func(play_rate_func)?;
 
     let animation = AnimationOptions {
-        run_time: optional_number(animation_run_time),
+        run_time: animation_run_time,
         rate_func: animation_rate_func,
-        lag_ratio: optional_number(animation_lag_ratio),
-        path_arc: optional_number(animation_path_arc),
+        lag_ratio: animation_lag_ratio,
+        path_arc: animation_path_arc,
         reverse_rate_function: optional_bool(animation_reverse_rate_function),
         ..AnimationOptions::new()
     };
     let play = AnimationOptions {
-        run_time: optional_number(play_run_time),
+        run_time: play_run_time,
         rate_func: play_rate_func,
-        lag_ratio: optional_number(play_lag_ratio),
+        lag_ratio: play_lag_ratio,
         ..AnimationOptions::new()
     };
 
@@ -133,31 +156,31 @@ fn resolve_frontend_options(
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_frontend_transform_animation_options(
     default_lag_ratio: f64,
-    animation_run_time: f64,
+    animation_run_time: Option<f64>,
     animation_rate_func: &str,
-    animation_lag_ratio: f64,
-    animation_path_arc: f64,
+    animation_lag_ratio: Option<f64>,
+    animation_path_arc: Option<f64>,
     animation_reverse_rate_function: i32,
-    play_run_time: f64,
+    play_run_time: Option<f64>,
     play_rate_func: &str,
-    play_lag_ratio: f64,
-    play_path_arc: f64,
+    play_lag_ratio: Option<f64>,
+    play_path_arc: Option<f64>,
 ) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
     let animation_rate_func = parse_optional_rate_func(animation_rate_func)?;
     let play_rate_func = parse_optional_rate_func(play_rate_func)?;
     let animation = AnimationOptions {
-        run_time: optional_number(animation_run_time),
+        run_time: animation_run_time,
         rate_func: animation_rate_func,
-        lag_ratio: optional_number(animation_lag_ratio),
-        path_arc: optional_number(animation_path_arc),
+        lag_ratio: animation_lag_ratio,
+        path_arc: animation_path_arc,
         reverse_rate_function: optional_bool(animation_reverse_rate_function),
         ..AnimationOptions::new()
     };
     let play = AnimationOptions {
-        run_time: optional_number(play_run_time),
+        run_time: play_run_time,
         rate_func: play_rate_func,
-        lag_ratio: optional_number(play_lag_ratio),
-        path_arc: optional_number(play_path_arc),
+        lag_ratio: play_lag_ratio,
+        path_arc: play_path_arc,
         ..AnimationOptions::new()
     };
     resolve_core_transform_animation_options(
@@ -174,6 +197,7 @@ mod wasm {
 
     use super::{
         resolve_frontend_animation_options, resolve_frontend_create_animation_options,
+        resolve_frontend_glow_pulse_animation_options,
         resolve_frontend_transform_animation_options, ResolvedAnimationOptions,
     };
     use crate::authoring_error::js_error;
@@ -213,14 +237,14 @@ mod wasm {
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_animation_options(
         default_lag_ratio: f64,
-        animation_run_time: f64,
+        animation_run_time: Option<f64>,
         animation_rate_func: &str,
-        animation_lag_ratio: f64,
-        animation_path_arc: f64,
+        animation_lag_ratio: Option<f64>,
+        animation_path_arc: Option<f64>,
         animation_reverse_rate_function: i32,
-        play_run_time: f64,
+        play_run_time: Option<f64>,
         play_rate_func: &str,
-        play_lag_ratio: f64,
+        play_lag_ratio: Option<f64>,
     ) -> Result<WasmAnimationOptionsResolution, JsValue> {
         resolve_frontend_animation_options(
             default_lag_ratio,
@@ -241,16 +265,44 @@ mod wasm {
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_create_animation_options(
         default_lag_ratio: f64,
-        animation_run_time: f64,
+        animation_run_time: Option<f64>,
         animation_rate_func: &str,
-        animation_lag_ratio: f64,
-        animation_path_arc: f64,
+        animation_lag_ratio: Option<f64>,
+        animation_path_arc: Option<f64>,
         animation_reverse_rate_function: i32,
-        play_run_time: f64,
+        play_run_time: Option<f64>,
         play_rate_func: &str,
-        play_lag_ratio: f64,
+        play_lag_ratio: Option<f64>,
     ) -> Result<WasmAnimationOptionsResolution, JsValue> {
         resolve_frontend_create_animation_options(
+            default_lag_ratio,
+            animation_run_time,
+            animation_rate_func,
+            animation_lag_ratio,
+            animation_path_arc,
+            animation_reverse_rate_function,
+            play_run_time,
+            play_rate_func,
+            play_lag_ratio,
+        )
+        .map(WasmAnimationOptionsResolution)
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = resolveGlowPulseAnimationOptions)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_glow_pulse_animation_options(
+        default_lag_ratio: f64,
+        animation_run_time: Option<f64>,
+        animation_rate_func: &str,
+        animation_lag_ratio: Option<f64>,
+        animation_path_arc: Option<f64>,
+        animation_reverse_rate_function: i32,
+        play_run_time: Option<f64>,
+        play_rate_func: &str,
+        play_lag_ratio: Option<f64>,
+    ) -> Result<WasmAnimationOptionsResolution, JsValue> {
+        resolve_frontend_glow_pulse_animation_options(
             default_lag_ratio,
             animation_run_time,
             animation_rate_func,
@@ -269,15 +321,15 @@ mod wasm {
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_transform_animation_options(
         default_lag_ratio: f64,
-        animation_run_time: f64,
+        animation_run_time: Option<f64>,
         animation_rate_func: &str,
-        animation_lag_ratio: f64,
-        animation_path_arc: f64,
+        animation_lag_ratio: Option<f64>,
+        animation_path_arc: Option<f64>,
         animation_reverse_rate_function: i32,
-        play_run_time: f64,
+        play_run_time: Option<f64>,
         play_rate_func: &str,
-        play_lag_ratio: f64,
-        play_path_arc: f64,
+        play_lag_ratio: Option<f64>,
+        play_path_arc: Option<f64>,
     ) -> Result<WasmAnimationOptionsResolution, JsValue> {
         resolve_frontend_transform_animation_options(
             default_lag_ratio,
@@ -307,14 +359,14 @@ mod tests {
     fn create_frontend_bridge_uses_create_policy_and_original_rate_identity() {
         let resolved = resolve_frontend_create_animation_options(
             0.0,
-            1.0,
+            Some(1.0),
             "lingering",
-            f64::NAN,
-            f64::NAN,
+            None,
+            None,
             1,
-            0.8,
+            Some(0.8),
             "",
-            f64::NAN,
+            None,
         )
         .unwrap();
         assert!(resolved.reverse_rate_function);
@@ -322,14 +374,14 @@ mod tests {
         assert_eq!(resolved.run_time, 0.8);
         let rejected = resolve_frontend_create_animation_options(
             0.0,
-            1.0,
+            Some(1.0),
             "lingering",
-            f64::NAN,
-            0.5,
+            None,
+            Some(0.5),
             1,
-            f64::NAN,
+            None,
             "",
-            f64::NAN,
+            None,
         )
         .unwrap_err();
         assert_eq!(rejected.code, "animation.unsupported_path_arc");
@@ -339,14 +391,14 @@ mod tests {
     fn frontend_bridge_uses_shared_precedence() {
         let resolved = resolve_frontend_animation_options(
             0.0,
-            3.0,
+            Some(3.0),
             "linear",
-            0.5,
-            f64::NAN,
+            Some(0.5),
+            None,
             -1,
-            0.4,
+            Some(0.4),
             "smooth",
-            f64::NAN,
+            None,
         );
 
         let resolved = resolved.unwrap();
@@ -359,15 +411,15 @@ mod tests {
     fn transform_frontend_bridge_accepts_and_overrides_path_arc() {
         let resolved = resolve_frontend_transform_animation_options(
             0.0,
-            f64::NAN,
+            None,
             "",
-            f64::NAN,
-            0.5,
+            None,
+            Some(0.5),
             -1,
-            f64::NAN,
+            None,
             "",
-            f64::NAN,
-            -0.75,
+            None,
+            Some(-0.75),
         )
         .unwrap();
         assert_eq!(resolved.path_arc, -0.75);
@@ -375,17 +427,8 @@ mod tests {
 
     #[test]
     fn frontend_bridge_preserves_shared_error_policy() {
-        let unsupported = resolve_frontend_animation_options(
-            0.0,
-            f64::NAN,
-            "",
-            f64::NAN,
-            0.25,
-            -1,
-            f64::NAN,
-            "",
-            f64::NAN,
-        );
+        let unsupported =
+            resolve_frontend_animation_options(0.0, None, "", None, Some(0.25), -1, None, "", None);
         let error = unsupported.unwrap_err();
         assert_eq!(
             (error.category, error.code),
@@ -393,20 +436,108 @@ mod tests {
         );
 
         let invalid = resolve_frontend_animation_options(
-            0.0,
-            f64::NAN,
-            "unknown",
-            f64::NAN,
-            f64::NAN,
-            -1,
-            f64::NAN,
-            "",
-            f64::NAN,
+            0.0, None, "unknown", None, None, -1, None, "", None,
         );
         let error = invalid.unwrap_err();
         assert_eq!(
             (error.category, error.code),
             ("invalid_input", "animation.invalid_rate_function")
         );
+    }
+
+    #[test]
+    fn frontend_bridge_distinguishes_omission_from_invalid_duration() {
+        let defaults =
+            resolve_frontend_animation_options(0.0, None, "", None, None, -1, None, "", None)
+                .unwrap();
+        assert_eq!(defaults.run_time, 1.0);
+
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.25] {
+            for (animation, play) in [(Some(invalid), None), (None, Some(invalid))] {
+                for result in [
+                    resolve_frontend_animation_options(
+                        0.0, animation, "", None, None, -1, play, "", None,
+                    ),
+                    resolve_frontend_create_animation_options(
+                        0.0, animation, "", None, None, -1, play, "", None,
+                    ),
+                    resolve_frontend_glow_pulse_animation_options(
+                        0.0, animation, "", None, None, -1, play, "", None,
+                    ),
+                    resolve_frontend_transform_animation_options(
+                        0.0, animation, "", None, None, -1, play, "", None, None,
+                    ),
+                ] {
+                    let error = result.unwrap_err();
+                    assert_eq!(
+                        (error.category, error.code),
+                        ("invalid_input", "animation.invalid_run_time")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn frontend_bridge_preserves_explicit_nan_lag_and_path() {
+        let lag = resolve_frontend_animation_options(
+            0.0,
+            None,
+            "",
+            Some(f64::NAN),
+            None,
+            -1,
+            None,
+            "",
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(lag.code, "animation.invalid_lag_ratio");
+        let path = resolve_frontend_transform_animation_options(
+            0.0,
+            None,
+            "",
+            None,
+            Some(f64::NAN),
+            -1,
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(path.code, "animation.invalid_path_arc");
+    }
+
+    #[test]
+    fn glow_pulse_frontend_bridge_preserves_reversal_and_play_overrides() {
+        let resolved = resolve_frontend_glow_pulse_animation_options(
+            0.0,
+            Some(1.0),
+            "there_and_back",
+            None,
+            None,
+            1,
+            Some(0.6),
+            "linear",
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.run_time, 0.6);
+        assert_eq!(resolved.rate_func, RateFunction::Linear);
+        assert!(resolved.reverse_rate_function);
+        let path = resolve_frontend_glow_pulse_animation_options(
+            0.0,
+            None,
+            "",
+            None,
+            Some(0.25),
+            1,
+            None,
+            "",
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(path.code, "animation.unsupported_path_arc");
     }
 }

@@ -166,6 +166,12 @@ impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();
         match error {
+            AuthoringError::AudioResource(_) => {
+                Self::new("invalid_input", "authoring.audio_resource", message)
+            }
+            AuthoringError::AudioClip(_) => {
+                Self::new("invalid_input", "authoring.audio_clip", message)
+            }
             AuthoringError::GlowParameter(_) => {
                 Self::new("invalid_input", "effect.invalid_parameter", message)
             }
@@ -369,8 +375,17 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::GeometryResource(cause) => {
                 Self::caused_by("authoring.geometry_resource", message, cause.into())
             }
+            AuthoringError::NoSubpathForClose { .. } => {
+                Self::new("index_error", "path.close_without_subpath", message)
+            }
+            AuthoringError::PathQuery(noon_geometry::PathProportionError::UnpairedAnchors {
+                ..
+            }) => Self::new("invalid_input", "path.unpaired_anchors", message),
             AuthoringError::PathQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_query", cause)
+            }
+            AuthoringError::PointArrayShape(cause) => {
+                Self::new("invalid_input", "point.array_shape", cause)
             }
             AuthoringError::MorphQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_morph_query", cause)
@@ -654,6 +669,10 @@ impl From<SemanticStoreError> for AuthoringFailure {
             E::NotFamily(_) => ("invalid_input", "store.not_family"),
             E::NotEffect(_) => ("invalid_input", "store.not_effect"),
             E::EffectCannotBeMember(_) => ("invalid_input", "store.effect_not_painter_member"),
+            E::NotAudioClip(_) => ("invalid_input", "store.not_audio_clip"),
+            E::AudioClipCannotBeMember(_) => {
+                ("invalid_input", "store.audio_clip_not_painter_member")
+            }
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),
@@ -788,6 +807,16 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::AudioExecutionImmutable => Self::new(
+                "unsupported",
+                "publication.audio_execution_immutable",
+                message,
+            ),
+            E::PlaybackControlsExecutionImmutable => Self::new(
+                "unsupported",
+                "publication.playback_controls_execution_immutable",
+                message,
+            ),
             E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
@@ -835,6 +864,7 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
     fn from(error: noon_compile::SemanticPublicationLoweringError) -> Self {
         use noon_compile::SemanticPublicationLoweringError as E;
         let code = match &error {
+            E::PlaybackControlUnavailable { .. } => "lowering.playback_control_unavailable",
             E::UnsupportedMutation { .. } => "lowering.unsupported_mutation",
             E::UnsupportedReactiveMembership { .. } => "lowering.unsupported_reactive_membership",
             E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
@@ -1332,6 +1362,24 @@ mod tests {
     }
 
     #[test]
+    fn fitting_xyz_unpaired_anchors_have_a_typed_language_projection() {
+        let mut scene = noon::Scene::new();
+        let points = (0..5)
+            .map(|n| noon_core::SemanticVec3::new(f64::from(n), 0.0, 1.0))
+            .collect();
+        let object = scene
+            .path(
+                noon_core::VectorPath::from_manim_points_3d(points),
+                Default::default(),
+            )
+            .unwrap();
+        let error = noon::LayoutAnchor::from(&object)
+            .rescale_to_fit(2.0, noon::LayoutDimension::Width, false)
+            .unwrap_err();
+        assert_authoring_projection(error, "invalid_input", &["path.unpaired_anchors"]);
+    }
+
+    #[test]
     fn accepted_public_operations_project_real_rust_causes_and_retry() {
         use noon::{LayoutAnchor, MobjectTarget, Scene};
         let mut scene = Scene::new();
@@ -1469,5 +1517,18 @@ mod tests {
         scene.remove_glow(&object).unwrap();
         let stale = handle.authored_definition().unwrap_err();
         assert_eq!(AuthoringFailure::from(stale).category, "stale_handle");
+    }
+    #[test]
+    fn closing_an_array_without_a_complete_subpath_has_a_typed_index_diagnosis() {
+        let failure = AuthoringFailure::from(noon::AuthoringError::NoSubpathForClose {
+            point_count: 4,
+            stride: 5,
+        });
+        assert_eq!(failure.category, "index_error");
+        assert_eq!(failure.code, "path.close_without_subpath");
+        assert_eq!(
+            failure.message,
+            "path with 4 points and stride 5 has no complete subpath to close"
+        );
     }
 }

@@ -28,6 +28,15 @@ pub type FamilyCopy = SemanticCopy<MobjectFamily>;
 pub type MobjectCopy = SemanticCopy<Mobject>;
 
 impl<R> SemanticCopy<R> {
+    /// Change only the typed root projection; retain the canonical copy identity map.
+    fn map_root<T>(self, map: impl FnOnce(R) -> T) -> SemanticCopy<T> {
+        SemanticCopy {
+            root: map(self.root),
+            store: self.store,
+            copied: self.copied,
+        }
+    }
+
     pub fn root(&self) -> &R {
         &self.root
     }
@@ -117,6 +126,10 @@ pub(crate) struct PendingSemanticCopy {
 }
 
 impl PendingSemanticCopy {
+    pub(crate) fn root_token(&self) -> SemanticLocalNodeToken {
+        self.copied[&self.source_root]
+    }
+
     pub(crate) fn resolve<R>(
         self,
         result: &SemanticMutationTransactionResult,
@@ -143,11 +156,53 @@ impl PendingSemanticCopy {
     }
 }
 
+impl SemanticCopy<Mobject> {
+    /// Project this copied object's root into the common typed entry form.
+    pub fn into_entry_copy(self) -> SemanticCopy<crate::CompositeEntryHandle> {
+        self.map_root(crate::CompositeEntryHandle::Mobject)
+    }
+}
+impl SemanticCopy<MobjectFamily> {
+    /// Project this copied family's root into the common typed entry form.
+    pub fn into_entry_copy(self) -> SemanticCopy<crate::CompositeEntryHandle> {
+        self.map_root(crate::CompositeEntryHandle::Family)
+    }
+}
+
 /// Prepare every copied node and edge before the caller publishes anything.
 /// Shared aliases allocate once; traversal and temporary work stay root-local.
 pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
+    capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
+    copy_effects: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        SemanticLocalNodeToken,
+        &mut SemanticMutationTransaction,
+    ) -> Result<(), E>,
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), E> {
+    prepare_semantic_copy_with_root_membership(
+        source,
+        references,
+        CopyRootMembership::Preserve,
+        capture,
+        copy_effects,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyRootMembership {
+    Preserve,
+    Omit,
+}
+
+/// Copy the same graph while optionally omitting only its root's member edges.
+/// Explicit metadata references still share one recursive identity mapping.
+pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>>(
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    root_membership: CopyRootMembership,
     mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
     mut copy_effects: impl FnMut(
         &SemanticStore,
@@ -169,14 +224,15 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         queue.push(target.require_store(store)?);
     }
     queue.push(source.node_id());
-    let graph_dependency_rows = graph_dependency_copy_rows(&store.borrow(), &queue)?;
+    let omitted_root = (root_membership == CopyRootMembership::Omit).then_some(source.node_id());
+    let graph_dependency_rows = graph_dependency_copy_rows(&store.borrow(), &queue, omitted_root)?;
     while let Some(id) = queue.pop() {
         if copied.contains_key(&id) {
             continue;
         }
         let (
             is_family,
-            members,
+            mut members,
             family_z,
             draw_enabled,
             family_color,
@@ -235,6 +291,9 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 }
             }
         };
+        if omitted_root == Some(id) {
+            members.clear();
+        }
         if let Some(graph) = graph_declaration {
             graph_declarations.push((id, graph));
         }
@@ -373,6 +432,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
 fn graph_dependency_copy_rows<E: From<AuthoringError>>(
     store: &SemanticStore,
     roots: &[SemanticNodeId],
+    omitted_root: Option<SemanticNodeId>,
 ) -> Result<HashSet<SemanticNodeId>, E> {
     let mut rows = HashSet::new();
     let mut seen = HashSet::new();
@@ -396,7 +456,9 @@ fn graph_dependency_copy_rows<E: From<AuthoringError>>(
                 }
             }
         }
-        stack.extend(node.members_iter());
+        if omitted_root != Some(node_id) {
+            stack.extend(node.members_iter());
+        }
         if matches!(node.kind(), SemanticNodeKind::Family(_)) {
             if let Some(layout) = store
                 .semantic_table_layout(node_id)

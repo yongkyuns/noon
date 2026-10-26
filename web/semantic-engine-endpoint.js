@@ -19,12 +19,17 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
   "restart_playback",
   "set_loop_duration",
   "advance_to",
+  "seek_section",
 ]);
 // A denied replay capability is not a denial of forward execution. Pause and
 // advance_to keep the existing callback-aware, non-rewinding Rust path; only
 // controls that can restart/loop the historical plan require replay admission.
 const REPLAY_DEPENDENT_CONTROLS = new Set([
-  "resume", "seek", "restart_playback", "set_loop_duration",
+  "resume", "seek", "restart_playback", "set_loop_duration", "seek_section",
+]);
+const FINITE_EXPORT_CONTROLS = new Set([
+  "begin_finite_export", "sample_finite_export", "acknowledge_finite_export",
+  "finite_export_audio", "cancel_finite_export",
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
   "pause", "resume", "seek", "restart_playback", "browser_pointer_input",
@@ -87,6 +92,8 @@ export async function attachSemanticEngine(
   }
   let player = null;
   let replayUnavailable = null;
+  let hasAudio = false;
+  let sections = [];
   // Live execution leases its existing source player. Prepared execution owns
   // an independent typed reader; the source player stays in its active context.
   // Transport sessions frame selected publications, never source/history state.
@@ -119,7 +126,7 @@ export async function attachSemanticEngine(
   let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
-  const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
+  const post = (payload, transfer = []) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
   function notePreparedTrap(error) {
     if (prepared === null || !(error instanceof WebAssembly.RuntimeError)) return false;
     if (!engineTrapped) {
@@ -327,6 +334,7 @@ export async function attachSemanticEngine(
       time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
         ? player.playbackTimeAt(performance.now()) : player.time(),
       playing: player.isPlaying(), nextPatchSequence: "0",
+      ...(hasAudio ? { hasAudio, sections, durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null
@@ -921,8 +929,42 @@ export async function attachSemanticEngine(
       let sourceCompleted;
       let pointerInputAccepted;
       let sampleTiming = null;
+      let audioAnchor;
+      let finiteExport;
+      let audioBlock;
       try {
+        if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
+          throw new Error("finite export owns paused execution until capture completes");
+        }
         switch (message.type) {
+          case "begin_finite_export":
+            latestTick = null;
+            finiteExport = JSON.parse(player.beginFiniteExportJson(JSON.stringify(message.frameOptions)));
+            observeExecutionWake(performance.now(), true);
+            break;
+          case "sample_finite_export": {
+            latestTick = null;
+            finiteExport = JSON.parse(player.finiteExportStatusJson());
+            if (finiteExport.kind === "needs_sample") {
+              // A held terminal frame must retain the exact completed epoch.
+              if (finiteExport.target_time !== player.time()) {
+                await advanceToAuthoredTime(finiteExport.target_time);
+              }
+              finiteExport = JSON.parse(player.observeFiniteExportJson());
+            }
+            await awaitPresentation(null);
+            break;
+          }
+          case "acknowledge_finite_export":
+            finiteExport = JSON.parse(player.acknowledgeFiniteExportJson(JSON.stringify(message.observation)));
+            break;
+          case "finite_export_audio":
+            audioBlock = player.mixFiniteExportAudioBlock(BigInt(message.firstFrame), message.frameCount);
+            break;
+          case "cancel_finite_export":
+            player.cancelFiniteExport();
+            observeExecutionWake(performance.now(), true);
+            break;
           case "pause": {
             latestTick = null;
             if (prepared !== null) {
@@ -942,25 +984,38 @@ export async function attachSemanticEngine(
             observeExecutionWake(performance.now(), true);
             break;
           }
-          case "resume":
+          case "resume": {
+            if (hasAudio) {
+              await awaitPresentation(null);
+              if (player.time() === player.finiteAudioDuration()) {
+                await awaitPresentation(send(player.seekDeltaJson(0)));
+              }
+            }
             if (prepared !== null) player.setPreparedPlaying(true);
             else player.resume();
-            observeExecutionWake(performance.now(), true);
+            if (!hasAudio) observeExecutionWake(performance.now(), true);
             break;
+          }
           case "set_loop_duration":
             player.setLoopDuration(message.loopDurationSeconds);
             observeExecutionWake(performance.now());
             break;
           case "seek":
+          case "seek_section":
+          case "restart_playback": {
             latestTick = null;
-            send(player.seekDeltaJson(message.time));
-            observeExecutionWake(performance.now());
+            const playing = hasAudio && player.isPlaying();
+            if (hasAudio) player.pause();
+            const delta = message.type === "seek_section"
+              ? player.seekSectionDeltaJson(message.previous)
+              : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
+            const publication = send(delta);
+            if (hasAudio) {
+              await awaitPresentation(publication);
+              if (playing) player.resume();
+            } else observeExecutionWake(performance.now());
             break;
-          case "restart_playback":
-            latestTick = null;
-            send(player.seekDeltaJson(0));
-            observeExecutionWake(performance.now());
-            break;
+          }
           case "undo_translation_drag": {
             latestTick = null;
             if (player.undoTranslationDrag()) {
@@ -979,9 +1034,13 @@ export async function attachSemanticEngine(
               );
             }
             latestTick = null;
+            const probe = message.stopAtSourceCompletion === true
+              ? JSON.parse(player.finiteSourceProbeJson(message.time)) : null;
+            const targetTime = probe === null ? message.time : probe.targetTime;
+            if (probe !== null) sourceCompleted = probe.sourceCompleted === true;
             const sampleStartedAtMs = sampleTiming === null ? 0 : performance.now();
             const advanced = await advanceToAuthoredTime(
-              message.time,
+              targetTime,
               message.observeRenderer === true,
               sampleTiming,
             );
@@ -1048,6 +1107,16 @@ export async function attachSemanticEngine(
         }
         if (stopped) break;
         if (prepared !== null) prepared.wakeSource();
+        if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
+          // A control changes both outputs at one accepted Rust clock sample.
+          // Presentation precedes the new device anchor; no device clock drives
+          // the runtime and no frontend cursor is retained.
+          await awaitPresentation(null);
+          const sampledAt = performance.now();
+          await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          observeExecutionWake(sampledAt, true);
+          audioAnchor = JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt));
+        }
         post({
           requestId: message.requestId,
           ...state(message.type),
@@ -1055,9 +1124,12 @@ export async function attachSemanticEngine(
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(sampleTiming === null ? {} : { sampleTiming }),
+          ...(audioAnchor === undefined ? {} : { audioAnchor }),
+          ...(finiteExport === undefined ? {} : { finiteExport }),
+          ...(audioBlock === undefined ? {} : { audioBlock }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
           ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
-        });
+        }, audioBlock === undefined ? [] : [audioBlock.buffer]);
       } catch (error) {
         if ((prepared !== null && error === failedPreparedPublication) ||
             (message.type === "sample_to_authored_time" && continuation !== null)) {
@@ -1105,9 +1177,12 @@ export async function attachSemanticEngine(
               // monotonic clock for authored-time conversion and wake projection.
               // Qualification may supply deterministic worker tick timestamps
               // without replacing the worker's global clock or its scheduler.
-              await publishCallbackPhase(player.tickCallbackPhaseJson(
-                testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp(),
-              ));
+              const wasPlaying = player.isPlaying();
+              const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
+              await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+              if (hasAudio && wasPlaying && !player.isPlaying()) {
+                post({ type: "audio_state", audioAnchor: JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt)) });
+              }
               observeExecutionWake(performance.now());
             }
           } catch (error) {
@@ -1140,6 +1215,7 @@ export async function attachSemanticEngine(
   }
   function stop() {
     if (stopped) return;
+    if (hasAudio) post({ type: "audio_stopped" });
     stopped = true;
     continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
@@ -1211,12 +1287,14 @@ export async function attachSemanticEngine(
       throw new Error("unsupported semantic execution transport");
     }
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
+    hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
+    sections = hasAudio ? JSON.parse(player.sectionsJson()) : [];
     if (continuation === null && prepared === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
-    if (initiallyPaused || replayUnavailable !== null) {
+    if (initiallyPaused || hasAudio || replayUnavailable !== null) {
       if (prepared !== null) player.setPreparedPlaying(false);
       else player.pause();
     }
@@ -1235,7 +1313,7 @@ export async function attachSemanticEngine(
           post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
           return;
         }
-        if (!["pause", "resume", "seek", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
+        if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
           "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {
@@ -1243,6 +1321,12 @@ export async function attachSemanticEngine(
         }
         if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type)) {
           throw new Error(`prepared playback does not support ${message.type}`);
+        }
+        if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
+          throw new Error("finite export owns paused execution until capture completes");
+        }
+        if (continuation !== null && FINITE_EXPORT_CONTROLS.has(message.type)) {
+          throw new Error("finite export requires a completed immutable Python scene");
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
@@ -1280,6 +1364,13 @@ export async function attachSemanticEngine(
         if (message.type === "advance_to" && message.observeRenderer !== undefined &&
             typeof message.observeRenderer !== "boolean") {
           throw new Error("renderer observation flag must be boolean");
+        }
+        if (message.type === "advance_to" && message.stopAtSourceCompletion !== undefined &&
+            typeof message.stopAtSourceCompletion !== "boolean") {
+          throw new Error("stopAtSourceCompletion must be a boolean");
+        }
+        if (message.type === "seek_section" && typeof message.previous !== "boolean") {
+          throw new Error("section navigation direction must be boolean");
         }
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
@@ -1359,7 +1450,11 @@ export async function attachSemanticEngine(
     } else {
       observeExecutionWake(performance.now(), true);
     }
-    post({ type: "ready", transportMode, ...(prepared === null ? {} : { preparedPlayback: true }) });
+    const audioResources = hasAudio ? Uint8Array.from(player.audioResourceBundleBytes()) : null;
+    post({ ...state("ready"), transportMode,
+      finiteSourceDuration: continuation === null && prepared === null ? player.freshFiniteSourceDuration() ?? null : null,
+      ...(audioResources === null ? {} : { audioResources }),
+    }, audioResources === null ? [] : [audioResources.buffer]);
   } catch (error) { notePreparedTrap(error); stop(); throw error; }
   return {
     stop,

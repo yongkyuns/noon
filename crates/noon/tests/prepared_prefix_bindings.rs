@@ -172,7 +172,7 @@ fn metadata_only_binding_intervals_survive_appends_rewinds_and_source_destructio
         );
         exercise(&mut reader, object, None, 0.0);
     }
-    assert_eq!(target.state().unwrap().click_indicate(), None);
+    assert_eq!(target.state().unwrap().click_action(), None);
     assert_eq!(reader.frontier(), 4.0);
     let retained = reader.replay_stats();
     drop(target);
@@ -392,7 +392,7 @@ fn sealed_session_pointer_interest_and_dispatch_follow_displayed_binding_history
         let boundary = source.wait_segment(1.0).unwrap();
         source.advance_to(boundary.end_time()).unwrap();
     }
-    assert_eq!(target.state().unwrap().click_indicate(), None);
+    assert_eq!(target.state().unwrap().click_action(), None);
     source.seal_replay().unwrap();
     source
         .configure_native_pointer_input(

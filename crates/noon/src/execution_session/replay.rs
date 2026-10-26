@@ -10,9 +10,46 @@ use noon_runtime::{
 mod prefix_probe;
 
 impl ExecutionSession {
+    /// Admit viewer transport over the initial complete immutable projection.
+    /// Prior live execution edits retain their explicit history requirements;
+    /// seeking to zero does not turn the latest projection into replayable history.
+    /// Native reactive inputs, source/callback barriers, effective producers and
+    /// retained history need their own recorded playback profile. Ordinary
+    /// pointer selection, inspection, click controls and immutable scalar
+    /// timelines do not grant those external domains and remain admissible.
+    ///
+    /// This constant-time check does not prove a finite duration; hosts obtain
+    /// the endpoint once with [`Self::finite_playback_end_time`] and may recheck
+    /// this ownership condition before applying an explicit control.
+    pub fn supports_immutable_playback(&self) -> bool {
+        self.runtime.supports_immutable_playback()
+            && !self.has_required_callbacks()
+            && self.pending_callback.is_none()
+            && self.callback_termination.is_none()
+            && self.pending_segment_completion.is_none()
+            && self.derived_display_plan.is_none()
+            && !self.reactive_projection.has_native_input_routes()
+            && !self.translation_drag.has_targets()
+    }
+
+    /// Engine-admitted endpoint for the finite immutable viewer-control profile.
+    /// This read-only admission query uses the existing timeline indices. It
+    /// creates neither historical snapshots nor a new clock, and is intended for
+    /// host admission/reconfiguration rather than each frame or input occurrence.
+    pub fn finite_playback_end_time(&self) -> Option<f64> {
+        self.supports_immutable_playback()
+            .then(|| self.finite_timeline_end_time())
+            .flatten()
+    }
+
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
+        // Immutable audio/control plans support direct seek. Live revision
+        // retention needs its own resource/binding history qualification (#2263).
+        if self.has_audio() || self.has_playback_controls() {
+            return Err(ReplayError::UnsupportedDomain);
+        }
         if self.pending_segment_completion.is_some()
             || self.pending_callback.is_some()
             || self.translation_drag_active()
@@ -40,6 +77,9 @@ impl ExecutionSession {
     // cloning intentionally retires pending continuation tokens. Runtime history
     // validity and its budget are still checked by runtime.seal_replay().
     fn ensure_replay_completion(&self) -> Result<(), ReplayError> {
+        if self.has_playback_controls() {
+            return Err(ReplayError::UnsupportedDomain);
+        }
         if self.pending_segment_completion.is_some()
             || self.pending_callback.is_some()
             || self.translation_drag_active()
@@ -126,3 +166,5 @@ mod prefix;
 
 #[cfg(feature = "prepared-prefix")]
 pub use prefix::PrefixReader;
+#[cfg(test)]
+mod playback_tests;

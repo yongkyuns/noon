@@ -108,6 +108,99 @@ impl ExportFramePolicy {
         Ok(ExportFramePolicyStatus::NeedsSample(self.requested_time))
     }
 
+    /// Plan the complete output range for a known immutable finite source.
+    ///
+    /// Call this only on a fresh policy, before submitting an observation. The
+    /// endpoint comes from the existing execution owner, not an estimate from
+    /// the platform host. Counting takes O(log(max_frames)) work and O(1) space;
+    /// it does not evaluate the source or consume a renderer publication.
+    ///
+    /// This result predicts the completed sampling summary; it is not a receipt
+    /// for sampling, rendering or encoding. Drive this same policy normally and
+    /// compare its completed summary before publishing an output file. Individual
+    /// grid samples still check representability during the actual run.
+    pub fn finite_summary(
+        &self,
+        source_end: f64,
+    ) -> Result<ExportFrameSummary, ExportFramePolicyError> {
+        if self.failed
+            || self.index != 0
+            || self.pending.is_some()
+            || self.complete.is_some()
+            || self.last_published_time.is_some()
+        {
+            return Err(ExportFramePolicyError::NotFresh);
+        }
+        if !source_end.is_finite() || source_end < 0.0 {
+            return Err(ExportFramePolicyError::InvalidSourceEnd);
+        }
+        // An explicit earlier stop never observes source completion, even when
+        // this immutable plan already knows when it would have occurred.
+        let observed_end = self
+            .stop_time
+            .is_none_or(|stop| source_end <= stop)
+            .then_some(source_end);
+        let (end, reason) = self.end_and_reason(observed_end)?;
+        let end_index = self
+            .grid
+            .frame_count_before(end, self.options.max_frames)
+            .map_err(|error| match error {
+                FrameGridError::FrameLimitExceeded { .. } => ExportFramePolicyError::FrameLimit,
+                error => ExportFramePolicyError::Grid(error),
+            })?;
+        // The running policy requests the next grid coordinate before applying
+        // an off-grid explicit stop. Keep that final conversion in preflight.
+        self.grid.sample(end_index)?;
+        let frames = end_index.saturating_sub(self.options.start_frame);
+        if frames == 0 {
+            return Err(ExportFramePolicyError::EmptyInterval);
+        }
+        self.summary(frames, observed_end, end, reason)
+    }
+
+    fn end_and_reason(
+        &self,
+        source_end: Option<f64>,
+    ) -> Result<(f64, ExportEndReason), ExportFramePolicyError> {
+        let source_limit = match source_end {
+            Some(end) => {
+                let held_end = end + self.options.final_hold_seconds;
+                if !held_end.is_finite()
+                    || (self.options.final_hold_seconds > 0.0 && held_end <= end)
+                {
+                    return Err(ExportFramePolicyError::InvalidHold);
+                }
+                held_end
+            }
+            None => f64::INFINITY,
+        };
+        let requested_limit = self.stop_time.unwrap_or(f64::INFINITY);
+        let reason = if source_limit <= requested_limit {
+            ExportEndReason::SourceEnd
+        } else {
+            ExportEndReason::RequestedStop
+        };
+        Ok((source_limit.min(requested_limit), reason))
+    }
+
+    fn summary(
+        &self,
+        frames: u64,
+        source_end: Option<f64>,
+        end_time: f64,
+        reason: ExportEndReason,
+    ) -> Result<ExportFrameSummary, ExportFramePolicyError> {
+        Ok(ExportFrameSummary {
+            frames,
+            frame_rate: self.options.frame_rate,
+            start_time: self.grid.sample(self.options.start_frame)?.authored_time(),
+            end_time,
+            source_end,
+            scheduled_duration: self.grid.sample(frames)?.authored_time(),
+            reason,
+        })
+    }
+
     /// Offer a settled observation of exactly the outstanding request.
     ///
     /// `source_finished` means all source continuation work has completed, not
@@ -157,20 +250,7 @@ impl ExportFramePolicy {
             return Err(ExportFramePolicyError::InvalidObservation);
         }
         let source_end = finished.then_some(observation.published_time);
-        let source_limit = match source_end {
-            Some(end) => {
-                let held_end = end + self.options.final_hold_seconds;
-                if !held_end.is_finite()
-                    || (self.options.final_hold_seconds > 0.0 && held_end <= end)
-                {
-                    return Err(ExportFramePolicyError::InvalidHold);
-                }
-                held_end
-            }
-            None => f64::INFINITY,
-        };
-        let requested_limit = self.stop_time.unwrap_or(f64::INFINITY);
-        let end = source_limit.min(requested_limit);
+        let (end, reason) = self.end_and_reason(source_end)?;
         let at_end = observation.requested_time >= end;
         if !at_end && self.index >= self.options.max_frames {
             return Err(ExportFramePolicyError::FrameLimit);
@@ -196,19 +276,7 @@ impl ExportFramePolicy {
             frame,
         };
         let summary = if at_end {
-            Some(ExportFrameSummary {
-                frames: self.emitted,
-                frame_rate: self.options.frame_rate,
-                start_time: self.grid.sample(self.options.start_frame)?.authored_time(),
-                end_time: end,
-                source_end,
-                scheduled_duration: self.grid.sample(self.emitted)?.authored_time(),
-                reason: if source_limit <= requested_limit {
-                    ExportEndReason::SourceEnd
-                } else {
-                    ExportEndReason::RequestedStop
-                },
-            })
+            Some(self.summary(self.emitted, source_end, end, reason)?)
         } else {
             None
         };
@@ -272,11 +340,13 @@ impl ExportFramePolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportFramePolicyError {
     InvalidOptions,
+    InvalidSourceEnd,
     InvalidHold,
     InvalidObservation,
     EmptyInterval,
     FrameLimit,
     WrongSample,
+    NotFresh,
     Inactive,
     Grid(FrameGridError),
 }
@@ -291,6 +361,7 @@ impl fmt::Display for ExportFramePolicyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidOptions => f.write_str("invalid export bounds or hold configuration"),
+            Self::InvalidSourceEnd => f.write_str("source endpoint must be finite and nonnegative"),
             Self::InvalidHold => f.write_str("terminal hold has no finite distinct end"),
             Self::InvalidObservation => {
                 f.write_str("observation does not settle the requested export sample")
@@ -300,6 +371,7 @@ impl fmt::Display for ExportFramePolicyError {
             }
             Self::FrameLimit => f.write_str("export exceeded its frame safety cap"),
             Self::WrongSample => f.write_str("acknowledgement does not match the pending sample"),
+            Self::NotFresh => f.write_str("finite export planning requires a fresh policy"),
             Self::Inactive => f.write_str("export is complete, failed, or cancelled"),
             Self::Grid(error) => error.fmt(f),
         }
@@ -317,3 +389,6 @@ impl Error for ExportFramePolicyError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod finite_tests;

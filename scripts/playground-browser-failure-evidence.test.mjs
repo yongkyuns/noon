@@ -1,9 +1,174 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { captureAttemptedPage, captureChildProcessDiagnostics, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses } from "./playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, captureChildProcessDiagnostics, captureNativeProcessLog, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses, readNativeProcessLog } from "./playground-browser-failure-evidence.mjs";
+import { collectWebKitCrashReports } from "./playground-browser-support.mjs";
+
+async function nativeArtifactFixture(t) {
+  const artifacts = await mkdtemp(path.join(tmpdir(), "noon-native-failure-"));
+  t.after(() => rm(artifacts, { recursive: true, force: true }));
+  return { artifacts, directories: [], prefix: "failed-case", pids: [222], startedAtMs: 1101, endedAtMs: 2501 };
+}
+
+test("missing IPS evidence retains native output for known PIDs and the actual query window", async t => {
+  const options = await nativeArtifactFixture(t);
+  const bytes = Buffer.from('{"processIdentifier":222,"eventMessage":"process exited"}\n');
+  let args;
+  const result = await captureNativeProcessLog({ ...options,
+    pids: [222, 222, -1, "333 OR TRUE", NaN, 1.2],
+    readNativeLog: async request => { args = request; return { stdout: bytes }; },
+  });
+  assert.deepEqual(result.pids, [222]);
+  assert.equal(args[args.indexOf("--predicate") + 1], "processIdentifier == 222");
+  assert.equal(args[args.indexOf("--start") + 1], "@1");
+  assert.equal(args[args.indexOf("--end") + 1], "@3");
+  assert.deepEqual([result.startedAtMs, result.endedAtMs], [1101, 2501]);
+  assert.deepEqual([result.queriedStartAtMs, result.queriedEndAtMs], [1000, 3000]);
+  assert.deepEqual(await readFile(path.join(options.artifacts, result.file)), bytes);
+  assert.equal(result.truncated, false);
+  assert.equal(result.retained, "tail");
+  assert.equal(result.observedBytes, bytes.length);
+});
+
+test("verbose native logging preserves the final event without stopping the query at capacity", async t => {
+  const options = await nativeArtifactFixture(t);
+  const finalEvent = '{"processIdentifier":222,"eventMessage":"WebContent terminated"}\n';
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, { launch: () => spawn(process.execPath, ["-e", `
+      process.stdout.write(Buffer.alloc(2 * 1024 * 1024, 120));
+      process.stdout.write(${JSON.stringify(finalEvent)});
+    `], { stdio: ["ignore", "pipe", "pipe"] }) }),
+  });
+  const bytes = await readFile(path.join(options.artifacts, result.file));
+  assert.equal(result.error, undefined);
+  assert.equal(bytes.length, 128 * 1024);
+  assert.equal(result.observedBytes, 2 * 1024 * 1024 + Buffer.byteLength(finalEvent));
+  assert.equal(result.truncated, true);
+  assert.equal(result.retained, "tail");
+  assert.ok(bytes.toString().endsWith(finalEvent));
+});
+
+test("native query failures retain the bounded tail and final stderr", async t => {
+  const options = await nativeArtifactFixture(t);
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, { launch: () => spawn(process.execPath, ["-e", `
+      process.stdout.write(Buffer.alloc(200_000, 120));
+      process.stdout.write("last native event\\n");
+      process.stderr.write("native log service failed");
+      process.exitCode = 3;
+    `], { stdio: ["ignore", "pipe", "pipe"] }) }),
+  });
+  const bytes = await readFile(path.join(options.artifacts, result.file));
+  assert.equal(bytes.length, 128 * 1024);
+  assert.ok(bytes.toString().endsWith("last native event\n"));
+  assert.equal(result.truncated, true);
+  assert.match(result.error, /code 3/);
+  assert.equal(result.stderr, "native log service failed");
+});
+
+test("a stalled native query is killed at its fixed deadline with partial evidence", async t => {
+  const options = await nativeArtifactFixture(t);
+  let child;
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, { timeoutMs: 500,
+      launch: () => (child = spawn(process.execPath, ["-e", `
+        process.stdout.write("last observed native event\\n");
+        setInterval(() => {}, 1000);
+      `], { stdio: ["ignore", "pipe", "pipe"] })),
+    }),
+  });
+  assert.match(result.error, /timed out after 500 ms/);
+  assert.equal(child.signalCode, "SIGKILL");
+  assert.equal(await readFile(path.join(options.artifacts, result.file), "utf8"), "last observed native event\n");
+});
+
+test("an unavailable native log executable reports its failure without hanging", async t => {
+  const options = await nativeArtifactFixture(t);
+  const result = await captureNativeProcessLog({ ...options,
+    readNativeLog: args => readNativeProcessLog(args, {
+      launch: () => spawn(path.join(options.artifacts, "missing-native-log"), [], { stdio: ["ignore", "pipe", "pipe"] }),
+    }),
+  });
+  assert.match(result.error, /ENOENT/);
+  assert.equal(result.bytes, 0);
+  assert.equal(result.truncated, false);
+});
+
+test("native log collection preserves existing PID-qualified IPS bytes", async t => {
+  const options = await nativeArtifactFixture(t);
+  const ips = pid => JSON.stringify({ bug_type: "309" }) + "\n" + JSON.stringify({
+    pid, captureTime: new Date(1500).toISOString(), termination: { namespace: "SIGNAL", code: 11 },
+  });
+  const owned = ips(222);
+  await writeFile(path.join(options.artifacts, "owned.ips"), owned);
+  await writeFile(path.join(options.artifacts, "unrelated.ips"), ips(333));
+  const evidence = createNativeWebKitEvidence({ enabled: true, ...options,
+    executablePath: "/pw/webkit/bin", now: () => options.endedAtMs,
+    readProcessTable: async () => "222 /pw/webkit/WebContent",
+    collect: args => collectWebKitCrashReports({ ...args, directories: [options.artifacts] }),
+    collectLog: args => captureNativeProcessLog({ ...args,
+      readNativeLog: async () => { throw Object.assign(new Error("native logging denied"), {
+        stdout: Buffer.from("native termination context\n"),
+      }); },
+    }),
+  });
+  await evidence.observe("ready");
+  const result = await evidence.failure();
+  assert.equal(result.reports.length, 1);
+  assert.equal(result.reports[0].pid, 222);
+  assert.deepEqual(result.reports[0].termination, { namespace: "SIGNAL", code: 11 });
+  assert.equal(await readFile(path.join(options.artifacts, result.reports[0].file), "utf8"), owned);
+  assert.equal(await readFile(path.join(options.artifacts, result.processLog.file), "utf8"), "native termination context\n");
+  assert.match(result.processLog.error, /native logging denied/);
+});
+
+test("native log errors retain bounded partial output and never become crash evidence", async t => {
+  const options = await nativeArtifactFixture(t);
+  const error = Object.assign(new Error("native log output exceeded capacity"), {
+    code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stdout: Buffer.concat([Buffer.alloc(150_000, 120), Buffer.from("end")]), stderr: "log collector diagnostic",
+  });
+  const result = await captureNativeProcessLog({ ...options, readNativeLog: async () => { throw error; } });
+  const saved = await readFile(path.join(options.artifacts, result.file));
+  assert.equal(saved.length, 128 * 1024);
+  assert.ok(saved.equals(error.stdout.subarray(error.stdout.length - saved.length)));
+  assert.equal(result.truncated, true);
+  assert.match(result.error, /exceeded capacity/);
+  assert.equal(result.stderr, "log collector diagnostic");
+});
+
+test("unavailable native logging is explicit rather than evidence that no native event occurred", async t => {
+  const options = await nativeArtifactFixture(t);
+  const result = await captureNativeProcessLog({ ...options, readNativeLog: async () => {
+    throw Object.assign(new Error("native logging denied"), { code: "EACCES" });
+  } });
+  assert.match(result.error, /denied/);
+  assert.equal(result.bytes, 0);
+  assert.equal(result.truncated, false);
+  assert.deepEqual(await readFile(path.join(options.artifacts, result.file)), Buffer.alloc(0));
+});
+
+test("native logging has a fixed PID bound and rejects excessive windows before invoking the provider", async t => {
+  const options = await nativeArtifactFixture(t);
+  let calls = 0;
+  const readNativeLog = async () => { calls++; return { stdout: Buffer.alloc(0) }; };
+  const bounded = await captureNativeProcessLog({ ...options,
+    pids: Array.from({ length: 40 }, (_, i) => i + 1), readNativeLog,
+  });
+  assert.equal(bounded.pids.length, 32);
+  assert.equal(bounded.omittedPidCount, 8);
+  const skipped = await captureNativeProcessLog({ ...options, endedAtMs: 200_000, readNativeLog });
+  assert.match(skipped.reason, /180 seconds/);
+  for (const update of [{ pids: [] }, { startedAtMs: NaN }, { endedAtMs: 0 }]) {
+    const invalid = await captureNativeProcessLog({ ...options, ...update, readNativeLog });
+    assert.ok(invalid.reason);
+  }
+  assert.equal(calls, 1);
+});
 
 test("file-server diagnostics retain bounded output and exact process failure", () => {
   const child = new EventEmitter();
@@ -128,7 +293,80 @@ test("invalid trace configuration and phase are rejected", () => {
 test("captures attempted scene state rather than reporting last successful source", async () => {
   const data = { patchState: "running", selectedExampleId: "showcase-dynamic-scene", runDisabled: true };
   const result = await captureAttemptedPage({ evaluate: async () => data });
-  assert.deepEqual(result, { state: "captured", observed: data });
+  assert.deepEqual(result, { state: "captured", observed: data,
+    executionMetrics: { state: "unavailable", reason: "execution not initialized" } });
+});
+
+test("an unresponsive page observation is bounded without retrying it", async () => {
+  let calls = 0;
+  const result = await captureAttemptedPage({
+    evaluate: () => { calls++; return new Promise(() => {}); },
+    isClosed: () => false,
+  }, { timeoutMs: 10 });
+  assert.equal(result.state, "unavailable");
+  assert.match(result.reason, /timed out/);
+  assert.equal(calls, 1);
+});
+
+test("failed or unresponsive renderer observations preserve the attempted DOM state", async () => {
+  for (const observe of [() => Promise.reject(new Error("worker closed")), () => new Promise(() => {})]) {
+    const data = { patchState: "running", executionMode: "retained", selectedExampleId: "current" };
+    let calls = 0;
+    const result = await captureAttemptedPage({
+      evaluate: () => ++calls === 1 ? Promise.resolve(data) : observe(),
+    }, { timeoutMs: 10 });
+    assert.equal(result.state, "captured");
+    assert.deepEqual(result.observed, data);
+    assert.equal(result.executionMetrics.state, "unavailable");
+    assert.match(result.executionMetrics.reason, /worker closed|timed out/);
+    assert.equal(calls, 2);
+  }
+});
+
+function attemptedPageFixture(executionMetrics, diagnostics = { runGeneration: 7 }) {
+  const status = { dataset: { executionMode: "retained", runtimeStartup: "started-on-demand", state: "running" } };
+  const globals = {
+    location: { href: "http://localhost/current" },
+    document: { visibilityState: "visible", hasFocus: () => true,
+      querySelector: selector => selector === "#status" ? status : null },
+    window: { __noonExampleGallery: { generationDiagnostics: diagnostics, executionMetrics } },
+  };
+  return { evaluate: async (callback, argument) => runInNewContext(`(${callback.toString()})(argument)`,
+    { ...globals, argument }) };
+}
+
+test("failure metrics retain bounded renderer progress without consuming profiles", async () => {
+  const result = await captureAttemptedPage(attemptedPageFixture(function (...args) {
+    assert.deepEqual(args, []);
+    return Promise.resolve({ metrics: { ready: true, backend: "WebGL2", time: 0.932,
+      needsPresent: true, bufferedDeltas: 2, lastFrameTimestamp: 123, presentedFrames: 45,
+      publicationStageSamples: Array(1000).fill({ large: "payload" }) } });
+  }));
+  assert.equal(result.observed.visibilityState, "visible");
+  assert.equal(result.observed.documentHasFocus, true);
+  assert.equal(result.executionMetrics.state, "captured");
+  assert.equal(result.executionMetrics.observed.time, 0.932);
+  assert.equal(result.executionMetrics.observed.needsPresent, true);
+  assert.equal(result.executionMetrics.observed.bufferedDeltas, 2);
+  assert.equal(Object.hasOwn(result.executionMetrics.observed, "publicationStageSamples"), false);
+});
+
+test("metrics from another run cannot be attached to the failed scene", async () => {
+  const diagnostics = { runGeneration: 7 };
+  const result = await captureAttemptedPage(attemptedPageFixture(async () => {
+    diagnostics.runGeneration++;
+    return { metrics: { time: 9 } };
+  }, diagnostics));
+  assert.equal(result.state, "captured");
+  assert.equal(result.executionMetrics.state, "unavailable");
+  assert.match(result.executionMetrics.reason, /changed/);
+  assert.equal(Object.hasOwn(result.executionMetrics, "observed"), false);
+});
+
+test("invalid failure-observation deadlines are rejected before browser work", async () => {
+  for (const timeoutMs of [0, -1, NaN, Infinity, 5001, "10"]) {
+    await assert.rejects(captureAttemptedPage({ evaluate: () => assert.fail("must not observe") }, { timeoutMs }), RangeError);
+  }
 });
 
 test("captures bounded playback commands without querying an unavailable engine", async () => {
@@ -151,6 +389,8 @@ test("captures bounded playback commands without querying an unavailable engine"
   assert.equal(result.observed.playbackControls.toggle.ariaLabel, "Pause animation");
   assert.deepEqual(Array.from(result.observed.playbackTrace, event => event.id),
     Array.from({ length: 32 }, (_, index) => index + 8));
+  assert.deepEqual(result.executionMetrics,
+    { state: "unavailable", reason: "execution not initialized" });
 });
 
 test("closed page stays unavailable even if an earlier scene was successful", async () => {
@@ -192,10 +432,11 @@ test("native evidence observes only installed PIDs before a process disappears",
     artifacts: "/diagnostics", startedAtMs: 1000, now: () => 2000,
     readProcessTable: async () => (++calls === 1)
       ? "222 /pw/webkit-x/WebKit.WebContent\n333 /other/WebKit.GPU"
-      : "", collect: async args => { requested = args; return { reports: [], errors: [] }; },
+      : "", collect: async args => { requested = args; return Object.freeze({ reports: [], errors: [] }); },
+    collectLog: async args => ({ pids: args.pids }),
   });
   await evidence.observe("before-showcase");
-  assert.deepEqual(await evidence.failure(), { reports: [], errors: [] });
+  assert.deepEqual(await evidence.failure(), { reports: [], errors: [], processLog: { pids: [222] } });
   assert.deepEqual(requested.pids, [222]);
   assert.equal(requested.prefix, "matrix-failure");
   assert.deepEqual([requested.startedAtMs, requested.endedAtMs], [1000, 2000]);
@@ -214,6 +455,7 @@ test("native gallery evidence retains a later content PID and isolates case arti
       executablePath: "/pw/webkit-x/pw_run.sh", artifacts: "/diagnostics", prefix,
       readProcessTable: async () => tables.shift(),
       collect: async args => { requests.push(args); return { reports: [], errors: [] }; },
+      collectLog: async args => ({ pids: args.pids }),
     });
     await evidence.observe("gallery-navigation");
     await evidence.observe("gallery-shell-ready");
@@ -230,16 +472,18 @@ test("native reporting failures never replace original test failure", async () =
   const evidence = createNativeWebKitEvidence({ enabled: true, executablePath: "/pw/w/bin", artifacts: "/x",
     readProcessTable: async () => { throw new Error("ps denied"); },
     collect: async () => { throw new Error("IPS unavailable"); },
+    collectLog: async () => { throw new Error("native logging denied"); },
   });
   const result = await evidence.failure();
   assert.match(evidence.snapshots()[0].error, /ps denied/);
   assert.match(result.errors[0].message, /IPS unavailable/);
+  assert.match(result.processLog.error, /native logging denied/);
 });
 
 test("non-WebKit platforms do not sample native processes", async () => {
   const evidence = createNativeWebKitEvidence({ enabled: false, readProcessTable: async () => {
     assert.fail("should not inspect process table");
-  } });
+  }, collectLog: async () => { assert.fail("should not collect native logs"); } });
   await evidence.observe("start");
   assert.equal(await evidence.failure(), null);
   assert.deepEqual(evidence.snapshots(), []);

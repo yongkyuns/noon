@@ -273,7 +273,16 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
             .clone(),
     ));
     store.copy_effects_into(original, copied, &mut tx).unwrap();
-    let result = tx.apply(&mut store).unwrap();
+    let prepared = tx.prepare(&mut store).unwrap();
+    let pending_effects = prepared.animation_effect_snapshot(copied).unwrap();
+    assert_eq!(pending_effects.len(), 2);
+    for (snapshot, source) in pending_effects.iter().zip([first, second]) {
+        let copy = snapshot.copy_provenance.unwrap();
+        assert_eq!(copy.source_attachment(), source);
+        assert_eq!(copy.copied_definition(), snapshot.definition);
+        assert!(!copy.writes_parameter(GlowParameter::Intensity));
+    }
+    let result = prepared.commit();
     let copied = result.resolve(copied).unwrap();
     let copy_ids = store.node(copied).unwrap().effect_ids().to_vec();
     assert_eq!(copy_ids.len(), 2);
@@ -288,6 +297,126 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
     tx.apply(&mut store).unwrap();
     assert_eq!(glow(&store, first).intensity(), 0.35);
     assert_eq!(glow(&store, copy_ids[0]).intensity(), 2.0);
+
+    let mut tx = SemanticMutationTransaction::new();
+    let frozen = tx.create_node(SemanticNodeCreation::object(
+        store.semantic_object_state_checked(copied).unwrap().clone(),
+    ));
+    let independent = tx.create_node(SemanticNodeCreation::object(
+        store.semantic_object_state_checked(copied).unwrap().clone(),
+    ));
+    store
+        .snapshot_effects_into(copied, frozen, &mut tx)
+        .unwrap();
+    store
+        .copy_effects_into(copied, independent, &mut tx)
+        .unwrap();
+    let prepared = tx.prepare(&mut store).unwrap();
+    let frozen_effects = prepared.animation_effect_snapshot(frozen).unwrap();
+    let frozen_intent = frozen_effects[0].copy_provenance.unwrap();
+    assert_eq!(frozen_intent.source_attachment(), first);
+    assert!(frozen_intent.writes_parameter(GlowParameter::Intensity));
+    let independent_effects = prepared.animation_effect_snapshot(independent).unwrap();
+    let independent_intent = independent_effects[0].copy_provenance.unwrap();
+    assert_eq!(independent_intent.source_attachment(), copy_ids[0]);
+    assert!(!independent_intent.writes_parameter(GlowParameter::Intensity));
+    assert_eq!(
+        independent_effects[0].definition,
+        frozen_effects[0].definition
+    );
+}
+
+#[test]
+fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
+    let mut store = SemanticStore::new();
+    let original = object(&mut store);
+    let original_effect = attach(&mut store, original, "glow");
+    let copied = store.copy_semantic_object(original).unwrap();
+    let copied_effect = store.effect_by_name(copied, "glow").unwrap().unwrap();
+    let original_state = store.semantic_effect_state(copied_effect).unwrap().clone();
+    let revision = store.scene_revision();
+    let update = GlowUpdate::default().intensity(Glow::default().intensity());
+
+    let mut staged = SemanticMutationTransaction::new();
+    staged.update_effect(copied_effect, update);
+    let prepared = staged.prepare(&mut store).unwrap();
+    assert_eq!(
+        prepared.proposed_scene_revision(),
+        revision.checked_next().unwrap()
+    );
+    assert_eq!(prepared.effect_updates().count(), 0);
+    assert_eq!(
+        prepared
+            .store()
+            .semantic_effect_state(copied_effect)
+            .unwrap(),
+        &original_state,
+        "preparing intent does not mutate authored state"
+    );
+    let staged_snapshot = prepared.animation_effect_snapshot(copied).unwrap();
+    assert!(staged_snapshot[0]
+        .copy_provenance
+        .unwrap()
+        .writes_parameter(GlowParameter::Intensity));
+    drop(prepared);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(
+        store.semantic_effect_state(copied_effect).unwrap(),
+        &original_state
+    );
+
+    let mut invalid = SemanticMutationTransaction::new();
+    invalid.update_effect(copied_effect, update);
+    invalid.update_effect(copied_effect, GlowUpdate::default().radius(-1.0));
+    assert!(invalid.apply(&mut store).is_err());
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(
+        store.semantic_effect_state(copied_effect).unwrap(),
+        &original_state
+    );
+
+    let mut accepted = SemanticMutationTransaction::new();
+    accepted.update_effect(copied_effect, update);
+    let result = accepted.prepare(&mut store).unwrap().commit();
+    assert!(
+        result.impacts().is_empty(),
+        "intent has no renderer parameter impact"
+    );
+    assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+    assert_eq!(glow(&store, copied_effect), Glow::default());
+    let copy = store
+        .semantic_effect_state(copied_effect)
+        .unwrap()
+        .copy_provenance()
+        .unwrap();
+    assert_eq!(copy.source_attachment(), original_effect);
+    assert!(copy.writes_parameter(GlowParameter::Intensity));
+    assert!(!copy.writes_parameter(GlowParameter::Radius));
+
+    let committed_revision = store.scene_revision();
+    let mut repeated = SemanticMutationTransaction::new();
+    repeated.update_effect(copied_effect, update);
+    repeated.update_effect(original_effect, update);
+    assert!(repeated.apply(&mut store).unwrap().impacts().is_empty());
+    assert_eq!(store.scene_revision(), committed_revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+    assert!(store
+        .semantic_effect_state(original_effect)
+        .unwrap()
+        .copy_provenance()
+        .is_none());
+
+    store.remove_node(original).unwrap();
+    assert_eq!(glow(&store, copied_effect), Glow::default());
+    assert_eq!(
+        store
+            .semantic_effect_state(copied_effect)
+            .unwrap()
+            .copy_provenance(),
+        Some(copy),
+        "copy provenance does not retain or cascade from its weak source"
+    );
 }
 
 #[test]

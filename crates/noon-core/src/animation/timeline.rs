@@ -105,6 +105,58 @@ pub enum RateFunction {
 }
 
 impl RateFunction {
+    /// Whether this rate keeps normalized progress within the unit interval.
+    /// Elastic and back rates intentionally overshoot; bounded parameter domains
+    /// such as glow must reject those leaf rates rather than extrapolate values.
+    pub const fn preserves_unit_interval(self) -> bool {
+        match self {
+            Self::EaseInElastic
+            | Self::EaseOutElastic
+            | Self::EaseInOutElastic
+            | Self::EaseInBack
+            | Self::EaseOutBack
+            | Self::EaseInOutBack => false,
+            Self::Linear
+            | Self::Smooth
+            | Self::Smoothstep
+            | Self::Smootherstep
+            | Self::Smoothererstep
+            | Self::SlowInto
+            | Self::DoubleSmooth
+            | Self::Lingering
+            | Self::MirroredLingering
+            | Self::RushInto
+            | Self::RushFrom
+            | Self::ThereAndBack
+            | Self::EaseInOutCubic
+            | Self::EaseInBounce
+            | Self::EaseOutBounce
+            | Self::EaseInOutBounce
+            | Self::EaseInExpo
+            | Self::EaseOutExpo
+            | Self::EaseInOutExpo
+            | Self::EaseInCirc
+            | Self::EaseOutCirc
+            | Self::EaseInOutCirc
+            | Self::EaseInSine
+            | Self::EaseOutSine
+            | Self::EaseInOutSine
+            | Self::EaseInQuad
+            | Self::EaseOutQuad
+            | Self::EaseInOutQuad
+            | Self::EaseInCubic
+            | Self::EaseOutCubic
+            | Self::EaseInQuart
+            | Self::EaseOutQuart
+            | Self::EaseInOutQuart
+            | Self::EaseInQuint
+            | Self::EaseOutQuint
+            | Self::EaseInOutQuint
+            | Self::StepStart
+            | Self::StepEnd => true,
+        }
+    }
+
     /// Evaluate a normalized animation progress value.
     pub fn evaluate(self, progress: f32) -> f32 {
         let progress = progress.clamp(0.0, 1.0);
@@ -564,6 +616,24 @@ impl std::fmt::Display for TrackValueEndpoint {
     }
 }
 
+/// The effective value left by one glow channel when its mapped leaf finishes.
+/// This is independent of the leaf's amplitude/easing function.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlowTrackEndBehavior {
+    /// Keep the ordinary terminal sample selected by the leaf's rate function.
+    #[default]
+    Sample,
+    /// Restore the captured source value, including for non-returning rates.
+    RestoreSource,
+}
+
+impl GlowTrackEndBehavior {
+    const fn is_sample(&self) -> bool {
+        matches!(self, Self::Sample)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
@@ -573,6 +643,8 @@ pub enum TrackValues {
         attachment: crate::SemanticNodeId,
         from: GlowTrackValue,
         to: GlowTrackValue,
+        #[serde(default, skip_serializing_if = "GlowTrackEndBehavior::is_sample")]
+        end_behavior: GlowTrackEndBehavior,
     },
     /// Exact finite f64 priorities; never lowered to shader precision or interpolated.
     ZIndex {
@@ -640,6 +712,30 @@ pub enum TrackValues {
 }
 
 impl TrackValues {
+    /// Endpoint used by ordinary subsequent activation captures. A restoring
+    /// pulse releases to its source independently of easing; other channels keep
+    /// the existing f32 terminal-rate contract.
+    pub fn terminal_progress(&self, timing: TrackTiming) -> f32 {
+        match self {
+            Self::Glow {
+                end_behavior: GlowTrackEndBehavior::RestoreSource,
+                ..
+            } => 0.0,
+            _ => timing.terminal_progress(),
+        }
+    }
+
+    /// f64-preserving terminal sampling for glow and spatial runtime channels.
+    pub fn terminal_progress_f64(&self, timing: TrackTiming) -> f64 {
+        match self {
+            Self::Glow {
+                end_behavior: GlowTrackEndBehavior::RestoreSource,
+                ..
+            } => 0.0,
+            _ => timing.terminal_progress_f64(),
+        }
+    }
+
     pub const fn value_kind(&self) -> ValueKind {
         match self {
             Self::Glow { .. } => ValueKind::Glow,
@@ -915,6 +1011,7 @@ pub struct TrackDefinition {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimelineError {
     InvalidGlowValues(Property),
+    UnsupportedGlowRateFunction(RateFunction),
     InvalidGlowAttachment {
         object: ObjectId,
         attachment: crate::SemanticNodeId,
@@ -974,6 +1071,7 @@ impl std::fmt::Display for TimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidGlowValues(property) => write!(formatter, "invalid or incompatible glow endpoints for {property:?}"),
+            Self::UnsupportedGlowRateFunction(rate) => write!(formatter, "glow tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidGlowAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),
             Self::InvalidDuration(value) => write!(formatter, "invalid duration {value}"),
@@ -1117,6 +1215,27 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     track
         .values
         .validate_numeric_values(track.object, track.property)?;
+    if matches!(track.values, TrackValues::Glow { .. })
+        && !track.timing.easing.preserves_unit_interval()
+    {
+        return Err(TimelineError::UnsupportedGlowRateFunction(
+            track.timing.easing,
+        ));
+    }
+    if matches!(
+        track.values,
+        TrackValues::Glow {
+            end_behavior: GlowTrackEndBehavior::RestoreSource,
+            ..
+        }
+    ) {
+        if track.property != Property::GlowIntensity {
+            return Err(TimelineError::InvalidGlowValues(track.property));
+        }
+        if track.timing.duration <= 0.0 {
+            return Err(TimelineError::InvalidDuration(track.timing.duration));
+        }
+    }
     if track.timing.is_instant() && !track.property.is_instant() && !track.time_map.is_identity() {
         return Err(TimelineError::InstantTrackCannotUseTimeMap(track.property));
     }

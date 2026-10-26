@@ -125,7 +125,7 @@ scene.add(circle)
 # Empty/cleared updater metadata must not disable ordinary typed mutations.
 circle.clear_updaters()
 circle.shift(RIGHT)
-assert circle.get_center() == (1.0, 0.0)
+assert tuple(circle.get_center()) == (1.0, 0.0, 0.0)
 circle.shift(LEFT)
 # A handle-less wrapper must fail before binding can project existing geometry
 # into Python state. The same scene must remain usable afterward.
@@ -165,7 +165,7 @@ assert untyped._scene is None
 assert scene._binding_handles == bindings_before
 assert scene._next_object_id == next_id
 assert len(scene._binding_handles) == 1
-assert circle.get_center() == (0.0, 0.0)
+assert tuple(circle.get_center()) == (0.0, 0.0, 0.0)
 builtins.__noon_persisted_scene = scene
 builtins.__noon_persisted_circle = circle
 result = scene
@@ -182,8 +182,8 @@ circle.set_fill(BLUE, opacity=0.4)
 center = circle.get_center()
 assert abs(circle.width - 3.0) < 1e-9
 assert abs(circle.height - 1.0) < 1e-9
-assert abs(center.x - 2.0) < 1e-9
-assert abs(center.y + 1.0) < 1e-9
+assert abs(center[0] - 2.0) < 1e-9
+assert abs(center[1] + 1.0) < 1e-9
 result = scene
 `;
 
@@ -839,8 +839,10 @@ try {
       endpointTime: null,
     },
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
+    { filename: "manim_parity_object_members.py", objectCount: 6, expectedDuration: 0.5, endpointTime: null },
     { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
+    { filename: "live_masked_placement.py", objectCount: 2, expectedDuration: 1.25, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_circle_surround.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
@@ -862,6 +864,13 @@ try {
     // Actual Python -> shared Rust -> retained worker; the matching ordinary
     // circle is an in-frame no-effect negative control for off-source pixels.
     { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
+    // Ordinary Python image construction and .animate use the same worker path.
+    // Its restored, no-glow image must remain at the final authored position.
+    {
+      filename: "image_glow.py", objectCount: 3, expectedDuration: 6,
+      endpointTime: null, expectedFinalCenter: [2.2, 0],
+      finalPixelPredicate: (_red, _green, blue, x) => x > 320 && blue > 80,
+    },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -999,7 +1008,7 @@ try {
         }
 
         const initial = await waitForFrame();
-        if (expectedGlowPair || filename === "ordinary_family_membership_order.py") {
+        if (expectedGlowPair || filename === "image_glow.py" || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
           // A source-owned Python continuation never admits external pause/seek.
           // harness.authoring.run resolves only after its final Rust execution
           // lease has returned and the final retained publication was presented.
@@ -1272,7 +1281,7 @@ def author(scene):
     circle = Circle(0.4).set_fill(BLUE, opacity=1)
     scene.add(circle)
     scene.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)
-    assert abs(circle.get_center().x - 1) < 1e-6
+    assert abs(circle.get_center()[0] - 1) < 1e-6
     assert scene.time == 0.75
     scene.wait(0.25)
 author(result)
@@ -1809,11 +1818,11 @@ class ArrangedOptions(Scene):
             member.next_to = reject_python_placement
             member.get_critical_point = reject_python_placement
         family.shift(RIGHT)
-        assert abs(first.get_center().x - 1) < 1e-6
-        assert abs(second.get_center().x - 3) < 1e-6
+        assert abs(first.get_center()[0] - 1) < 1e-6
+        assert abs(second.get_center()[0] - 3) < 1e-6
         family.arrange(RIGHT, buff=0.2, aligned_edge=UP)
-        assert abs(first.get_center().x + 1) < 1e-6
-        assert abs(second.get_center().x - 1) < 1e-6
+        assert abs(first.get_center()[0] + 1) < 1e-6
+        assert abs(second.get_center()[0] - 1) < 1e-6
         self.add(first, second)
         self.wait(0.1)
         try:
@@ -1823,12 +1832,12 @@ class ArrangedOptions(Scene):
             assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("late invalid arrangement index was accepted")
-        assert abs(first.get_center().x + 1) < 1e-6
-        assert abs(second.get_center().x - 1) < 1e-6
+        assert abs(first.get_center()[0] + 1) < 1e-6
+        assert abs(second.get_center()[0] - 1) < 1e-6
         selected.arrange(RIGHT, buff=0.5, center=False,
                          index_of_submobject_to_align=-1, submobject_to_align=second)
-        assert abs(first.get_center().x + 1) < 1e-6
-        assert abs(second.get_center().x + 0.1) < 1e-6
+        assert abs(first.get_center()[0] + 1) < 1e-6
+        assert abs(second.get_center()[0] + 0.1) < 1e-6
         self.wait(0.1)
 `;
   await startSampledSource(page, arrangedOptionsSource, "scene-arrange-options");
@@ -1858,13 +1867,13 @@ class SelectedAlignment(Scene):
             value.get_critical_point = reject_python_bounds
         family.next_to(target, index_of_submobject_to_align=0,
                        submobject_to_align=second, buff=0.25)
-        assert abs(first.get_center().x - 5.75) < 1e-6
-        assert abs(second.get_center().x - 7.75) < 1e-6
+        assert abs(first.get_center()[0] - 5.75) < 1e-6
+        assert abs(second.get_center()[0] - 7.75) < 1e-6
         self.add(first, second, target)
         self.wait(0.1)
         family.next_to(ORIGIN, index_of_submobject_to_align=-1, buff=0.25)
-        assert abs(first.get_center().x + 1.25) < 1e-6
-        assert abs(second.get_center().x - 0.75) < 1e-6
+        assert abs(first.get_center()[0] + 1.25) < 1e-6
+        assert abs(second.get_center()[0] - 0.75) < 1e-6
         try:
             family.next_to(ORIGIN, index_of_submobject_to_align=-3)
         except NoonValueError as error:
@@ -1872,10 +1881,10 @@ class SelectedAlignment(Scene):
             assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("invalid family index was accepted")
-        assert abs(first.get_center().x + 1.25) < 1e-6
+        assert abs(first.get_center()[0] + 1.25) < 1e-6
         first.next_to(2 * RIGHT, submobject_to_align=second, buff=0.25)
-        assert abs(first.get_center().x - 0.75) < 1e-6
-        assert abs(second.get_center().x - 0.75) < 1e-6
+        assert abs(first.get_center()[0] - 0.75) < 1e-6
+        assert abs(second.get_center()[0] - 0.75) < 1e-6
         self.wait(0.1)
 `;
   await startSampledSource(page, selectedAlignmentSource, "scene-selected-alignment");
@@ -1965,6 +1974,100 @@ class SelectedAlignment(Scene):
     });
     assert.equal(result.duration, 4.5);
     assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const glowPulseSource = await readFile(
+    path.join(repoRoot, "web/python/examples/glow_pulse.py"), "utf8",
+  );
+  const glowPulseCrop = (png, centerX, centerY) => {
+    assert.equal(png.width, 640); assert.equal(png.height, 360);
+    const half = 60, width = 2 * half + 1;
+    const result = Buffer.alloc(width * width * 4);
+    for (let row = 0; row < width; row++) {
+      const start = ((centerY - half + row) * png.width + centerX - half) * 4;
+      png.data.copy(result, row * width * 4, start, start + width * 4);
+    }
+    return result;
+  };
+  let persistentPulseEndpoint;
+  await startSampledSource(page, glowPulseSource, "scene-shared-glow-pulse");
+  try {
+    const canvas = page.locator("#scene-shared-glow-pulse");
+    const frames = new Map();
+    for (const time of [0, 1, 1.3, 1.6, 2.125, 2.25, 2.375, 2.5, 2.875, 3, 3.125, 3.25, 3.5]) {
+      await page.evaluate(
+        sampleTime => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      frames.set(time, PNG.sync.read(await canvas.screenshot()));
+    }
+    const halo = (png, centerX, centerY) => {
+      let blue = 0;
+      for (const dx of [26, 29, 32]) for (const dy of [-3, 0, 3]) {
+        blue += png.data[((centerY + dy) * png.width + centerX + dx) * 4 + 2];
+      }
+      return blue;
+    };
+    // A 0.4-world-unit move is exactly 18 pixels here. Radius also changes from
+    // ten to twelve pixels; an independent static scene below pins that endpoint.
+    persistentPulseEndpoint = glowPulseCrop(frames.get(1.6), 230, 162);
+    assert.deepEqual(glowPulseCrop(frames.get(3.5), 230, 162), persistentPulseEndpoint,
+      "persistent GlowPulse endpoint drifted after the disjoint motion/radius edit");
+    assert.ok(halo(frames.get(1.3), 230, 171) > halo(frames.get(1), 230, 180) + 9 * 4,
+      "persistent GlowPulse never brightened above its 1.2 baseline");
+    assert.ok(halo(frames.get(1.3), 410, 180) > halo(frames.get(0), 410, 180) + 9 * 8,
+      "temporary GlowPulse did not render an off-source midpoint halo");
+    for (const time of [1.6, 2.5, 3.25, 3.5]) {
+      assert.deepEqual(glowPulseCrop(frames.get(time), 410, 180), glowPulseCrop(frames.get(0), 410, 180),
+        `temporary GlowPulse left a halo after its completion at ${time}`);
+    }
+    assert.ok(halo(frames.get(2.25), 410, 180) > halo(frames.get(0), 410, 180) + 9 * 3,
+      "linear GlowPulse was rejected or skipped instead of restoring at its endpoint");
+    assert.deepEqual(glowPulseCrop(frames.get(2.125), 410, 180), glowPulseCrop(frames.get(3.125), 410, 180),
+      "reversed GlowPulse did not match the complementary forward sample");
+    assert.deepEqual(glowPulseCrop(frames.get(2.375), 410, 180), glowPulseCrop(frames.get(2.875), 410, 180),
+      "reversed GlowPulse did not preserve the shared linear amplitude map");
+    assert.ok(halo(frames.get(2.875), 410, 180) > halo(frames.get(3.125), 410, 180) + 9 * 3,
+      "reverse_rate_function was discarded before GlowPulse playback");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const completed = await authored;
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics,
+        state: await execution.state() };
+    });
+    assert.equal(result.duration, 3.5);
+    assert.equal(result.metrics.objectCount, 3);
+    assert.equal(result.state.playing, false);
+    assert.equal(result.state.time, 3.5);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const glowPulseEndpointSource = `
+from noon import BLUE, WHITE, LEFT, RIGHT, UP, Circle, Pixels, Rectangle, Scene
+class GlowPulseEndpoint(Scene):
+    def construct(self):
+        background = Rectangle(width=16, height=9, fill="#08101f", fill_opacity=1, stroke=None)
+        persistent = Circle(radius=0.4, fill=WHITE, fill_opacity=1, stroke=None).shift(2 * LEFT + 0.4 * UP)
+        temporary = Circle(radius=0.4, fill=WHITE, fill_opacity=1, stroke=None).shift(2 * RIGHT)
+        persistent.set_glow(color=BLUE, radius=Pixels(12), intensity=1.2)
+        self.add(background, persistent, temporary)
+        self.wait(0.25)
+`;
+  await startSampledSource(page, glowPulseEndpointSource, "scene-shared-glow-pulse-endpoint");
+  try {
+    await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      await execution.sampleToAuthoredTime(0.25);
+      await authored;
+    });
+    const endpoint = PNG.sync.read(
+      await page.locator("#scene-shared-glow-pulse-endpoint").screenshot(),
+    );
+    assert.deepEqual(persistentPulseEndpoint, glowPulseCrop(endpoint, 230, 162),
+      "persistent GlowPulse did not retain the independently authored position/radius and baseline intensity");
   } finally {
     await stopSampledSource(page);
   }
@@ -3564,4 +3667,16 @@ class LateFailure(Scene):
     duration: 0.2, sampleTime: 0.2, playback: "live", boundaries: [0.1],
   }], artifactDirectory: "browser-smoke-artifacts/circle-surround",
     prepareContext: disableAuthoringJspi });
+  await qualifyPairedAuthoring({
+    cases: [1.3, 2.125, 2.875, 3.5].map(sampleTime => ({
+      id: `glow-pulse-${sampleTime}`, file: "glow_pulse.py",
+      factory: "createDirectGlowPulseSmokeRenderer", objectCount: 3,
+      duration: 3.5, sampleTime, playback: "live",
+      boundaries: [0.5, 1, 1.6, 2, 2.5, 2.75, 3.25],
+      stopAtSourceCompletion: sampleTime === 3.5,
+    })),
+    artifactDirectory: "browser-smoke-artifacts/glow-pulse",
+    prepareContext: disableAuthoringJspi,
+  });
+  await import("./object-membership-qualification.mjs");
 }

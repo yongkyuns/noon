@@ -1,9 +1,8 @@
 //! Native counterpart of ManimCE's MovingZoomedSceneAround example.
 //!
-//! The two pop-out phases pair a shared Transform restore with a bounded Rust
-//! host callback. The callback keeps the transparent helper rectangle fitted
-//! to the moving zoom display through the same effective-layout operation used
-//! by Python `UpdateFromFunc`.
+//! The two pop-out phases specialize a pure layout expression to ordinary
+//! Transform channels. A bounded Rust callback remains the fallback for profiles
+//! that cannot prove the same affine result as Python `UpdateFromFunc`.
 
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
@@ -102,9 +101,10 @@ impl LiveContinuation for MovingZoomedSceneAround {
                         &saved_display,
                         transform_options,
                     )),
-                    Request::CallbackInterval {
+                    Request::LayoutReplaceInterval {
                         target: &self.display_helper,
-                        callback: UNFOLD_RECT,
+                        layout_target: &self.display,
+                        fallback: UNFOLD_RECT,
                         options: linear(STEP_DURATION),
                     },
                 ];
@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn native_program_runs_both_bounded_layout_callbacks_and_finishes_at_twelve_seconds() {
+    fn native_program_specializes_both_layout_intervals_and_finishes_at_twelve_seconds() {
         let (mut program, mut callbacks) = program().unwrap();
         for endpoint in 1..=12 {
             assert!(matches!(
@@ -393,6 +393,7 @@ mod tests {
                 LiveProgramStatus::Awaiting(_)
             ));
             finish_segment(&mut program, &mut callbacks, endpoint as f64);
+            assert!(!callbacks.last_advance_completed_callback_phase());
 
             if endpoint == 1 {
                 assert_eq!(program.session().frame().time, 1.0);

@@ -21,7 +21,7 @@ class OrdinaryTextFamilyReveal(Scene):
         except ValueError:
             pass
         assert self.mobjects == [moving]
-        assert abs(left.get_center().y - 0.75) < 1e-6
+        assert abs(left.get_center()[1] - 0.75) < 1e-6
 
         self.play(
             Create(family, run_time=2.0, lag_ratio=0.25, rate_func=linear),
@@ -31,7 +31,7 @@ class OrdinaryTextFamilyReveal(Scene):
             rate_func=linear,
         )
         assert self.mobjects == [moving, family, solo]
-        assert abs(moving.get_center().x - 3.0) < 1e-6
+        assert abs(moving.get_center()[0] - 3.0) < 1e-6
 
         self.play(
             Uncreate(family, run_time=1.0, lag_ratio=0.25, rate_func=linear),

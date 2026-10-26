@@ -660,12 +660,12 @@ class PlottingAdapterTests(unittest.TestCase):
         self.assertEqual(axes.axes, (x_axis, y_axis))
         x_axis.add_numbers.assert_called_once_with(
             x_values=(-1.0, 1.0), excluding=[0.0], font_size=30.0,
-            direction=plotting._base._as_vec2(plotting._base.UP), buff=0.25,
+            direction=plotting._base.UP, buff=0.25,
             decimal_places=1,
         )
         y_axis.add_numbers.assert_called_once_with(
             x_values=(0.5,), excluding=[0.0], font_size=24.0,
-            direction=plotting._base._as_vec2(plotting._base.LEFT), buff=0.25,
+            direction=plotting._base.LEFT, buff=0.25,
             decimal_places=2,
         )
         self.assertEqual(y_axis.decimal_number_config, {

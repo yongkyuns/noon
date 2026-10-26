@@ -11,6 +11,83 @@ python3 -m http.server --directory web 8080
 
 Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `requestAnimationFrame` timestamp is converted to deterministic scene time in Rust; JavaScript only owns browser scheduling and canvas sizing.
 
+## Background audio and scene navigation
+
+Open <http://localhost:8080/background-audio.html> for the direct Rust/WASM audio
+example. **Play with sound** unlocks browser audio after a user gesture. Pause,
+restart, the time slider, previous/next controls, and the three named key points
+seek picture and music together. Viewer mute and volume do not change the
+authored scene or its clip gains. Preparation is silent; closing or leaving the
+page retires the output.
+
+The shared builder is `noon::example_scenes::background_audio::scene()`. It
+declares immutable PCM with `Scene::audio(resource, AudioClipOptions { ... })`
+and section markers at 0, 10, and 20 seconds. Clip start time is absolute scene
+time; declaring audio does not advance the authoring cursor. Lower the returned
+animation with `scene.execution_session_with_animation_root(&animation)`.
+`scene.section_navigation()` provides immutable marker metadata for a host's
+controls. The existing runtime and direct host clock own playback time; the
+Web Audio adapter only consumes shared Rust playback descriptors.
+
+The 30-second example uses an original synthesized score, **A Small Discovery**,
+whose composition and generated audio are dedicated under **CC0-1.0**. It uses
+no external recordings or samples. The generator remains MIT-licensed source;
+see [the music example](../crates/noon/examples/render_background_music/README.md)
+for provenance and offline rendering instructions.
+
+The audible profiles accept finite, predeclared direct Rust/WASM scenes and
+complete Python scenes returned as `result = Scene()`. The Python gallery lesson
+is [Double the input](python/examples/background_music_lesson.py), paired with
+[`background_music_lesson.rs`](../crates/noon/src/example_scenes/background_music_lesson.rs).
+Open `/?catalog=showcase&example=showcase-background-music`, then choose **Play
+with sound**. Its three sections, point motion and soundtrack share Rust time.
+The viewer's Previous/Next, seek, mute and volume controls operate on this same
+execution owner. Leaving the page pauses playback; returning does not restart it.
+
+`AudioSource.small_discovery()` prepares the bundled music. Use
+`AudioSource.from_interleaved(samples, sample_rate=48000, channels=2)` for decoded
+float PCM. `Scene.audio(source, start_time=..., source_start_frame=...,
+source_end_frame=..., duration=..., loop=True, gain=..., fade_in=..., fade_out=...)`
+forwards clip options to Rust. Source trim bounds count PCM frames, times use
+seconds, and declarations do not advance the authoring cursor. Finite motion can
+use `declare_value(tracker, target, run_time=..., rate_func=linear)` alongside
+`declare_wait(...)` and native `bind_position(...)`, as the lesson demonstrates.
+
+Export that same Python source through the existing native MP4 sink:
+
+```bash
+node scripts/export-python-scene.mjs \
+  web/python/examples/background_music_lesson.py /tmp/noon-music-capture \
+  --mp4 scene-with-music.mp4 --width 1280 --height 720
+```
+
+Run this command from the repository root after the browser package is built.
+It requires Playwright Chromium, Rust/Cargo and FFmpeg with H.264/AAC support.
+The source executes once in the normal Pyodide authoring worker. Rust selects
+every sample and mixes the soundtrack; the browser renderer supplies pixels and
+the native encoder produces one MP4 with sound. `--fps 30000/1001`,
+`--start-frame`, `--frames` or `--end-time`, and `--hold` use the same shared frame
+policy as native Rust export. The capture directory must be new; an existing
+movie is replaced only with explicit `--overwrite` after successful encoding.
+
+Live authored mutation, source continuations, retained source history, native
+device playback and scene-authored click controls in the Python worker remain
+gated under [#2263](https://github.com/yongkyuns/noon/issues/2263). Ordinary
+`Scene.play`/`construct` execution retains its existing continuation behavior.
+The headless export command uses browser rendering and native encoding; it is
+not an in-process native Python runtime. Text-to-speech is a later milestone.
+
+Run `node scripts/background-audio-smoke.mjs` after building the browser package
+to qualify actual device output, playback controls, key-point picture/audio
+sync, and retirement. It writes its report and screenshots under
+`browser-smoke-artifacts/background-audio/`; it does not establish subjective
+music quality or production audio latency budgets.
+
+Run `node scripts/python-background-audio-smoke.mjs` for the actual Python
+gallery path, shared Rust animation, gesture activation, fades, sections,
+viewer controls and output retirement. Its reports include the source and
+runtime build identities plus a real captured lesson frame.
+
 | Direct Rust/WASM qualification | Shared Rust builder | Browser-owned input |
 | --- | --- | --- |
 | Sequential ordinary affine play | `noon::example_scenes::ordinary_affine_play()` | None; the typed Rust session owns both plays, the wait, and the authored edit |

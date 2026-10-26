@@ -15,7 +15,8 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  const existingEntries = manifest.entries.filter(entry => entry.id !== "showcase-cuda-transpose");
+  const existingEntries = manifest.entries.filter(entry =>
+    !["showcase-cuda-transpose", "showcase-background-music"].includes(entry.id));
   assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
     existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
   assert.ok(evidence.posters.length === existingEntries.length ||
@@ -29,6 +30,22 @@ test("every showcase card has a retained, source-bound real capture", async () =
     assertPoster(cuda, evidence.posters[existingEntries.length],
       await read(cuda.path), await read(cuda.thumbnail));
   }
+});
+
+test("the audio lesson has a source-bound real capture from its qualified browser build", async () => {
+  const entry = manifest.entries.find(entry => entry.id === "showcase-background-music");
+  assert.ok(entry);
+  const capture = JSON.parse(await read("thumbnails/showcase/showcase-background-music-evidence.json"));
+  assert.equal(capture.schema, 1);
+  assert.equal(capture.publication, "captured-preview");
+  assert.match(capture.captureRevision, /^[a-f0-9]{40}$/);
+  assert.equal(capture.captureRevision, capture.runtimeBuildIdentity.sourceRevision);
+  assert.equal(capture.qualification.status, "passed");
+  assert.equal(capture.qualification.sourceDirty, false);
+  assert.equal(capture.qualification.script, "scripts/python-background-audio-smoke.mjs");
+  assert.deepEqual(capture.posters.map(record => record.id), [entry.id]);
+  assertRetainedPoster(entry, capture.posters[0], await read(entry.path), await read(entry.thumbnail),
+    capture.runtimeBuildIdentity);
 });
 
 test("source, image, timing and framing changes cannot silently reuse a poster", async () => {

@@ -619,7 +619,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 | SemanticMutation::SetFamilyStyle { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
-                | SemanticMutation::SetClickIndicate { object, .. }
+                | SemanticMutation::SetClickAction { object, .. }
                 | SemanticMutation::SetSpatialCompositionDomain { object, .. }
                 | SemanticMutation::SetCameraProfile { object, .. }
                 | SemanticMutation::SetCameraMotions { object, .. }
@@ -668,7 +668,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self.preflight
             .staged_effects
             .iter()
-            .filter_map(|(&effect, &definition)| {
+            .filter_map(|(&effect, state)| {
                 if self.preflight.removed_existing.contains(&effect) {
                     return None;
                 }
@@ -676,10 +676,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .store
                     .semantic_effect_state(effect)
                     .expect("prepared existing effect update retains its validated source");
-                (definition != original.definition()).then_some((
+                (state.definition() != original.definition()).then_some((
                     effect,
                     original.owner(),
-                    definition,
+                    state.definition(),
                 ))
             })
     }
@@ -720,6 +720,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     SemanticNodeCreation::PendingPathObject { .. }
                     | SemanticNodeCreation::Family { state: None, .. }
                     | SemanticNodeCreation::Effect { .. }
+                    | SemanticNodeCreation::AudioClip { .. }
                     | SemanticNodeCreation::Signal { .. },
                 ) => Err(SemanticTransactionReadError::NotObject(object)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
@@ -1052,6 +1053,32 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Err(SemanticTransactionReadError::UnknownPendingNode(token))
     }
 
+    /// Read the optional affine start from the same prepared animation owner.
+    pub fn transform_start(
+        &self,
+        animation: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Option<crate::SemanticTransform2_5D>, SemanticTransactionReadError> {
+        let animation = animation.into();
+        match animation {
+            SemanticTransactionNodeRef::Pending(token) => {
+                Ok(self.pending_animation(token)?.transform_start())
+            }
+            SemanticTransactionNodeRef::Existing(id) => {
+                if self.node_is_removed(id) {
+                    return Err(SemanticTransactionReadError::RemovedExistingNode(id));
+                }
+                let node = self
+                    .store
+                    .node(id)
+                    .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?;
+                let SemanticNodeKind::Animation(state) = node.kind() else {
+                    return Err(SemanticTransactionReadError::NotAnimation(animation));
+                };
+                Ok(state.transform_start())
+            }
+        }
+    }
+
     /// Read final direct family order through the transaction-local overlay.
     pub fn family_members(
         &self,
@@ -1098,9 +1125,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .into_iter()
                     .filter(|member| !self.is_removed_ref(*member))
                     .collect()),
-                Some(SemanticNodeCreation::Effect { .. } | SemanticNodeCreation::Signal { .. }) => {
-                    Err(SemanticTransactionReadError::NotFamily(family))
-                }
+                Some(
+                    SemanticNodeCreation::Effect { .. }
+                    | SemanticNodeCreation::Signal { .. }
+                    | SemanticNodeCreation::AudioClip { .. },
+                ) => Err(SemanticTransactionReadError::NotFamily(family)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
@@ -1386,6 +1415,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     );
                     committed_nodes.insert(*token, node);
                     written_slots.insert(node);
+                    if let Some(clip) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_audio_clip_state)
+                    {
+                        written_slots.insert(clip.scope());
+                    }
                     if let Some(effect) = store
                         .node(node)
                         .and_then(crate::SemanticNode::semantic_effect_state)
@@ -1419,19 +1454,28 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 continue;
             }
             match mutation {
+                SemanticMutation::ReplaceAudioClip { clip, definition } => {
+                    let scope = store
+                        .semantic_audio_clip_state(clip)
+                        .expect("preflighted audio clip")
+                        .scope();
+                    store.replace_audio_clip_definition(clip, definition);
+                    written_slots.insert(clip);
+                    impacts.push(SemanticMutationImpact::AudioClip { scope, clip });
+                }
                 SemanticMutation::UpdateEffect { effect, update } => {
                     let previous = store
                         .semantic_effect_state(effect)
                         .expect("validated effect");
                     let owner = previous.owner();
+                    let next = previous.updated(update).expect("preflighted effect update");
                     let previous = previous.definition();
-                    let prepared = preflight.staged_effects[&effect];
+                    let prepared = preflight.staged_effects[&effect].definition();
                     // Publish this mutation's disjoint channels in order. The
                     // final value was validated before any semantic commit.
-                    let next = previous.update(update).expect("preflighted effect update");
                     for parameter in update.parameters() {
-                        debug_assert!(!next.parameter_changed(prepared, parameter));
-                        if previous.parameter_changed(next, parameter) {
+                        debug_assert!(!next.definition().parameter_changed(prepared, parameter));
+                        if previous.parameter_changed(next.definition(), parameter) {
                             impacts.push(SemanticMutationImpact::EffectParameter {
                                 owner,
                                 effect,
@@ -1439,7 +1483,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                             });
                         }
                     }
-                    store.replace_effect_definition(effect, next);
+                    store.replace_effect_state(effect, next);
                     written_slots.insert(effect);
                 }
                 SemanticMutation::SetSignal { signal, value } => {
@@ -1549,16 +1593,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         impacts.push(SemanticMutationImpact::SpatialAnchorChanged { object });
                     }
                 }
-                SemanticMutation::SetClickIndicate { object, binding } => {
+                SemanticMutation::SetClickAction { object, binding } => {
                     let object = resolve_node_ref(object, &committed_nodes);
                     store
                         .node_mut(object)
                         .expect("preflighted semantic object")
                         .semantic_object_state_mut()
                         .expect("preflighted semantic object state")
-                        .set_click_indicate(binding);
+                        .set_click_action(binding);
                     written_slots.insert(object);
-                    impacts.push(SemanticMutationImpact::ClickIndicate { object });
+                    impacts.push(SemanticMutationImpact::ClickAction { object });
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
                     let object = resolve_node_ref(object, &committed_nodes);
@@ -1881,6 +1925,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::AddNode { token, .. } => {
                     let node = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::NodeAdded { node });
+                    if let Some(clip) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_audio_clip_state)
+                    {
+                        impacts.push(SemanticMutationImpact::AudioClip {
+                            scope: clip.scope(),
+                            clip: node,
+                        });
+                    }
                     if let Some(effect) = store
                         .node(node)
                         .and_then(crate::SemanticNode::semantic_effect_state)
@@ -1912,6 +1965,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.extend(outcome.written_slots().iter().copied());
                     for effect in outcome.effects() {
                         match effect {
+                            SemanticRemoveNodeEffect::AudioClipChanged { scope, clip } => {
+                                impacts.push(SemanticMutationImpact::AudioClip {
+                                    scope: *scope,
+                                    clip: *clip,
+                                });
+                            }
                             SemanticRemoveNodeEffect::EffectAttachmentChanged { owner, effect } => {
                                 impacts.push(SemanticMutationImpact::EffectAttachment {
                                     owner: *owner,

@@ -165,6 +165,14 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
         .family()
         .shift(-3.0, 1.4)
         .map_err(|error| error.to_string())?;
+    // Generic Table entry handles retain text content without a frontend class.
+    // Every direct native/WASM host must select the existing content query.
+    for entry in plain.get_entries().map_err(|error| error.to_string())? {
+        assert!(entry
+            .as_target()
+            .requires_content_boundary()
+            .map_err(|error| error.to_string())?);
+    }
     let math = MathTable::from_rows_with_options(
         &mut scene,
         backend,
@@ -235,7 +243,16 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
             composite.family().into(),
         ])
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    let mut execution = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    for entry in plain.get_entries().map_err(|error| error.to_string())? {
+        assert!(scene
+            .live(&mut execution)
+            .requires_content_boundary(entry.as_target())
+            .map_err(|error| error.to_string())?);
+    }
+    Ok(execution)
 }
 
 /// DecimalTable counterpart for ManimCE's configurable DecimalNumber entries.

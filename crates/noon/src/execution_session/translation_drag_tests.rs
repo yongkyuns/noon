@@ -746,7 +746,7 @@ fn target_animation_blocks_drag_acquisition_without_acknowledging_input() {
         .insert_semantic_transform_animation(target, endpoint, AnimationOptions::new())
         .unwrap();
     let segment = session
-        .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
+        .activate_animation_segment(&mut store, animation, AnimationOptions::new().run_time(1.0))
         .unwrap();
     let before = session.publication_context();
     let token = session.native_pointer_input_token().unwrap();
@@ -794,7 +794,7 @@ fn parallel_animation_pending_barrier_preserves_both_tracks_during_rejected_drag
         )
         .unwrap();
     let segment = session
-        .activate_animation_segment(&store, parallel, AnimationOptions::new().run_time(1.0))
+        .activate_animation_segment(&mut store, parallel, AnimationOptions::new().run_time(1.0))
         .unwrap();
     session.advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(translation(&session, target), Vec2::new(6.0, 0.0));
@@ -851,7 +851,7 @@ fn active_drag_rejects_new_animation_without_installing_tracks() {
     .unwrap();
     let before = session.publication_context();
     assert_eq!(
-        session.activate_animation_segment(&store, animation, AnimationOptions::new()),
+        session.activate_animation_segment(&mut store, animation, AnimationOptions::new()),
         Err(super::ExecutionSessionAnimationError::AuthoredPublication(
             ExecutionSessionPublicationError::TranslationDragActive
         ))
@@ -860,7 +860,7 @@ fn active_drag_rejects_new_animation_without_installing_tracks() {
     assert!(session.translation_drag_active());
     session.cancel_translation_drag().unwrap();
     session
-        .activate_animation_segment(&store, animation, AnimationOptions::new())
+        .activate_animation_segment(&mut store, animation, AnimationOptions::new())
         .unwrap();
 }
 
@@ -878,7 +878,11 @@ fn unrelated_animation_and_drag_resolve_in_either_order_or_cancel() {
             .insert_semantic_transform_animation(unrelated, endpoint, AnimationOptions::new())
             .unwrap();
         let segment = session
-            .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
+            .activate_animation_segment(
+                &mut store,
+                animation,
+                AnimationOptions::new().run_time(1.0),
+            )
             .unwrap();
         let authored_before = store.scene_revision();
         submit(
@@ -984,7 +988,11 @@ fn sustained_unrelated_animation_and_drag_cycles_restore_a_quiescent_baseline() 
             .insert_semantic_transform_animation(unrelated, endpoint, AnimationOptions::new())
             .unwrap();
         let segment = session
-            .activate_animation_segment(&store, animation, AnimationOptions::new().run_time(1.0))
+            .activate_animation_segment(
+                &mut store,
+                animation,
+                AnimationOptions::new().run_time(1.0),
+            )
             .unwrap();
         session.advance_segment_to(segment, 0.5).unwrap();
         assert_eq!(

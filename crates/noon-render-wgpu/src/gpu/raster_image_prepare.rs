@@ -18,10 +18,31 @@ pub(super) struct ImageUniform {
     sampling: u32,
     padding: u32,
     dimensions: [f32; 2],
-    padding2: [f32; 2],
+    crop_origin: [f32; 2],
 }
 
 impl ImageUniform {
+    /// Remove final scope opacity for an isolated source. Intrinsic texture alpha
+    /// is image coverage in both modes; silhouette omits only fill modulation.
+    pub(super) fn captured(mut self, paint_opacity: f32, silhouette: bool) -> Self {
+        self.opacity = if silhouette { 1.0 } else { paint_opacity };
+        self
+    }
+
+    pub(super) fn transform(self) -> crate::PackedTransform {
+        crate::PackedTransform {
+            translation: self.translation,
+            scale: self.scale,
+            rotation: self.rotation,
+            padding: 0.0,
+        }
+    }
+
+    pub(super) fn with_capture_origin(mut self, origin: [i32; 2]) -> Self {
+        self.crop_origin = [origin[0] as f32, origin[1] as f32];
+        self
+    }
+
     pub(super) fn inset(center: noon_core::Vec2, size: noon_core::Vec2, pixels: [u32; 2]) -> Self {
         Self {
             translation: [center.x, center.y],
@@ -31,7 +52,7 @@ impl ImageUniform {
             sampling: 2,
             padding: 0,
             dimensions: [pixels[0] as f32, pixels[1] as f32],
-            padding2: [0.0; 2],
+            crop_origin: [0.0; 2],
         }
     }
 }
@@ -41,6 +62,9 @@ pub(super) struct PreparedImageObject {
     pub object: ObjectId,
     pub content: RasterImageContentRef,
     pub uniform: ImageUniform,
+    // Keep paint modulation separate from final scope opacity for isolated source
+    // capture; recovering it by division would make opacity-only edits dirty.
+    pub paint_opacity: f32,
     // This small immutable row shares its Arc<[u8]>; pixels never enter instance
     // rows or per-frame publications.
     pub resource: RasterImageResource,
@@ -172,9 +196,8 @@ impl RasterImageFramePreparer {
                 return Err(RasterImagePrepareError::InvalidPresentation(object.id));
             }
             let transform = frame.render_transform(index);
-            let opacity = object.style.opacity
-                * object.appearance
-                * object.style.fill.map_or(1.0, |fill| fill.alpha);
+            let paint_opacity = object.style.fill.map_or(1.0, |fill| fill.alpha);
+            let opacity = object.style.opacity * object.appearance * paint_opacity;
             let uniform = ImageUniform {
                 translation: [transform.translation.x, transform.translation.y],
                 scale: [transform.scale.x, transform.scale.y],
@@ -187,7 +210,7 @@ impl RasterImageFramePreparer {
                 },
                 padding: 0,
                 dimensions: [content.width() as f32, content.height() as f32],
-                padding2: [0.0; 2],
+                crop_origin: [0.0; 2],
             };
             if !uniform
                 .translation
@@ -202,7 +225,10 @@ impl RasterImageFramePreparer {
             }
             if !reset
                 && existing.is_some_and(|row| {
-                    row.object == object.id && row.content == content && row.uniform == uniform
+                    row.object == object.id
+                        && row.content == content
+                        && row.uniform == uniform
+                        && row.paint_opacity == paint_opacity
                 })
             {
                 return Ok(());
@@ -213,6 +239,7 @@ impl RasterImageFramePreparer {
                     object: object.id,
                     content,
                     uniform,
+                    paint_opacity,
                     resource: resource.clone(),
                 }),
             ));

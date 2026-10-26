@@ -12,6 +12,8 @@ mod storage;
 use resource_budget::ResourceBudget;
 
 #[cfg(test)]
+mod inset_tests;
+#[cfg(test)]
 mod payload_budget_tests;
 #[cfg(test)]
 mod resource_budget_tests;
@@ -485,6 +487,19 @@ impl SceneInstance {
             .reactive
             .as_ref()
             .is_some_and(|reactive| !reactive.is_empty())
+        {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        // Initial cloning includes retained inverse revisions. Checking only
+        // active relations would admit an inset added and removed before this
+        // boundary, then silently omit that view when the reader rewinds.
+        if self.compiled.inset_2d_views().next().is_some()
+            || history.revisions.iter().any(|revision| {
+                revision
+                    .inverse
+                    .as_ref()
+                    .is_some_and(|inverse| inverse.changes_inset_2d_view())
+            })
         {
             return Err(ReplayError::UnsupportedDomain.into());
         }

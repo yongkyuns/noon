@@ -51,6 +51,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Install native audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -83,6 +86,9 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
+
+      - name: Install native audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
 
       - name: Run fast Rust tests
         run: cargo test --workspace --all-features --lib --test family
@@ -214,6 +220,32 @@ jobs:
 
       - name: Check typed WASM/Python error boundary
         run: node scripts/typed-authoring-errors-smoke.mjs
+
+      - name: Check direct background audio and scene controls
+        run: timeout --signal=TERM 240s node scripts/background-audio-smoke.mjs
+
+      - name: Retain direct background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: background-audio-${{ github.event.pull_request.number }}
+          path: browser-smoke-artifacts/background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Check Python gallery background audio
+        env:
+          NOON_PYTHON_AUDIO_ARTIFACTS: ${{ runner.temp }}/python-background-audio
+        run: timeout --signal=TERM 240s node scripts/python-background-audio-smoke.mjs
+
+      - name: Retain Python background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-background-audio-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/python-background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Check Manim-style authoring
         id: manim-authoring

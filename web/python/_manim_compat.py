@@ -21,47 +21,7 @@ from noon import Mobject, Scene
 _ir = _base._ir
 
 
-class _Direction3(tuple):
-    """Immutable three-component arithmetic for the Manim depth directions."""
-
-    __slots__ = ()
-
-    def __new__(cls, x, y, z):
-        return tuple.__new__(cls, (
-            _ir._finite_number("direction component", float(value)) for value in (x, y, z)
-        ))
-
-    def __getnewargs__(self):
-        return tuple(self)
-
-    @staticmethod
-    def _components(value):
-        if isinstance(value, _base.Vec2):
-            return (*value, 0.0)
-        components = tuple(value)
-        if len(components) != 3:
-            raise TypeError("direction arithmetic requires three components")
-        return tuple(float(component) for component in components)
-
-    def __add__(self, other):
-        return _Direction3(*(left + right for left, right in zip(self, self._components(other))))
-
-    def __sub__(self, other):
-        return _Direction3(*(left - right for left, right in zip(self, self._components(other))))
-
-    def __neg__(self):
-        return self * -1
-
-    def __mul__(self, scalar):
-        factor = float(scalar)
-        return _Direction3(*(component * factor for component in self))
-
-    def __rmul__(self, scalar):
-        return self * scalar
-
-    def __truediv__(self, scalar):
-        return self * (1 / float(scalar))
-
+_Direction3 = _base._Direction3
 
 OUT = _Direction3(0.0, 0.0, 1.0)
 IN = _Direction3(0.0, 0.0, -1.0)
@@ -132,7 +92,12 @@ def _manim_opacities_from_rgbas(rgbas):
 
 
 def _manim_point3(point):
-    values = (float(point.x), float(point.y), 0.0)
+    dimensions = len(point)
+    if dimensions not in (2, 3):
+        raise ValueError("point must have two or three coordinates")
+    values = tuple(float(point[index]) for index in range(dimensions))
+    if dimensions == 2:
+        values += (0.0,)
     try:
         import numpy as np
     except ImportError:
@@ -140,8 +105,17 @@ def _manim_point3(point):
     return np.asarray(values, dtype=np.float64)
 
 
+def _manim_point3_result(point):
+    """Keep arithmetic on XYZ query values when the optional array host is absent."""
+    result = _manim_point3(point)
+    return _Direction3(*result) if isinstance(result, list) else result
+
+
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
+
+    def _assert_valid_submobjects(self, submobjects):
+        return self._assert_valid_submobjects_internal(submobjects, VMobject)
 
     n_points_per_cubic_curve = 4
     tolerance_for_point_equality = 1e-6
@@ -314,9 +288,9 @@ class VMobject(Mobject):
         from _manim_path_editing import set_points
         return set_points(self, points)
 
-    def append_points(self, points):
+    def append_points(self, new_points):
         from _manim_path_editing import append_points
-        return append_points(self, points)
+        return append_points(self, new_points)
 
     def resize_points(self, new_length, resize_func=_resize_array):
         from _manim_path_editing import resize_points
@@ -348,13 +322,13 @@ class VMobject(Mobject):
         from _manim_path_editing import add_line_to
         return add_line_to(self, point)
 
-    def add_quadratic_bezier_curve_to(self, control, anchor):
+    def add_quadratic_bezier_curve_to(self, handle, anchor):
         from _manim_path_editing import add_quadratic_bezier_curve_to
-        return add_quadratic_bezier_curve_to(self, control, anchor)
+        return add_quadratic_bezier_curve_to(self, handle, anchor)
 
-    def add_cubic_bezier_curve_to(self, control1, control2, anchor):
+    def add_cubic_bezier_curve_to(self, handle1, handle2, anchor):
         from _manim_path_editing import add_cubic_bezier_curve_to
-        return add_cubic_bezier_curve_to(self, control1, control2, anchor)
+        return add_cubic_bezier_curve_to(self, handle1, handle2, anchor)
 
     def add_smooth_curve_to(self, *points):
         from _manim_path_editing import add_smooth_curve_to
@@ -385,9 +359,9 @@ class VMobject(Mobject):
         from _manim_path_editing import set_anchors_and_handles
         return set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2)
 
-    def append_vectorized_mobject(self, source):
+    def append_vectorized_mobject(self, vectorized_mobject):
         from _manim_path_editing import append_vectorized_mobject
-        return append_vectorized_mobject(self, source)
+        return append_vectorized_mobject(self, vectorized_mobject)
 
     def add_points_as_corners(self, points):
         from _manim_path_editing import add_points_as_corners
@@ -396,6 +370,15 @@ class VMobject(Mobject):
     def insert_n_curves(self, n):
         from _manim_path_editing import insert_n_curves
         return insert_n_curves(self, n)
+
+    def insert_n_curves_to_point_list(self, n, points):
+        """Return subdivided caller-owned values without editing this object's path."""
+        import numpy as np
+        from _manim_user_vectors import bezier_remap
+        if len(points) == 1:
+            return np.repeat(points, self.n_points_per_cubic_curve * n, 0)
+        curves = self.get_cubic_bezier_tuples_from_points(points)
+        return bezier_remap(curves, len(curves) + n).reshape(-1, 3)
 
     def get_subcurve(self, a, b):
         from _manim_semantic_handles import _clone_mobject
@@ -1091,6 +1074,11 @@ class _FamilyMethods:
         from _manim_semantic_handles import _group_members
         return _group_members(self)
 
+    @submobjects.setter
+    def submobjects(self, members):
+        from _manim_semantic_handles import _replace_submobjects
+        _replace_submobjects(self, members)
+
     @property
     def id(self) -> int:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
@@ -1174,7 +1162,7 @@ class _FamilyMethods:
         from _manim_semantic_handles import _group_copy
         return _group_copy(self)
 
-    def get_center(self) -> _base.Vec2:
+    def get_center(self) -> Any:
         return _base._semantic_operations()._get_center(self)
 
     def shift(self, direction: object) -> Group:
@@ -1603,7 +1591,9 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         clone = object.__new__(type(value))
         memo[id(value)] = clone
         pairs.append((value, clone))
-        if _is_shared_family(value):
+        # Only wrapper identities/metadata are traversed. Rust supplies the
+        # children and copies their canonical graph once, including aliases.
+        if _is_shared_family(value) or getattr(value, "_semantic_member_wrappers", None):
             family_members.append((clone, [allocate(member) for member in value.submobjects]))
         return clone
 

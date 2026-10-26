@@ -52,7 +52,7 @@ fn fixture() -> (Scene, Vec<Mobject>, ExecutionSession, ExecutionSegment) {
     let mut execution = scene.execution_session().unwrap();
     let segment = execution
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             animation.node_id(),
             AnimationOptions::new(),
         )

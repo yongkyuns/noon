@@ -188,6 +188,9 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
 | Coordinate plotting | [coordinate_plotting.rs](crates/noon-native/examples/coordinate_plotting.rs) | [coordinate_plotting.py](web/python/examples/coordinate_plotting.py) |
 | Retained images | [raster_image.rs](crates/noon-native/examples/raster_image.rs) | [raster_image.py](web/python/examples/raster_image.py) |
+| Image glow and motion | [image_glow.rs](crates/noon-native/examples/image_glow.rs) | [image_glow.py](web/python/examples/image_glow.py) |
+| Temporary glow pulses | [glow_pulse.rs](crates/noon-native/examples/glow_pulse.rs) | [glow_pulse.py](web/python/examples/glow_pulse.py) |
+| Finite background music | [background_music_lesson.rs](crates/noon-native/examples/background_music_lesson.rs) | [background_music_lesson.py](web/python/examples/background_music_lesson.py) |
 
 The complete qualification corpus lives under [`crates/noon-native/examples`](crates/noon-native/examples) and [`web/python/examples`](web/python/examples).
 
@@ -201,7 +204,92 @@ The retained raster image example admits immutable PNG/JPEG or uint8 array resou
 
 Current Phase A acceptance status is intentionally not duplicated here; use the [Phase A umbrella](https://github.com/yongkyuns/noon/issues/953) and the architecture guide for current ownership and invariants.
 
+## Native background audio
+
+Enable the optional `noon-native` audio feature to play finite Rust scenes through
+the default output device. The example uses the same original score, motion and
+three authored sections as the direct Rust/WASM background-music example:
+
+```bash
+cargo run -p noon-native --features audio --example background_audio
+```
+
+The paired Python lesson also has a native entry point. Both versions use the
+same shared Rust lesson, scalar bindings, sections and music:
+
+```bash
+cargo run -p noon-native --features audio --example background_music_lesson
+```
+
+Preparation stays silent; playback starts after the first native picture is ready.
+The shared Rust mixer supplies loops, trims, fades and overlapping clips on the
+native player's existing timeline. The geometric example has the same five
+authored buttons as its browser counterpart: Previous, Play/Pause, Next, Restart
+and Sound. Both native examples also enable these keyboard controls:
+
+| Key | Action |
+| --- | --- |
+| Space | Play or pause; playing a completed scene starts it again |
+| Left / Right | Seek backward or forward five seconds |
+| Page Up / Page Down | Previous or next authored section |
+| Home | Restart at time zero |
+| Up / Down | Increase or decrease viewer volume by five percentage points |
+| M | Mute or restore the retained viewer volume |
+
+Seek, section navigation and Restart preserve play/pause state. A paused seek
+presents the target without starting sound. Playback waits for that picture and
+the preceding release before admitting a fresh device anchor. Ordinary starts
+use a 40 ms attack, pauses and seeks release over at most 60 ms, and viewer gain
+changes use a 20 ms ramp. Viewer volume and mute never alter authored gains or MP4
+exports. Inspection zoom leaves audio time unchanged; closing, suspension and
+output failures retire device output immediately.
+
+Library callers opt in to keyboard controls with
+`NativeViewportConfig { playback_controls: true, section_navigation:
+scene.section_navigation(), ..Default::default() }`. Authored scene buttons use
+the shared Rust input publication and admitted session seek path. The native
+control profile requires a freshly lowered finite immutable scene without prior
+live execution edits, required callbacks, source continuations, retained history,
+external native input routes or effective-driver leases. Deterministic scalar
+bindings in the paired lesson are supported; broader live and dynamic numeric-text
+profiles remain under
+[#2263](https://github.com/yongkyuns/noon/issues/2263).
+The current device profile admits at most 256 immutable clips and mono or stereo
+output at 8–192 kHz. It requests a 20 ms callback period within the device's
+supported range; the backend may negotiate a different buffer size. This keeps
+the requested scheduling headroom consistent across sample rates. A device
+timestamp discontinuity above 50 ms stops the run with an explicit output error.
+
+The device backend uses ALSA on Linux, WASAPI on Windows, and CoreAudio on macOS.
+Linux builds with the `audio` feature (including workspace `--all-features`
+validation) require `pkg-config` and the ALSA development package, for example
+`sudo apt-get install libasound2-dev pkg-config` on Debian or Ubuntu. Native audio
+requires macOS 14.2 or newer with the [pinned CPAL backend](https://docs.rs/crate/cpal/0.18.2/source/README.md).
+Linux ALSA routes through PulseAudio also need the upstream
+[startup timing fix](https://github.com/alsa-project/alsa-plugins/commit/811c2ce69d1265ace42a05ef045ca1b4ed72e01c).
+Older Pulse plugins can report missing initial timing as an I/O error; Noon stops
+playback when the backend reports that failure. The software-device CI fixture
+selects a private build containing the fix without replacing system plugins.
+The feature is disabled by default, so visual-only native builds do not acquire
+this audio dependency.
+Automated output and clock checks do not establish physical-speaker latency or
+replace listening tests on supported devices.
+Linux capture fixtures use a private PulseAudio sink and a 60 Hz software viewport
+to check recorded PCM, output ramps, silent gaps and exact source offsets. This
+controlled software profile does not establish resilience under arbitrary host
+load. Captured gaps and driver-reported underruns, including a headless attempt,
+remain recorded in [#2263](https://github.com/yongkyuns/noon/issues/2263); their
+underlying cause and broader load/device qualification remain open.
+
 ## Browser playground
+
+The [background-music lesson](web/python/examples/background_music_lesson.py)
+authors a complete 30-second Python scene with native scalar motion, three
+sections and the original score *A Small Discovery*. The gallery's **Play with
+sound**, seek, section, volume and mute controls use shared Rust timing. The
+same source can be exported with H.264 video and AAC audio through the existing
+native MP4 sink; see [audio playback and export](web/README.md#background-audio-and-scene-navigation)
+for the finite authoring profile and command.
 
 The browser demo combines:
 

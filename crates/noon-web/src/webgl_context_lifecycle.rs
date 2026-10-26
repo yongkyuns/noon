@@ -1,7 +1,28 @@
 use std::{cell::Cell, rc::Rc};
 
 use wasm_bindgen::{prelude::*, JsCast};
-use web_sys::{OffscreenCanvas, WebGl2RenderingContext};
+use web_sys::{OffscreenCanvas, WebGl2RenderingContext, WebGlContextAttributes};
+
+/// Claim a selected WebGL fallback with the Window host's presentation policy.
+///
+/// Main-thread OffscreenCanvas composition can otherwise retain the previous
+/// drawing buffer after a final paused draw, even though the GPU has rendered
+/// the current publication. Preserve that buffer until the next actual draw.
+/// This needs no extra render, readback, or host animation clock. Worker hosts
+/// keep wgpu's context policy; callers must first rule out a WebGPU backend.
+pub(crate) fn prepare_main_thread_webgl_context(canvas: &OffscreenCanvas) -> Result<(), JsValue> {
+    if web_sys::window().is_none() {
+        return Ok(());
+    }
+    let attributes = WebGlContextAttributes::new();
+    // Match wgpu-hal's WebGL context attributes, changing only preservation.
+    attributes.set_antialias(false);
+    attributes.set_preserve_drawing_buffer(true);
+    canvas
+        .get_context_with_context_options("webgl2", &attributes)?
+        .ok_or_else(|| JsValue::from_str("cannot initialize the main-thread WebGL2 canvas"))?;
+    Ok(())
+}
 
 /// Platform-owned WebGL context-loss state shared by canvas renderers.
 pub(crate) struct WebGlContextLifecycle {

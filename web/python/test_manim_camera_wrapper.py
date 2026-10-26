@@ -81,6 +81,10 @@ class MovingCameraWrapperTests(unittest.TestCase):
                 def targetEditor(self):
                     return Handle(self.owner, self.state)
 
+                def layoutAnchor(self, index):
+                    assert index is None
+                    return self
+
                 def scale(self, x, y):
                     self.state["scale"] = [self.state["scale"][0] * x,
                                            self.state["scale"][1] * y]
@@ -104,6 +108,11 @@ class MovingCameraWrapperTests(unittest.TestCase):
                     self.execution_revision = self.semantic_revision
                     self.calls.append("liveTargetEditor")
                     return handle.targetEditor()
+
+                def liveScaleLayout3d(self, anchor, x, y, z, px, py, pz, about_point):
+                    assert (px, py, pz, about_point) == (0.0, 0.0, 0.0, False)
+                    assert z == x == y
+                    self.liveScale(anchor, x, y)
 
                 def liveScale(self, handle, x, y):
                     self._require_coherent()

@@ -4,6 +4,7 @@ mod effective_content;
 mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
+mod glow_pulse;
 mod input;
 mod inspection;
 #[cfg(test)]
@@ -66,14 +67,12 @@ use noon_compile::{
     lower_prepared_family_transform_channels, lower_prepared_matching_family_transform_payload,
     lower_prepared_path_motion_tracks, lower_prepared_scalar_signal_timeline_entries_with_resolver,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_schedule,
-    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, lower_semantic_execution_root,
-    lower_semantic_execution_root_with_animation_root_at, lower_semantic_path_motion_tracks,
-    prepare_family_transform_activations, prepare_matching_family_transform_activation,
-    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
-    PathMotionActivationProperties, PreparedScalarAnimationTrackError,
-    PreparedScalarSignalTimelineError, PreparedSemanticAnimationLoweringError,
-    PreparedSemanticAnimationScheduleError, SemanticAffineAnimationTrackError,
+    lower_semantic_execution_root_with_animation_root_at, prepare_family_transform_activations,
+    prepare_matching_family_transform_activation, CompilePatchError, EffectiveAnimationProperties,
+    ExecutionPatch, PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
+    PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
+    PreparedSemanticScheduledAnimationPayload, SemanticAffineAnimationTrackError,
     SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
@@ -199,6 +198,21 @@ pub(crate) enum SemanticCompositionRequest {
         callback: noon_core::HostCallbackId,
         options: AnimationOptions,
     },
+    LayoutReplaceInterval {
+        target: SemanticNodeId,
+        layout_target: SemanticNodeId,
+        fallback: noon_core::HostCallbackId,
+        options: AnimationOptions,
+    },
+    /// Candidate-local result of shared pure-expression specialization.
+    ResolvedLayoutReplace {
+        target: SemanticNodeId,
+        endpoints: Box<(
+            noon_core::SemanticTransform2_5D,
+            noon_core::SemanticObjectState,
+        )>,
+        options: AnimationOptions,
+    },
     WorldTransform {
         target: SemanticNodeId,
         transform: noon_core::SemanticWorldTransform3D,
@@ -233,6 +247,11 @@ pub(crate) enum SemanticCompositionRequest {
         target: SemanticNodeId,
         indication: IndicateOptions,
         scale_center: noon_core::SemanticVec3,
+        options: AnimationOptions,
+    },
+    GlowPulse {
+        target: SemanticNodeId,
+        intensity: f64,
         options: AnimationOptions,
     },
     FamilyIndicate {
@@ -348,9 +367,12 @@ impl SemanticCompositionRequest {
             | Self::FamilyMethodTargetTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
-            Self::CallbackInterval { target, .. } => Some(*target),
+            Self::CallbackInterval { target, .. }
+            | Self::LayoutReplaceInterval { target, .. }
+            | Self::ResolvedLayoutReplace { target, .. } => Some(*target),
             Self::MoveAlongPath { target, .. } => Some(*target),
             Self::Indicate { target, .. }
+            | Self::GlowPulse { target, .. }
             | Self::FamilyIndicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::FamilyDrawBorderThenFill { target, .. }
@@ -518,13 +540,6 @@ impl std::fmt::Display for ExecutionSessionInset2DError {
 }
 
 impl std::error::Error for ExecutionSessionInset2DError {}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Inset2DExecutionBinding {
-    camera_frame: ObjectId,
-    display: ObjectId,
-    capture_own_display: bool,
-}
 
 /// Unsupported lifecycle shape for the bounded canonical leaf-fade operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -830,12 +845,12 @@ pub struct ExecutionSession {
     signal_timeline: SignalTimelineSchedule,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
-    inset_2d_views: Vec<Inset2DExecutionBinding>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
     pointer_selection: selection::PointerSelectionState,
     translation_drag: translation_drag::TranslationDragState,
+    interaction_bindings: interactions::InteractionBindings,
     inspection: inspection::SessionInspectionView,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
@@ -887,12 +902,12 @@ impl Clone for ExecutionSession {
                 .clone_for_runtime(runtime.runtime_identity()),
             runtime,
             camera_object: self.camera_object,
-            inset_2d_views: self.inset_2d_views.clone(),
             next_activation_track_id: self.next_activation_track_id,
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
             pointer_selection: self.pointer_selection.fresh(),
             translation_drag: self.translation_drag.clone(),
+            interaction_bindings: self.interaction_bindings.clone(),
             inspection: self.inspection,
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
@@ -960,7 +975,7 @@ impl ExecutionSession {
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
-        session.sync_inset_2d_view_bindings(store);
+        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -979,7 +994,7 @@ impl ExecutionSession {
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
-        session.sync_inset_2d_view_bindings(store);
+        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -1013,7 +1028,7 @@ impl ExecutionSession {
         )?;
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
-        session.sync_inset_2d_view_bindings(store);
+        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -1085,12 +1100,12 @@ impl ExecutionSession {
             signal_timeline,
             runtime,
             camera_object,
-            inset_2d_views: Vec::new(),
             next_activation_track_id,
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
             pointer_selection: selection::PointerSelectionState::default(),
             translation_drag: Default::default(),
+            interaction_bindings: Default::default(),
             inspection: inspection::SessionInspectionView::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,
@@ -1111,6 +1126,95 @@ impl ExecutionSession {
     /// Current renderer-facing runtime frame.
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
+    }
+
+    /// Whether this execution plan contains immutable authored audio clips.
+    pub fn has_audio(&self) -> bool {
+        self.runtime.has_audio()
+    }
+
+    /// End of the finite authored audio range, independent of visual tracks.
+    pub fn audio_end_time(&self) -> Option<f64> {
+        self.runtime.audio_end_time()
+    }
+
+    /// Finite endpoint of the current immutable timeline, when the whole
+    /// session admits that observation. Immutable scalar tracks participate via
+    /// their existing event schedule. Source continuations and required
+    /// callbacks retain their explicit completion protocol.
+    ///
+    /// Hosts query this at admission, not on each frame. The answer comes from
+    /// the existing scheduler and does not create another duration authority.
+    pub fn finite_timeline_end_time(&self) -> Option<f64> {
+        if self.has_required_callbacks()
+            || self.pending_segment_completion.is_some()
+            || self.derived_display_plan.is_some()
+        {
+            return None;
+        }
+        Some(
+            self.runtime
+                .finite_timeline_end_time()?
+                .max(self.signal_timeline.finite_end_time()?),
+        )
+    }
+
+    /// Device-neutral output instructions at the current committed scene time.
+    ///
+    /// This does not start a device, advance time, or grant playback admission.
+    /// A host must keep preparation silent and stop/reschedule its output on
+    /// pause, seek, replacement, or failure. The initial audible host profile
+    /// admits only a complete immutable plan without required callbacks.
+    pub fn audio_playback(
+        &self,
+    ) -> Result<
+        impl Iterator<Item = noon_runtime::AudioPlaybackClip<'_>>,
+        noon_runtime::AudioPlaybackError,
+    > {
+        self.runtime.audio_playback()
+    }
+
+    /// Read-only audio projection for one accepted authored-time sample or
+    /// immutable resource preparation across a real host boundary.
+    pub fn audio_playback_at(
+        &self,
+        time: f64,
+    ) -> Result<
+        impl Iterator<Item = noon_runtime::AudioPlaybackClip<'_>>,
+        noon_runtime::AudioPlaybackError,
+    > {
+        self.runtime.audio_playback_at(time)
+    }
+
+    /// Retain immutable audio dependencies and allocate reusable bounded scratch.
+    ///
+    /// The returned mixer shares PCM with this plan and can outlive the session.
+    /// Its block queries allocate nothing and do not evaluate the scene. This
+    /// does not admit playback or create a clock; hosts must keep preparation
+    /// silent and retire the mixer on execution replacement.
+    pub fn prepare_audio_mix(
+        &self,
+        format: noon_runtime::AudioMixFormat,
+        max_block_frames: usize,
+    ) -> Result<noon_runtime::PreparedAudioMix, noon_runtime::AudioMixError> {
+        self.runtime.prepare_audio_mix(format, max_block_frames)
+    }
+
+    /// Mix a bounded block from the immutable authored PCM and clip definitions.
+    ///
+    /// `scene_start` is the absolute scene time at output frame zero;
+    /// `first_output_frame` is an integer audio-frame offset from that origin.
+    /// This does not evaluate the visual runtime, consume a publication or use
+    /// viewer mute/volume. Output remains unchanged if validation or mixing fails.
+    pub fn mix_audio_block(
+        &self,
+        scene_start: f64,
+        first_output_frame: u64,
+        format: noon_runtime::AudioMixFormat,
+        output: &mut [f32],
+    ) -> Result<(), noon_runtime::AudioMixError> {
+        self.runtime
+            .mix_audio_block(scene_start, first_output_frame, format, output)
     }
 
     /// Current renderer-facing frame with derived Text/family animation state.
@@ -1317,20 +1421,20 @@ impl ExecutionSession {
 
     /// Active inset views derived from ordinary objects in the current frame epoch.
     ///
-    /// The authoritative semantic relation is resolved only when topology changes.
+    /// The relation is lowered with the execution revision, including replay.
     /// Per-frame work is therefore bounded by active views and reads the frame and
     /// display rows from the same already-evaluated runtime frame.
     pub fn inset_2d_views(
         &self,
     ) -> Result<Vec<noon_core::Inset2DViewState>, ExecutionSessionInset2DError> {
-        self.inset_2d_views
-            .iter()
-            .filter(|binding| {
+        self.runtime
+            .inset_2d_views()
+            .filter(|(display, _)| {
                 self.runtime
-                    .frame_index_for_object(binding.display)
-                    .is_some_and(|index| self.runtime.frame().is_present(index))
+                    .frame_index_for_object(*display)
+                    .is_some_and(|index| self.runtime.frame().is_drawable(index))
             })
-            .map(|binding| {
+            .map(|(display_id, binding)| {
                 let camera_object = self.runtime.effective_object(binding.camera_frame).ok_or(
                     ExecutionSessionInset2DError::MissingCameraFrame {
                         object: binding.camera_frame,
@@ -1344,11 +1448,10 @@ impl ExecutionSession {
                     .ok_or(ExecutionSessionInset2DError::InvalidCameraFrame {
                         object: binding.camera_frame,
                     })?;
-                let display = self.runtime.effective_object(binding.display).ok_or(
-                    ExecutionSessionInset2DError::MissingDisplay {
-                        object: binding.display,
-                    },
-                )?;
+                let display = self
+                    .runtime
+                    .effective_object(display_id)
+                    .ok_or(ExecutionSessionInset2DError::MissingDisplay { object: display_id })?;
                 let size = match display.geometry() {
                     Some(noon_core::GeometryRef::Rectangle { size })
                         if display.transform.translation.x.is_finite()
@@ -1365,18 +1468,18 @@ impl ExecutionSession {
                     }
                     _ => {
                         return Err(ExecutionSessionInset2DError::InvalidDisplay {
-                            object: binding.display,
+                            object: display_id,
                         });
                     }
                 };
                 if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
                     return Err(ExecutionSessionInset2DError::InvalidDisplay {
-                        object: binding.display,
+                        object: display_id,
                     });
                 }
                 Ok(noon_core::Inset2DViewState {
                     camera_frame: binding.camera_frame,
-                    display: binding.display,
+                    display: display_id,
                     camera,
                     display_center: display.transform.translation,
                     display_size: size,
@@ -1394,25 +1497,6 @@ impl ExecutionSession {
                 })
             })
             .collect()
-    }
-
-    fn sync_inset_2d_view_bindings(&mut self, store: &SemanticStore) {
-        self.inset_2d_views = store
-            .inset_2d_views()
-            .filter(|(display, role)| {
-                self.reachability.is_reachable(*display)
-                    && self.reachability.is_reachable(role.camera_frame)
-            })
-            .filter_map(|(display, role)| {
-                Some(Inset2DExecutionBinding {
-                    camera_frame: self
-                        .execution_index
-                        .execution_object_id(role.camera_frame)?,
-                    display: self.execution_index.execution_object_id(display)?,
-                    capture_own_display: role.capture_own_display,
-                })
-            })
-            .collect();
     }
 
     fn sync_spatial_index(&mut self) {
@@ -1596,7 +1680,7 @@ impl ExecutionSession {
     /// duration in an authoring facade.
     pub fn activate_animation(
         &mut self,
-        store: &SemanticStore,
+        store: &mut SemanticStore,
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<&FrameState, ExecutionSessionAnimationError> {
@@ -1610,122 +1694,24 @@ impl ExecutionSession {
     /// declaration once; the segment is constructed directly from that resolved projection's
     /// `start_time` / `run_time`; affine payload lowering captures each target's effective
     /// runtime transform at most once; and the session attaches execution-local track identity.
-    /// All emitted tracks are preflighted and published as one execution transaction,
-    /// so a failed activation cannot expose a partial timeline or continuation boundary.
+    /// Required neutral effect attachments and emitted tracks are prepared together
+    /// through the same semantic/execution publication as live declarations. The
+    /// supplied declaration retains its identity; a failed activation publishes no
+    /// partial attachment, timeline, or continuation boundary.
     pub fn activate_animation_segment(
         &mut self,
-        store: &SemanticStore,
+        store: &mut SemanticStore,
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
-        let schedule = lower_semantic_animation_schedule(
+        self.declare_and_activate_prepared_animation(
             store,
-            &self.execution_index,
+            SemanticMutationTransaction::new(),
             root,
-            self.runtime.frame().time,
             play_options,
-        )?;
-        let mut segment =
-            ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
-        let mut tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
-            let index = self.runtime.frame_index_for_object(object)?;
-            let frame = self.runtime.frame();
-            let row = frame.objects.get(index)?;
-            Some(EffectiveAnimationProperties {
-                glow: row.glow.as_deref().copied(),
-                z_index: row.z_index,
-                transform: row.transform,
-                style: row.style,
-                appearance: row.appearance,
-                reveal: *frame.reveals.get(index)?,
-                world_transform: row.world_transform(),
-                camera_profile: row.camera_profile(),
-            })
-        })?;
-        let path_tracks =
-            lower_semantic_path_motion_tracks(store, &schedule, tracks.tracks(), |object| {
-                if self.runtime.object_has_effective_driver(object) {
-                    return None;
-                }
-                let index = self.runtime.frame_index_for_object(object)?;
-                let row = self.runtime.frame().objects.get(index)?;
-                let bounds_center = self.runtime.effective_object_bounds(object)?.center();
-                Some(PathMotionActivationProperties {
-                    transform: row.transform,
-                    bounds_center,
-                })
-            })?;
-        tracks.append(path_tracks);
-        let family_animations = noon_compile::lower_semantic_text_glyph_animations_with_tracks(
-            store,
-            &schedule,
-            tracks.tracks(),
+            None,
         )
-        .map_err(ExecutionSessionAnimationError::TextGlyph)?;
-        if tracks.is_empty() && family_animations.is_empty() {
-            return Ok(segment);
-        }
-
-        let mut next_track_id = self.next_activation_track_id;
-        let mut definitions = Vec::with_capacity(tracks.len());
-        let mut completions = Vec::with_capacity(tracks.len());
-        for track in tracks.tracks() {
-            let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
-            let track_id = TrackId::new(raw_id);
-            let definition = track.with_track_id(track_id)?;
-            let end_time = execution_track_end_time(&definition)
-                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
-            completions.push(SegmentCompletionEntry {
-                semantic_object: track.target,
-                completion: track.completion.clone(),
-                execution_object: track.execution_object_id,
-                property: track.property,
-                track: track_id,
-                end_time,
-                retain_effective: false,
-            });
-            definitions.push(definition);
-            next_track_id = raw_id.checked_add(1);
-        }
-
-        self.runtime
-            .preflight_reconcilable_track_additions(&definitions)
-            .map_err(ExecutionSessionAnimationError::Publication)?;
-        let raw_sequence = self
-            .next_segment_sequence
-            .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
-        let next_segment_sequence = raw_sequence.checked_add(1);
-        let transaction = ExecutionMutationTransaction::from_mutations(
-            definitions.into_iter().map(ExecutionPatch::AddTrack).chain(
-                family_animations
-                    .into_iter()
-                    .map(ExecutionPatch::AddFamilyAnimation),
-            ),
-        );
-        self.runtime.apply_execution_transaction(&transaction)?;
-        let token = ExecutionSegmentToken::new(
-            self.runtime.runtime_identity(),
-            ExecutionSegmentSequence::new(raw_sequence),
-        );
-        self.next_segment_sequence = next_segment_sequence;
-        segment = segment.with_completion_token(token);
-        self.pending_segment_completion = Some(PendingSegmentCompletion::new(
-            token,
-            segment.end_time(),
-            store.scene_revision(),
-            PendingSegmentCompletionKind {
-                lifecycle_root: None,
-                lifecycle_removals: Vec::new(),
-                family_transform: None,
-                family_colors: Vec::new(),
-                family_styles: Vec::new(),
-                object_entries: completions,
-                scalar_entries: Vec::new(),
-            },
-        ));
-        self.next_activation_track_id = next_track_id;
-        Ok(segment)
     }
 
     /// Declare and activate one supported transform/style animation against this session.
@@ -2141,6 +2127,8 @@ impl ExecutionSession {
         let mut callback_intervals = Vec::new();
         let mut family_colors = std::collections::BTreeMap::new();
         let mut family_styles = std::collections::BTreeMap::new();
+        let specialized = self.specialize_layout_replace(store, request, play_options);
+        let request = specialized.as_ref().unwrap_or(request);
         let animation = self.stage_composition_request(
             store,
             root,
@@ -2341,13 +2329,17 @@ impl ExecutionSession {
                 }
                 Ok(declaration.create_camera_profile_animation(*target, *profile, *options))
             }
-            SemanticCompositionRequest::CallbackInterval { options, .. } => {
-                let SemanticCompositionRequest::CallbackInterval {
-                    target, callback, ..
-                } = request
-                else {
-                    unreachable!()
-                };
+            SemanticCompositionRequest::CallbackInterval {
+                target,
+                callback,
+                options,
+            }
+            | SemanticCompositionRequest::LayoutReplaceInterval {
+                target,
+                fallback: callback,
+                options,
+                ..
+            } => {
                 if !self.reachability.is_object_reachable(*target) {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "callback interval target must belong to the execution domain".into(),
@@ -2361,6 +2353,19 @@ impl ExecutionSession {
                 let marker = declaration.create_wait_animation(options.run_time.unwrap_or(1.0));
                 callback_intervals.push((marker, *target, *callback));
                 Ok(marker)
+            }
+            SemanticCompositionRequest::ResolvedLayoutReplace {
+                target,
+                endpoints,
+                options,
+            } => {
+                let (from, to) = endpoints.as_ref();
+                admit(*target, admitted)?;
+                let end = declaration.create_node(SemanticNodeCreation::object(to.clone()));
+                Ok(
+                    declaration
+                        .create_transform_animation_with_start(*target, end, *from, *options),
+                )
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
                 source,
@@ -2637,6 +2642,11 @@ impl ExecutionSession {
             } => {
                 self.stage_indicate_leaf(*target, *indication, *scale_center, *options, declaration)
             }
+            SemanticCompositionRequest::GlowPulse {
+                target,
+                intensity,
+                options,
+            } => self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration),
             SemanticCompositionRequest::FamilyIndicate {
                 target,
                 indication,
@@ -3262,6 +3272,9 @@ impl ExecutionSession {
                     });
                 }
                 Ok(declaration.create_move_along_path_animation(*target, *path, *options))
+            }
+            SemanticCompositionRequest::GlowPulse { target, intensity, options } => {
+                self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration)
             }
             SemanticCompositionRequest::WorldTransform { target, transform, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -4040,7 +4053,7 @@ impl ExecutionSession {
             .clone();
         let copy = declaration.create_node(SemanticNodeCreation::object(state));
         store
-            .copy_effects_into(target, copy, declaration)
+            .snapshot_effects_into(target, copy, declaration)
             .map_err(|error| ExecutionSessionAnimationError::TargetState {
                 target,
                 error: error.into(),
@@ -4109,18 +4122,19 @@ impl ExecutionSession {
         &mut self,
         store: &mut SemanticStore,
         mut declaration: SemanticMutationTransaction,
-        root: noon_core::SemanticLocalNodeToken,
+        root: impl Into<SemanticTransactionNodeRef>,
         play_options: AnimationOptions,
         lifecycle: Option<PreparedAnimationLifecycle>,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        let root = root.into();
         let callback_markers = match lifecycle.as_ref() {
             Some(PreparedAnimationLifecycle::Composition {
                 callback_intervals, ..
             }) => callback_intervals.as_slice(),
             _ => &[],
         };
-        // Ordinary animation keeps its single preparation path. Only finite
-        // host-callback children need this schedule-derived interval preflight.
+        // Finite host-callback children use this schedule-derived interval
+        // preflight before the ordinary attachment and track preparation below.
         if !callback_markers.is_empty() {
             let (callback_timings, recovered_declaration) = {
                 let preliminary = declaration.prepare(store).map_err(|error| {
@@ -4172,18 +4186,77 @@ impl ExecutionSession {
                 );
             }
         }
-        let prepared = declaration.prepare(store).map_err(|error| {
+        let mut prepared = declaration.prepare(store).map_err(|error| {
             ExecutionSessionAnimationError::AuthoredPublication(
                 ExecutionSessionPublicationError::Semantic(error),
             )
         })?;
-        let schedule = lower_prepared_semantic_animation_schedule(
+        let mut schedule = lower_prepared_semantic_animation_schedule(
             &prepared,
             &self.execution_index,
             root,
             self.runtime.frame().time,
             play_options,
         )?;
+        if lifecycle.is_none() {
+            // The prepared payload lowerer also serves root-aware introducing
+            // and removing activations. A generic existing declaration still
+            // needs that lifecycle proof before it may change membership.
+            if let Some(leaf) = schedule.leaves().iter().find(|leaf| {
+                matches!(
+                    leaf.payload,
+                    PreparedSemanticScheduledAnimationPayload::Fade { .. }
+                        | PreparedSemanticScheduledAnimationPayload::AffineLifecycle { .. }
+                        | PreparedSemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
+                        | PreparedSemanticScheduledAnimationPayload::Create
+                        | PreparedSemanticScheduledAnimationPayload::Add
+                )
+            }) {
+                return Err(if let Some(animation) = leaf.animation.existing() {
+                    SemanticAffineAnimationTrackError::UnsupportedLifecycle {
+                        animation,
+                        remover: leaf.options.remover,
+                        introducer: leaf.options.introducer,
+                    }
+                    .into()
+                } else {
+                    PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                        animation: leaf.animation,
+                        remover: leaf.options.remover,
+                        introducer: leaf.options.introducer,
+                    }
+                    .into()
+                });
+            }
+        }
+        let missing_glow = self.missing_glow_pulse_attachments(&prepared, &schedule)?;
+        let mut temporary_glow = std::collections::BTreeSet::new();
+        if !missing_glow.is_empty() {
+            let mut declaration = prepared.into_transaction();
+            let neutral = noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+                .expect("zero intensity is a valid neutral glow");
+            let attachments = missing_glow
+                .into_iter()
+                .map(|owner| declaration.create_effect(owner, "glow", neutral))
+                .collect::<Vec<_>>();
+            prepared = declaration.prepare(store).map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(error),
+                )
+            })?;
+            temporary_glow.extend(attachments.into_iter().map(|token| {
+                prepared
+                    .planned_node_id(token)
+                    .expect("prepared temporary attachment has an allocator-proven identity")
+            }));
+            schedule = lower_prepared_semantic_animation_schedule(
+                &prepared,
+                &self.execution_index,
+                root,
+                self.runtime.frame().time,
+                play_options,
+            )?;
+        }
         let scalar_tracks = derive_prepared_scalar_animation_tracks(&prepared, &schedule)?;
         let prepared = prepared
             .with_scalar_signal_tracks(scalar_tracks)
@@ -4460,6 +4533,7 @@ impl ExecutionSession {
             .saturating_add(family_transform_tracks.len());
         let mut definitions = Vec::with_capacity(track_capacity);
         let mut completions = Vec::with_capacity(track_capacity);
+        let mut glow_pulse_attachments = BTreeMap::new();
         for track in &activation_tracks {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
@@ -4468,6 +4542,12 @@ impl ExecutionSession {
                 .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
             let end_time = execution_track_end_time(&definition)
                 .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
+            glow_pulse::record_attachment_completion(
+                &mut glow_pulse_attachments,
+                track.target,
+                &definition,
+                &temporary_glow,
+            );
             completions.push((
                 track.target,
                 track.completion.clone(),
@@ -4501,6 +4581,8 @@ impl ExecutionSession {
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
         }
+
+        glow_pulse::adopt_ordinary_parameter_tracks(&mut glow_pulse_attachments, &definitions);
 
         // Staged effect enrollment is not yet resident while this preflight
         // runs. Pass only the exact allocator-proven new attachment generations
@@ -4625,7 +4707,10 @@ impl ExecutionSession {
             )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
         self.commit_scalar_timeline_append(scalar_timeline);
-        debug_assert!(result.resolve(root).is_some());
+        debug_assert!(match root {
+            SemanticTransactionNodeRef::Existing(node) => store.node(node).is_some(),
+            SemanticTransactionNodeRef::Pending(token) => result.resolve(token).is_some(),
+        });
         let activation_scene_revision = self.publication_context().scene_revision();
         let family_transform_completion =
             schedule.family_transforms().first().and_then(|transform| {
@@ -4704,30 +4789,37 @@ impl ExecutionSession {
                 segment = segment.with_family_replacement(root, source, target);
             }
             self.next_segment_sequence = next_segment_sequence;
-            self.pending_segment_completion = Some(PendingSegmentCompletion::new(
-                token,
-                segment.end_time(),
-                activation_scene_revision,
-                PendingSegmentCompletionKind {
-                    lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
-                    lifecycle_removals: match lifecycle.as_ref() {
-                        Some(PreparedAnimationLifecycle::Composition { removals, .. }) => removals
-                            .iter()
-                            .map(|(root, target)| (*root, resolve_committed_node(*target, &result)))
-                            .collect(),
-                        _ => lifecycle
-                            .as_ref()
-                            .and_then(|lifecycle| lifecycle.removal())
-                            .into_iter()
-                            .collect(),
+            self.pending_segment_completion = Some(
+                PendingSegmentCompletion::new(
+                    token,
+                    segment.end_time(),
+                    activation_scene_revision,
+                    PendingSegmentCompletionKind {
+                        lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
+                        lifecycle_removals: match lifecycle.as_ref() {
+                            Some(PreparedAnimationLifecycle::Composition { removals, .. }) => {
+                                removals
+                                    .iter()
+                                    .map(|(root, target)| {
+                                        (*root, resolve_committed_node(*target, &result))
+                                    })
+                                    .collect()
+                            }
+                            _ => lifecycle
+                                .as_ref()
+                                .and_then(|lifecycle| lifecycle.removal())
+                                .into_iter()
+                                .collect(),
+                        },
+                        family_transform: family_transform_completion,
+                        family_colors,
+                        family_styles,
+                        object_entries: entries,
+                        scalar_entries: scalar_completions.into_values().collect(),
                     },
-                    family_transform: family_transform_completion,
-                    family_colors,
-                    family_styles,
-                    object_entries: entries,
-                    scalar_entries: scalar_completions.into_values().collect(),
-                },
-            ));
+                )
+                .with_glow_pulse_attachments(glow_pulse_attachments),
+            );
         }
         Ok(segment)
     }
@@ -5057,7 +5149,7 @@ mod tests {
         session.take_frame_changes();
 
         let segment = session
-            .activate_animation_segment(&store, animation, linear_second())
+            .activate_animation_segment(&mut store, animation, linear_second())
             .unwrap();
         assert_eq!(
             session.wake_state().timeline(),
@@ -5099,7 +5191,7 @@ mod tests {
 
         let segment = session
             .activate_animation_segment(
-                &store,
+                &mut store,
                 animation,
                 AnimationOptions::new()
                     .run_time(1.5)
@@ -5176,7 +5268,7 @@ mod tests {
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let segment = session
-            .activate_animation_segment(&store, sequence, AnimationOptions::new())
+            .activate_animation_segment(&mut store, sequence, AnimationOptions::new())
             .unwrap();
         assert_eq!(segment.start_time(), 0.0);
         assert_eq!(segment.end_time(), 3.0);
@@ -5214,7 +5306,7 @@ mod tests {
         let before = session.publication_context();
 
         assert_eq!(
-            session.activate_animation_segment(&store, animation, linear_second()),
+            session.activate_animation_segment(&mut store, animation, linear_second()),
             Err(ExecutionSessionAnimationError::Payload(
                 SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation,
@@ -5283,7 +5375,7 @@ mod tests {
         let before = session.frame().clone();
 
         assert_eq!(
-            session.activate_animation_segment(&store, animation, linear_second()),
+            session.activate_animation_segment(&mut store, animation, linear_second()),
             Err(ExecutionSessionAnimationError::Segment(
                 ExecutionSegmentError::EndTimeOverflow {
                     start_time: f64::MAX,
@@ -5453,7 +5545,7 @@ mod tests {
         );
 
         session
-            .activate_animation(&store, animation, linear_second())
+            .activate_animation(&mut store, animation, linear_second())
             .unwrap();
         session.seek(0.5).unwrap();
         assert_eq!(
@@ -5489,7 +5581,7 @@ mod tests {
         transaction.apply(&mut store).unwrap();
 
         assert_eq!(
-            session.activate_animation_segment(&store, animation, linear_second()),
+            session.activate_animation_segment(&mut store, animation, linear_second()),
             Err(ExecutionSessionAnimationError::StaleSceneRevision {
                 expected: context.scene_revision(),
                 actual: store.scene_revision(),
@@ -5981,7 +6073,7 @@ mod tests {
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let first_segment = session
-            .activate_animation_segment(&store, first, linear_second())
+            .activate_animation_segment(&mut store, first, linear_second())
             .unwrap();
         session.seek(1.0).unwrap();
         assert_eq!(
@@ -5995,7 +6087,7 @@ mod tests {
         session.complete_segment(&mut store, first_segment).unwrap();
 
         session
-            .activate_animation_segment(&store, second, linear_second())
+            .activate_animation_segment(&mut store, second, linear_second())
             .unwrap();
         session.seek(1.5).unwrap();
 

@@ -659,6 +659,71 @@ where
             )?;
             continue;
         }
+        if let SemanticScheduledAnimationPayload::GlowPulse { intensity } = leaf.payload {
+            super::glow_pulse::validate_options(leaf.options).map_err(|error| {
+                SemanticAffineAnimationTrackError::GlowTarget {
+                    animation: leaf.animation,
+                    error,
+                }
+            })?;
+            let source = object_state(store, leaf, leaf.target)?;
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+                animation: leaf.animation,
+                error,
+            };
+            let attachments = store
+                .animation_effect_snapshot(leaf.target)
+                .map_err(super::glow_target::GlowTargetLoweringError::Store)
+                .map_err(glow_error)?;
+            let values = super::glow_pulse::values(
+                store,
+                leaf.target,
+                source,
+                &attachments,
+                from.glow,
+                intensity,
+            )
+            .map_err(glow_error)?;
+            super::glow_target::reserve(
+                &mut driven,
+                leaf.execution_object_id,
+                Property::GlowIntensity,
+                leaf.animation,
+            )
+            .map_err(|first_animation| {
+                SemanticAffineAnimationTrackError::GlowDriverConflict {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    property: Property::GlowIntensity,
+                }
+            })?;
+            let mut timing = leaf.timing;
+            timing.reverse_rate_function = leaf.options.reverse_rate_function;
+            tracks.push(SemanticAffineAnimationTrack {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                property: Property::GlowIntensity,
+                completion: super::glow_target::completion(&values, timing).map_err(glow_error)?,
+                values,
+                timing,
+                time_map: leaf.time_map.clone(),
+            });
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -855,6 +920,7 @@ where
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::TextGlyph { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
+            | SemanticScheduledAnimationPayload::GlowPulse { .. }
             | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
@@ -884,13 +950,18 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_transform_channels(
+        let start = store
+            .semantic_animation_state(leaf.animation)
+            .expect("scheduled animation was validated")
+            .transform_start();
+        let channels = lower_transform_channels_with_start(
             store,
             source,
             target,
             from,
             interpolation,
             leaf.options.path_arc,
+            start,
         )
         .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
         let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
@@ -917,11 +988,22 @@ where
             super::glow_target::validate_sources(store, leaf.target, source, target_state, target)
                 .map_err(glow_error)?;
         }
-        let glow_channels =
-            super::glow_target::channels(snapshot, &source_effects, &target_effects, from.glow)
-                .map_err(glow_error)?;
+        let glow_channels = super::glow_target::channels(
+            snapshot,
+            &source_effects,
+            &target_effects,
+            from.glow,
+            complete_priority,
+            &Default::default(),
+        )
+        .map_err(glow_error)?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            let track = tracks.last_mut().expect("pushed Transform channel");
+            if let Some(completion) = explicit_start_completion(track.property, track.timing, start)
+            {
+                track.completion = completion;
+            }
         }
         for (property, values) in glow_channels {
             super::glow_target::reserve(
@@ -1216,6 +1298,15 @@ fn validate_leaf_matches_declaration(
                     angle: *angle,
                     hold_origin: *hold_origin,
                 } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::GlowPulse { target, intensity }
+            if *target == leaf.target
+                && leaf.payload
+                    == SemanticScheduledAnimationPayload::GlowPulse {
+                        intensity: *intensity,
+                    } =>
         {
             Ok(())
         }
@@ -2343,6 +2434,76 @@ pub fn lower_indicate_channels_with_bindings(
         &mut channels,
     )?;
     Ok(channels)
+}
+
+/// Explicit affine starts also need constant channels where the start and end
+/// agree but differ from the activation frame. Merge those from the ordinary
+/// lowering result rather than introducing another channel/value algorithm.
+pub(super) fn lower_transform_channels_with_start(
+    store: &SemanticStore,
+    source: &noon_core::SemanticObjectState,
+    target: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    interpolation: noon_core::SemanticTransformInterpolation,
+    path_arc: f64,
+    start: Option<noon_core::SemanticTransform2_5D>,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    let Some(start) = start else {
+        return lower_transform_channels(store, source, target, from, interpolation, path_arc);
+    };
+    let mut state = source.clone();
+    state.set_transform(start.into());
+    let mut captured = from;
+    captured.transform = lower_semantic_transform_value(&state)
+        .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
+    let mut channels =
+        lower_transform_channels(store, source, target, captured, interpolation, path_arc)?;
+    for mut channel in
+        lower_transform_channels(store, source, target, from, interpolation, path_arc)?
+    {
+        if channels
+            .iter()
+            .any(|existing| existing.property == channel.property)
+        {
+            continue;
+        }
+        match &mut channel.values {
+            TrackValues::Vec2 { from, to } => *from = *to,
+            TrackValues::Scalar { from, to } => *from = *to,
+            _ => return Err(AffinePayloadIssue::UnsupportedContentChange),
+        }
+        channels.push(channel);
+    }
+    Ok(channels)
+}
+
+/// A returning explicit-start Transform must persist its specified start rather
+/// than reveal an unrelated authored base at completion.
+pub(super) fn explicit_start_completion(
+    property: Property,
+    timing: noon_core::TrackTiming,
+    start: Option<noon_core::SemanticTransform2_5D>,
+) -> Option<SemanticAnimationCompletion> {
+    let start = start?;
+    if timing.terminal_progress() != 0.0 {
+        return None;
+    }
+    let (property, value) = match property {
+        Property::Position => (
+            SemanticObjectProperty::Translation,
+            SemanticSignalValue::Vec3(start.translation),
+        ),
+        Property::Scale => (
+            SemanticObjectProperty::Scale,
+            SemanticSignalValue::Vec3(start.scale),
+        ),
+        Property::Rotation => (
+            SemanticObjectProperty::RotationZ,
+            SemanticSignalValue::Scalar(start.rotation_z),
+        ),
+        _ => return None,
+    };
+    Some(SemanticAnimationCompletion::Property { property, value })
 }
 
 pub(super) fn lower_transform_channels(

@@ -1,8 +1,44 @@
-//! Time-qualified compiled click actions in the existing session input lane.
+//! Source-declared click actions projected into the existing session input lane.
 use super::{ExecutionSession, ExecutionSessionInputError, PointerSelectionClick};
+use noon_core::{
+    PlaybackControl, SemanticClickAction, SemanticMutationImpact, SemanticNodeId, SemanticStore,
+};
 use noon_runtime::PreparedTransientAnimation;
+use std::collections::BTreeMap;
+
+// Playback controls currently admit only an immutable live session. Indicate
+// bindings live in ordinary compiled rows and follow retained history.
+#[derive(Clone, Debug, Default)]
+pub(super) struct InteractionBindings {
+    bindings: BTreeMap<SemanticNodeId, PlaybackControl>,
+}
+
+impl InteractionBindings {
+    pub(super) fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+
+    fn insert(&mut self, node: SemanticNodeId, binding: PlaybackControl) {
+        self.bindings.insert(node, binding);
+    }
+
+    fn remove(&mut self, node: SemanticNodeId) {
+        self.bindings.remove(&node);
+    }
+}
+
+pub(super) enum PreparedClickAction {
+    Animation(PreparedTransientAnimation),
+    Playback(PlaybackControl),
+}
 
 impl ExecutionSession {
+    /// Whether this immutable initial plan declares scene playback controls.
+    /// Presence is maintained with the existing local binding projection.
+    pub fn has_playback_controls(&self) -> bool {
+        !self.interaction_bindings.is_empty()
+    }
+
     pub fn interactions_active(&self) -> bool {
         self.runtime.interactions_active()
     }
@@ -17,32 +53,106 @@ impl ExecutionSession {
             .map_err(ExecutionSessionInputError::Interaction)
     }
 
-    pub(super) fn prepare_click_animation(
+    pub(super) fn initialize_interaction_bindings(&mut self, store: &SemanticStore) {
+        let nodes: Vec<_> = self
+            .runtime
+            .painter_order()
+            .iter()
+            .filter_map(|&index| {
+                self.execution_index
+                    .semantic_object_id(self.frame().objects[index as usize].id)
+            })
+            .collect();
+        for node in nodes {
+            self.refresh_interaction_binding(store, node);
+        }
+    }
+
+    fn refresh_interaction_binding(&mut self, store: &SemanticStore, node: SemanticNodeId) {
+        let binding = store
+            .semantic_object_state_checked(node)
+            .ok()
+            .filter(|state| state.signal_bindings().is_empty())
+            .and_then(|state| match state.click_action() {
+                Some(SemanticClickAction::Playback(control)) => Some(control),
+                _ => None,
+            });
+        if let Some(binding) = binding.filter(|_| self.semantic_object_is_reachable(node)) {
+            self.interaction_bindings.insert(node, binding);
+        } else {
+            self.interaction_bindings.remove(node);
+        }
+    }
+
+    pub(super) fn refresh_interaction_bindings(
+        &mut self,
+        store: &SemanticStore,
+        result: &noon_core::SemanticMutationTransactionResult,
+        entered: &[noon_core::ObjectId],
+        exited: &[noon_core::ObjectId],
+    ) {
+        for &object in exited {
+            if let Some(node) = self.execution_index.semantic_object_id(object) {
+                self.interaction_bindings.remove(node);
+            }
+        }
+        for &object in entered {
+            if let Some(node) = self.execution_index.semantic_object_id(object) {
+                self.refresh_interaction_binding(store, node);
+            }
+        }
+        for impact in result.impacts() {
+            match *impact {
+                SemanticMutationImpact::ClickAction { object }
+                | SemanticMutationImpact::ObjectContent { object }
+                | SemanticMutationImpact::Subscription { object, .. } => {
+                    self.refresh_interaction_binding(store, object)
+                }
+                SemanticMutationImpact::NodeRemoved { node } => {
+                    self.interaction_bindings.remove(node);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub(super) fn prepare_click_action(
         &self,
         click: Option<PointerSelectionClick>,
-    ) -> Result<Option<PreparedTransientAnimation>, ExecutionSessionInputError> {
+    ) -> Result<Option<PreparedClickAction>, ExecutionSessionInputError> {
         let Some(node) = click.and_then(|click| click.target()) else {
             return Ok(None);
         };
-        // Runtime-owned channel arbitration admits disjoint playback and defers
-        // an effect when an authored/native driver owns one of its channels.
+        // Keep the current conservative callback/effective-driver admission.
+        // Indicate also delegates channel arbitration to the ordinary Runtime.
         if self.pending_callback.is_some() {
             return Ok(None);
         }
         let Some(object) = self.interaction_execution_object_id(node) else {
             return Ok(None);
         };
-        let Some(binding) = self.runtime.click_indicate_binding(object) else {
-            return Ok(None);
-        };
         if self.runtime.object_has_effective_driver(object) {
             return Ok(None);
         }
-        self.runtime
-            .prepare_click_indicate(object, binding)
-            .map_err(ExecutionSessionInputError::Interaction)
+        // Indicate is selected from the time-qualified compiled row, so a
+        // historical reader never consults the producer's current binding.
+        if let Some(indication) = self.runtime.click_indicate_binding(object) {
+            return self
+                .runtime
+                .prepare_click_indicate(object, indication)
+                .map(|animation| animation.map(PreparedClickAction::Animation))
+                .map_err(ExecutionSessionInputError::Interaction);
+        }
+        Ok(self
+            .interaction_bindings
+            .bindings
+            .get(&node)
+            .copied()
+            .map(PreparedClickAction::Playback))
     }
 }
 
+#[cfg(test)]
+mod playback_tests;
 #[cfg(test)]
 mod tests;

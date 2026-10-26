@@ -33,6 +33,12 @@ on:
       - "scripts/manim-family-*"
       - "fixtures/manim-v0.21/family-*"
       - "scripts/painter-order-browser-smoke.mjs"
+      - "scripts/background-audio-smoke.mjs"
+      - "scripts/browser-audio-observation.mjs"
+      - "scripts/python-background-audio-smoke.mjs"
+      - "scripts/export-python-scene.mjs"
+      - "web/background-audio*"
+      - "web/worker-audio-device.js"
       - "scripts/manim-shape-matcher-current-bounds.mjs"
       - "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs"
       - "web/python/**"
@@ -145,6 +151,9 @@ jobs:
           version: v0.16.0
 
       # PR Fast Gate runs these same commands at the merge checkout.
+      - name: Install native audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+
       - name: Format workspace
         if: github.event_name != 'pull_request'
         run: cargo fmt --all -- --check
@@ -209,7 +218,11 @@ jobs:
         run: |
           cargo run -p noon --example glow_scene_playback
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact authored_glow_pulse_pixels_restore_and_replay --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -345,6 +358,28 @@ jobs:
         run: node scripts/shared-authoring-smoke.mjs
       - name: Test native browser input signals
         run: node scripts/native-input-smoke.mjs
+      - name: Test direct background audio and scene controls
+        run: timeout --signal=TERM 240s node scripts/background-audio-smoke.mjs
+      - name: Retain direct background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: background-audio-full-ci
+          path: browser-smoke-artifacts/background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Test Python gallery background audio
+        env:
+          NOON_PYTHON_AUDIO_ARTIFACTS: ${{ runner.temp }}/python-background-audio
+        run: timeout --signal=TERM 240s node scripts/python-background-audio-smoke.mjs
+      - name: Retain Python background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-background-audio-full-ci
+          path: ${{ runner.temp }}/python-background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Test Python updater callback bridge
         run: node scripts/updater-callback-smoke.mjs
       - name: Test engine/render worker transports

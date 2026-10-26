@@ -15,6 +15,10 @@ mod authoring_arc;
 mod authoring_arrow;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow_endpoints;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_audio;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_audio::*;
 #[cfg(target_arch = "wasm32")]
 mod authoring_bar_chart;
 #[cfg(target_arch = "wasm32")]
@@ -46,6 +50,8 @@ mod authoring_implicit_plotting;
 mod authoring_latex;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_latex::*;
+#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+mod audio_output;
 #[cfg(target_arch = "wasm32")]
 mod authoring_matrix;
 mod authoring_mobject;
@@ -72,10 +78,18 @@ mod authoring_synchronized_plotting;
 mod authoring_table;
 #[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+mod background_audio_example;
 #[cfg(any(target_arch = "wasm32", test))]
 mod browser_pointer_input;
 mod canonical_authoring_scene;
 mod clock;
+#[cfg(any(target_arch = "wasm32", test))]
+mod worker_audio;
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+pub use background_audio_example::*;
+#[cfg(all(target_arch = "wasm32", feature = "renderer"))]
+pub use worker_audio::*;
 mod determinism;
 #[cfg(all(
     feature = "renderer",
