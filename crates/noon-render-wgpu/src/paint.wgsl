@@ -55,4 +55,3 @@ fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
     if color.a <= 0.0 { return vec4<f32>(0.0); }
     return vec4<f32>(color.rgb / color.a, color.a * carrier.a);
 }
-
