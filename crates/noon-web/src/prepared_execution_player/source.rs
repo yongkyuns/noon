@@ -109,7 +109,11 @@ impl PreparedExecutionPlayer {
     /// only CapacityRequired is a recoverable rejection. The suffix is retained.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reservePrefixObjectCapacity))]
     pub fn reserve_prefix_object_capacity(&mut self, total: usize) -> Result<usize, String> {
-        if let Some(batch) = self.source.as_ref().and_then(|source| source.pending.as_ref()) {
+        if let Some(batch) = self
+            .source
+            .as_ref()
+            .and_then(|source| source.pending.as_ref())
+        {
             match self.preflight_append(batch) {
                 Ok(_) | Err(PrefixError::CapacityRequired { .. }) => {}
                 Err(error) => return Err(error.to_string()),
