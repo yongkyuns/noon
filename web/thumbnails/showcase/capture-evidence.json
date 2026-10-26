@@ -1,30 +1,30 @@
 {
-  "schema": 1,
-  "publication": "captured-preview",
-  "captureRevision": "ce5dbe43f3642c2266682d81bbe1fb9c004424b7",
-  "backend": "webgl",
-  "runtimeBuildIdentity": {
-    "schema": 1,
-    "sourceRevision": "ce5dbe43f3642c2266682d81bbe1fb9c004424b7",
-    "files": {
-      "worker": {
-        "path": "./python-worker.js",
-        "sha256": "fd230fb417a51573d23cf474f25898394050fb597980a502a0797922970c1d4b"
+  "schema": 2,
+  "publication": "captured-preview-catalog",
+  "builds": {
+    "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452": {
+      "schema": 1,
+      "sourceRevision": "ce5dbe43f3642c2266682d81bbe1fb9c004424b7",
+      "files": {
+        "worker": {
+          "path": "./python-worker.js",
+          "sha256": "fd230fb417a51573d23cf474f25898394050fb597980a502a0797922970c1d4b"
+        },
+        "wasm": {
+          "path": "./pkg/noon_web_bg.wasm",
+          "sha256": "74d305d5c92bc1c1a3b37bab84906dcfbaad5fca220199527450c647043ad073"
+        },
+        "glue": {
+          "path": "./pkg/noon_web.js",
+          "sha256": "dc2dc85f2fe21517e5088c0e8a700639fe748410122272940e466dd2e046ba99"
+        },
+        "verifier": {
+          "path": "./runtime-build-verifier.js",
+          "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+        }
       },
-      "wasm": {
-        "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "74d305d5c92bc1c1a3b37bab84906dcfbaad5fca220199527450c647043ad073"
-      },
-      "glue": {
-        "path": "./pkg/noon_web.js",
-        "sha256": "dc2dc85f2fe21517e5088c0e8a700639fe748410122272940e466dd2e046ba99"
-      },
-      "verifier": {
-        "path": "./runtime-build-verifier.js",
-        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
-      }
-    },
-    "buildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452"
+      "buildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452"
+    }
   },
   "posters": [
     {
@@ -46,7 +46,8 @@
         "sourceCompleted": true,
         "sourceState": "completed",
         "completionProbe": true
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-dynamic-scene",
@@ -65,7 +66,8 @@
         "publishedTime": 12.4,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-entrances-exits",
@@ -84,7 +86,8 @@
         "publishedTime": 2.9,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-timing",
@@ -103,7 +106,8 @@
         "publishedTime": 7.9,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-gpu-glow",
@@ -122,7 +126,8 @@
         "publishedTime": 11.4,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-group-slicing",
@@ -141,7 +146,8 @@
         "publishedTime": 4.8,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-bezier-paths",
@@ -160,7 +166,8 @@
         "publishedTime": 7.3,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-transform-ownership",
@@ -179,7 +186,8 @@
         "publishedTime": 7.2,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-shape-matching",
@@ -200,7 +208,8 @@
         "sourceCompleted": true,
         "sourceState": "completed",
         "completionProbe": true
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-ordered-reveal",
@@ -219,7 +228,8 @@
         "publishedTime": 6.9,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-text-math",
@@ -238,7 +248,8 @@
         "publishedTime": 5,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-code-blocks",
@@ -257,7 +268,8 @@
         "publishedTime": 5.5,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-latex-create",
@@ -276,7 +288,8 @@
         "publishedTime": 3.1,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-coordinate-plotting",
@@ -295,7 +308,8 @@
         "publishedTime": 5.65,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-spatial-scene",
@@ -314,7 +328,8 @@
         "publishedTime": 7.1,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-three-d-axes",
@@ -333,7 +348,8 @@
         "publishedTime": 5.7,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-linear-algebra",
@@ -352,7 +368,8 @@
         "publishedTime": 8.25,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-reactive-relationships",
@@ -371,7 +388,8 @@
         "publishedTime": 4.6,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-camera-follows-path",
@@ -390,7 +408,8 @@
         "publishedTime": 7.1,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-always-redraw",
@@ -409,7 +428,8 @@
         "publishedTime": 4,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-raster-images",
@@ -428,7 +448,8 @@
         "publishedTime": 6.35,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-pointer-selection",
@@ -530,7 +551,8 @@
           "pngSha256": "2cc40225be2d5984ec6fb72af4a5cc41c93b50f2d0d76e037a11562a74a32409",
           "pixelSha256": "6b9d3ae17e3eae9380dd258ffba878002af7eff96ff49d5f1cb3789a532aeb86"
         }
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-translation-drag",
@@ -643,7 +665,8 @@
           "pngSha256": "deb4f6cee916aa82cb3797ef6a6f22063a3ade0664ebefe18407abda49222a0e",
           "pixelSha256": "6d93e38b73ec505d89cb7a7749d36b17ca1fdae711e1de832576fdd9af20e70e"
         }
-      }
+      },
+      "backend": "webgl"
     },
     {
       "id": "showcase-triangle-light",
@@ -662,7 +685,8 @@
         "publishedTime": 15.6,
         "authoredDuration": null,
         "completionProbe": false
-      }
+      },
+      "backend": "webgl"
     }
   ]
 }

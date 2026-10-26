@@ -12,6 +12,7 @@ import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js"
 import { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";
 import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { assertCaptureTime, validateCaptureIntervals } from "./showcase-capture-checks.mjs";
+import { selectShowcaseEntries } from "./showcase-cases.mjs";
 
 const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
@@ -208,6 +209,7 @@ async function main() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
   const gallery = normalizeShowcaseManifest(manifest);
+  const entries = selectShowcaseEntries(manifest.entries, process.env.NOON_SHOWCASE_CASES);
   const normalizedById = new Map(gallery.examples.map((entry) => [entry.id, entry]));
   const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
   assert.ok(["webgl", "webgpu"].includes(backend));
@@ -217,7 +219,8 @@ async function main() {
   const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
   const report = {
     purpose: "normal-playback video and replay review; recorded wall time is not a performance benchmark",
-    viewport: { width: 1600, height: 1000 }, backendRequested: backend, results: [],
+    viewport: { width: 1600, height: 1000 }, backendRequested: backend,
+    selectedCaseIds: entries.map(entry => entry.id), results: [],
   };
   await mkdir(output, { recursive: true });
   const server = await serveRepository(root, 0);
@@ -243,7 +246,7 @@ async function main() {
     const identity = await context.request.get(`${base}/runtime-build-identity.json`);
     assert.ok(identity.ok(), "served build identity is missing");
     report.servedBuildIdentity = await identity.json();
-    if (manifest.entries.some(entry => entry.id === "showcase-gpu-glow")) {
+    if (entries.some(entry => entry.id === "showcase-gpu-glow")) {
       try {
         report.glowViewportQualification = { outcome: "pass", ...await qualifyGlowViewport(
           browser, base, path.join(output, "production-viewport"), backend, cache,
@@ -264,7 +267,7 @@ async function main() {
     } catch (error) {
       report.firstPassCaptureReportError = String(error);
     }
-    for (const rawEntry of manifest.entries) {
+    for (const rawEntry of entries) {
       const entry = { ...rawEntry, ...normalizedById.get(rawEntry.id) };
       const result = { id: entry.id, outcome: "fail", firstPassOutcome: "not-run", replayOutcome: "not-run", intermediateReplayOutcome: "not-run", stage: "open", pageErrors: [], consoleErrors: [] };
       report.results.push(result);

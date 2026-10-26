@@ -3,32 +3,30 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { posterEvidence, assertRetainedPoster, assertRetainedCudaFidelityPoster } from "./showcase-posters.mjs";
+import { validatePosterCatalog } from "./showcase-poster-catalog.mjs";
 
 const web = new URL("../web/", import.meta.url);
 const read = path => readFile(new URL(path, web));
 const manifest = JSON.parse(await read("python/examples/noon_showcase_manifest.json"));
-const evidence = JSON.parse(await read("thumbnails/showcase/capture-evidence.json"));
-const assertPoster = (...args) => assertRetainedPoster(...args, evidence.runtimeBuildIdentity);
+const evidence = await validatePosterCatalog(JSON.parse(await read("thumbnails/showcase/capture-evidence.json")));
+const assertPoster = (entry, record, source, png) =>
+  assertRetainedPoster(entry, record, source, png, evidence.builds[record.captureBuildId]);
 
 test("every showcase card has a retained, source-bound real capture", async () => {
-  assert.equal(evidence.schema, 1);
-  assert.equal(evidence.publication, "captured-preview");
+  assert.equal(evidence.schema, 2);
+  assert.equal(evidence.publication, "captured-preview-catalog");
   assert.equal(manifest.publication, "curated");
-  assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
   const existingEntries = manifest.entries.filter(entry =>
     !["showcase-cuda-transpose", "showcase-background-music"].includes(entry.id));
-  assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
-    existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
-  assert.ok(evidence.posters.length === existingEntries.length ||
-    evidence.posters.length === existingEntries.length + 1,
-    "capture evidence must be the original batch or a fully refreshed batch");
-  for (const [index, entry] of existingEntries.entries()) {
-    assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
+  const byId = new Map(evidence.posters.map(record => [record.id, record]));
+  for (const entry of existingEntries) {
+    assert.ok(byId.has(entry.id), `${entry.id}: previously captured poster is missing`);
   }
-  if (evidence.posters.length > existingEntries.length) {
-    const cuda = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
-    assertPoster(cuda, evidence.posters[existingEntries.length],
-      await read(cuda.path), await read(cuda.thumbnail));
+  const capturedEntries = manifest.entries.filter(entry => byId.has(entry.id));
+  assert.deepEqual(evidence.posters.map(poster => poster.id), capturedEntries.map(entry => entry.id),
+    "poster catalog must contain known entries in manifest order");
+  for (const entry of capturedEntries) {
+    assertPoster(entry, byId.get(entry.id), await read(entry.path), await read(entry.thumbnail));
   }
 });
 
@@ -59,7 +57,7 @@ test("source, image, timing and framing changes cannot silently reuse a poster",
   assert.throws(() => assertPoster(entry, { ...record, sample: { ...record.sample, publishedTime: 0 } }, source, png));
 });
 
-test("a poster copied from another build cannot inherit the global capture identity", async () => {
+test("a poster copied from another build requires its own registered capture identity", async () => {
   const entry = manifest.entries[0], record = evidence.posters[0];
   const source = await read(entry.path), png = await read(entry.thumbnail);
   assert.throws(() => assertPoster(entry, { ...record, captureBuildId: "0".repeat(64) }, source, png),
@@ -78,7 +76,7 @@ test("native-input posters require drag, background no-op, reset, and current so
   const posterHash = sha256(png);
   const record = {
     id: entry.id,
-    captureBuildId: evidence.runtimeBuildIdentity.buildId,
+    captureBuildId: evidence.posters[0].captureBuildId,
     sourceSha256: sha256(source),
     thumbnailTime: entry.thumbnail_time,
     image: { pngSha256: posterHash, width: png.readUInt32BE(16), height: png.readUInt32BE(20) },

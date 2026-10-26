@@ -4,14 +4,17 @@ from noon import *
 
 class SelectingGroupMembers(Scene):
     def construct(self):
-        title = Text("Animate part of a group", font_size=34).shift(2.9 * UP)
-        colors = [BLUE, TEAL, GREEN, YELLOW, PINK]
+        theme = Theme.dark()
+        title = theme.text("Animate part of a group", role="title").to_edge(UP, buff=theme.spacing("page"))
         items = VGroup(*[
-            Square(side_length=0.8, color=color).set_fill(color, opacity=0.8).move_to(((index - 2) * 1.8, 0, 0))
-            for index, color in enumerate(colors)
-        ])
-        indices = [Text(str(index), font_size=24).move_to(((index - 2) * 1.8, -1, 0)) for index in range(len(items))]
-        caption = Text("items[1:4] selects indices 1, 2, and 3", font_size=24).shift(2.6 * DOWN)
+            Square(side_length=0.8, color=theme.categorical(index), fill_opacity=0.8)
+            for index in range(5)
+        ]).arrange(RIGHT, buff=theme.spacing("large"))
+        indices = [
+            theme.text(str(index), role="label").next_to(item, DOWN, buff=theme.spacing("normal"))
+            for index, item in enumerate(items)
+        ]
+        caption = theme.text("items[1:4] selects indices 1, 2, and 3", role="caption").to_edge(DOWN, buff=theme.spacing("page"))
         self.play(FadeIn(title), FadeIn(caption), run_time=0.7)
         self.play(Create(items), *[FadeIn(index) for index in indices], run_time=1.2)
         self.wait(0.5)

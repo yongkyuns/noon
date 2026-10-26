@@ -11,7 +11,9 @@ import pngjs from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
-import { posterEvidence } from "./showcase-posters.mjs";
+import { posterEvidence, assertRetainedPoster } from "./showcase-posters.mjs";
+import { mergePosterCatalog, validatePosterCatalog } from "./showcase-poster-catalog.mjs";
+import { selectShowcaseEntries } from "./showcase-cases.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 import { seekPausedGallery, qualifyPlayheadEndpoints } from "./showcase-playback.mjs";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
@@ -21,7 +23,10 @@ const { PNG } = pngjs;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
 normalizeShowcaseManifest(manifest);
-const schedules = new Map(manifest.entries.map(entry => [entry.id, captureSchedule(entry)]));
+const entries = selectShowcaseEntries(manifest.entries, process.env.NOON_SHOWCASE_CASES);
+const retainedEvidencePath = path.join(root, "web/thumbnails/showcase/capture-evidence.json");
+const retainedEvidence = await validatePosterCatalog(JSON.parse(await readFile(retainedEvidencePath, "utf8")));
+const schedules = new Map(entries.map(entry => [entry.id, captureSchedule(entry)]));
 const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
 assert.ok(["webgl", "webgpu"].includes(backend));
 const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
@@ -29,7 +34,8 @@ const output = path.join(root, "browser-smoke-artifacts/showcase", backend);
 const report = {
   purpose: "render-and-presentation-qualification, not a real-time performance benchmark",
   checkoutRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
-  backendRequested: backend, samplingHz: 30, viewport: { width: 960, height: 540 }, results: [],
+  backendRequested: backend, samplingHz: 30, viewport: { width: 960, height: 540 },
+  selectedCaseIds: entries.map(entry => entry.id), results: [],
 };
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
@@ -76,7 +82,7 @@ try {
   report.servedBuildIdentity = await identity.json();
   report.workerFileSha256 = hash(worker);
 
-  for (const entry of manifest.entries) {
+  for (const entry of entries) {
     const result = { id: entry.id, title: entry.title, samples: [], pageErrors: [], outcome: "fail" };
     report.results.push(result);
     const page = await context.newPage();
@@ -144,15 +150,27 @@ try {
   await sheet.close();
   const failed = report.results.filter((result) => result.outcome !== "pass");
   assert.deepEqual(failed.map((result) => result.id), [], "showcase capture failures");
-  const evidence = json(posterEvidence(manifest, report));
-  await writeFile(path.join(output, "capture-evidence.json"), evidence);
+  const batch = posterEvidence({ ...manifest, entries }, report);
+  await writeFile(path.join(output, "capture-evidence.json"), json(batch));
+  const evidence = await mergePosterCatalog(manifest, retainedEvidence, batch);
+  const selected = new Set(entries.map(entry => entry.id));
+  const byId = new Map(manifest.entries.map(entry => [entry.id, entry]));
+  // Validate the entire resulting catalog before replacing any retained bytes.
+  // Changed sources outside the selected scope still require their own capture.
+  for (const record of evidence.posters) {
+    const entry = byId.get(record.id);
+    const image = selected.has(entry.id)
+      ? path.join(output, `${entry.id}.png`) : path.join(root, "web", entry.thumbnail);
+    assertRetainedPoster(entry, record, await readFile(path.join(root, "web", entry.path)),
+      await readFile(image), evidence.builds[record.captureBuildId]);
+  }
   // Stage real posters only after every scene passes. They remain review artifacts;
   // this script does not commit, approve, publish, or modify the catalog's status.
   await mkdir(path.join(root, "web/thumbnails/showcase"), { recursive: true });
   for (const result of report.results) {
     await writeFile(path.join(root, "web/thumbnails/showcase", result.poster), await readFile(path.join(output, result.poster)));
   }
-  await writeFile(path.join(root, "web/thumbnails/showcase/capture-evidence.json"), evidence);
+  await writeFile(retainedEvidencePath, json(evidence));
   const decodePage = await context.newPage();
   await decodePage.goto(`${base}/manim-raster-host.html`);
   await decodePage.evaluate(async (paths) => {
@@ -160,7 +178,7 @@ try {
       const image = new Image(); image.src = path; await image.decode();
       if (image.naturalWidth < 320 || image.naturalHeight < 180) throw new Error(`Invalid poster: ${path}`);
     }));
-  }, manifest.entries.map((entry) => `./${entry.thumbnail}`));
+  }, entries.map((entry) => `./${entry.thumbnail}`));
   await decodePage.close();
   report.stagedPosterDecode = "pass";
   report.runtimeResources = cache.stats();

@@ -4,16 +4,22 @@ from noon import *
 
 class AnimationTiming(Scene):
     def construct(self):
-        title = Text("Together, in sequence, or staggered?", font_size=32).shift(3 * UP)
+        theme = Theme.dark()
+        title = theme.text("Together, in sequence, or staggered?", role="title").to_edge(UP, buff=theme.spacing("page"))
         labels = []
         rows = []
-        for name, y, color in [("Together", 1.5, BLUE), ("Sequence", 0, GREEN), ("Staggered", -1.5, PINK)]:
-            labels.append(Text(name, font_size=24, color=color).move_to((-4.3, y, 0)))
+        for index, name in enumerate(("Together", "Sequence", "Staggered")):
+            color = theme.categorical(index)
+            labels.append(theme.text(name, role="label", color=color))
             rows.append(VGroup(*[
-                Square(side_length=0.7, color=color).set_fill(color, opacity=0.8).move_to((x, y, 0))
-                for x in (-1.5, 0, 1.5, 3)
-            ]))
-        caption = Text("Same four objects. Only their timing changes.", font_size=22).shift(2.8 * DOWN)
+                Square(side_length=0.7, color=color, fill_opacity=0.8)
+                for _ in range(4)
+            ]).arrange(RIGHT, buff=theme.spacing("large")))
+        VGroup(*rows).arrange(DOWN, buff=theme.spacing("large"))
+        for label, row in zip(labels, rows):
+            label.next_to(row, LEFT, buff=theme.spacing("large"))
+        VGroup(*labels, *rows).center()
+        caption = theme.text("Same four objects. Only their timing changes.", role="caption").to_edge(DOWN, buff=theme.spacing("page"))
         self.play(FadeIn(title), FadeIn(caption), *[FadeIn(label) for label in labels], run_time=0.8)
         self.play(*[FadeIn(item, shift=0.3 * UP) for item in rows[0]], run_time=1.6, rate_func=smooth)
         self.wait(0.4)
