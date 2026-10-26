@@ -7,6 +7,8 @@ use crate::execution_source::{
     LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource,
 };
 use crate::NativeViewportConfig;
+#[cfg(target_os = "linux")]
+use crate::NativeApp;
 use noon::{AudioClipOptions, AudioResource, RustHostCallbackTable, Scene};
 
 fn pcm(rate: u32, channels: u16, samples: &[f32]) -> AudioResource {
