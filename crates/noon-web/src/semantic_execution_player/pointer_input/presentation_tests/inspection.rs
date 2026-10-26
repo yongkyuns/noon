@@ -273,9 +273,14 @@ fn worker_scroll_does_not_bypass_a_pending_callback_and_retries_after_completion
         .unwrap();
     // A callback commit can publish a new epoch. Use an actual new displayed
     // frame; never rewrite the old packet's collection receipt to permit retry.
+    let mut target = PlayerPointerTarget {
+        session: &mut p.session,
+        semantics: p.semantics.as_ref().unwrap(),
+        translation_drag_undo: &mut p.translation_drag_undo,
+    };
     p.worker_pointer_presentation
         .set_view(
-            &mut p.session,
+            &mut target,
             &mut p.browser_pointer_binding,
             &mut p.next_native_event_sequence,
             PointerPresentationView {

@@ -189,8 +189,11 @@ fn main() -> Result<(), String> {
         let times = [0.0, 0.5, 1.0];
         let mut frames = Vec::new();
         for time in times {
-            session.advance_to(time).map_err(|e| e.to_string())?;
-            frames.push(execution_frame_value(&session));
+            session
+                .session_mut()
+                .advance_to(time)
+                .map_err(|e| e.to_string())?;
+            frames.push(execution_frame_value(session.session()));
         }
         println!(
             "{}",
@@ -206,9 +209,10 @@ fn main() -> Result<(), String> {
         let mut frames = Vec::new();
         for time in times {
             session
+                .session_mut()
                 .advance_to(time)
                 .map_err(|error| error.to_string())?;
-            frames.push(execution_frame_value(&session));
+            frames.push(execution_frame_value(session.session()));
         }
         println!(
             "{}",
