@@ -113,6 +113,12 @@ mod direct_pointer_presentation;
 mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod gaussian_blur_smoke;
 #[cfg(any(target_arch = "wasm32", test))]
 mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
