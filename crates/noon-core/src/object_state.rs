@@ -10,6 +10,10 @@ pub use glow::{
 };
 pub use linear_gradient::{GradientStop, LinearGradient, LinearGradientError};
 pub use paint_transition::{PaintTransition, PaintTransitionError};
+mod image_paint;
+pub use image_paint::{
+    ImageAddressMode, ImageFit, ImageMapping, ImagePaint, ImagePaintError, ImageUvTransform,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectStateField {
