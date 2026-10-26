@@ -258,6 +258,7 @@ class Code(_compat.VGroup):
         # the atomic source, resource and membership change.
         known = self.code_lines._semantic_member_wrappers
         previous = known.pop(_handle_key(previous_handle), None)
+        scene = None
         if isinstance(previous, Text):
             # Retain its existing JS handle and derived ObjectId so ordinary
             # re-entry can reuse the same binding. Source is observed from Rust;
@@ -271,6 +272,12 @@ class Code(_compat.VGroup):
             previous = self._replacement_text(previous_handle, context)
         current = self._replacement_text(current_handle, context)
         known[_handle_key(current_handle)] = current
+        if scene is not None:
+            # The shared operation may have put the new row inside an attached
+            # Code family. Associate its derived wrapper identity with that
+            # already-published membership; never add it as another scene root.
+            from _manim_scene import _reconcile_completed_family_bindings
+            _reconcile_completed_family_bindings(scene, (current,))
         return previous, current
 
     def _replacement_text(self, handle, context):

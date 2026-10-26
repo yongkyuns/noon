@@ -59,7 +59,25 @@ await qualifyPairedAuthoring({
       }
     }
     assert.equal(stableObjects, 24);
-    const bounds = {
+    // Read the allocated row from the untouched before scene. Using only the
+    // union of old/new glyph bounds would also accept a misplaced replacement
+    // because its incorrect position could enlarge the permitted region.
+    const yellow = [0xf7, 0xd9, 0x6f].map(channel => channel / 255);
+    const highlights = before.frame.objects.filter(object => object.present && object.fill &&
+      Math.abs(object.fill.alpha - 0.2) < 1e-6 &&
+      [object.fill.red, object.fill.green, object.fill.blue]
+        .every((channel, index) => Math.abs(channel - yellow[index]) < 1e-6));
+    assert.equal(highlights.length, 1, "the before scene must contain one default translucent row highlight");
+    const highlight = highlights[0];
+    assert.deepEqual(currentObjects.get(highlight.id), highlight,
+      "source replacement must keep the independently allocated row highlight unchanged");
+    assert.ok(highlight.bounds, "the allocated row must have render bounds");
+    assert.deepEqual(frame.camera, before.frame.camera, "source replacement must keep the camera fixed");
+    const allocatedBounds = {
+      left: highlight.bounds.min[0], right: highlight.bounds.max[0],
+      bottom: highlight.bounds.min[1], top: highlight.bounds.max[1],
+    };
+    const inkBounds = {
       left: Math.min(removed[0].bounds.min[0], added[0].bounds.min[0]),
       right: Math.max(removed[0].bounds.max[0], added[0].bounds.max[0]),
       bottom: Math.min(removed[0].bounds.min[1], added[0].bounds.min[1]),
@@ -67,14 +85,22 @@ await qualifyPairedAuthoring({
     };
     const unitsPerPixel = frame.camera.height / rust.height;
     const margin = 2 * unitsPerPixel;
+    assert.ok(added[0].bounds.min[0] >= allocatedBounds.left - margin &&
+      added[0].bounds.max[0] <= allocatedBounds.right + margin &&
+      added[0].bounds.min[1] >= allocatedBounds.bottom - margin &&
+      added[0].bounds.max[1] <= allocatedBounds.top + margin,
+    "the replacement glyph bounds must stay inside the original allocated row");
     let changedPixels = 0;
     for (let offset = 0; offset < rust.data.length; offset += 4) {
       if (rust.data.readUInt32LE(offset) === before.pixels.data.readUInt32LE(offset)) continue;
       const index = offset / 4;
       const x = frame.camera.center[0] + (index % rust.width + 0.5 - rust.width / 2) * unitsPerPixel;
       const y = frame.camera.center[1] + (rust.height / 2 - Math.floor(index / rust.width) - 0.5) * unitsPerPixel;
-      assert.ok(x >= bounds.left - margin && x <= bounds.right + margin &&
-        y >= bounds.bottom - margin && y <= bounds.top + margin,
+      assert.ok(x >= allocatedBounds.left - margin && x <= allocatedBounds.right + margin &&
+        y >= allocatedBounds.bottom - margin && y <= allocatedBounds.top + margin,
+      `source edit changed a pixel outside the original allocated row at (${x}, ${y})`);
+      assert.ok(x >= inkBounds.left - margin && x <= inkBounds.right + margin &&
+        y >= inkBounds.bottom - margin && y <= inkBounds.top + margin,
       `source edit changed a pixel outside the edited glyph row at (${x}, ${y})`);
       changedPixels++;
     }
@@ -94,7 +120,8 @@ await qualifyPairedAuthoring({
     for (const [name, count] of Object.entries(colorPixels)) {
       assert.ok(count > 8, `shared ${name} token/category color must reach rendered glyphs`);
     }
-    return { stableObjects, changedPixels, changesConfinedToEditedRow: true, colorPixels };
+    return { stableObjects, changedPixels, changesConfinedToEditedRow: true,
+      originalAllocatedRowUnchanged: true, replacementFitsOriginalAllocatedRow: true, colorPixels };
   },
   async prepareContext(context) {
     if (!process.env.NOON_PYODIDE_ROOT) return;

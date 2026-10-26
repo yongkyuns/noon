@@ -54,7 +54,7 @@ class CodeSourceAuthoringContract(Scene):
         self.wait(0.05)
         clone = listing.copy().scale(0.7).rotate(0.08).shift(DOWN * 2)
         self.add(clone)
-        unchanged_ids = [row.id for row in clone.code_lines][1:]
+        unchanged_ids = [row.id for row in list(clone.code_lines)[1:]]
         unchanged_positions = [tuple(row.get_center()) for row in clone.code_lines][1:]
         cloned_numbers = list(clone.line_numbers)
         clone_panel = (clone.background.width, clone.background.height,
@@ -69,12 +69,32 @@ class CodeSourceAuthoringContract(Scene):
         old, current = clone.replace_line(0, source.split("\n")[0])
         assert old is clone_previous and old.annotation == "live replacement"
         assert old.id == clone_previous_id
+        assert current.id != old.id
         assert (old._semantic_handle.semanticSlot, old._semantic_handle.semanticGeneration) != (
             current._semantic_handle.semanticSlot, current._semantic_handle.semanticGeneration)
         assert clone.code_lines[0] is current
         assert old.text == padded_line and current.text == source.split("\n")[0]
         assert clone.code_string == source and listing.code_string == reserved
-        assert [row.id for row in clone.code_lines][1:] == unchanged_ids
+        assert [row.id for row in list(clone.code_lines)[1:]] == unchanged_ids
+
+        # A detached listing can share the active authoring context. Its new
+        # source row stays detached; an independently attached previous row
+        # retains that separate membership when it leaves the listing.
+        detached = Code(code_string="old", reserved_source="new",
+                        language="text", add_line_numbers=False)
+        before_roots = len(self.mobjects)
+        detached_old, detached_current = detached.replace_line(0, "new")
+        assert detached_old._scene is None and detached_current._scene is None
+        assert len(self.mobjects) == before_roots
+        self.add(detached_current)
+        retained_id = detached_current.id
+        independent, unbound = detached.replace_line(0, "old")
+        assert independent is detached_current and independent.id == retained_id
+        assert independent._scene is self and unbound._scene is None
+        assert any(root is independent for root in self.mobjects)
+        assert all(root is not unbound and root is not detached for root in self.mobjects)
+        self.remove(independent)
+        assert len(self.mobjects) == before_roots
         assert list(clone.line_numbers) == cloned_numbers
         assert (clone.background.width, clone.background.height,
                 tuple(clone.background.get_center())) == clone_panel
@@ -96,7 +116,7 @@ class CodeSourceAuthoringContract(Scene):
             else:
                 raise AssertionError("invalid source replacement must fail atomically")
         assert clone.code_string == source and clone.code_lines[0] is current
-        assert [row.id for row in clone.code_lines][1:] == unchanged_ids
+        assert [row.id for row in list(clone.code_lines)[1:]] == unchanged_ids
         assert len(self.mobjects) == 2
 
         # The previous row is explicitly a temporary scene root. The current
@@ -108,7 +128,7 @@ class CodeSourceAuthoringContract(Scene):
         assert all(root is not old and root is not current for root in self.mobjects)
         assert clone.code_lines[0] is current
         assert clone.code_string == source
-        assert [row.id for row in clone.code_lines][1:] == unchanged_ids
+        assert [row.id for row in list(clone.code_lines)[1:]] == unchanged_ids
 
         for kwargs in [
             {"reserved_source": "wrong row count"},

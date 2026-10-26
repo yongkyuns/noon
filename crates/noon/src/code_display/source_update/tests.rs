@@ -311,7 +311,7 @@ fn inferred_language_survives_replacing_its_shebang() {
 }
 
 #[test]
-fn live_edit_preserves_unrelated_execution_slot_and_rolls_back_pending_segment() {
+fn live_edit_preserves_slots_and_uses_shared_wait_and_animation_publication_gates() {
     let mut scene = Scene::new();
     let code = Code::new(&mut scene, "x\ny", options("longer\ny")).unwrap();
     let unrelated = scene.circle(0.4).unwrap();
@@ -324,20 +324,51 @@ fn live_edit_preserves_unrelated_execution_slot_and_rolls_back_pending_segment()
     let unrelated_slot = session.execution_object_id(unrelated.node_id());
     {
         let mut live = scene.live(&mut session);
-        let segment = live.wait_segment(0.5).unwrap();
-        let before = snapshot(&scene);
-        assert!(code
-            .replace_line_in_live_session(&mut live, 0, "longer")
-            .is_err());
-        assert_eq!(snapshot(&scene), before);
-        live.advance_segment_to(segment, segment.end_time())
-            .unwrap();
-        live.complete_segment(segment).unwrap();
+        let wait = live.wait_segment(0.5).unwrap();
+        let waiting = live.segment_state(wait);
         let edit = code
             .replace_line_in_live_session(&mut live, 0, "longer")
             .unwrap();
         assert_eq!(edit.current.text_source().unwrap().as_ref(), "longer");
+        assert_eq!(live.segment_state(wait), waiting);
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        live.complete_segment(wait).unwrap();
+
+        let target = live.target_editor(&unrelated).unwrap();
+        live.set_translation(&target, 0.2, 0.0).unwrap();
+        let segment = live
+            .declare_and_activate_transform_to(
+                &unrelated,
+                &target,
+                noon_core::AnimationOptions::new().run_time(0.5),
+            )
+            .unwrap();
+        let before = snapshot(&scene);
+        let error = code
+            .replace_line_in_live_session(&mut live, 0, "x")
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CodeAuthoringError::Text(TextAuthoringError::Semantic(
+                    AuthoringError::ExecutionPublication(
+                        crate::ExecutionSessionPublicationError::SegmentCompletionPending
+                    )
+                ))
+            ),
+            "unexpected publication error: {error:?}"
+        );
+        assert_eq!(snapshot(&scene), before);
+        assert_eq!(code.line(0).unwrap().node_id(), edit.current.node_id());
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        let edit = code
+            .replace_line_in_live_session(&mut live, 0, "x")
+            .unwrap();
+        assert_eq!(edit.current.text_source().unwrap().as_ref(), "x");
     }
+    assert_eq!(session.frame().time, 1.0);
     assert_eq!(session.execution_object_id(other.node_id()), other_slot);
     assert_eq!(
         session.execution_object_id(unrelated.node_id()),

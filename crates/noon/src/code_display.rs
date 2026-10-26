@@ -1,7 +1,8 @@
 //! Native syntax-highlighted source listings over ordinary retained text.
 //!
-//! Layout and highlighting happen once, at admission. A `Code` is a normal
-//! semantic family with a background, optional line numbers, and text lines;
+//! Admission retains the allocated layout. Bounded source edits refresh text
+//! and contextual highlighting through shared semantic transactions. A `Code`
+//! is a normal family with a background, optional line numbers, and text lines;
 //! transforms, copies, animations and rendering use the shared engine paths.
 
 mod admission;

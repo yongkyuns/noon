@@ -217,7 +217,9 @@ declaration edit using the normal execution path.
 #### Associate source tokens with visual concepts
 
 `syntax_colors` optionally overrides `foreground`, `comment`, `keyword`,
-`number`, `string` and `operator` colors from the selected theme. `token_colors`
+`number`, `string` and `operator` colors from the selected theme. `foreground`
+sets the unclassified fallback color; explicit theme rules retain their colors.
+`token_colors`
 maps exact identifiers or dotted identifier paths such as `threadIdx.x` to
 colors. Matching respects Unicode identifier boundaries: `in` does not recolor
 `int`, and names inside comments or strings keep their lexical colors. Exact

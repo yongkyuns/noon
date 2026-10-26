@@ -292,6 +292,7 @@ class CodeFacadeTests(unittest.TestCase):
         previous._object = derived_object = object()
         original_handle = previous._semantic_handle
         reconciled = []
+        associated = []
 
         def reconcile(owner, operation, values):
             self.assertIs(owner, scene)
@@ -300,14 +301,35 @@ class CodeFacadeTests(unittest.TestCase):
             previous._scene = None
             reconciled.append(values)
 
+        def associate(owner, values):
+            self.assertIs(owner, scene)
+            self.assertEqual(values, (value.code_lines.submobjects[0],))
+            current = values[0]
+            self.assertIsNone(current._scene)
+            current._scene = scene
+            current._object = object()
+            associated.append(current)
+
         with patch.dict("sys.modules", {"_manim_scene": types.SimpleNamespace(
-                _sync_membership_wrapper_attachments=reconcile)}):
-            old, _ = value.replace_line(0, "other")
+                _sync_membership_wrapper_attachments=reconcile,
+                _reconcile_completed_family_bindings=associate)}):
+            old, current = value.replace_line(0, "other")
         self.assertEqual(reconciled, [(previous,)])
+        self.assertEqual(associated, [current])
         self.assertIs(old, previous)
         self.assertIs(old._semantic_handle, original_handle)
         self.assertIs(old._object, derived_object)
         self.assertIsNone(old._scene)
+        self.assertIs(current._scene, scene)
+
+    def test_detached_replacement_keeps_only_the_live_context_without_scene_binding(self):
+        value = code.Code(code_string="x")
+        with patch.dict("sys.modules", {"_manim_scene": types.SimpleNamespace()}):
+            old, current = value.replace_line(0, "other")
+        self.assertIsNone(old._scene)
+        self.assertIsNone(current._scene)
+        self.assertIsNone(current._object)
+        self.assertIs(current._canonical_live_target_context, self.context)
 
     def test_replacement_python_shapes_and_native_failure_do_not_change_aliases(self):
         value = code.Code(code_string="x")
