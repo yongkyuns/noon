@@ -67,7 +67,6 @@ const expectedJavascriptSurface = [
   "highlights()",
   "liveGetHighlightedCodeLines(",
   "liveHighlightCodeLines(",
-  "export function createCodeLineHighlightRenderer(",
   "export class WasmNativeFontFace",
   "static bundled(family)",
   "cloneFace()",
@@ -326,7 +325,6 @@ const expectedTypeSurface = [
   "highlights(): WasmAuthoringFamilyHandle",
   "liveGetHighlightedCodeLines(code: WasmCodeHandle, start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
   "liveHighlightCodeLines(code: WasmCodeHandle, start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
-  "createCodeLineHighlightRenderer(canvas: OffscreenCanvas, highlighted: boolean): Promise<ExecutionCanvasRenderer>",
   "export class WasmNativeFontFace",
   "constructor(family: string, data: Uint8Array, face_index: number)",
   "static bundled(family: string): WasmNativeFontFace",
@@ -637,6 +635,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "export function createCodeLineHighlightRenderer(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectTypstCanvasRenderer(",
@@ -721,6 +720,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "export function createCodeLineHighlightRenderer(canvas: OffscreenCanvas, highlighted: boolean): Promise<ExecutionCanvasRenderer>",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
