@@ -12,7 +12,7 @@ NOON_PYTHON_AUDIO_ARTIFACTS="$(cd "$NOON_PYTHON_AUDIO_ARTIFACTS" && pwd)"
 export NOON_PYTHON_AUDIO_ARTIFACTS
 
 record_provenance() {
-  NOON_AUDIO_PROVENANCE_STAGE="$1" node --input-type=module <<'NODE'
+  NOON_AUDIO_PROVENANCE_STAGE="$1" NOON_AUDIO_EXIT_STATUS="${2:-}" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -27,6 +27,16 @@ const observed = await createRuntimeBuildIdentity();
 const untracked = git("ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
 const expectedOutput = name => name.startsWith("node_modules/") ||
   name.startsWith("browser-smoke-artifacts/") || name === "package-lock.json";
+let report = null;
+let reportReadError = null;
+if (process.env.NOON_AUDIO_PROVENANCE_STAGE === "after") {
+  try {
+    report = JSON.parse(await readFile(path.join(process.env.NOON_PYTHON_AUDIO_ARTIFACTS,
+      "report.json"), "utf8"));
+  } catch (error) {
+    reportReadError = { code: error.code ?? null, message: error.message };
+  }
+}
 const receipt = {
   revision: git("rev-parse", "HEAD"), tree: git("rev-parse", "HEAD^{tree}"),
   sourceStatus: git("status", "--porcelain", "--untracked-files=all"),
@@ -35,6 +45,11 @@ const receipt = {
   unexpectedUntrackedPaths: untracked.filter(name => !expectedOutput(name)),
   smokeSha256: createHash("sha256").update(await readFile("scripts/python-background-audio-smoke.mjs")).digest("hex"),
   browser: process.env.NOON_PYTHON_AUDIO_BROWSER, backend: process.env.NOON_PYTHON_AUDIO_BACKEND,
+  requestedRenderHost: process.env.NOON_PLAYGROUND_RENDER_HOST ?? "auto",
+  ...(process.env.NOON_AUDIO_PROVENANCE_STAGE === "after" ? {
+    actualRenderHost: report?.renderHost ?? null,
+    reportStatus: report?.status ?? null, reportReadError,
+  } : {}),
   viewport: { width: 1280, height: 900, deviceScaleFactor: 1 },
   playwrightVersion: require("playwright/package.json").version,
   browserRevisions: JSON.parse(await readFile(path.join(path.dirname(
@@ -47,6 +62,8 @@ const receipt = {
 };
 await writeFile(path.join(process.env.NOON_PYTHON_AUDIO_ARTIFACTS,
   `provenance-${process.env.NOON_AUDIO_PROVENANCE_STAGE}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+assert.ok(["auto", "worker", "main-thread"].includes(receipt.requestedRenderHost),
+  "unsupported requested render host");
 assert.equal(receipt.trackedSourceStatus, "", "tracked source and index must match the tested commit");
 assert.deepEqual(receipt.unexpectedUntrackedPaths, [], "unexpected untracked source cannot qualify");
 assert.equal(declared.sourceRevision, receipt.revision, "downloaded runtime must attest this exact checkout");
@@ -63,7 +80,17 @@ if (process.env.NOON_AUDIO_PROVENANCE_STAGE === "after") {
   assert.equal(receipt.revision, before.revision, "source revision changed during qualification");
   assert.equal(receipt.tree, before.tree, "source tree changed during qualification");
   assert.equal(receipt.smokeSha256, before.smokeSha256, "original smoke changed during qualification");
+  assert.equal(receipt.requestedRenderHost, before.requestedRenderHost,
+    "requested render host changed during qualification");
   assert.deepEqual(declared, before.declaredRuntime, "runtime identity changed during qualification");
+  if (process.env.NOON_AUDIO_EXIT_STATUS === "0") {
+    assert.equal(reportReadError, null, "successful qualification requires a readable JSON report");
+    assert.equal(report?.status, "passed", "successful qualification requires a passed report");
+    if (receipt.requestedRenderHost !== "auto") {
+      assert.equal(receipt.actualRenderHost, receipt.requestedRenderHost,
+        "actual render host must match the explicit qualification profile");
+    }
+  }
 }
 NODE
 }
@@ -73,7 +100,7 @@ noon_pulse_pid=
 cleanup() {
   noon_exit_status=$?
   trap - EXIT
-  if record_provenance after; then
+  if record_provenance after "$noon_exit_status"; then
     :
   elif (( noon_exit_status == 0 )); then
     noon_exit_status=1

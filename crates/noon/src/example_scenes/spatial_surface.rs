@@ -82,7 +82,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             animation.node_id(),
             crate::AnimationOptions::new(),
         )
@@ -126,7 +126,7 @@ pub fn lighting_session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             animation.node_id(),
             AnimationOptions::new(),
         )
@@ -283,7 +283,7 @@ pub fn cairo_sphere_torus_session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             movement.node_id(),
             AnimationOptions::new(),
         )

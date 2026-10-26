@@ -79,7 +79,7 @@ fn animated_neighbor(start_x: f64, end_x: f64) -> (SemanticExecutionPlayer, Work
     let mut session = scene.execution_session().unwrap();
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             animation.node_id(),
             noon_core::AnimationOptions::new(),
         )
@@ -1015,7 +1015,7 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
     let mut session = scene.execution_session().unwrap();
     session
         .activate_animation_segment(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             animation.node_id(),
             noon_core::AnimationOptions::new(),
         )

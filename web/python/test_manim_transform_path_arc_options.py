@@ -45,16 +45,16 @@ class ManimTransformPathArcOptionsTests(unittest.TestCase):
                 play_path_arc,
             ):
                 result = Result()
-                result.runTime = play_run_time if math.isfinite(play_run_time) else 1.0
+                result.runTime = play_run_time if play_run_time is not None else 1.0
                 result.rateFunc = play_rate_func or animation_rate_func or "smooth"
                 result.lagRatio = (
-                    play_lag_ratio if math.isfinite(play_lag_ratio) else default_lag_ratio
+                    play_lag_ratio if play_lag_ratio is not None else default_lag_ratio
                 )
                 result.pathArc = (
                     play_path_arc
-                    if math.isfinite(play_path_arc)
+                    if play_path_arc is not None
                     else animation_path_arc
-                    if math.isfinite(animation_path_arc)
+                    if animation_path_arc is not None
                     else 0.0
                 )
                 result.reverseRateFunction = reverse_rate_function == 1

@@ -48,6 +48,7 @@ try {
     noonCreateAuthoringTextHandle: (...args) => authoringStore.createManimText(...args),
     noonResolveAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args),
     noonResolveCreateAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveCreateAnimationOptions, ...args),
+    noonResolveGlowPulseAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveGlowPulseAnimationOptions, ...args),
     noonResolveTransformAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveTransformAnimationOptions, ...args),
     noonCodeOptions: (...args) => new wasm.WasmCodeOptions(...args),
     noonCodeStylesList: () => wasm.noonCodeStylesList(),

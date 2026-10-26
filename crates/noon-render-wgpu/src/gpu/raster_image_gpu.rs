@@ -53,6 +53,15 @@ struct ObjectResidency {
     binding: wgpu::BindGroup,
 }
 
+/// An isolated source reuses the immutable resident texture and ordinary image
+/// shader, with a separately normalized uniform in the source's retained buffer.
+#[derive(Debug)]
+pub(super) struct CapturedImageBinding {
+    pub resource: RasterImageResourceHandle,
+    texture: wgpu::BindGroup,
+    object: wgpu::BindGroup,
+}
+
 /// Renderer-owned texture binding, sharing the ordinary image sampling pipeline.
 /// It never enters semantic resource arenas or their upload/retirement accounting.
 #[derive(Debug)]
@@ -178,6 +187,61 @@ impl RasterImageGpuRenderer {
         pass: &mut wgpu::RenderPass<'a>,
         camera: &'a wgpu::BindGroup,
         image: &'a ExternalImageBinding,
+        sample_count: u32,
+    ) {
+        pass.set_pipeline(if sample_count == 1 {
+            &self.pipeline
+        } else {
+            &self.pipeline_msaa
+        });
+        pass.set_bind_group(0, camera, &[]);
+        pass.set_bind_group(1, &image.texture, &[]);
+        pass.set_bind_group(2, &image.object, &[]);
+        pass.draw(0..6, 0..1);
+    }
+
+    pub(super) fn bind_captured(
+        &self,
+        device: &wgpu::Device,
+        index: usize,
+        resource: RasterImageResourceHandle,
+        buffer: &wgpu::Buffer,
+    ) -> Result<CapturedImageBinding, RasterImageDrawError> {
+        if !self
+            .objects
+            .get(&index)
+            .is_some_and(|row| row.resource == resource)
+        {
+            return Err(RasterImageDrawError::MissingObject(index));
+        }
+        let texture = self
+            .textures
+            .get(&resource)
+            .ok_or(RasterImageDrawError::MissingObject(index))?;
+        let object = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon isolated image placement"),
+            layout: &self.object_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(size_of::<ImageUniform>() as u64),
+                }),
+            }],
+        });
+        Ok(CapturedImageBinding {
+            resource,
+            texture: texture.binding.clone(),
+            object,
+        })
+    }
+
+    pub(super) fn draw_captured<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        camera: &'a wgpu::BindGroup,
+        image: &'a CapturedImageBinding,
         sample_count: u32,
     ) {
         pass.set_pipeline(if sample_count == 1 {

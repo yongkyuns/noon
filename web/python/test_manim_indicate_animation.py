@@ -44,20 +44,20 @@ class ManimIndicateAnimationTests(unittest.TestCase):
                 result = Result()
                 result.runTime = (
                     play_run_time
-                    if math.isfinite(play_run_time)
+                    if play_run_time is not None
                     else animation_run_time
-                    if math.isfinite(animation_run_time)
+                    if animation_run_time is not None
                     else 1.0
                 )
                 result.rateFunc = play_rate_func or animation_rate_func or "smooth"
                 result.lagRatio = (
                     play_lag_ratio
-                    if math.isfinite(play_lag_ratio)
+                    if play_lag_ratio is not None
                     else animation_lag_ratio
-                    if math.isfinite(animation_lag_ratio)
+                    if animation_lag_ratio is not None
                     else default_lag_ratio
                 )
-                result.pathArc = path_arc if math.isfinite(path_arc) else 0.0
+                result.pathArc = path_arc if path_arc is not None else 0.0
                 result.reverseRateFunction = reverse_rate_function == 1
                 return result
 

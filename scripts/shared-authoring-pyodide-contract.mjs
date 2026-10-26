@@ -69,6 +69,7 @@ try {
     noonGlow: (update) => new wasm.WasmGlow(update),
     noonResolveAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args),
     noonResolveCreateAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveCreateAnimationOptions, ...args),
+    noonResolveGlowPulseAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveGlowPulseAnimationOptions, ...args),
     noonResolveTransformAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveTransformAnimationOptions, ...args),
   });
   for (const descriptor of PYTHON_COMPAT_MODULES) {

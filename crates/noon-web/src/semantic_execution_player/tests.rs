@@ -1623,7 +1623,7 @@ fn animated_player() -> SemanticExecutionPlayer {
     let mut session = scene.execution_session().unwrap();
     session
         .activate_animation(
-            &scene.integration_store().borrow(),
+            &mut scene.integration_store().borrow_mut(),
             animation,
             AnimationOptions::new()
                 .run_time(1.0)

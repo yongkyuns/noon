@@ -36,6 +36,7 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
+      - "scripts/playground-preload.test.mjs"
       - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
@@ -90,6 +91,7 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
+      - "scripts/playground-preload.test.mjs"
       - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
@@ -190,16 +192,19 @@ jobs:
         include:
           - browser: chromium
             audio_backend: webgpu
+            audio_render_host: auto
             profile: desktop-dpr1
             os: ubuntu-latest
             display: "xvfb-run -a"
           - browser: firefox
             audio_backend: webgl
+            audio_render_host: auto
             profile: desktop-dpr2
             os: ubuntu-latest
             display: "xvfb-run -a"
           - browser: webkit
             audio_backend: webgl
+            audio_render_host: main-thread
             profile: mobile-dpr2
             os: macos-latest
             display: ""
@@ -390,21 +395,22 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: bash scripts/ci-install-reference-deps.sh pulseaudio pulseaudio-utils libasound2-plugins
-      - name: Qualify Python audio on ${{ matrix.browser }} / ${{ matrix.audio_backend }} / desktop-dpr1
+      - name: Qualify Python audio on ${{ matrix.browser }} / ${{ matrix.audio_backend }} / ${{ matrix.audio_render_host }} / desktop-dpr1
         # The fixture keeps its original 240-second process deadline. The extra
         # minute belongs only to device setup, provenance capture and cleanup.
         timeout-minutes: 5
         env:
           NOON_PYTHON_AUDIO_BROWSER: ${{ matrix.browser }}
           NOON_PYTHON_AUDIO_BACKEND: ${{ matrix.audio_backend }}
-          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-audio-${{ matrix.audio_backend }}-desktop-dpr1
+          NOON_PLAYGROUND_RENDER_HOST: ${{ matrix.audio_render_host }}
+          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-audio-${{ matrix.audio_backend }}-${{ matrix.audio_render_host }}-desktop-dpr1
         run: bash scripts/ci-python-audio-smoke.sh ${{ matrix.display }}
-      - name: Retain Python audio output and exact runtime evidence
+      - name: Retain Python audio ${{ matrix.audio_render_host }} output and exact runtime evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: python-audio-${{ matrix.browser }}-${{ matrix.audio_backend }}-desktop-dpr1
-          path: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-audio-${{ matrix.audio_backend }}-desktop-dpr1
+          name: python-audio-${{ matrix.browser }}-${{ matrix.audio_backend }}-${{ matrix.audio_render_host }}-desktop-dpr1
+          path: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-audio-${{ matrix.audio_backend }}-${{ matrix.audio_render_host }}-desktop-dpr1
           if-no-files-found: warn
           retention-days: 3
       # Preserve large per-case screenshots only when a browser test fails.

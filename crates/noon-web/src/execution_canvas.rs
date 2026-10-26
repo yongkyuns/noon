@@ -2235,12 +2235,19 @@ mod wasm {
                 .direct_preparer
                 .prepare_transient_presentations_visible(&publication, visibility.object_indices())
                 .map_err(js_error)?;
+            // Retain glow source dirtiness across endpoint publications just as
+            // the native host does. Capture/filter work remains deferred until
+            // the final presented frame, after all endpoint drains have settled.
+            let glow_visible = self
+                .renderer
+                .glow_source_visibility(&publication, visibility.object_indices())
+                .map_err(js_error)?;
             let prepared = self
                 .direct_preparer
                 .prepare_planned_publication_visible(
                     &self.device,
                     &publication,
-                    visibility.object_indices(),
+                    glow_visible,
                     metrics,
                 )
                 .map_err(js_error)?;

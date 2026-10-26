@@ -548,7 +548,7 @@ pub async fn create_direct_execution_smoke_renderer(
     }
     session
         .activate_animation(
-            &store.borrow(),
+            &mut store.borrow_mut(),
             animation,
             AnimationOptions::new()
                 .run_time(0.1)
@@ -776,6 +776,15 @@ pub async fn create_direct_mixed_scalar_composition_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let program = noon::example_scenes::mixed_scalar_composition::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Direct host for shared authored glow pulses, motion and endpoint restoration.
+#[wasm_bindgen(js_name = createDirectGlowPulseSmokeRenderer)]
+pub async fn create_direct_glow_pulse_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::glow_pulse::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 

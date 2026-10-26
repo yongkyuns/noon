@@ -861,6 +861,13 @@ try {
     // Actual Python -> shared Rust -> retained worker; the matching ordinary
     // circle is an in-frame no-effect negative control for off-source pixels.
     { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
+    // Ordinary Python image construction and .animate use the same worker path.
+    // Its restored, no-glow image must remain at the final authored position.
+    {
+      filename: "image_glow.py", objectCount: 3, expectedDuration: 6,
+      endpointTime: null, expectedFinalCenter: [2.2, 0],
+      finalPixelPredicate: (_red, _green, blue, x) => x > 320 && blue > 80,
+    },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -998,7 +1005,7 @@ try {
         }
 
         const initial = await waitForFrame();
-        if (expectedGlowPair || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
+        if (expectedGlowPair || filename === "image_glow.py" || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
           // A source-owned Python continuation never admits external pause/seek.
           // harness.authoring.run resolves only after its final Rust execution
           // lease has returned and the final retained publication was presented.
@@ -1964,6 +1971,100 @@ class SelectedAlignment(Scene):
     });
     assert.equal(result.duration, 4.5);
     assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const glowPulseSource = await readFile(
+    path.join(repoRoot, "web/python/examples/glow_pulse.py"), "utf8",
+  );
+  const glowPulseCrop = (png, centerX, centerY) => {
+    assert.equal(png.width, 640); assert.equal(png.height, 360);
+    const half = 60, width = 2 * half + 1;
+    const result = Buffer.alloc(width * width * 4);
+    for (let row = 0; row < width; row++) {
+      const start = ((centerY - half + row) * png.width + centerX - half) * 4;
+      png.data.copy(result, row * width * 4, start, start + width * 4);
+    }
+    return result;
+  };
+  let persistentPulseEndpoint;
+  await startSampledSource(page, glowPulseSource, "scene-shared-glow-pulse");
+  try {
+    const canvas = page.locator("#scene-shared-glow-pulse");
+    const frames = new Map();
+    for (const time of [0, 1, 1.3, 1.6, 2.125, 2.25, 2.375, 2.5, 2.875, 3, 3.125, 3.25, 3.5]) {
+      await page.evaluate(
+        sampleTime => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      frames.set(time, PNG.sync.read(await canvas.screenshot()));
+    }
+    const halo = (png, centerX, centerY) => {
+      let blue = 0;
+      for (const dx of [26, 29, 32]) for (const dy of [-3, 0, 3]) {
+        blue += png.data[((centerY + dy) * png.width + centerX + dx) * 4 + 2];
+      }
+      return blue;
+    };
+    // A 0.4-world-unit move is exactly 18 pixels here. Radius also changes from
+    // ten to twelve pixels; an independent static scene below pins that endpoint.
+    persistentPulseEndpoint = glowPulseCrop(frames.get(1.6), 230, 162);
+    assert.deepEqual(glowPulseCrop(frames.get(3.5), 230, 162), persistentPulseEndpoint,
+      "persistent GlowPulse endpoint drifted after the disjoint motion/radius edit");
+    assert.ok(halo(frames.get(1.3), 230, 171) > halo(frames.get(1), 230, 180) + 9 * 4,
+      "persistent GlowPulse never brightened above its 1.2 baseline");
+    assert.ok(halo(frames.get(1.3), 410, 180) > halo(frames.get(0), 410, 180) + 9 * 8,
+      "temporary GlowPulse did not render an off-source midpoint halo");
+    for (const time of [1.6, 2.5, 3.25, 3.5]) {
+      assert.deepEqual(glowPulseCrop(frames.get(time), 410, 180), glowPulseCrop(frames.get(0), 410, 180),
+        `temporary GlowPulse left a halo after its completion at ${time}`);
+    }
+    assert.ok(halo(frames.get(2.25), 410, 180) > halo(frames.get(0), 410, 180) + 9 * 3,
+      "linear GlowPulse was rejected or skipped instead of restoring at its endpoint");
+    assert.deepEqual(glowPulseCrop(frames.get(2.125), 410, 180), glowPulseCrop(frames.get(3.125), 410, 180),
+      "reversed GlowPulse did not match the complementary forward sample");
+    assert.deepEqual(glowPulseCrop(frames.get(2.375), 410, 180), glowPulseCrop(frames.get(2.875), 410, 180),
+      "reversed GlowPulse did not preserve the shared linear amplitude map");
+    assert.ok(halo(frames.get(2.875), 410, 180) > halo(frames.get(3.125), 410, 180) + 9 * 3,
+      "reverse_rate_function was discarded before GlowPulse playback");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const completed = await authored;
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics,
+        state: await execution.state() };
+    });
+    assert.equal(result.duration, 3.5);
+    assert.equal(result.metrics.objectCount, 3);
+    assert.equal(result.state.playing, false);
+    assert.equal(result.state.time, 3.5);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const glowPulseEndpointSource = `
+from noon import BLUE, WHITE, LEFT, RIGHT, UP, Circle, Pixels, Rectangle, Scene
+class GlowPulseEndpoint(Scene):
+    def construct(self):
+        background = Rectangle(width=16, height=9, fill="#08101f", fill_opacity=1, stroke=None)
+        persistent = Circle(radius=0.4, fill=WHITE, fill_opacity=1, stroke=None).shift(2 * LEFT + 0.4 * UP)
+        temporary = Circle(radius=0.4, fill=WHITE, fill_opacity=1, stroke=None).shift(2 * RIGHT)
+        persistent.set_glow(color=BLUE, radius=Pixels(12), intensity=1.2)
+        self.add(background, persistent, temporary)
+        self.wait(0.25)
+`;
+  await startSampledSource(page, glowPulseEndpointSource, "scene-shared-glow-pulse-endpoint");
+  try {
+    await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      await execution.sampleToAuthoredTime(0.25);
+      await authored;
+    });
+    const endpoint = PNG.sync.read(
+      await page.locator("#scene-shared-glow-pulse-endpoint").screenshot(),
+    );
+    assert.deepEqual(persistentPulseEndpoint, glowPulseCrop(endpoint, 230, 162),
+      "persistent GlowPulse did not retain the independently authored position/radius and baseline intensity");
   } finally {
     await stopSampledSource(page);
   }
@@ -3722,5 +3823,16 @@ class LateFailure(Scene):
     duration: 0.2, sampleTime: 0.2, playback: "live", boundaries: [0.1],
   }], artifactDirectory: "browser-smoke-artifacts/circle-surround",
     prepareContext: disableAuthoringJspi });
+  await qualifyPairedAuthoring({
+    cases: [1.3, 2.125, 2.875, 3.5].map(sampleTime => ({
+      id: `glow-pulse-${sampleTime}`, file: "glow_pulse.py",
+      factory: "createDirectGlowPulseSmokeRenderer", objectCount: 3,
+      duration: 3.5, sampleTime, playback: "live",
+      boundaries: [0.5, 1, 1.6, 2, 2.5, 2.75, 3.25],
+      stopAtSourceCompletion: sampleTime === 3.5,
+    })),
+    artifactDirectory: "browser-smoke-artifacts/glow-pulse",
+    prepareContext: disableAuthoringJspi,
+  });
   await import("./object-membership-qualification.mjs");
 }

@@ -34,7 +34,9 @@ use swash::{
 use super::raster_image_gpu::{
     RasterImageDrawError, RasterImageGpuRenderer, RasterImageResidencyStats, RasterImageUploadStats,
 };
-use super::raster_image_prepare::{ImagePreparation, ImageUniform, RasterImageFramePreparer};
+use super::raster_image_prepare::{
+    ImagePreparation, ImageUniform, PreparedImageObject, RasterImageFramePreparer,
+};
 use super::{
     push_upload_write, Camera2D, CameraUniform, DrawStats, GpuRenderer, Inset2DGpuView,
     RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
@@ -279,8 +281,21 @@ pub enum RetainedPreparedObjectOutcome {
 
 impl PreparedRetainedGpuFrame<'_> {
     pub(super) fn capture_items(&self, object: ObjectId) -> Option<&[RetainedRenderItem]> {
+        if let Some(item) = self
+            .object_indices
+            .get(&object)
+            .and_then(|index| self.painter_ranks.get(*index))
+            .and_then(|rank| self.image_draw.items().get(rank))
+            .filter(|item| item.object_id() == object)
+        {
+            return Some(std::slice::from_ref(item));
+        }
         let source = self.capture_items.as_ref()?;
         source.items.get(source.ranges.get(&object)?.clone())
+    }
+
+    pub(super) fn capture_image(&self, index: usize) -> Option<&PreparedImageObject> {
+        self.images.objects.get(&index)
     }
 
     pub(super) fn source_is_visible(&self, object: ObjectId) -> bool {
@@ -290,6 +305,14 @@ impl PreparedRetainedGpuFrame<'_> {
         let Some(&rank) = self.painter_ranks.get(index) else {
             return false;
         };
+        if self
+            .image_draw
+            .items()
+            .get(&rank)
+            .is_some_and(|item| item.object_id() == object)
+        {
+            return true;
+        }
         self.render_items
             .binary_search_by_key(&rank, |item| {
                 self.object_indices
@@ -3983,6 +4006,14 @@ impl GpuRenderer {
             {
                 let (_, image) = images.next().expect("peeked image draw item");
                 if !excluded.contains(&image.object_id())
+                    && self.draw_source_glow(pass, image.object_id(), sample_count == 1)
+                {
+                    binding = None;
+                    stats.geometry.draw_calls += 1;
+                    stats.geometry.instances_drawn += 1;
+                    continue;
+                }
+                if !excluded.contains(&image.object_id())
                     && self.draw_retained_image_with_camera(pass, image, sample_count, camera)?
                 {
                     binding = None;
@@ -4084,6 +4115,13 @@ impl GpuRenderer {
             }
         }
         for (_, image) in images {
+            if !excluded.contains(&image.object_id())
+                && self.draw_source_glow(pass, image.object_id(), sample_count == 1)
+            {
+                stats.geometry.draw_calls += 1;
+                stats.geometry.instances_drawn += 1;
+                continue;
+            }
             if !excluded.contains(&image.object_id())
                 && self.draw_retained_image_with_camera(pass, image, sample_count, camera)?
             {

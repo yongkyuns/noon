@@ -979,7 +979,13 @@ pub(super) fn validate_glow_source_profile(
                     && resource.bounds.max.y > resource.bounds.min.y
             })
         }
-        _ => false,
+        SemanticObjectContent::Image(image) => {
+            noon_core::SemanticImageContent::supports_style(&state.style)
+                && store
+                    .raster_image_resources()
+                    .get(image.resource())
+                    .is_some_and(|resource| resource.width() > 0 && resource.height() > 0)
+        }
     };
     lower_semantic_style(owner, state)?;
     if !geometry_supported
@@ -1496,6 +1502,101 @@ mod tests {
         text_state.style.fill = None;
         let text_id = store.insert_semantic_object(text_state.clone());
         validate_glow_source_profile(text_id, &text_state, &store).unwrap();
+    }
+
+    #[test]
+    fn image_glow_lowers_shared_resource_and_preserves_source_and_sampling() {
+        use noon_core::{
+            Glow, GlowSource, GlowUpdate, RasterImageResourceError, RasterImageSampling,
+            SemanticImageContent, SemanticMutationTransaction,
+        };
+
+        for sampling in [
+            RasterImageSampling::Nearest,
+            RasterImageSampling::Linear,
+            RasterImageSampling::Bicubic,
+        ] {
+            for source in [GlowSource::Painted, GlowSource::Silhouette] {
+                let mut store = SemanticStore::new();
+                let owner = store
+                    .with_raster_image_rgba8(
+                        2,
+                        1,
+                        [255_u8, 0, 0, 255, 0, 0, 255, 64],
+                        |store, resource| {
+                            let mut state = SemanticObjectState::new(
+                                SemanticImageContent::with_sampling(resource, sampling),
+                            );
+                            state.style.fill = Some(SemanticPaint::Solid(Color::WHITE));
+                            state.style.fill_opacity = 0.4;
+                            state.style.object_opacity = 0.7;
+                            let owner = attach(store, state);
+                            let mut transaction = SemanticMutationTransaction::new();
+                            transaction.create_effect(
+                                owner,
+                                "glow",
+                                Glow::new(GlowUpdate::default().source(source)).unwrap(),
+                            );
+                            transaction.apply(store).unwrap();
+                            Ok::<_, RasterImageResourceError>(owner)
+                        },
+                    )
+                    .unwrap();
+                let mut index = SemanticExecutionIndex::new();
+                let lowered = index.lower_scene(&store).unwrap();
+                let [row] = lowered.objects() else {
+                    panic!("one image source must remain one execution object");
+                };
+                assert_eq!(row.semantic_id, owner);
+                let image = row.content.image().unwrap();
+                assert_eq!(image.sampling(), sampling);
+                assert!(store
+                    .raster_image_resources()
+                    .get(image.resource())
+                    .is_some());
+                assert_eq!(row.glow.as_ref().unwrap().definition.source(), source);
+                assert!((row.base_style.fill.unwrap().alpha - 0.4).abs() < 1e-6);
+                assert!((row.base_style.opacity - 0.7).abs() < 1e-6);
+                assert_eq!(store.raster_image_resources().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn image_glow_profile_rejects_missing_pixels_recolor_stroke_and_spatial_pose() {
+        use noon_core::{RasterImageResourceError, SemanticImageContent};
+
+        let mut store = SemanticStore::new();
+        let owner = store
+            .with_raster_image_rgba8(1, 1, [255_u8; 4], |store, resource| {
+                let mut state = SemanticObjectState::new(SemanticImageContent::new(resource));
+                state.style.fill = Some(SemanticPaint::Solid(Color::WHITE));
+                Ok::<_, RasterImageResourceError>(attach(store, state))
+            })
+            .unwrap();
+        let original = store.semantic_object_state_checked(owner).unwrap().clone();
+        validate_glow_source_profile(owner, &original, &store).unwrap();
+        let mut missing = original.clone();
+        let mut handle = missing.content.image().unwrap().resource();
+        handle.version += 1;
+        missing.content = SemanticImageContent::new(handle).into();
+        let mut recolored = original.clone();
+        recolored.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        let mut stroked = original.clone();
+        stroked.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        let mut spatial = original.clone();
+        spatial.transform = noon_core::SemanticWorldTransform3D::IDENTITY.into();
+        for unsupported in [missing, recolored, stroked, spatial] {
+            assert!(matches!(
+                validate_glow_source_profile(owner, &unsupported, &store),
+                Err(SemanticLoweringError::UnsupportedGlowProfile { owner: rejected })
+                    if rejected == owner
+            ));
+        }
+        assert_eq!(
+            store.semantic_object_state_checked(owner).unwrap(),
+            &original
+        );
     }
 
     #[test]

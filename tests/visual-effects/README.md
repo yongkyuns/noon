@@ -1,5 +1,109 @@
 # Visual-effects contract fixtures
 
+## Current authored GlowPulse extension
+
+`GlowPulse(obj, intensity=2.0)` is an ordinary authored animation for one supported
+leaf already present in the execution scene. It owns only the canonical glow's
+intensity and defaults to one second with `there_and_back`. Its Rust counterpart is
+`live.declare_and_activate_glow_pulse(&obj, 2.0, AnimationOptions::new())`;
+`Scene::declare_glow_pulse` also creates a replayable inert declaration.
+Construction does not enroll an attachment or capture a source value.
+
+The shared compiler captures coherent effective intensity at activation and emits
+an ordinary `Property::GlowIntensity` track with `GlowTrackEndBehavior::RestoreSource`.
+The existing composition time map runs before the leaf amplitude map. At the mapped
+child endpoint the channel restores its captured source, including when a Linear
+or other non-returning rate override makes that restoration discontinuous. A later
+non-overlapping Succession child captures this restored endpoint. A reversing
+parent can revisit the child; reaching the enclosing root's end forces restoration.
+No additional effect clock, runtime, scheduler or frontend lifecycle state is used.
+
+| Situation | Shared behavior |
+| --- | --- |
+| Existing canonical glow | Capture effective intensity; preserve color, radius, source and attachment identity |
+| No glow | Atomically enroll a neutral canonical attachment using documented glow defaults and intensity zero |
+| Child completes before its enclosing composition | Restore intensity immediately; retain neutral temporary identity so a reversing parent can revisit it |
+| Enclosing segment completes | Remove only the exact temporary attachment generation that remains unadopted |
+| Explicit persistent color or radius edit | Adopt that attachment and preserve the pulse intensity channel |
+| Explicit persistent intensity edit | Adopt that attachment and supersede its pending pulse intensity tracks, including later leaves in the same prepared segment |
+| Explicit same-valued edit | Preserve its write intent; adoption and channel supersession do not depend on dirty-value impacts |
+| Ordinary glow parameter target beside a pulse | Adopt the shared attachment for its persistent result; retain the normal pending-driver guard for those ordinary parameters |
+| Overlapping intensity drivers | Reject the whole activation before publication |
+
+Persistent edits use the ordinary semantic transaction and execution publication
+boundary. Structural removal/replacement retains the existing pending-segment
+guard. Live parameter edits retain the existing executable schema: radius units
+and source mode cannot change within a live attachment. Animated method targets
+retain explicit parameter intent in shared Rust,
+so `.animate` motion or radius edits do not accidentally take ownership of intensity
+merely because an effective pulse differs from authored base state. The equivalent
+Rust composition uses `TransformToRequest::method_target()`. An ordinary full
+`Transform` still targets the complete copied appearance, including returning to
+an untouched earlier snapshot; explicit same-valued writes own their parameter
+in either form.
+
+Intensity must be finite and in `[0, 8]`; duration must be finite and positive.
+The normal animation/local/play option precedence applies. Omitted numeric options
+cross Python/WASM as `None`; an explicit NaN is preserved for shared validation.
+Pulse leaves reject introducer/remover flags, nonzero lag and Transform-only path
+arcs. Shared bounded rate functions, including reversing amplitude maps, are
+supported. Elastic/Back leaf rates are rejected because they overshoot the supported
+parameter interval; bounded floating-point roundoff is normalized at sampling.
+
+The paired `glow_pulse` examples exercise a persistent halo, temporary enrollment,
+disjoint motion/radius editing and forward/reversed Linear overrides through the
+existing authored segment path.
+Runtime, transaction and publication tests establish temporal and ownership
+semantics. The native `authored_glow_pulse_pixels_restore_and_replay` fixture
+compares six persistent/temporary and default/Linear/reversed-Linear profiles
+against an independent full two-dimensional Gaussian at five rational times. It
+checks full RGBA error, visible pulse controls, exact repeated and rewind samples,
+baseline restoration, retained persistent identity and temporary retirement.
+The existing browser smoke samples actual halo and restored pixels and compares
+the paired Rust/WASM and Python programs. Qualification is recorded from executed
+checks on the owning PR. This does not enable click-triggered pulses, family
+broadcasting, stacks, group/backdrop scopes or custom shaders; those remain separate work under
+[#1897](https://github.com/yongkyuns/noon/issues/1897).
+
+## Current image-source extension
+
+The executable leaf-glow profile now includes immutable planar raster images,
+alongside geometry and Text/MathTypst. Image effects use the same `set_glow`,
+`.animate.set_glow`, named attachment, and explicit removal operations. The paired
+`image_glow` Rust/Python examples prepare one RGBA texture, share it between two
+images, and animate only ordinary pose and glow parameters.
+
+Image coverage is its sampled intrinsic alpha, including soft and fully
+transparent texels. `source="painted"` also includes image fill opacity;
+`source="silhouette"` ignores that paint modulation but retains intrinsic alpha.
+Neither mode substitutes the rectangular image bounds for a transparent cutout.
+Final object opacity and appearance apply once to the composed source and halo.
+All three existing image sampling modes use the ordinary premultiplied-alpha
+image shader; hidden RGB in alpha-zero texels does not supply painted coverage.
+
+Image capture borrows the resident texture and image pipeline. Its disposable
+normalized instance binding is distinct from the ordinary instance, so enabling
+an effect does not modify the image used elsewhere. Radius/color/intensity edits
+reuse immutable image pixels. Source capture remains a renderer responsibility,
+not another authored resource, shader clock, or scene representation.
+
+`image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle` in the existing
+native `glow_scene_raster` target compares all RGBA channels against an independent
+full two-dimensional Gaussian using separate ordinary image renders. It covers
+nearest/bilinear/bicubic sampling, both source modes, paint and scope opacity,
+affine movement, same-time and seek equality, neutral restoration and removal.
+This qualifies filter/composition behavior, not independent image rasterization
+or physical-GPU speed. The existing browser authoring smoke executes the paired
+Python example and verifies completion and the retained ordinary image.
+
+Arbitrary image fills inside vector geometry, procedural paint, effect stacks,
+composed groups, backdrop capture and custom shaders remain separate
+work under [#1897](https://github.com/yongkyuns/noon/issues/1897). The following M0
+sections preserve the original design and declaration-stage evidence; their
+historical execution guards are not a current support matrix.
+
+## Historical M0 contract and evidence
+
 M0 work for [#1897](https://github.com/yongkyuns/noon/issues/1897).
 `docs/architecture.md` is the sole architecture/roadmap authority; this is an
 acceptance specification and reference-fixture description, not another roadmap.

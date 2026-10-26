@@ -136,6 +136,8 @@ struct ResidentGlow {
     silhouette: Option<CaptureImage>,
     source_buffer: wgpu::Buffer,
     silhouette_buffer: Option<wgpu::Buffer>,
+    source_image_binding: Option<super::raster_image_gpu::CapturedImageBinding>,
+    silhouette_image_binding: Option<super::raster_image_gpu::CapturedImageBinding>,
     camera_buffer: wgpu::Buffer,
     camera_binding: wgpu::BindGroup,
     text_camera_binding: Option<wgpu::BindGroup>,
@@ -443,7 +445,7 @@ impl GpuRenderer {
         request: AnalyticGlowRequest,
         key: (u8, usize),
         object: ObjectId,
-        effective: SourceInstance,
+        mut effective: SourceInstance,
         bounds: GlowPixelBounds,
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
@@ -530,6 +532,12 @@ impl GpuRenderer {
         if total > request.texture_budget_bytes {
             return Err(GlowPrepareError::ScratchBudgetExceeded);
         }
+        if let SourceInstance::Draws { source, silhouette } = &mut effective {
+            Arc::make_mut(source).set_capture_origin(tile.origin);
+            if let Some(silhouette) = silhouette {
+                Arc::make_mut(silhouette).set_capture_origin(tile.origin);
+            }
+        }
         let mut source_instance = effective.clone();
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
@@ -596,6 +604,8 @@ impl GpuRenderer {
                         silhouette,
                         source_buffer,
                         silhouette_buffer,
+                        source_image_binding: None,
+                        silhouette_image_binding: None,
                         text_camera_binding: text
                             .map(|text| text.glyphs.capture_camera_binding(device, &camera_buffer)),
                         multisampled: (key.0 == 2).then(|| {
@@ -654,6 +664,14 @@ impl GpuRenderer {
                     SourceInstance::Draws { source, silhouette } => {
                         let text = text.expect("isolated text capture state");
                         source
+                            .prepare_image_binding(
+                                self,
+                                device,
+                                &scope.source_buffer,
+                                &mut scope.source_image_binding,
+                            )
+                            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                        source
                             .encode(
                                 self,
                                 text,
@@ -667,6 +685,7 @@ impl GpuRenderer {
                                     .as_ref()
                                     .expect("isolated text camera"),
                                 &scope.source_buffer,
+                                scope.source_image_binding.as_ref(),
                             )
                             .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
                         stats.source_passes = 1;
@@ -674,6 +693,14 @@ impl GpuRenderer {
                             (silhouette, &scope.silhouette, &scope.silhouette_buffer)
                         {
                             queue.write_buffer(buffer, 0, &source.bytes);
+                            source
+                                .prepare_image_binding(
+                                    self,
+                                    device,
+                                    buffer,
+                                    &mut scope.silhouette_image_binding,
+                                )
+                                .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
                             source
                                 .encode(
                                     self,
@@ -688,6 +715,7 @@ impl GpuRenderer {
                                         .as_ref()
                                         .expect("isolated text camera"),
                                     buffer,
+                                    scope.silhouette_image_binding.as_ref(),
                                 )
                                 .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
                             stats.source_passes += 1;
@@ -998,7 +1026,9 @@ fn instance_buffer(device: &wgpu::Device, bytes: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Noon isolated analytic glow source"),
         size: bytes.max(size_of::<CircleInstance>()).next_power_of_two() as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::VERTEX
+            | wgpu::BufferUsages::UNIFORM
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
 }

@@ -93,7 +93,7 @@ impl ScheduledCaptures {
             if let Some(index) = self.latest_tracks.get(&key) {
                 let track = &tracks[*index];
                 if track.animation == owner {
-                    let alpha = track.timing.terminal_progress();
+                    let alpha = track.values.terminal_progress(track.timing);
                     if alpha != 0.0 && alpha != 1.0 {
                         continue;
                     }
@@ -127,7 +127,7 @@ pub(super) fn completed_effective_properties_before(
             TrackActivationRelation::Overlapping => return None,
             TrackActivationRelation::Completed => {}
         }
-        let alpha = track.timing.terminal_progress();
+        let alpha = track.values.terminal_progress(track.timing);
         if alpha != 0.0 && alpha != 1.0 {
             return None;
         }
@@ -192,6 +192,7 @@ fn apply_effective_track_endpoint(
                 attachment,
                 from,
                 to,
+                ..
             },
         ) => {
             let glow = value.glow.as_mut()?;
@@ -307,4 +308,132 @@ pub(super) fn known_intervals<'a>(
                 .map(|interval| (leaf.animation, interval))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CompiledGlow, PreparedSemanticScheduledAnimationPayload};
+    use noon_core::{
+        Color, CompositionTimeMap, CompositionTimeMapStep, Glow, GlowTrackEndBehavior,
+        GlowTrackValue, GlowUpdate, Pixels, RateFunction, ResolvedAnimationOptions, SemanticNodeId,
+        SemanticTransformInterpolation, Style, TrackTiming, Transform2D, Vec2,
+    };
+
+    #[test]
+    fn sequential_capture_uses_channel_terminal_behavior() {
+        let object = ObjectId::new(1);
+        let attachment = SemanticNodeId::new(3, 7);
+        let first_animation = SemanticTransactionNodeRef::Existing(SemanticNodeId::new(10, 0));
+        let next_animation = SemanticTransactionNodeRef::Existing(SemanticNodeId::new(11, 0));
+        let target = SemanticTransactionNodeRef::Existing(SemanticNodeId::new(1, 0));
+        let captured_intensity = 0.613456789012345;
+        let peak = 2.0;
+        let source = EffectiveAnimationProperties {
+            glow: Some(CompiledGlow {
+                attachment,
+                definition: Glow::new(
+                    GlowUpdate::default()
+                        .color(Color::BLUE)
+                        .radius(Pixels(3.25))
+                        .intensity(0.35),
+                )
+                .unwrap(),
+            }),
+            z_index: 4.5,
+            transform: Transform2D {
+                translation: Vec2::new(2.0, -1.0),
+                ..Transform2D::IDENTITY
+            },
+            style: Style::default(),
+            appearance: 0.75,
+            reveal: 1.0,
+            world_transform: None,
+            camera_profile: None,
+        };
+        let leaf = PreparedSemanticScheduledAnimationLeaf {
+            finish_time_map: CompositionTimeMap::identity(),
+            animation: next_animation,
+            target,
+            execution_object_id: object,
+            payload: PreparedSemanticScheduledAnimationPayload::TransformTo {
+                target_state: target,
+                interpolation: SemanticTransformInterpolation::Affine,
+                complete_priority: false,
+            },
+            timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                0.5,
+                0.25,
+                RateFunction::Linear,
+            )]),
+            options: ResolvedAnimationOptions {
+                run_time: 1.0,
+                rate_func: RateFunction::Linear,
+                lag_ratio: 0.0,
+                path_arc: 0.0,
+                reverse_rate_function: false,
+                remover: false,
+                introducer: false,
+            },
+        };
+        let intervals =
+            HashMap::from([(first_animation, (0.0, 2.0)), (next_animation, (2.0, 3.0))]);
+        for (end_behavior, rate, expected_intensity) in [
+            (
+                GlowTrackEndBehavior::RestoreSource,
+                RateFunction::Linear,
+                captured_intensity,
+            ),
+            (GlowTrackEndBehavior::Sample, RateFunction::Linear, peak),
+            // This ordinary terminal sample is exactly one in f32, but slightly
+            // below one in f64. Endpoint capture keeps its existing contract.
+            (GlowTrackEndBehavior::Sample, RateFunction::EaseInSine, peak),
+        ] {
+            let track = PreparedSemanticAnimationTrack {
+                animation: first_animation,
+                target,
+                execution_object_id: object,
+                property: Property::GlowIntensity,
+                completion: SemanticAnimationCompletion::Release,
+                values: TrackValues::Glow {
+                    attachment,
+                    from: GlowTrackValue::Intensity(captured_intensity),
+                    to: GlowTrackValue::Intensity(peak),
+                    end_behavior,
+                },
+                timing: TrackTiming::new(0.0, 4.0, rate),
+                time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                    0.0,
+                    0.5,
+                    RateFunction::Linear,
+                )]),
+            };
+            let mut expected = source;
+            let glow = expected.glow.as_mut().unwrap();
+            glow.definition = GlowUpdate::default()
+                .intensity(expected_intensity)
+                .apply_to(glow.definition)
+                .unwrap();
+            let tracks = [track];
+            let mut captures = ScheduledCaptures::default();
+            captures.insert(object, source);
+            let mut driven =
+                HashMap::from([(driver_key(object, Property::GlowIntensity), first_animation)]);
+
+            captures.begin_leaf(&leaf, &mut driven, &tracks, &intervals, true);
+            assert_eq!(captures.get(object), Some(expected));
+            assert!(driven.is_empty(), "completed child releases its channel");
+            assert_eq!(
+                completed_effective_properties_before(source, object, 2.0, &tracks),
+                Some(expected),
+                "activation correspondence and ordinary sequential captures agree"
+            );
+            assert_eq!(
+                completed_effective_properties_before(source, object, 1.0, &tracks),
+                None,
+                "an overlapping driver remains unavailable for endpoint capture"
+            );
+        }
+    }
 }

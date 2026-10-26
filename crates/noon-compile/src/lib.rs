@@ -185,6 +185,7 @@ impl CompiledGlow {
                             .expect("glow property"),
                         to: noon_core::GlowTrackValue::from_definition(property, target)
                             .expect("glow property"),
+                        end_behavior: noon_core::GlowTrackEndBehavior::Sample,
                     },
                 ));
             }
@@ -2683,6 +2684,7 @@ pub(crate) fn validate_glow_track_attachment(
         attachment,
         from,
         to,
+        ..
     } = track.values
     {
         let Some(glow) = glow.filter(|glow| glow.attachment == attachment) else {

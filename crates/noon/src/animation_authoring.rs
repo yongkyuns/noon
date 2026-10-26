@@ -123,6 +123,25 @@ impl crate::Scene {
         )
     }
 
+    /// Declare a replayable intensity pulse. Activation captures the effective glow;
+    /// an absent canonical attachment is enrolled neutrally by the live session.
+    pub fn declare_glow_pulse(
+        &self,
+        target: &Mobject,
+        intensity: f64,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::GlowPulse {
+                target: target.node_id(),
+                intensity,
+            },
+            options,
+        )
+    }
+
     /// Declare one transient flash over an exact analytic Line.
     pub fn declare_passing_flash(
         &self,
