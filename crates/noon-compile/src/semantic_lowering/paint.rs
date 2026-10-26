@@ -83,10 +83,15 @@ pub fn project_image_mapping(
         .map_err(|_| invalid())?;
     let translation = mapping.transform().translation();
     let displacement = 2.0 + translation[0].abs() + translation[1].abs();
-    if rows.iter().any(|row| {
+    if rows.iter().enumerate().any(|(axis, row)| {
         let norm = row[0].hypot(row[1]);
+        // Sampling converts UVs to texel coordinates before reconstructing the
+        // filter. Bound that product too, including a rotation-independent
+        // displacement margin and the fitted alignment offset.
+        let texel_bound =
+            (2.0 * norm * displacement + row[2].abs() + 2.0) * f64::from(image_size[axis]);
         norm < 4.0 * f64::from(f32::MIN_POSITIVE)
-            || norm * displacement + 2.0 > f64::from(f32::MAX) / 4.0
+            || texel_bound > f64::from(f32::MAX) / 4.0
             || row.iter().any(|v| !(*v as f32).is_finite())
     }) {
         return Err(invalid());

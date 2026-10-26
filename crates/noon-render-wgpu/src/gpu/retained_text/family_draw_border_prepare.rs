@@ -126,7 +126,8 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
-        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
+        let images =
+            self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         self.prepare_canonical_mixed_baseline(
             device,
             frame.retained,

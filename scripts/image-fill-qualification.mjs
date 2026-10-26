@@ -50,8 +50,26 @@ class ImageSurface(Scene):
 `,
 }));
 
+// ImageMobject's native default is bicubic. An ImagePaint made from it must
+// preserve that existing Rust value unless the script explicitly overrides it.
+staticCases.push({
+  id:"image-fill-bitmap-default", profile:{fit:"contain",address:"repeat",sampling:"bicubic"},
+  factory:"createDirectImageFillProfileSmokeRenderer", factoryArgs:[26], objectCount:1,
+  duration:0, sampleTime:0, canvasSize:[640,360],
+  source:`from noon import ImageMapping, ImagePaint, ImageMobject, Rectangle, Scene
+class ImageSurface(Scene):
+    def construct(self):
+        bitmap = ImageMobject(${JSON.stringify([pixels.slice(0,3),pixels.slice(3)])})
+        panel = Rectangle(width=4, height=2, stroke=None)
+        mapping = ImageMapping(fit="contain", alignment=(0.23,0.71), address="repeat", translation=(0.173,-0.231), scale=(-0.71,0.58), rotation=0.37)
+        panel.set_fill(ImagePaint(bitmap, mapping=mapping), opacity=0.7)
+        panel.set_object_opacity(0.6)
+        self.add(panel)
+`,
+});
+
 await qualifyPairedAuthoring({
-  artifactDirectory: "browser-smoke-artifacts/image-fill-authoring",
+  artifactDirectory: process.env.NOON_IMAGE_FILL_ARTIFACTS ?? "browser-smoke-artifacts/image-fill-authoring",
   cases: [...staticCases, ...[0.25,0.75,1,1.5,1.8,2.1,2.25].map(sampleTime => ({
     id: `image-fill-${sampleTime}`, file: "image_fill.py", factory: "createDirectImageFillSmokeRenderer",
     objectCount: 1, duration: 2.25, sampleTime, playback: "live", canvasSize: [640,360],

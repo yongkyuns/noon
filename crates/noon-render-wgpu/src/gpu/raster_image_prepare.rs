@@ -165,6 +165,7 @@ impl RasterImageFramePreparer {
         frame: &FrameState,
         changes: &FrameChanges,
         resources: Option<&dyn RasterImageResourceLookup>,
+        geometries: &(impl noon_core::GeometryResourceLookup + ?Sized),
         texture_limit: u32,
     ) -> Result<ImagePreparation, RasterImagePrepareError> {
         let reset = changes.is_all() || !self.initialized;
@@ -194,9 +195,12 @@ impl RasterImageFramePreparer {
                     });
                 }
                 let object = &frame.objects[index];
-                let bounds = object
+                let geometry = object
                     .geometry()
-                    .and_then(|geometry| geometry.local_bounds())
+                    .ok_or(RasterImagePrepareError::InvalidPresentation(object.id))?;
+                // Use the same versioned geometry lookup as ordinary retained
+                // path preparation. External IDs have no inline local bounds.
+                let bounds = super::retained_text::resolve_geometry_bounds(geometry, geometries)
                     .ok_or(RasterImagePrepareError::InvalidPresentation(object.id))?;
                 let size = bounds.max - bounds.min;
                 noon_compile::project_image_mapping(

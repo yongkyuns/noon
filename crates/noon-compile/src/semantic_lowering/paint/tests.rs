@@ -151,4 +151,8 @@ fn image_projection_bounds_rotated_coordinates_before_narrowing() {
         )
         .is_err());
     }
+    assert!(
+        project_image_mapping(mapping([0.0; 2], [1e-36, 1.0], 0.0), [4.0, 2.0], [4096, 1]).is_err(),
+        "finite UV coefficients must not overflow the filtered texel coordinates"
+    );
 }

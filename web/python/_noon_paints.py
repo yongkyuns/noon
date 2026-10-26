@@ -87,11 +87,12 @@ class ImagePaint:
     """Immutable PNG/JPEG, uint8 array, or ImageMobject pixels for a planar fill.
 
     Construction admits no scene object. Reusing an ImageMobject shares its
-    immutable pixels. UV animation uses ordinary Rust fill-channel semantics.
+    immutable pixels and sampling unless explicitly overridden. Array/encoded
+    defaults come from Rust preparation. UV animation uses ordinary fill semantics.
     """
     __slots__ = ("_definition",)
 
-    def __init__(self, source, *, mapping=None, sampling="linear"):
+    def __init__(self, source, *, mapping=None, sampling=None):
         from js import noonImagePaintOptions
         from _manim_image import ImageMobject, _sampling, _encoded_bytes, _rgba8_array, _js_bytes
         from _manim_semantic_handles import _handle_for
@@ -104,7 +105,8 @@ class ImagePaint:
             width, height, pixels = _rgba8_array(source)
             candidate = engine_call(noonImagePaintOptions.rgba8, width, height, _js_bytes(pixels))
         try:
-            engine_call(candidate.setSampling, _sampling(sampling))
+            if sampling is not None:
+                engine_call(candidate.setSampling, _sampling(sampling))
             if mapping is not None:
                 if not isinstance(mapping, ImageMapping):
                     raise TypeError("image mapping must be an ImageMapping")

@@ -1531,7 +1531,7 @@ impl RetainedFramePreparer {
         visible_object_indices: Option<&[usize]>,
         images: Option<&dyn RasterImageResourceLookup>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        let staged = self.stage_image_publication(device, frame, changes, images)?;
+        let staged = self.stage_image_publication(device, frame, changes, images, geometries)?;
         let mut prepared = self.prepare_geometry_text_inner(
             device,
             frame,
@@ -1680,6 +1680,7 @@ impl RetainedFramePreparer {
         frame: &FrameState,
         changes: &FrameChanges,
         images: Option<&dyn RasterImageResourceLookup>,
+        geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<PreparedImagePublication, RetainedPrepareError> {
         let rows = self
             .images
@@ -1687,6 +1688,7 @@ impl RetainedFramePreparer {
                 frame,
                 changes,
                 images,
+                geometries,
                 device.limits().max_texture_dimension_2d,
             )
             .map_err(RetainedPrepareError::Image)?;
@@ -3115,6 +3117,22 @@ fn same_analytic_geometry_kind(left: Option<&GeometryRef>, right: Option<&Geomet
             Some(GeometryRef::Line { .. })
         )
     )
+}
+
+/// Borrow immutable content for bounds admission; UV-only checks must not clone
+/// a resource-backed path's command buffer just to read its coordinate box.
+pub(super) fn resolve_geometry_bounds(
+    geometry: &GeometryRef,
+    geometries: &(impl GeometryResourceLookup + ?Sized),
+) -> Option<noon_core::Rect> {
+    let GeometryRef::External(id) = geometry else {
+        return geometry.local_bounds();
+    };
+    let handle = geometries.current_handle(*id)?;
+    let GeometryResource::VectorPath(path) = geometries.get(handle)? else {
+        return None;
+    };
+    path.conservative_bounds()
 }
 
 fn resolve_geometry_ref(
@@ -5653,6 +5671,99 @@ mod tests {
         assert!(draw.text.draw_calls > 0);
     }
 
+    #[test]
+    fn image_paint_resolves_shared_path_bounds_before_atomic_renderer_publication() {
+        let (mut frame, texts, fonts, mut geometries) = mixed_text_frame();
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-2.0, -1.0))
+            .line_to(Vec2::new(2.0, -1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-2.0, 1.0))
+            .close();
+        let bounds = path.conservative_bounds().unwrap();
+        let geometry = geometries.insert_path(path.clone());
+        let mut images = noon_core::RasterImageResourceArena::new();
+        let handle = images.intern_rgba8(1, 1, [17, 73, 191, 128]).unwrap();
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::External(geometry.id));
+        frame.objects[0].fill_paint = Some(Arc::new(noon_core::SemanticPaint::Image(Arc::new(
+            noon_core::ImagePaint::new(
+                handle,
+                noon_core::ImageMapping::default(),
+                noon_core::RasterImageSampling::Linear,
+            ),
+        ))));
+        frame.objects[0].style.fill = Some(Color::WHITE);
+        frame.objects[0].style.stroke = None;
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut gpu_text = renderer.create_retained_text_state(&device, &queue);
+        {
+            let prepared = preparer
+                .prepare_with_image_resources(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &images,
+                    TextDeviceMetrics::uniform(10.0).unwrap(),
+                )
+                .expect("accepted resource-backed vector paint must resolve its local bounds");
+            assert_eq!(prepared.images.paints.len(), 1);
+            assert_eq!(prepared.images.paints[&0].handle, handle);
+            let paint = prepared
+                .geometry
+                .fill_paints
+                .values()
+                .find(|paint| paint.definition.as_image().is_some())
+                .unwrap();
+            assert_eq!(paint.bounds, bounds);
+            let upload = renderer.upload_retained(&device, &queue, &prepared, &mut gpu_text);
+            assert_eq!(upload.images.textures_uploaded, 1);
+            assert_eq!(upload.images.pixel_bytes_uploaded, 4);
+        }
+        let generation = preparer.images.generation;
+        geometries.remove(geometry.id).unwrap();
+        assert!(preparer
+            .prepare_with_image_resources(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                &images,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .is_err());
+        assert_eq!(preparer.images.generation, generation);
+        assert_eq!(preparer.images.paints[&0].handle, handle);
+        let replacement = geometries.insert_path(path);
+        assert_ne!(replacement.id, geometry.id);
+        frame.objects[0].content =
+            ObjectContentRef::Geometry(GeometryRef::External(replacement.id));
+        let prepared = preparer
+            .prepare_with_image_resources(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                &images,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.images.paints[&0].handle, handle);
+        assert_eq!(
+            renderer
+                .upload_retained(&device, &queue, &prepared, &mut gpu_text)
+                .images,
+            RasterImageUploadStats::default()
+        );
+    }
     #[test]
     fn encoded_frame_keeps_retired_image_and_compacted_paths_alive_until_submit() {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();

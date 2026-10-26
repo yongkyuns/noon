@@ -65,7 +65,7 @@ class PaintFacadeTests(unittest.TestCase):
              patch.object(handles, "_is_shared_family", return_value=False), \
              patch.object(handles, "_live_mutation_context", return_value=None):
             mapping = noon.ImageMapping(translation=(0.173, -0.231), scale=(-0.7, 1.2))
-            paint = noon.ImagePaint([[[17, 73, 191, 128]]], mapping=mapping)
+            paint = noon.ImagePaint([[[17, 73, 191, 128]]], mapping=mapping, sampling="linear")
             factory.rgba8.assert_called_once_with(1, 1, (17, 73, 191, 128))
             candidate.setSampling.assert_called_once_with("bilinear")
             candidate.setMapping.assert_called_once_with(mapping_definition)
@@ -90,3 +90,21 @@ class PaintFacadeTests(unittest.TestCase):
                 value.set_fill_image_mapping(object())
             with self.assertRaises(TypeError):
                 value.set_fill_image_mapping(mapping, opacity=True)
+
+
+    def test_image_bitmap_sampling_default_stays_with_the_shared_rust_value(self):
+        candidate, handle = Mock(), Mock()
+        factory = Mock()
+        factory.fromImage.return_value = candidate
+        js = types.ModuleType("js")
+        js.noonImagePaintOptions = factory
+        bitmap = object.__new__(noon.ImageMobject)
+        with patch.dict(sys.modules, {"js": js}), \
+             patch.object(handles, "_handle_for", return_value=handle):
+            paint = noon.ImagePaint(bitmap)
+            self.assertIs(paint._definition, candidate)
+            factory.fromImage.assert_called_once_with(handle)
+            candidate.setSampling.assert_not_called()
+            noon.ImagePaint(bitmap, sampling="nearest")
+            candidate.setSampling.assert_called_once_with("nearest")
+            factory.rgba8.assert_not_called()
