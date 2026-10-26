@@ -286,6 +286,156 @@ fn no_effect_visibility_is_borrowed_and_clean_glow_path_is_zero_work() {
 }
 
 #[test]
+fn glow_order_initially_effect_free_publication_prepares_later_local_attachment() {
+    let mut fixture = Fixture::new();
+    let mut scene = runtime(4096, false, false);
+    let initial = fixture.prepare(&mut scene, true);
+    assert_eq!(initial.rows_examined, 4096);
+    assert_eq!(initial.sources_prepared, 0);
+    // Initial publication owns the full inverse-order construction, including
+    // an effect-free scene. A later local attachment must not need that scan.
+    let publication = scene.take_renderer_publication();
+    assert_eq!(
+        fixture.renderer.retained_glow.painter_ranks.len(),
+        publication.frame().objects.len()
+    );
+    for (rank, &index) in publication.painter_order().iter().enumerate() {
+        assert_eq!(
+            fixture.renderer.retained_glow.painter_ranks[index as usize],
+            rank
+        );
+    }
+    drop(publication);
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetZIndex {
+            object: ObjectId::new(101),
+            value: -2.0,
+        })
+        .unwrap();
+    assert_eq!(
+        fixture.prepare(&mut scene, true),
+        RetainedGlowStats::default()
+    );
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            object: ObjectId::new(101),
+            expected: None,
+            glow: Some(Arc::new(CompiledGlow {
+                attachment: SemanticNodeId::new(31, 5),
+                definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0))).unwrap(),
+            })),
+        })
+        .unwrap();
+    assert!(scene.frame_changes().painter_order_range().is_none());
+    let attached = fixture.prepare(&mut scene, true);
+    assert_eq!((attached.rows_examined, attached.sources_prepared), (1, 1));
+    assert_eq!(
+        fixture.prepare(&mut scene, true),
+        RetainedGlowStats {
+            retained_texture_bytes: attached.retained_texture_bytes,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn glow_order_reattachment_keeps_reorders_published_without_effects() {
+    for mixed in [false, true] {
+        let mut fixture = Fixture::new();
+        let mut scene = runtime(3, true, mixed);
+        fixture.prepare(&mut scene, true);
+        let old = scene.frame().objects[1].glow.as_ref().unwrap().clone();
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+                object: ObjectId::new(101),
+                expected: Some(old.attachment),
+                glow: None,
+            })
+            .unwrap();
+        let removed = fixture.prepare(&mut scene, true);
+        assert_eq!(removed.rows_examined, 1);
+        assert_eq!(removed.retained_texture_bytes, 0);
+        assert!(!fixture.renderer.has_retained_analytic_glow_sources());
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetZIndex {
+                object: ObjectId::new(101),
+                value: -2.0,
+            })
+            .unwrap();
+        assert_eq!(
+            fixture.prepare(&mut scene, true),
+            RetainedGlowStats::default()
+        );
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+                object: ObjectId::new(101),
+                expected: None,
+                glow: Some(Arc::new(CompiledGlow {
+                    attachment: SemanticNodeId::new(31, 6),
+                    definition: old.definition,
+                })),
+            })
+            .unwrap();
+        assert!(scene.frame_changes().painter_order_range().is_none());
+        // Fixture::prepare checks the offscreen source's expanded visibility
+        // against the current publication's exact painter order.
+        let attached = fixture.prepare(&mut scene, true);
+        assert_eq!((attached.rows_examined, attached.sources_prepared), (1, 1));
+    }
+}
+
+#[test]
+fn glow_order_attachment_to_object_added_without_effects_stays_local() {
+    let mut fixture = Fixture::new();
+    let mut scene = runtime(4096, true, false);
+    fixture.prepare(&mut scene, true);
+    let old = scene.frame().objects[1].glow.as_ref().unwrap().clone();
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            object: ObjectId::new(101),
+            expected: Some(old.attachment),
+            glow: None,
+        })
+        .unwrap();
+    fixture.prepare(&mut scene, true);
+    let added = ObjectId::new(10_000);
+    scene
+        .apply_execution_patch(&ExecutionPatch::CreateObject(CompiledObject::new(
+            added,
+            GeometryRef::circle(0.4),
+            Transform2D::IDENTITY,
+            Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                ..Style::default()
+            },
+        )))
+        .unwrap();
+    let created = fixture.prepare(&mut scene, true);
+    assert_eq!((created.rows_examined, created.sources_prepared), (1, 0));
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+            object: added,
+            expected: None,
+            glow: Some(Arc::new(CompiledGlow {
+                attachment: SemanticNodeId::new(32, 5),
+                definition: old.definition,
+            })),
+        })
+        .unwrap();
+    assert!(scene.frame_changes().painter_order_range().is_none());
+    let attached = fixture.prepare(&mut scene, true);
+    assert_eq!((attached.rows_examined, attached.sources_prepared), (1, 1));
+    assert_eq!(
+        fixture.prepare(&mut scene, true),
+        RetainedGlowStats {
+            retained_texture_bytes: attached.retained_texture_bytes,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
 fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
     for mixed in [false, true] {
         let mut fixture = Fixture::new();
