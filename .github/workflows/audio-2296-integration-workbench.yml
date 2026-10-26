@@ -10,9 +10,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: audio-2296-integration-workbench
+  cancel-in-progress: true
+
 jobs:
   snapshot:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 10
     steps:
       - name: Checkout workbench
@@ -56,7 +60,12 @@ jobs:
           print(f'Snapshotting {len(objects)} source objects; no Git config, credentials or working-directory files.')
           PY
           git pack-objects --stdout < snapshot/object-ids.txt > snapshot/source-objects.pack
-          sha256sum snapshot/* > snapshot/SHA256SUMS
+          python3 - <<'PY'
+          import hashlib, pathlib
+          root = pathlib.Path('snapshot')
+          rows = [f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}' for p in sorted(root.iterdir()) if p.is_file()]
+          (root / 'SHA256SUMS').write_text('\n'.join(rows) + '\n')
+          PY
           ls -lh snapshot/source-objects.pack
       - name: Retain exact source snapshot
         uses: actions/upload-artifact@v7
