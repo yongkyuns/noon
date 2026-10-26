@@ -1510,37 +1510,43 @@ impl ExecutionSession {
             return;
         }
         let mut stats = SpatialIndexUpdateStats::default();
-        for &index in changes.object_indices() {
-            let Some(object) = self.runtime.frame().objects.get(index) else {
-                self.pointer_frame_damage.invalidate();
-                continue;
-            };
-            let slot = self.slots.slot_for_object(object.id);
-            let before = slot.and_then(|slot| self.spatial_index.bounds_for_slot(slot));
-            if self.runtime.object_slot_is_live(index) {
-                if let Some(slot) = slot {
-                    let painter_order = self.runtime.painter_rank(index).unwrap_or(index as u32);
-                    stats.merge_from(self.spatial_index.upsert_frame_slot(
-                        self.runtime.frame(),
-                        self.runtime.geometry_resources(),
-                        slot,
-                        index,
-                        painter_order as u64,
-                    ));
+        if !changes.object_indices().is_empty() {
+            // One synchronous drain is one checkpoint, regardless of how many
+            // rows changed. Captures cannot observe a partially recorded batch.
+            let mut damage = self.pointer_frame_damage.begin_batch();
+            for &index in changes.object_indices() {
+                let Some(object) = self.runtime.frame().objects.get(index) else {
+                    damage.invalidate();
+                    continue;
+                };
+                let slot = self.slots.slot_for_object(object.id);
+                let before = slot.and_then(|slot| self.spatial_index.bounds_for_slot(slot));
+                if self.runtime.object_slot_is_live(index) {
+                    if let Some(slot) = slot {
+                        let painter_order =
+                            self.runtime.painter_rank(index).unwrap_or(index as u32);
+                        stats.merge_from(self.spatial_index.upsert_frame_slot(
+                            self.runtime.frame(),
+                            self.runtime.geometry_resources(),
+                            slot,
+                            index,
+                            painter_order as u64,
+                        ));
+                    }
+                } else {
+                    stats.merge_from(self.spatial_index.remove_object(object.id));
                 }
-            } else {
-                stats.merge_from(self.spatial_index.remove_object(object.id));
-            }
-            let after = slot.and_then(|slot| self.spatial_index.bounds_for_slot(slot));
-            // Every dirty row matters, including unchanged bounds: fill, reveal,
-            // content and other precise-picking inputs may have changed inside it.
-            // Unknown geometry or membership is a conservative global barrier.
-            if Some(object.id) == self.camera_object {
-                self.pointer_frame_damage.invalidate();
-            } else {
-                match (before, after) {
-                    (Some(before), Some(after)) => self.pointer_frame_damage.record(before, after),
-                    _ => self.pointer_frame_damage.invalidate(),
+                let after = slot.and_then(|slot| self.spatial_index.bounds_for_slot(slot));
+                // Every dirty row matters, including unchanged bounds: fill, reveal,
+                // content and other precise-picking inputs may have changed inside it.
+                // Unknown geometry or membership is a conservative global barrier.
+                if Some(object.id) == self.camera_object {
+                    damage.invalidate();
+                } else {
+                    match (before, after) {
+                        (Some(before), Some(after)) => damage.record(before, after),
+                        _ => damage.invalidate(),
+                    }
                 }
             }
         }
