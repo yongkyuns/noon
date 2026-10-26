@@ -58,6 +58,9 @@ on:
       - "crates/noon-render-wgpu/src/gpu/glow_filter*"
       - "crates/noon-render-wgpu/src/gpu/glow_filter/**"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow*"
+      - "crates/noon-render-wgpu/src/gpu/gaussian_blur*"
+      - "crates/noon-render-wgpu/src/gpu/gaussian_blur/**"
+      - "scripts/gaussian-blur-*.mjs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*"
@@ -210,6 +213,8 @@ jobs:
           cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
           cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests
           cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
+      - name: Qualify RGBA Gaussian pixels and retained raster resources
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
@@ -456,6 +461,8 @@ jobs:
         run: node scripts/camera-density-smoke.mjs
       - name: Test retained worker glow report and independent reference
         run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs scripts/glow-worker-transport.test.mjs
+      - name: Qualify reusable RGBA Gaussian raster on WebGPU and WebGL2
+        run: node scripts/gaussian-blur-qualification.mjs
       - name: Qualify retained worker glow images and recovery
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker

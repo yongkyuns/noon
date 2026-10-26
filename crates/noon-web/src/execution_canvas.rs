@@ -1567,6 +1567,27 @@ mod wasm {
             noon::diagnostics::execution_frame_value(self.source.session()).to_string()
         }
 
+        /// Explicit raster fixture/readback boundary; never used in Scene playback.
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = qualifyGaussianBlurRaster)]
+        pub async fn qualify_gaussian_blur_raster(
+            &self,
+            pixels: Vec<u8>,
+            width: u32,
+            height: u32,
+            sigma: f64,
+        ) -> Result<JsValue, JsValue> {
+            crate::gaussian_blur_smoke::qualify(
+                &self.device,
+                &self.queue,
+                pixels,
+                width,
+                height,
+                sigma,
+            )
+            .await
+        }
+
         /// Read-only qualification evidence, never used to construct an input token.
         #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         #[wasm_bindgen(js_name = debugPointerPresentationJson)]

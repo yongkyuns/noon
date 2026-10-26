@@ -9,7 +9,12 @@ mod derived_display;
 mod linear_gradient;
 mod source_capture;
 pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
+mod gaussian_blur;
 mod glow_filter;
+pub use gaussian_blur::{
+    GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurPrepareError,
+    GaussianBlurScope, GaussianBlurStats,
+};
 pub use glow_filter::{
     GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
     GlowRasterStats, GlowScope,

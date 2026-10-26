@@ -866,3 +866,34 @@ automatic host preparation and worker serialization. The source-alpha oracle sti
 uses production primitive rasterization; GPU timing and physical-hardware
 performance are separate acceptance requirements. Pixel tolerances remain 2
 RGBA8 bytes and mask error remains 1e-5.
+
+## RGBA Gaussian raster prerequisite
+
+The reusable renderer's `GaussianBlurFilter` consumes an encoded-premultiplied
+RGBA8 capture, before final scope opacity. Sigma uses physical output pixels,
+is bounded to [0, 64], and has square support `ceil(3*sigma)` in each axis.
+Normalize the complete kernel once and treat pixels beyond the capture as zero;
+do not clamp edges or renormalize at borders. The caller owns padded capture,
+painter placement, submission and in-flight retirement. Exact zero radius uses
+the ordinary source path. This operator alone does not enable Scene/Python Blur,
+shadow, stacks, group isolation or an additional semantic scope model.
+
+Three portable RGBA8 attachments retain 24 bits per premultiplied component
+between horizontal and vertical passes. No float render-target extension or
+color transfer is assumed. The seven retained textures cost 28 bytes per tile
+pixel, excluding source capture and in-flight resources. Three programs are
+lazy/shared across scopes; clean calls allocate/upload/encode nothing. An
+opacity-only edit uploads 16 bytes and reuses the blurred color. Invalid
+preparation preserves the prior valid scope; abandoned encoding requires
+invalidation. A reduced neutral budget can retire the disposable texture cache.
+
+The native ignored test
+`gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions`
+compares all channels and packed intermediates against a full independent 2-D
+convolution, including asymmetric color/alpha, faint edges and maximum sigma.
+Replacing actual shader RGB with alpha must make it fail. The JS oracle has a
+literal rational 7x7 impulse witness. `scripts/gaussian-blur-qualification.mjs`
+borrows the normal browser host's device for explicit test readback on WebGPU
+and WebGL2; the maximum-radius field has independent full-support point probes.
+These are raster correctness/resource checks, not public animation, source
+capture/placement, group semantics or physical-device performance evidence.
