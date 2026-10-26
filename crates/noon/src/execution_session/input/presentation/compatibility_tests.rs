@@ -49,6 +49,20 @@ fn tracked_fixture(
     values: SemanticObjectTrackValues<SemanticTransactionNodeRef>,
     rate: RateFunction,
 ) -> Fixture {
+    tracked_objects_fixture(objects, [(animated, property, values, rate)])
+}
+
+fn tracked_objects_fixture(
+    objects: Vec<SemanticObjectState>,
+    tracks: impl IntoIterator<
+        Item = (
+            usize,
+            SemanticObjectTrackProperty,
+            SemanticObjectTrackValues<SemanticTransactionNodeRef>,
+            RateFunction,
+        ),
+    >,
+) -> Fixture {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let nodes: Vec<_> = objects
@@ -60,16 +74,21 @@ fn tracked_fixture(
         })
         .collect();
     let mut transaction = SemanticMutationTransaction::new();
-    let track = transaction.create_object_property_track(
-        nodes[animated],
-        property,
-        values,
-        TrackTiming::new(0.0, 2.0, rate),
-        CompositionTimeMap::identity(),
-    );
+    let tracks: Vec<_> = tracks
+        .into_iter()
+        .map(|(animated, property, values, rate)| {
+            transaction.create_object_property_track(
+                nodes[animated],
+                property,
+                values,
+                TrackTiming::new(0.0, 2.0, rate),
+                CompositionTimeMap::identity(),
+            )
+        })
+        .collect();
     let animation = transaction.create_animation_composition(
         SemanticAnimationCompositionKind::Parallel,
-        [track],
+        tracks,
         Default::default(),
     );
     let committed = transaction.apply(&mut store).unwrap();
@@ -107,6 +126,21 @@ fn distant_fixture() -> Fixture {
         position_track(8.0, 12.0),
         RateFunction::Linear,
     )
+}
+
+fn dense_distant_fixture(animated_rows: usize) -> Fixture {
+    let mut objects = vec![button()];
+    objects.extend((0..animated_rows).map(|row| circle(8.0 + row as f64 * 2.0)));
+    let tracks = (0..animated_rows).map(|row| {
+        let from = 8.0 + row as f64 * 2.0;
+        (
+            row + 1,
+            SemanticObjectTrackProperty::Position,
+            position_track(from, from + 4.0),
+            RateFunction::Linear,
+        )
+    });
+    tracked_objects_fixture(objects, tracks)
 }
 
 fn view(session: &ExecutionSession) -> PointerFrameView {
@@ -192,78 +226,123 @@ fn current_pick(session: &mut ExecutionSession) -> PointerFillOutcome {
         .outcome()
 }
 
+fn assert_delayed_click(
+    mut fixture: Fixture,
+    release_from_later_display: bool,
+    animated_rows: usize,
+) {
+    let session = &mut fixture.session;
+    let down_frame = capture(session);
+    let authored_revision = fixture.store.scene_revision();
+    session.advance_to(0.5).unwrap();
+    let before_down = session.publication_context();
+    assert_ne!(
+        before_down.frame_epoch(),
+        down_frame.publication().frame_epoch()
+    );
+    let current_view = view(session);
+    down_frame
+        .validate_position(session, current_view, CENTER)
+        .unwrap();
+    let update = session.last_spatial_update_stats();
+    assert_eq!(update.full_rebuilds, 0);
+    assert_eq!(update.leaves_upserted, animated_rows);
+    assert_eq!(update.leaves_removed, animated_rows);
+    let down_token = down_frame
+        .input_token_at(session, current_view, CENTER)
+        .unwrap();
+    assert_eq!(down_token.context().publication, down_frame.publication());
+    let down = session
+        .submit_native_pointer_input(
+            &down_token,
+            record(&down_token, 10, edge(&down_frame, CENTER, true)),
+        )
+        .unwrap();
+    assert_eq!(down.input().context().publication, down_frame.publication());
+    assert_eq!(
+        down.input().position(),
+        Some(down_frame.position(CENTER).unwrap())
+    );
+    assert_eq!(down.previous_publication(), before_down);
+    assert_eq!(down.publication(), before_down);
+    assert_eq!(down.playback_control(), None);
+    let up_frame = if release_from_later_display {
+        capture(session)
+    } else {
+        down_frame.clone()
+    };
+    session.advance_to(1.0).unwrap();
+    let before_up = session.publication_context();
+    let current_view = view(session);
+    up_frame
+        .validate_position(session, current_view, CENTER)
+        .unwrap();
+    let update = session.last_spatial_update_stats();
+    assert_eq!(update.full_rebuilds, 0);
+    assert_eq!(update.leaves_upserted, animated_rows);
+    assert_eq!(update.leaves_removed, animated_rows);
+    let up_token = up_frame
+        .input_token_at(session, current_view, CENTER)
+        .unwrap();
+    let up = session
+        .submit_native_pointer_input(
+            &up_token,
+            record(&up_token, 11, edge(&up_frame, CENTER, false)),
+        )
+        .unwrap();
+    assert_eq!(up.input().context().publication, up_frame.publication());
+    assert_eq!(up.previous_publication(), before_up);
+    assert_eq!(up.publication(), before_up);
+    let click = up.selection_click().unwrap();
+    assert_eq!(click.target(), Some(fixture.nodes[0]));
+    assert_eq!(
+        click.press().context().publication,
+        down_frame.publication()
+    );
+    assert_eq!(
+        click.release().context().publication,
+        up_frame.publication()
+    );
+    assert_eq!(up.playback_control(), Some(PlaybackControl::NextSection));
+    assert_eq!(session.frame().time, 1.0);
+    assert_eq!(fixture.store.scene_revision(), authored_revision);
+    assert_eq!(session.last_native_event_sequence, Some(11));
+    assert_eq!(up.selection_query().unwrap().precise_tests(), 1);
+    assert_eq!(
+        up.selection_query()
+            .unwrap()
+            .spatial_stats()
+            .candidates_tested,
+        1
+    );
+    assert_eq!(
+        up.selection_query()
+            .unwrap()
+            .spatial_stats()
+            .full_scan_fallbacks,
+        0
+    );
+}
+
 #[test]
 fn delayed_click_keeps_collected_contexts_while_a_distant_region_animates() {
     // Both a queued down/up from one display and a held press whose release was
     // collected from a later display use each edge's own original context.
     for release_from_later_display in [false, true] {
-        let mut fixture = distant_fixture();
-        let session = &mut fixture.session;
-        let down_frame = capture(session);
-        let authored_revision = fixture.store.scene_revision();
-        session.advance_to(0.5).unwrap();
-        let before_down = session.publication_context();
-        assert_ne!(
-            before_down.frame_epoch(),
-            down_frame.publication().frame_epoch()
-        );
-        let current_view = view(session);
-        down_frame
-            .validate_position(session, current_view, CENTER)
-            .unwrap();
-        let down_token = down_frame
-            .input_token_at(session, current_view, CENTER)
-            .unwrap();
-        assert_eq!(down_token.context().publication, down_frame.publication());
-        let down = session
-            .submit_native_pointer_input(
-                &down_token,
-                record(&down_token, 10, edge(&down_frame, CENTER, true)),
-            )
-            .unwrap();
-        assert_eq!(down.input().context().publication, down_frame.publication());
-        assert_eq!(
-            down.input().position(),
-            Some(down_frame.position(CENTER).unwrap())
-        );
-        assert_eq!(down.previous_publication(), before_down);
-        assert_eq!(down.publication(), before_down);
-        assert_eq!(down.playback_control(), None);
-        let up_frame = if release_from_later_display {
-            capture(session)
-        } else {
-            down_frame.clone()
-        };
-        session.advance_to(1.0).unwrap();
-        let before_up = session.publication_context();
-        let current_view = view(session);
-        let up_token = up_frame
-            .input_token_at(session, current_view, CENTER)
-            .unwrap();
-        let up = session
-            .submit_native_pointer_input(
-                &up_token,
-                record(&up_token, 11, edge(&up_frame, CENTER, false)),
-            )
-            .unwrap();
-        assert_eq!(up.input().context().publication, up_frame.publication());
-        assert_eq!(up.previous_publication(), before_up);
-        assert_eq!(up.publication(), before_up);
-        let click = up.selection_click().unwrap();
-        assert_eq!(click.target(), Some(fixture.nodes[0]));
-        assert_eq!(
-            click.press().context().publication,
-            down_frame.publication()
-        );
-        assert_eq!(
-            click.release().context().publication,
-            up_frame.publication()
-        );
-        assert_eq!(up.playback_control(), Some(PlaybackControl::NextSection));
-        assert_eq!(session.frame().time, 1.0);
-        assert_eq!(fixture.store.scene_revision(), authored_revision);
-        assert_eq!(session.last_native_event_sequence, Some(11));
-        assert_eq!(up.selection_query().unwrap().precise_tests(), 1);
+        assert_delayed_click(distant_fixture(), release_from_later_display, 1);
+    }
+}
+
+#[test]
+fn delayed_click_survives_dense_distant_animation() {
+    for animated_rows in [129, 256, 1024] {
+        for release_from_later_display in [false, true] {
+            assert_delayed_click(
+                dense_distant_fixture(animated_rows),
+                release_from_later_display,
+                animated_rows,
+            );
+        }
     }
 }
 
