@@ -12,7 +12,7 @@ await qualifyPairedAuthoring({
     factory: glow ? "createDirectGradientGlowSmokeRenderer" : "createDirectLinearGradientSmokeRenderer", objectCount: 1,
     duration: glow ? 4.5 : 4.25, sampleTime, playback: "live",
     // Quiet waits retain their last picture and timer deadline in the direct host.
-    directHeldSampleTime: sampleTime === 0.25 ? 0 : undefined,
+    directHeldSampleTime: sampleTime === 0.25 ? 0 : sampleTime === 4.2 ? 4 : undefined,
     boundaries: [0.5, 1.5, 1.75, 2.75, 3, 4, ...(glow ? [4.25] : [])],
     stopAtSourceCompletion: sampleTime === (glow ? 4.5 : 4.25),
   }))),
