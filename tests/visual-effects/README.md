@@ -126,6 +126,44 @@ cross-host binding execution or physical-performance result follows from declara
 The separate leaf-adapter section records implemented binding source and its
 validation boundary without reclassifying the future-feature review programs.
 
+## Linear-gradient values and reference boundary
+
+The next paint slice for #1897 defines checked inert Rust `GradientStop` and
+`LinearGradient` values in `noon-core::object_state`. This is a value/reference
+contract, **not enabled Scene paint, animation, Python authoring or GPU support**.
+No placeholder Scene setter or Python class is exported. The remaining vertical
+slice must integrate these values through shared semantics, lowering, ordinary
+animation, publication and retained drawing with equivalent Rust/Python examples.
+
+For the first encoded-LDR profile:
+
+- Endpoints are distinct finite points in the normalized local geometry box.
+  `(0, 0)` is its lower-left corner and `(1, 1)` its upper-right. Motion, camera
+  zoom and object scale do not rewrite the paint definition.
+- At least two stops are explicitly ordered by finite positions in `[0, 1]`.
+  Repeated positions are hard edges; the last coincident stop wins exactly at
+  the edge. Positions are not silently sorted or deduplicated. Before the first
+  stop, pad uses the first color; after the last, it uses the last color. In
+  particular, sampling before a repeated stop at zero differs from sampling
+  exactly at zero. Do not clamp the projected coordinate before stop selection.
+- Sample by projecting the local point onto the endpoint axis. Interpolate
+  **premultiplied encoded-sRGB RGBA**, preventing invisible RGB from leaking into
+  partially transparent samples. This profile introduces no linear-light/HDR
+  transfer. Coverage, fill opacity and final object opacity multiply the result
+  once each at their existing owners; they are not baked into stop colors.
+- Definition clones share immutable stop storage. Invalid values fail before a
+  definition exists. A valid short axis must not divide by an underflowed squared
+  length; renderer lowering must separately qualify representable GPU inputs.
+
+`reference.linear_gradient_pixel` uses exact rational arithmetic from decimal
+input spellings, independent of Rust's rescaled f64 projection and binary stop
+lookup. Both implementations check the 25 specification-derived samples in
+`linear-gradient-vectors.txt`; the Python oracle independently recomputes their
+expected values. Literal vectors and seeded defects cover projection, units, hard edges,
+transparent color, and double-applied opacity. The existing `test_reference.py`
+entrypoint includes these tests. These component tests do not establish geometry
+rasterization, GPU pixels, temporal behavior, cross-host parity or performance.
+
 ## Implemented shared Rust boundary
 
 `crates/noon-core/src/object_state/glow.rs` contains production, renderer-independent

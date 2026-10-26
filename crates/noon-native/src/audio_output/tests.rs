@@ -6,6 +6,8 @@ use super::*;
 use crate::execution_source::{
     LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource,
 };
+#[cfg(target_os = "linux")]
+use crate::NativeApp;
 use crate::NativeViewportConfig;
 use noon::{AudioClipOptions, AudioResource, RustHostCallbackTable, Scene};
 
