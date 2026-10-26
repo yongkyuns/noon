@@ -20,6 +20,15 @@ const sourcePath = 'web/python/examples/cuda_transpose_banks.py';
 const source = await readFile(path.join(root, sourcePath), 'utf8');
 const workerSource = await readFile(path.join(root, 'web/python-worker.js'), 'utf8');
 const resourceCache = createPyodideResourceCache(workerSource);
+const localPyodideRoot = process.env.NOON_PYODIDE_ROOT;
+let localPyodideBase = null;
+if (localPyodideRoot) {
+  localPyodideBase = workerSource.match(/https:\/\/cdn\.jsdelivr\.net\/pyodide\/v[^/]+\/full\//)?.[0];
+  assert.ok(localPyodideBase, 'worker must pin its official Pyodide distribution');
+  const pkg = JSON.parse(await readFile(path.join(localPyodideRoot, 'package.json'), 'utf8'));
+  assert.equal(localPyodideBase, `https://cdn.jsdelivr.net/pyodide/v${pkg.version}/full/`,
+    'local Pyodide version must match the actual worker');
+}
 const probe = await readFile(path.join(root, 'tools/cuda-transpose/visual_probe.py'), 'utf8');
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const report = {schema: 1, status: 'running', sceneSha256: sha256(source),
@@ -108,14 +117,14 @@ try {
     const queue = eventQueue(); const observations = [];
     const page = await browser.newPage({viewport:{width:1280,height:720}, deviceScaleFactor:1});
     await resourceCache.install(page.context());
-    if (process.env.NOON_PYODIDE_ROOT) {
-      const base = workerSource.match(/https:\/\/cdn\.jsdelivr\.net\/pyodide\/v[^/]+\/full\//)?.[0];
-      assert.ok(base, 'worker must pin its official Pyodide distribution');
-      await page.context().route(url => url.href.startsWith(base), async route => {
+    if (localPyodideRoot) {
+      await page.context().route(url => url.href.startsWith(localPyodideBase), async route => {
         const name = new URL(route.request().url()).pathname.split('/').at(-1);
-        const body = await readFile(path.join(process.env.NOON_PYODIDE_ROOT, name));
-        const contentType = name.endsWith('.mjs') ? 'application/javascript'
-          : name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
+        assert.match(name, /^[A-Za-z0-9._-]+$/);
+        const body = await readFile(path.join(localPyodideRoot, name));
+        const contentType = name.endsWith('.mjs') || name.endsWith('.js') ? 'application/javascript'
+          : name.endsWith('.wasm') ? 'application/wasm'
+          : name.endsWith('.json') ? 'application/json' : 'application/octet-stream';
         await route.fulfill({body, contentType});
       });
     }

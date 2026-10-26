@@ -146,7 +146,7 @@ def observe_source_page(scene):
     numbers = [observe_leaf(obj, False) for obj in scene.code.line_numbers]
     return {"page": "load" if "declaration" in rows else "output" if "output_x" in rows else "read",
             "rows": rows, "numbers": numbers, "regions": observe_highlights(scene),
-            "panel": observe_leaf(scene.code.background),
+            "panel": observe_leaf(scene.code.background[0]),
             "source": scene.code.code_string,
             "source_font_size": float(scene.code.code_lines[0].font_size),
             "gutter_font_size": float(scene.code.line_numbers[0].font_size)}
