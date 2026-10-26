@@ -2,10 +2,12 @@
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
 mod glow;
+mod linear_gradient;
 pub use glow::{
     Glow, GlowParameter, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
     PreparedGlowUpdate,
 };
+pub use linear_gradient::{GradientStop, LinearGradient, LinearGradientError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectStateField {
