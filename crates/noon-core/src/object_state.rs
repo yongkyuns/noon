@@ -5,6 +5,7 @@ mod blur;
 mod effect_parameters;
 mod glow;
 mod linear_gradient;
+mod paint_transition;
 pub use blur::Blur;
 pub(crate) use effect_parameters::sealed as effect_value_sealed;
 pub use effect_parameters::{
@@ -13,6 +14,7 @@ pub use effect_parameters::{
 };
 pub use glow::{Glow, GlowSource};
 pub use linear_gradient::{GradientStop, LinearGradient, LinearGradientError};
+pub use paint_transition::{PaintTransition, PaintTransitionError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectStateField {

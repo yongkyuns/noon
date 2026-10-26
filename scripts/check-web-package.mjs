@@ -47,6 +47,9 @@ const expectedJavascriptSurface = [
   // the exact class token avoids mistaking WasmEffectUpdate for WasmEffectDefinition.
   "export class WasmEffectDefinition {",
   "export class WasmEffectUpdate {",
+  "export class WasmLinearGradient {",
+  "setFillGradient(",
+  "liveSetFillGradient(",
   "export class WasmEffectHandle {",
   "authoredDefinition()",
   "setGlow(",
@@ -646,6 +649,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectGlowPulseSmokeRenderer(",
     "export function createDirectBlurSmokeRenderer(",
+    "export function createDirectGradientGlowSmokeRenderer(",
     "export function createDirectClickGlowPulseRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(",

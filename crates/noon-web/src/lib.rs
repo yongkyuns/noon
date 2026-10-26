@@ -37,6 +37,10 @@ pub use authoring_composite::WasmCompositeRows;
 mod authoring_effects;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_effects::*;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_paints;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_paints::*;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;

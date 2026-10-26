@@ -20,7 +20,7 @@ pub(super) struct ScheduledCaptures {
 
 impl ScheduledCaptures {
     pub fn get(&self, object: ObjectId) -> Option<EffectiveAnimationProperties> {
-        let mut value = *self.base.get(&object)?;
+        let mut value = self.base.get(&object)?.clone();
         for slot in 0..=driver_key(object, Property::EffectIntensity).1 {
             let Some((property, values, at_end)) = self.completed.get(&(object.get(), slot)) else {
                 continue;
@@ -229,7 +229,27 @@ fn apply_effective_track_endpoint(
             value.transform.rotation = if at_end { *to } else { *from };
         }
         (Property::Fill, TrackValues::Color { from, to }) => {
+            value.fill_gradient = None;
             value.style.fill = if at_end { *to } else { *from };
+        }
+        (Property::Fill, TrackValues::Paint { transition }) => {
+            let (paint, opacity) = transition.sample(if at_end { 1.0 } else { 0.0 }).ok()?;
+            match paint {
+                Some(noon_core::SemanticPaint::LinearGradient(gradient)) => {
+                    value.fill_gradient = Some(gradient);
+                    value.style.fill = Some(noon_core::Color::rgba(1.0, 1.0, 1.0, opacity as f32));
+                }
+                Some(noon_core::SemanticPaint::Solid(mut color)) => {
+                    value.fill_gradient = None;
+                    color.alpha = (f64::from(color.alpha) * opacity) as f32;
+                    value.style.fill = Some(color);
+                }
+                None => {
+                    value.fill_gradient = None;
+                    value.style.fill = None;
+                }
+                _ => return None,
+            }
         }
         (Property::Stroke, TrackValues::Color { from, to }) => {
             value.style.stroke = if at_end { *to } else { *from };
@@ -330,6 +350,7 @@ mod tests {
         let captured_intensity = 0.613456789012345;
         let peak = 2.0;
         let source = EffectiveAnimationProperties {
+            fill_gradient: None,
             effect: Some(CompiledEffect {
                 attachment,
                 definition: (Glow::new(
@@ -414,7 +435,7 @@ mod tests {
                     RateFunction::Linear,
                 )]),
             };
-            let mut expected = source;
+            let mut expected = source.clone();
             let effect = expected.effect.as_mut().unwrap();
             effect.definition = EffectUpdate::default()
                 .intensity(expected_intensity)
@@ -422,22 +443,22 @@ mod tests {
                 .unwrap();
             let tracks = [track];
             let mut captures = ScheduledCaptures::default();
-            captures.insert(object, source);
+            captures.insert(object, source.clone());
             let mut driven = HashMap::from([(
                 driver_key(object, Property::EffectIntensity),
                 first_animation,
             )]);
 
             captures.begin_leaf(&leaf, &mut driven, &tracks, &intervals, true);
-            assert_eq!(captures.get(object), Some(expected));
+            assert_eq!(captures.get(object), Some(expected.clone()));
             assert!(driven.is_empty(), "completed child releases its channel");
             assert_eq!(
-                completed_effective_properties_before(source, object, 2.0, &tracks),
+                completed_effective_properties_before(source.clone(), object, 2.0, &tracks),
                 Some(expected),
                 "activation correspondence and ordinary sequential captures agree"
             );
             assert_eq!(
-                completed_effective_properties_before(source, object, 1.0, &tracks),
+                completed_effective_properties_before(source.clone(), object, 1.0, &tracks),
                 None,
                 "an overlapping driver remains unavailable for endpoint capture"
             );

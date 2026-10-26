@@ -76,7 +76,11 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
             state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
         }
         state.set_z_index(observed.object.z_index);
-        state.style = target_style_from_effective(&state.style, observed.object.style)?;
+        state.style = target_style_from_effective(
+            &state.style,
+            observed.object.style,
+            observed.object.fill_gradient.as_ref(),
+        )?;
     }
     Ok(state)
 }
@@ -87,24 +91,19 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
 pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
     effective: Style,
+    fill_gradient: Option<&std::sync::Arc<noon_core::LinearGradient>>,
 ) -> Result<SemanticStyle, AuthoringError> {
-    if matches!(
-        authored.fill.as_ref(),
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_))
-    ) || matches!(
-        authored.stroke.as_ref(),
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_))
-    ) {
+    if matches!(authored.fill.as_ref(), Some(SemanticPaint::Resource(_)))
+        || matches!(
+            authored.stroke.as_ref(),
+            Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_))
+        )
+    {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));
     }
-    let (fill, fill_opacity) =
-        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
-            (authored.fill.clone(), authored.fill_opacity)
-        } else {
-            (effective.fill.map(SemanticPaint::Solid), 1.0)
-        };
+    let (fill, fill_opacity) = authored.capture_effective_fill(effective.fill, fill_gradient);
     let (stroke, stroke_opacity) =
         if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
             == effective.stroke

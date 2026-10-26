@@ -102,6 +102,35 @@ work under [#1897](https://github.com/yongkyuns/noon/issues/1897). The following
 sections preserve the original design and declaration-stage evidence; their
 historical execution guards are not a current support matrix.
 
+## Continuous gradient source capture
+
+Ordinary planar circle, rectangle and retained path linear fills can carry the
+same named glow attachment. Paint edits and glow parameter edits use their
+ordinary independent channels, with the existing authored clock, target capture,
+pulse ownership and completion. Gradient text/strokes, image paint, groups and
+effect stacks remain outside this profile.
+
+Painted capture includes interpolated stop alpha and fill opacity. Silhouette
+capture ignores paint while preserving the same geometry and stroke coverage.
+Final object opacity applies once. The retained gradient binding is shared with
+the ordinary draw; its immutable value invalidates source capture on paint-only
+edits. Clean frames upload nothing; warmed intensity edits reuse capture and blur.
+
+The native `gradient_glow_preserves_paint_alpha_seek_and_local_capture` oracle
+uses separate no-effect renders and a slow full 2-D Gaussian, comparing every
+RGBA channel within two bytes. It covers circles, rectangles and stroked paths,
+reflection/rotation/nonuniform scale, both source modes, animated alpha/stops,
+transparent and colored backgrounds, exact seek, neutral/removal output and
+resource reuse. Temporarily disabling the actual gradient capture route must
+make it fail. This qualifies filtering/composition; the separate linear-paint
+oracle qualifies paint rasterization. Neither establishes physical GPU speed.
+
+`linear_gradient::glow_program`, the native `gradient_glow` example and
+`web/python/examples/gradient_glow.py` author the same paint/effect lifecycle.
+`scripts/linear-gradient-qualification.mjs` checks real Rust/WASM–Python image
+pairs on WebGPU and WebGL2, independent interior paint values, a visible halo
+and exact removal. Existing CI owns both native and browser qualification.
+
 ## Historical M0 contract and evidence
 
 M0 work for [#1897](https://github.com/yongkyuns/noon/issues/1897).
@@ -185,6 +214,38 @@ expected values. Literal vectors and seeded defects cover projection, units, har
 transparent color, and double-applied opacity. The existing `test_reference.py`
 entrypoint includes these tests. These component tests do not establish geometry
 rasterization, GPU pixels, temporal behavior, cross-host parity or performance.
+
+The next authoring slice exposes `Mobject::set_fill_gradient` and
+`LiveSession::set_fill_gradient` with an immutable checked `LinearGradient`.
+Python uses the ordinary `obj.set_fill(LinearGradient(stops, start=..., end=...))`
+and `obj.animate.set_fill(...)` operations. Omitted opacity preserves its multiplier.
+The paired executable examples are `noon::example_scenes::linear_gradient`,
+`crates/noon-native/examples/linear_gradient.rs`, and
+`web/python/examples/linear_gradient.py`; the same Rust program has a direct
+WASM host. Python owns argument coercion only.
+
+Paint interpolation uses the existing Fill channel and authored clock. Matching
+stop counts, ordered positions and axes interpolate with premultiplied encoded-sRGB
+colors; solids/absent paint promote to the other endpoint's mapping. Exact endpoint
+paint kinds, immutable definitions and authored f64 opacity survive reconciliation.
+The compiler rejects axis collapse anywhere in the interval, GPU precision loss,
+opening/closing subpixel stop gaps, overshooting leaf rates and unsupported sources
+before publication. Immediate edits may change stop count. Native reactive fill
+drivers retain existing conflict admission. Initial support is planar positive-area
+circle/rectangle/path fills. Strokes, text/image fills, source effects, content morphs,
+derived displays, callback paint edits and group fills remain explicitly unsupported.
+Scalar color queries reject continuous paint; fill opacity reports its multiplier.
+
+`paint-transition-vectors.txt` supplies 12 literal temporal/spatial/opacity cases.
+The independent rational Python oracle recomputes them and seeded-defect tests reject
+straight-alpha temporal mixing, frozen time and repeated opacity. Shared Rust
+sampling checks the same literals. `linear_gradient_raster` qualifies public Rust
+animation through the retained native renderer with 80 interior RGBA comparisons
+(maximum byte error 1), including analytic/path coverage routes and clean uploads.
+`scripts/linear-gradient-qualification.mjs` runs the paired program through real
+Rust/WASM and Python browser hosts on WebGPU and WebGL2; it requires identical host
+pixels and independently checks 30 interior samples per time/backend. These commands
+are qualification gates, not claims of a pass on every physical device.
 
 ## Implemented shared Rust boundary
 

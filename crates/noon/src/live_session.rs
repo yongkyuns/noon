@@ -50,6 +50,9 @@ use std::{cell::RefCell, rc::Rc};
 /// it is an observation, not another runtime authority.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveMobjectState {
+    /// Continuous fill definition, when present. `style.fill` then carries only
+    /// the independent fill-opacity multiplier in its alpha component.
+    pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -1478,6 +1481,7 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         Ok(EffectiveMobjectState {
+            fill_gradient: object.fill_gradient.clone(),
             z_index: object.z_index,
             transform: object.transform,
             style: object.style,
@@ -1624,9 +1628,19 @@ impl<'a> LiveSession<'a> {
         &self,
         mobject: &Mobject,
     ) -> Result<Option<Color>, LiveSessionError> {
-        mobject.fill_color().map_err(LiveSessionError::from)?;
-        Ok(self
-            .effective(mobject)?
+        let effective = self.effective(mobject)?;
+        if effective.fill_gradient.is_some()
+            || matches!(
+                mobject.state()?.style.fill,
+                Some(noon_core::SemanticPaint::Resource(_))
+            )
+        {
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+            )
+            .into());
+        }
+        Ok(effective
             .style
             .fill
             .map(crate::semantic_mobject::opaque_paint_color))
@@ -1659,8 +1673,21 @@ impl<'a> LiveSession<'a> {
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
-        mobject.manim_color().map_err(LiveSessionError::from)?;
         let effective = self.effective(mobject)?;
+        if effective.fill_gradient.is_some()
+            && effective.style.fill.is_some_and(|color| color.alpha > 0.0)
+        {
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+            )
+            .into());
+        }
+        if !matches!(
+            mobject.state()?.style.fill,
+            Some(noon_core::SemanticPaint::LinearGradient(_))
+        ) {
+            mobject.manim_color().map_err(LiveSessionError::from)?;
+        }
         Ok(crate::semantic_mobject::manim_color_from_effective(
             &effective.style,
         ))
@@ -3098,6 +3125,19 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
+    /// Set an immutable local gradient and optional fill opacity in one publication.
+    pub fn set_fill_gradient(
+        &mut self,
+        mobject: &Mobject,
+        gradient: impl Into<std::sync::Arc<noon_core::LinearGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state =
+            crate::semantic_mobject::prepare_fill_gradient(mobject, gradient.into(), opacity)?;
+        self.replace_style(mobject, state.style)
+    }
+
     /// Set fill color and fill opacity through one authoritative style publication.
     pub fn set_fill(
         &mut self,
@@ -3826,7 +3866,7 @@ mod tests {
             fill: Some(SemanticPaint::Resource(7)),
             ..SemanticStyle::default()
         };
-        assert!(target_style_from_effective(&authored, Style::default()).is_err());
+        assert!(target_style_from_effective(&authored, Style::default(), None).is_err());
     }
 
     #[test]

@@ -225,7 +225,7 @@ where
                 },
             )?;
             let effective_source = if let Some(captured) = captures.get(&execution_object_id) {
-                *captured
+                captured.clone()
             } else {
                 let captured = effective_properties(execution_object_id).ok_or(
                     PreparedFamilyTransformActivationError::MissingEffectiveSource {
@@ -234,7 +234,7 @@ where
                         execution_object_id,
                     },
                 )?;
-                captures.insert(execution_object_id, captured);
+                captures.insert(execution_object_id, captured.clone());
                 captured
             };
             let occurrence_index = u32::try_from(occurrences.len()).map_err(|_| {

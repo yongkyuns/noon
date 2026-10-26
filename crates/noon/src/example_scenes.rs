@@ -38,6 +38,7 @@ pub mod glow_pulse;
 pub mod graph_queries;
 pub mod image_glow;
 pub mod line_passing_flash;
+pub mod linear_gradient;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]

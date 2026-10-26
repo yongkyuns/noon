@@ -792,8 +792,9 @@ mod tests {
     fn neutral_glow(attachment: noon_core::SemanticNodeId) -> Arc<noon_compile::CompiledEffect> {
         Arc::new(noon_compile::CompiledEffect {
             attachment,
-            definition: noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
-                .unwrap(),
+            definition: (noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
+                .unwrap())
+            .into(),
         })
     }
 
@@ -823,7 +824,7 @@ mod tests {
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffectAttachment {
                 object,
                 expected: None,
-                glow: Some(glow),
+                effect: Some(glow),
             }]);
         instance
             .preflight_transient_glow_lifecycle_transaction(
@@ -869,7 +870,7 @@ mod tests {
                     ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: Some(attachment),
-                        glow: None,
+                        effect: None,
                     },
                 ]),
                 CompiledResources::default(),
@@ -968,7 +969,7 @@ mod tests {
             retire_temporary_glow(&mut instance, object);
             assert!(instance.supports_immutable_playback());
             assert!(!instance.interactions_active());
-            assert!(instance.effective_object(object).unwrap().glow.is_none());
+            assert!(instance.effective_object(object).unwrap().effect.is_none());
         }
         assert_ne!(
             instance.publication_context().execution_revision(),
@@ -1023,7 +1024,7 @@ mod tests {
         let add = ExecutionPatch::SetEffectAttachment {
             object,
             expected: None,
-            glow: Some(neutral_glow(attachment)),
+            effect: Some(neutral_glow(attachment)),
         };
         let style = ExecutionPatch::SetStyle {
             object,
@@ -1036,15 +1037,15 @@ mod tests {
         let non_neutral = ExecutionPatch::SetEffectAttachment {
             object,
             expected: None,
-            glow: Some(Arc::new(noon_compile::CompiledEffect {
+            effect: Some(Arc::new(noon_compile::CompiledEffect {
                 attachment,
-                definition: noon_core::Glow::default(),
+                definition: (noon_core::Glow::default()).into(),
             })),
         };
         let remove = ExecutionPatch::SetEffectAttachment {
             object,
             expected: Some(attachment),
-            glow: None,
+            effect: None,
         };
         instance.take_frame_changes();
         for transaction in [
@@ -1118,12 +1119,12 @@ mod tests {
             ExecutionPatch::SetEffectAttachment {
                 object,
                 expected: Some(noon_core::SemanticNodeId::new(90, 2)),
-                glow: None,
+                effect: None,
             },
             ExecutionPatch::SetEffectAttachment {
                 object,
                 expected: Some(attachment),
-                glow: Some(neutral_glow(noon_core::SemanticNodeId::new(91, 1))),
+                effect: Some(neutral_glow(noon_core::SemanticNodeId::new(91, 1))),
             },
         ] {
             assert!(matches!(
@@ -1147,7 +1148,7 @@ mod tests {
                     ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: Some(attachment),
-                        glow: None,
+                        effect: None,
                     }
                 ]),
                 CompiledResources::default(),
@@ -1190,7 +1191,7 @@ mod tests {
                     ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: Some(attachment),
-                        glow: None,
+                        effect: None,
                     }
                 ]),
                 CompiledResources::default(),
@@ -1236,7 +1237,7 @@ mod tests {
                     ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: None,
-                        glow: Some(neutral_glow(noon_core::SemanticNodeId::new(90, 1))),
+                        effect: Some(neutral_glow(noon_core::SemanticNodeId::new(90, 1))),
                     }
                 ]),
                 CompiledResources::default(),
@@ -1266,7 +1267,7 @@ mod tests {
         assert_eq!(instance.publication_context(), before);
         assert!(instance.interactions_active());
         retire_temporary_glow(&mut instance, object);
-        assert!(instance.effective_object(object).unwrap().glow.is_none());
+        assert!(instance.effective_object(object).unwrap().effect.is_none());
         instance
             .begin_replay_retention(crate::ReplayLimits::default())
             .unwrap();

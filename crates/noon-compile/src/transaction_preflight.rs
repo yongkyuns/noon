@@ -24,6 +24,7 @@ struct TrackShadow {
     authored_duration: f64,
     reconciled: bool,
     presence: Option<(bool, bool)>,
+    continuous_paint: bool,
 }
 
 impl TrackShadow {
@@ -40,6 +41,7 @@ impl TrackShadow {
             authored_duration: track.timing.duration,
             reconciled: track.reconciled,
             presence: presence_endpoints(track.property, &track.values),
+            continuous_paint: matches!(track.values, TrackValues::Paint { .. }),
         }
     }
 
@@ -57,6 +59,7 @@ impl TrackShadow {
             authored_duration: timing.duration,
             reconciled: false,
             presence: presence_endpoints(track.property, &track.values),
+            continuous_paint: matches!(track.values, TrackValues::Paint { .. }),
         }
     }
 }
@@ -78,6 +81,7 @@ enum ObjectOverlay {
         effect: Option<std::sync::Arc<crate::CompiledEffect>>,
         index: u32,
         is_text: bool,
+        continuous_fill: bool,
         spatial: Option<Box<crate::CompiledSpatialState>>,
     },
     Removed {
@@ -90,6 +94,7 @@ enum ObjectOverlay {
 /// transaction; payload vectors are never cloned for validation.
 struct PreflightOverlay {
     objects: BTreeMap<ObjectId, ObjectOverlay>,
+    paint_definitions: BTreeMap<u32, bool>,
     tracks: BTreeMap<TrackId, Option<TrackShadow>>,
     channels: BTreeMap<CompiledChannelKey, BTreeSet<TrackId>>,
     seen_objects: BTreeSet<ObjectId>,
@@ -102,6 +107,7 @@ impl PreflightOverlay {
     fn new(scene: &CompiledScene) -> Self {
         Self {
             objects: BTreeMap::new(),
+            paint_definitions: BTreeMap::new(),
             tracks: BTreeMap::new(),
             channels: BTreeMap::new(),
             seen_objects: BTreeSet::new(),
@@ -141,7 +147,7 @@ impl PreflightOverlay {
         }
     }
 
-    fn set_glow(
+    fn set_effect(
         &mut self,
         scene: &CompiledScene,
         id: ObjectId,
@@ -162,6 +168,9 @@ impl PreflightOverlay {
                     effect,
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
+                    continuous_fill: crate::continuous_fill_content_supported(
+                        &scene.objects[index as usize].content,
+                    ),
                     spatial: scene.objects[index as usize].spatial.clone(),
                 },
             );
@@ -205,6 +214,9 @@ impl PreflightOverlay {
                     effect: scene.objects[index as usize].effect.clone(),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
+                    continuous_fill: crate::continuous_fill_content_supported(
+                        &scene.objects[index as usize].content,
+                    ),
                     spatial: spatial.map(Box::new),
                 },
             );
@@ -220,6 +232,18 @@ impl PreflightOverlay {
                 self.seen_objects.insert(id);
                 Some(scene.objects[index as usize].text().is_some())
             }
+        }
+    }
+
+    fn supports_continuous_fill(&self, scene: &CompiledScene, id: ObjectId) -> bool {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present {
+                continuous_fill, ..
+            }) => *continuous_fill,
+            Some(ObjectOverlay::Removed { .. }) => false,
+            None => scene.object_indices.get(&id).is_some_and(|&index| {
+                crate::continuous_fill_content_supported(&scene.objects[index as usize].content)
+            }),
         }
     }
 
@@ -318,6 +342,36 @@ impl PreflightOverlay {
         }
         tracks
     }
+
+    fn require_paint_source(
+        &mut self,
+        scene: &CompiledScene,
+        index: u32,
+        supported: bool,
+    ) -> Result<(), CompilePatchError> {
+        let painted = self
+            .paint_definitions
+            .get(&index)
+            .copied()
+            .unwrap_or_else(|| {
+                scene
+                    .objects
+                    .get(index as usize)
+                    .is_some_and(|object| object.fill_gradient.is_some())
+            });
+        if !supported
+            && (painted
+                || self
+                    .channel(scene, index, Property::Fill)
+                    .iter()
+                    .any(|track| track.continuous_paint))
+        {
+            return Err(CompilePatchError::InvalidTrack(
+                noon_core::TimelineError::InvalidPaintValues,
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn preflight_transaction(
@@ -361,12 +415,16 @@ pub(super) fn preflight_transaction_with_resources(
                         }
                     },
                 };
+                overlay
+                    .paint_definitions
+                    .insert(index, object.fill_gradient.is_some());
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
                         effect: object.effect.clone(),
                         index,
                         is_text: object.text().is_some(),
+                        continuous_fill: crate::continuous_fill_content_supported(&object.content),
                         spatial: object.spatial.clone(),
                     },
                 );
@@ -379,6 +437,7 @@ pub(super) fn preflight_transaction_with_resources(
                     .objects
                     .insert(*id, ObjectOverlay::Removed { index });
                 overlay.remove_object_tracks(scene, index);
+                overlay.paint_definitions.insert(index, false);
             }
             ExecutionPatch::ReorderObject { object, before } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -421,12 +480,18 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 let spatial = overlay.spatial(scene, *object);
                 let effect = overlay.effect(scene, *object);
+                overlay.require_paint_source(
+                    scene,
+                    index,
+                    crate::continuous_fill_content_supported(content) && spatial.is_none(),
+                )?;
                 overlay.objects.insert(
                     *object,
                     ObjectOverlay::Present {
                         effect,
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
+                        continuous_fill: crate::continuous_fill_content_supported(content),
                         spatial: spatial.map(Box::new),
                     },
                 );
@@ -456,6 +521,10 @@ pub(super) fn preflight_transaction_with_resources(
                         field: noon_core::ObjectStateField::Transform,
                     });
                 };
+                let index = overlay
+                    .object_index(scene, *object)
+                    .expect("validated object");
+                overlay.require_paint_source(scene, index, next_spatial.is_none())?;
                 overlay.set_spatial(scene, *object, next_spatial);
             }
             ExecutionPatch::SetSpatialState {
@@ -473,6 +542,7 @@ pub(super) fn preflight_transaction_with_resources(
                         field: noon_core::ObjectStateField::Transform,
                     });
                 }
+                overlay.require_paint_source(scene, index, spatial.is_none())?;
                 let object_is_mesh = scene.compiled_object_is_mesh(index as usize);
                 if spatial.as_ref().is_some_and(|spatial| {
                     (spatial.draw_kind == crate::CompiledSpatialDrawKind::Mesh) != object_is_mesh
@@ -531,16 +601,16 @@ pub(super) fn preflight_transaction_with_resources(
                 super::validate_z_index(*object, *value)?;
             }
             ExecutionPatch::SetEffect { object, effect } => {
-                if overlay.object_index(scene, *object).is_none() {
-                    return Err(CompilePatchError::UnknownObject(*object));
-                }
+                overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
                 let previous = overlay.effect(scene, *object);
                 crate::execution_patch::validate_effect_replacement(
                     *object,
                     previous.as_deref(),
                     effect,
                 )?;
-                overlay.set_glow(scene, *object, Some(std::sync::Arc::clone(effect)));
+                overlay.set_effect(scene, *object, Some(std::sync::Arc::clone(effect)));
             }
             ExecutionPatch::SetEffectAttachment {
                 object,
@@ -564,18 +634,29 @@ pub(super) fn preflight_transaction_with_resources(
                         overlay.set_track(track.id, None);
                     }
                 }
-                overlay.set_glow(scene, *object, effect.clone());
+                overlay.set_effect(scene, *object, effect.clone());
             }
             ExecutionPatch::SetStyle {
                 object,
                 style,
                 fill_gradient,
             } => {
-                if overlay.object_index(scene, *object).is_none() {
-                    return Err(CompilePatchError::UnknownObject(*object));
-                }
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 crate::execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
+                let supported = overlay.supports_continuous_fill(scene, *object)
+                    && overlay.spatial(scene, *object).is_none();
+                if fill_gradient.is_some() && !supported {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Style,
+                    });
+                }
+                overlay
+                    .paint_definitions
+                    .insert(index, fill_gradient.is_some());
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -647,6 +728,11 @@ pub(super) fn preflight_transaction_with_resources(
                     .map_err(CompilePatchError::InvalidTrack)?;
                 }
                 let spatial = overlay.spatial(scene, track.object);
+                if matches!(track.values, TrackValues::Paint { .. }) {
+                    let supported = overlay.supports_continuous_fill(scene, track.object);
+                    crate::validate_paint_track_profile(track, supported, spatial.is_some())
+                        .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
                     return Err(CompilePatchError::InvalidTrack(
                         noon_core::TimelineError::InvalidWorldTransformValues,
@@ -692,6 +778,11 @@ pub(super) fn preflight_transaction_with_resources(
                     .map_err(CompilePatchError::InvalidTrack)?;
                 }
                 let spatial = overlay.spatial(scene, track.object);
+                if matches!(track.values, TrackValues::Paint { .. }) {
+                    let supported = overlay.supports_continuous_fill(scene, track.object);
+                    crate::validate_paint_track_profile(track, supported, spatial.is_some())
+                        .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
                     return Err(CompilePatchError::InvalidTrack(
                         noon_core::TimelineError::InvalidWorldTransformValues,

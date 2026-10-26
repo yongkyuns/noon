@@ -35,6 +35,9 @@ pub enum SemanticObjectTrackProperty {
 /// execution snapshots and prepared morph payloads do not enter the semantic store.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
+    Paint {
+        transition: std::sync::Arc<crate::PaintTransition>,
+    },
     Bool {
         from: bool,
         to: bool,
@@ -69,6 +72,7 @@ pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SemanticObjectTrackValueKind {
+    Paint,
     Bool,
     Scalar,
     Vec3,
@@ -105,6 +109,7 @@ impl SemanticObjectTrackProperty {
 impl<R> SemanticObjectTrackValues<R> {
     const fn value_kind(&self) -> SemanticObjectTrackValueKind {
         match self {
+            Self::Paint { .. } => SemanticObjectTrackValueKind::Paint,
             Self::Bool { .. } => SemanticObjectTrackValueKind::Bool,
             Self::Scalar { .. } => SemanticObjectTrackValueKind::Scalar,
             Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
@@ -711,7 +716,9 @@ pub(crate) fn validate_object_property_track<R>(
     timing: TrackTiming,
     time_map: &CompositionTimeMap,
 ) -> Result<(), SemanticAnimationError> {
-    if property.value_kind() != values.value_kind()
+    if (property.value_kind() != values.value_kind()
+        && !(property == SemanticObjectTrackProperty::Fill
+            && values.value_kind() == SemanticObjectTrackValueKind::Paint))
         || !timing.start_time.is_finite()
         || !timing.duration.is_finite()
         || timing.duration < 0.0
@@ -727,6 +734,11 @@ pub(crate) fn validate_object_property_track<R>(
         return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
     }
     match values {
+        SemanticObjectTrackValues::Paint { .. } => {
+            if !timing.easing.preserves_unit_interval() {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
         SemanticObjectTrackValues::Scalar { from, to } => {
             if !from.is_finite()
                 || !to.is_finite()

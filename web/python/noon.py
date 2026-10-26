@@ -1940,6 +1940,7 @@ _PUBLIC_EXPORTS = {
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
     "Blur": "_noon_effects",
+    "LinearGradient": "_noon_paints",
     "GlowPulse": "_noon_effects",
     "Pixels": "_noon_effects",
     "EffectHandle": "_noon_effects",

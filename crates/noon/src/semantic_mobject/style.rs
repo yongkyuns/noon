@@ -33,16 +33,15 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
 }
 
 /// Observable paint alpha is the solid color alpha times its authored multiplier.
-/// Object-composite opacity is a separate domain. A resource paint has no single
-/// scalar color alpha and cannot be represented by a Manim opacity getter.
+/// A continuous paint reports its independent multiplier; intrinsic stop alpha
+/// varies spatially. Unresolved resource paint has no supported scalar query.
 fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, AuthoringError> {
     match paint {
         Some(SemanticPaint::Solid(color)) => Ok(f64::from(color.alpha) * opacity),
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
-            Err(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
-            ))
-        }
+        Some(SemanticPaint::LinearGradient(_)) => Ok(opacity),
+        Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
+        )),
         None => Ok(0.0),
     }
 }
@@ -605,7 +604,39 @@ pub(crate) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, AuthoringError> {
     }
 }
 
+pub(crate) fn prepare_fill_gradient(
+    object: &Mobject,
+    gradient: std::sync::Arc<noon_core::LinearGradient>,
+    opacity: Option<f64>,
+) -> Result<SemanticObjectState, AuthoringError> {
+    object.validate()?;
+    let mut state = object.state()?;
+    if state.style.fill.is_none() {
+        state.style.fill_opacity = 1.0;
+    }
+    state.style.fill = Some(SemanticPaint::LinearGradient(gradient));
+    if let Some(opacity) = opacity {
+        edit_fill_opacity(&mut state.style, opacity)?;
+    }
+    let store = object.integration_store().borrow();
+    let unsupported = || {
+        AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::ContinuousPaintProfile)
+    };
+    noon_compile::lower_semantic_fill(object.node_id(), &state, &store)
+        .map_err(|_| unsupported())?;
+    Ok(state)
+}
+
 impl Mobject {
+    /// Set one immutable object-local gradient through the ordinary style transaction.
+    pub fn set_fill_gradient(
+        &mut self,
+        gradient: impl Into<std::sync::Arc<noon_core::LinearGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        let state = prepare_fill_gradient(self, gradient.into(), opacity)?;
+        self.commit_state(state)
+    }
     /// RGB paint observation; opacity is queried independently.
     pub fn fill_color(&self) -> Result<Option<Color>, AuthoringError> {
         paint_color(self.state()?.style.fill.as_ref())

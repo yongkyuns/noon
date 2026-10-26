@@ -459,6 +459,7 @@ pub enum Property {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
+    Paint,
     Effect,
     Bool,
     ZIndex,
@@ -471,6 +472,9 @@ pub enum ValueKind {
 }
 
 impl Property {
+    pub fn accepts_value_kind(self, actual: ValueKind) -> bool {
+        matches!((self, actual), (Self::Fill, ValueKind::Paint)) || self.value_kind() == actual
+    }
     pub const fn value_kind(self) -> ValueKind {
         match self {
             Self::EffectColor | Self::EffectRadius | Self::EffectIntensity => ValueKind::Effect,
@@ -645,6 +649,10 @@ impl EffectTrackEndBehavior {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
+    /// Continuous fill endpoints share the ordinary Fill channel with solids.
+    Paint {
+        transition: Arc<crate::PaintTransition>,
+    },
     /// Generation is captured at activation; a reused object slot or attachment
     /// name never redirects an already prepared effect track.
     Effect {
@@ -746,6 +754,7 @@ impl TrackValues {
 
     pub const fn value_kind(&self) -> ValueKind {
         match self {
+            Self::Paint { .. } => ValueKind::Paint,
             Self::Effect { .. } => ValueKind::Effect,
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
@@ -1018,6 +1027,8 @@ pub struct TrackDefinition {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimelineError {
+    InvalidPaintValues,
+    UnsupportedPaintRateFunction(RateFunction),
     InvalidEffectValues(Property),
     UnsupportedGlowRateFunction(RateFunction),
     InvalidEffectAttachment {
@@ -1078,6 +1089,8 @@ pub enum TimelineError {
 impl std::fmt::Display for TimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPaintValues => formatter.write_str("continuous paint track is outside the finite planar fill profile"),
+            Self::UnsupportedPaintRateFunction(rate) => write!(formatter, "continuous paint tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectValues(property) => write!(formatter, "invalid or incompatible effect endpoints for {property:?}"),
             Self::UnsupportedGlowRateFunction(rate) => write!(formatter, "glow tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
@@ -1200,7 +1213,7 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     }
     let expected = track.property.value_kind();
     let actual = track.values.value_kind();
-    if expected != actual {
+    if !track.property.accepts_value_kind(actual) {
         return Err(TimelineError::ValueTypeMismatch {
             property: track.property,
             expected,
@@ -1227,6 +1240,13 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
         && !track.timing.easing.preserves_unit_interval()
     {
         return Err(TimelineError::UnsupportedGlowRateFunction(
+            track.timing.easing,
+        ));
+    }
+    if matches!(track.values, TrackValues::Paint { .. })
+        && !track.timing.easing.preserves_unit_interval()
+    {
+        return Err(TimelineError::UnsupportedPaintRateFunction(
             track.timing.easing,
         ));
     }

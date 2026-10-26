@@ -22,11 +22,29 @@ pub struct Raster {
     pub last_scene_repacked: usize,
 }
 impl Raster {
+    // This support module is compiled separately by native and Vulkan test binaries.
+    #[allow(dead_code)]
     pub async fn new() -> Self {
         Self::with_dimensions(SIZE, SIZE).await
     }
 
+    #[allow(dead_code)]
     pub async fn with_dimensions(width: u32, height: u32) -> Self {
+        Self::with_adapter_dimensions(width, height, wgpu::Backends::VULKAN, true).await
+    }
+
+    // Explicit real native adapter qualification, also usable on Metal hosts.
+    #[allow(dead_code)]
+    pub async fn with_primary_dimensions(width: u32, height: u32) -> Self {
+        Self::with_adapter_dimensions(width, height, wgpu::Backends::PRIMARY, false).await
+    }
+
+    async fn with_adapter_dimensions(
+        width: u32,
+        height: u32,
+        backends: wgpu::Backends,
+        force_fallback_adapter: bool,
+    ) -> Self {
         let layout = Rgba8ReadbackLayout::new(
             width,
             height,
@@ -35,16 +53,16 @@ impl Raster {
         )
         .unwrap();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                force_fallback_adapter: true,
+                force_fallback_adapter,
                 ..Default::default()
             })
             .await
-            .expect("native raster qualification requires Vulkan");
+            .expect("native raster qualification requires the requested real adapter");
         eprintln!("native raster adapter: {:?}", adapter.get_info());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())

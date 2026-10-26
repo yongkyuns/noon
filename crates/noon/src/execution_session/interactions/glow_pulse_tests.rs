@@ -175,6 +175,47 @@ fn click_pulse_rejects_blur_without_publishing_or_acknowledging_the_release() {
 }
 
 #[test]
+fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
+    use crate::{GradientStop, LinearGradient};
+    use std::sync::Arc;
+
+    for persistent in [false, true] {
+        let mut f = Fixture::new(persistent.then(|| EffectUpdate::default().intensity(0.35)));
+        let gradient = LinearGradient::new(
+            [0.0, 0.5],
+            [1.0, 0.5],
+            [
+                GradientStop::new(0.0, Color::rgba(1.0, 0.0, 0.0, 0.4)).unwrap(),
+                GradientStop::new(1.0, Color::rgba(0.0, 0.0, 1.0, 0.8)).unwrap(),
+            ],
+        )
+        .unwrap();
+        f.scene
+            .live(&mut f.session)
+            .set_fill_gradient(&f.targets[0], gradient, Some(0.6))
+            .unwrap();
+        let paint = Arc::clone(f.session.frame().objects[0].fill_gradient.as_ref().unwrap());
+        let style = f.session.frame().objects[0].style;
+        let original = f.glow(0);
+        let attachment = f.effect(0);
+        f.click(1, 0);
+        for time in [10.0, 10.5, 11.0] {
+            f.tick(time);
+            let row = &f.session.frame().objects[0];
+            assert!(Arc::ptr_eq(row.fill_gradient.as_ref().unwrap(), &paint));
+            assert_eq!(row.style, style);
+            assert_eq!(f.session.frame().time, 0.0);
+            if time == 10.5 {
+                close(f.glow(0).unwrap().intensity(), 2.0);
+            }
+        }
+        assert_eq!(f.glow(0), original);
+        assert_eq!(f.effect(0), attachment);
+        assert!(!f.session.interactions_active());
+    }
+}
+
+#[test]
 fn click_glow_pulse_absent_attachment_enrolls_neutrally_and_retires_exactly() {
     let mut f = Fixture::new(None);
     let original = f.session.frame().objects.clone();

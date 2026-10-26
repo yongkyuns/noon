@@ -175,6 +175,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::EffectParameter(_) => {
                 Self::new("invalid_input", "effect.invalid_parameter", message)
             }
+            AuthoringError::PaintTransition(_) => {
+                Self::new("invalid_input", "paint.invalid_transition", message)
+            }
             AuthoringError::EffectNotFound { .. } => {
                 Self::new("invalid_input", "effect.not_found", message)
             }

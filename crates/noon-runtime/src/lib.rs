@@ -1231,11 +1231,30 @@ impl SceneInstance {
             new_channel.map(|channel| channel.object_index as usize),
         );
         let mut evaluation = EvaluationStats::default();
+        let paint_only = affected_channels
+            .iter()
+            .flatten()
+            .all(|channel| channel.property == Property::Fill);
         for object_index in affected_objects.into_iter().flatten() {
+            let before = paint_only.then(|| {
+                (
+                    FrameRowState::from_frame(&self.frame, object_index),
+                    self.frame.objects[object_index].content.clone(),
+                    self.frame.objects[object_index].text_bounds,
+                )
+            });
             self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
-            self.mark_changed(object_index);
+            if before.is_some_and(|(row, content, text_bounds)| {
+                !row.spatially_differs_from_frame(&self.frame, object_index)
+                    && content == self.frame.objects[object_index].content
+                    && text_bounds == self.frame.objects[object_index].text_bounds
+            }) {
+                self.changes.insert(object_index);
+            } else {
+                self.mark_changed(object_index);
+            }
             patch_stats.objects_recomputed += 1;
         }
         patch_stats.groups_evaluated = evaluation.groups_evaluated;
@@ -1260,6 +1279,8 @@ impl SceneInstance {
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))? as usize;
         let before = self.frame.objects[index].clone();
+        let style_spatial_before = matches!(patch, ExecutionPatch::SetStyle { .. })
+            .then(|| FrameRowState::from_frame(&self.frame, index));
         self.compiled.apply_execution_patch(patch)?;
 
         match patch {
@@ -1367,7 +1388,15 @@ impl SceneInstance {
             self.reapply_reactive_for_object(index);
             self.reapply_numeric_text_for_object(index);
             if self.frame.objects[index] != before {
-                self.mark_changed(index);
+                if style_spatial_before.is_some_and(|previous| {
+                    !previous.spatially_differs_from_frame(&self.frame, index)
+                        && before.content == self.frame.objects[index].content
+                        && before.text_bounds == self.frame.objects[index].text_bounds
+                }) {
+                    self.changes.insert(index);
+                } else {
+                    self.mark_changed(index);
+                }
             }
         }
         Ok(())
@@ -1716,7 +1745,11 @@ impl SceneInstance {
                 if channel.property == Property::ZIndex {
                     self.reposition_painter_row(channel.object_index as usize);
                 }
-                self.mark_changed(channel.object_index as usize);
+                if channel.property == Property::Fill {
+                    self.changes.insert(channel.object_index as usize);
+                } else {
+                    self.mark_changed(channel.object_index as usize);
+                }
             }
             stats.groups_evaluated += 1;
         }
@@ -2445,6 +2478,19 @@ fn apply_group_to_row(
         // Coupled geometry tracks retain their source snapshot so an earlier
         // wait must recover it, just as affine channels recover their first `from`.
         if let Some(first) = tracks.first() {
+            if group.channel.property == Property::Fill && first.reconciled {
+                if let TrackValues::Paint { transition } = &first.values {
+                    return apply_paint_track(&mut row, transition, 0.0);
+                }
+                if let TrackValues::Color { from, .. } = first.values {
+                    return apply_evaluated_value(
+                        &mut row,
+                        Property::Fill,
+                        EvaluatedValue::Color(from),
+                        false,
+                    );
+                }
+            }
             if group.channel.property == Property::Transform {
                 return apply_transform_track(&mut row, first, 0.0);
             }
@@ -2626,6 +2672,13 @@ fn apply_group_to_row(
         });
     }
 
+    if let TrackValues::Paint { transition } = &track.values {
+        let progress =
+            world_track_progress(track, time).expect("selected continuous paint track is active");
+        // Admission excludes overshooting leaf rates. As with glow, remove only
+        // endpoint roundoff from otherwise bounded polynomial rate functions.
+        return apply_paint_track(&mut row, transition, progress.clamp(0.0, 1.0));
+    }
     if group.channel.property == Property::Transform {
         return apply_transform_track(&mut row, track, progress);
     }
@@ -2769,6 +2822,34 @@ enum EvaluatedValue {
         profile: noon_core::ManimCamera3DProfile,
         camera: noon_core::SemanticCamera3D,
     },
+}
+
+fn apply_paint_track(
+    row: &mut FrameRowMut<'_>,
+    transition: &noon_core::PaintTransition,
+    progress: f64,
+) -> bool {
+    let (paint, opacity) = transition
+        .sample(progress)
+        .expect("validated continuous fill sample");
+    let (fill, gradient) = match paint {
+        Some(noon_core::SemanticPaint::Solid(mut color)) => {
+            color.alpha = (f64::from(color.alpha) * opacity) as f32;
+            (Some(color), None)
+        }
+        Some(noon_core::SemanticPaint::LinearGradient(gradient)) => (
+            Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)),
+            Some(gradient),
+        ),
+        None => (None, None),
+        Some(noon_core::SemanticPaint::Resource(_)) => {
+            unreachable!("checked fill transition excludes unresolved paint")
+        }
+    };
+    let changed = row.style.fill != fill || *row.fill_gradient != gradient;
+    row.style.fill = fill;
+    *row.fill_gradient = gradient;
+    changed
 }
 
 // A prepared morph owns its fixed rendering frame alongside ordinary semantic
@@ -3449,6 +3530,7 @@ fn interpolate_track_values_with_path_plan(
             Some(EvaluatedValue::CameraProfile { profile, camera })
         }
         TrackValues::Effect { .. }
+        | TrackValues::Paint { .. }
         | TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }
