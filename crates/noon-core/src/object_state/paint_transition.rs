@@ -2,8 +2,8 @@
 use std::sync::Arc;
 
 use crate::{
-    Color, GradientError, GradientStop, ImagePaint, ImagePaintError, LinearGradient,
-    RadialGradient, SemanticPaint,
+    Color, GradientError, GradientStop, ImagePaint, ImagePaintError, LinearGradient, NoisePaint,
+    NoisePaintError, RadialGradient, SemanticPaint,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,18 +15,20 @@ pub enum PaintTransitionError {
     DegenerateAxis,
     Gradient(GradientError),
     Image(ImagePaintError),
+    Noise(NoisePaintError),
 }
 
 impl std::fmt::Display for PaintTransitionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedPaint => f.write_str("paint transitions require compatible gradient endpoints or two image paints using the same resource"),
+            Self::UnsupportedPaint => f.write_str("paint transitions require compatible supported kinds, matching image resources and matching noise seeds"),
             Self::InvalidOpacity => f.write_str("paint transition opacity must be finite and in [0, 1]"),
             Self::InvalidProgress => f.write_str("paint transition progress must be finite and in [0, 1]"),
             Self::DifferentStopCounts => f.write_str("animated gradients require matching stop counts"),
             Self::DegenerateAxis => f.write_str("gradient axis would collapse or lose coordinate precision during interpolation"),
             Self::Gradient(error) => error.fmt(f),
             Self::Image(error) => error.fmt(f),
+            Self::Noise(error) => error.fmt(f),
         }
     }
 }
@@ -42,10 +44,17 @@ impl From<ImagePaintError> for PaintTransitionError {
     }
 }
 
+impl From<NoisePaintError> for PaintTransitionError {
+    fn from(error: NoisePaintError) -> Self {
+        Self::Noise(error)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum PreparedPaintTransition {
     Gradient([Arc<LinearGradient>; 2]),
     Radial([Arc<RadialGradient>; 2]),
+    Noise([Arc<NoisePaint>; 2]),
     Image(Box<[ImagePaint; 2]>),
 }
 
@@ -105,6 +114,37 @@ impl PaintTransition {
                 prepared,
             });
         }
+        let noise = |paint: &Option<SemanticPaint>| match paint {
+            Some(SemanticPaint::Noise(value)) => Some(value.clone()),
+            _ => None,
+        };
+        if let Some(template) = noise(&from).or_else(|| noise(&to)) {
+            let promote = |paint: &Option<SemanticPaint>| match paint {
+                Some(SemanticPaint::Noise(value)) => Ok(value.clone()),
+                Some(SemanticPaint::Solid(color)) => Ok(Arc::new(NoisePaint::new(
+                    template.seed(),
+                    template.frequency(),
+                    template.phase(),
+                    [*color; 2],
+                )?)),
+                None => Ok(Arc::new(NoisePaint::new(
+                    template.seed(),
+                    template.frequency(),
+                    template.phase(),
+                    [Color::TRANSPARENT; 2],
+                )?)),
+                _ => Err(PaintTransitionError::UnsupportedPaint),
+            };
+            let values = [promote(&from)?, promote(&to)?];
+            values[0].interpolate(&values[1], 0.0)?;
+            return Ok(Self {
+                from,
+                from_opacity,
+                to,
+                to_opacity,
+                prepared: PreparedPaintTransition::Noise(values),
+            });
+        }
         let radial = |paint: &Option<SemanticPaint>| match paint {
             Some(SemanticPaint::RadialGradient(gradient)) => Some(gradient.clone()),
             _ => None,
@@ -139,9 +179,11 @@ impl PaintTransition {
             |paint: &Option<SemanticPaint>| -> Result<Arc<LinearGradient>, PaintTransitionError> {
                 match paint {
                     Some(SemanticPaint::LinearGradient(gradient)) => Ok(gradient.clone()),
-                    Some(SemanticPaint::Image(_) | SemanticPaint::RadialGradient(_)) => {
-                        Err(PaintTransitionError::UnsupportedPaint)
-                    }
+                    Some(
+                        SemanticPaint::Image(_)
+                        | SemanticPaint::RadialGradient(_)
+                        | SemanticPaint::Noise(_),
+                    ) => Err(PaintTransitionError::UnsupportedPaint),
                     Some(SemanticPaint::Solid(_)) | None => {
                         let color = match paint {
                             Some(SemanticPaint::Solid(color)) => *color,
@@ -177,21 +219,34 @@ impl PaintTransition {
     pub fn gradients(&self) -> Option<&[Arc<LinearGradient>; 2]> {
         match &self.prepared {
             PreparedPaintTransition::Gradient(gradients) => Some(gradients),
-            PreparedPaintTransition::Image(_) | PreparedPaintTransition::Radial(_) => None,
+            PreparedPaintTransition::Image(_)
+            | PreparedPaintTransition::Radial(_)
+            | PreparedPaintTransition::Noise(_) => None,
         }
     }
 
     pub fn radials(&self) -> Option<&[Arc<RadialGradient>; 2]> {
         match &self.prepared {
             PreparedPaintTransition::Radial(gradients) => Some(gradients),
-            PreparedPaintTransition::Gradient(_) | PreparedPaintTransition::Image(_) => None,
+            PreparedPaintTransition::Gradient(_)
+            | PreparedPaintTransition::Image(_)
+            | PreparedPaintTransition::Noise(_) => None,
+        }
+    }
+
+    pub fn noises(&self) -> Option<&[Arc<NoisePaint>; 2]> {
+        match &self.prepared {
+            PreparedPaintTransition::Noise(values) => Some(values),
+            _ => None,
         }
     }
 
     pub fn images(&self) -> Option<&[ImagePaint; 2]> {
         match &self.prepared {
             PreparedPaintTransition::Image(images) => Some(images),
-            PreparedPaintTransition::Gradient(_) | PreparedPaintTransition::Radial(_) => None,
+            PreparedPaintTransition::Gradient(_)
+            | PreparedPaintTransition::Radial(_)
+            | PreparedPaintTransition::Noise(_) => None,
         }
     }
 
@@ -257,6 +312,12 @@ impl PaintTransition {
                     opacity,
                 ));
             }
+            PreparedPaintTransition::Noise([from, to]) => {
+                return Ok((
+                    Some(SemanticPaint::Noise(Arc::new(from.interpolate(to, alpha)?))),
+                    opacity,
+                ));
+            }
             PreparedPaintTransition::Radial([from, to]) => {
                 let center = std::array::from_fn(|i| mix(from.center()[i], to.center()[i], alpha));
                 let radii = std::array::from_fn(|i| {
@@ -315,28 +376,7 @@ fn blend_stops(
     from.iter()
         .zip(to)
         .map(|(a, b)| {
-            let color = |color: Color| {
-                let alpha = f64::from(color.alpha);
-                [
-                    f64::from(color.red) * alpha,
-                    f64::from(color.green) * alpha,
-                    f64::from(color.blue) * alpha,
-                    alpha,
-                ]
-            };
-            let a_color = color(a.color());
-            let b_color = color(b.color());
-            let c: [f64; 4] = std::array::from_fn(|i| mix(a_color[i], b_color[i], alpha));
-            let color = if c[3] == 0.0 {
-                Color::rgba(0.0, 0.0, 0.0, 0.0)
-            } else {
-                Color::rgba(
-                    (c[0] / c[3]) as f32,
-                    (c[1] / c[3]) as f32,
-                    (c[2] / c[3]) as f32,
-                    c[3] as f32,
-                )
-            };
+            let color = super::interpolate_premultiplied_color(a.color(), b.color(), alpha);
             GradientStop::new(mix(a.position(), b.position(), alpha), color)
         })
         .collect::<Result<Vec<_>, _>>()

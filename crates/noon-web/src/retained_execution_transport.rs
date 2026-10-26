@@ -23,7 +23,7 @@ pub(crate) mod incremental_render_resources;
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
 // V21 carries the shared tagged fill paint in the genuine execution/render
 // worker envelope. Older readers reject instead of discarding a paint kind.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 22;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 23;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2387,7 +2387,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 22);
+        assert_eq!(snapshot.protocol_version, 23);
         assert_eq!(
             snapshot.objects[0].effect.unwrap().attachment,
             effect.attachment

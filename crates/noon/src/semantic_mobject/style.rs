@@ -10,6 +10,7 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
         Some(
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
             | SemanticPaint::Image(_),
         ) => Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
@@ -24,6 +25,7 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
         Some(
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
             | SemanticPaint::Image(_),
         ) => style.fill_opacity > 0.0,
         None => false,
@@ -45,6 +47,7 @@ fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f6
         Some(
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
             | SemanticPaint::Image(_),
         ) => Ok(opacity),
         None => Ok(0.0),
@@ -99,6 +102,7 @@ fn replace_paint_color(
         Some(
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
             | SemanticPaint::Image(_),
         ) => *opacity,
     };
@@ -651,7 +655,24 @@ pub(crate) fn prepare_fill_paint_value(
 }
 
 impl Mobject {
-    /// Set an elliptical radial fill through the ordinary style transaction.
+    /// Set a seeded local noise fill through the shared style publication.
+    pub fn set_fill_noise(
+        &mut self,
+        paint: impl Into<std::sync::Arc<noon_core::NoisePaint>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let state = prepare_fill_paint_value(
+            &self.integration_store().borrow(),
+            self.node_id(),
+            self.state()?,
+            SemanticPaint::Noise(paint.into()),
+            opacity,
+        )?;
+        self.commit_state(state)
+    }
+
+    /// Set an elliptical radial fill through the ordinary shared style operation.
     pub fn set_fill_radial_gradient(
         &mut self,
         gradient: impl Into<std::sync::Arc<noon_core::RadialGradient>>,

@@ -10248,6 +10248,24 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFillNoise)]
+        pub fn live_set_fill_noise(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            gradient: &crate::WasmNoisePaint,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFillRadialGradient)]
         pub fn live_set_fill_radial_gradient(
             &mut self,

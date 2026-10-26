@@ -35,6 +35,34 @@ class LinearGradient:
         return self
 
 
+class NoisePaint:
+    """Seeded smooth local noise, with Rust-owned sampling and pixel filtering.
+
+    Frequency counts cells across the normalized local box; phase shifts them
+    in cell units. Animate matching-seed values with ordinary ``set_fill``.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, low, high, *, seed=0, frequency=(8.0, 8.0), phase=(0.0, 0.0)):
+        from _manim_compat import _as_color
+        from js import noonNoisePaint
+        from pyodide.ffi import to_js
+        colors = []
+        for value in (low, high):
+            c = _as_color("noise color", value)
+            colors.extend((c.red, c.green, c.blue, c.alpha))
+        pair = lambda values: to_js([_number(v, "noise coordinate") for v in values])
+        self._definition = engine_call(noonNoisePaint, _number(seed, "noise seed"),
+                                       pair(frequency), pair(phase), to_js(colors))
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+
 class RadialGradient:
     """Elliptical local-box paint with ordered ``(position, color)`` stops.
 
@@ -81,6 +109,11 @@ def set_fill(value, paint, opacity):
             engine_call(handle.setFillImage, paint._definition, opacity)
         else:
             engine_call(context.liveSetFillImage, handle, paint._definition, opacity)
+    elif isinstance(paint, NoisePaint):
+        if context is None:
+            engine_call(handle.setFillNoise, paint._definition, opacity)
+        else:
+            engine_call(context.liveSetFillNoise, handle, paint._definition, opacity)
     elif isinstance(paint, RadialGradient):
         if context is None:
             engine_call(handle.setFillRadialGradient, paint._definition, opacity)

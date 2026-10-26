@@ -60,11 +60,27 @@ pub(crate) fn validate_definition(
     match paint {
         SemanticPaint::LinearGradient(gradient) => validate_gradient(gradient),
         SemanticPaint::RadialGradient(gradient) => validate_radial(gradient),
+        SemanticPaint::Noise(noise) => validate_noise(noise),
         SemanticPaint::Image(image) => validate_image(image),
         SemanticPaint::Solid(_) => Err(SemanticExecutionValueError::UnsupportedPaintProfile {
             field: SemanticExecutionField::FillPaint,
         }),
     }
+}
+
+pub(crate) fn validate_noise(
+    noise: &noon_core::NoisePaint,
+) -> Result<(), SemanticExecutionValueError> {
+    if noise
+        .frequency()
+        .into_iter()
+        .any(|v| v > 256.0 || (v as f32) < f32::MIN_POSITIVE)
+    {
+        return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+            field: SemanticExecutionField::FillPaint,
+        });
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_image(
@@ -137,6 +153,11 @@ pub(crate) fn validate_transition(
         validate_radial(to)?;
         return validate_stop_sweep(from.stops(), to.stops());
     }
+    if let Some([from, to]) = transition.noises() {
+        validate_noise(from)?;
+        validate_noise(to)?;
+        return Ok(());
+    }
     let [from, to] = transition
         .gradients()
         .expect("closed checked gradient/image transition");
@@ -198,6 +219,7 @@ pub fn lower_fill(
     let Some(
         paint @ (SemanticPaint::LinearGradient(_)
         | SemanticPaint::RadialGradient(_)
+        | SemanticPaint::Noise(_)
         | SemanticPaint::Image(_)),
     ) = state.style.fill.as_ref()
     else {

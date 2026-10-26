@@ -1687,6 +1687,8 @@ impl<'a> LiveSession<'a> {
             Some(
                 noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Image(_)
             )
         ) {
             mobject.manim_color().map_err(LiveSessionError::from)?;
@@ -3128,7 +3130,25 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
-    /// Set an immutable local gradient and optional fill opacity in one publication.
+    /// Set a seeded local noise fill through the shared style publication.
+    pub fn set_fill_noise(
+        &mut self,
+        mobject: &Mobject,
+        paint: impl Into<std::sync::Arc<noon_core::NoisePaint>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state = crate::semantic_mobject::prepare_fill_paint_value(
+            &self.store.borrow(),
+            mobject.node_id(),
+            mobject.state()?,
+            noon_core::SemanticPaint::Noise(paint.into()),
+            opacity,
+        )?;
+        self.replace_style(mobject, state.style)
+    }
+
+    /// Set an elliptical radial fill through the ordinary shared style operation.
     pub fn set_fill_radial_gradient(
         &mut self,
         mobject: &Mobject,

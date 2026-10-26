@@ -735,6 +735,7 @@ impl SemanticObjectState {
                 Some(
                     crate::SemanticPaint::LinearGradient(_)
                     | crate::SemanticPaint::RadialGradient(_)
+                    | crate::SemanticPaint::Noise(_)
                     | crate::SemanticPaint::Image(_),
                 ) => false,
                 Some(crate::SemanticPaint::Solid(color)) => {

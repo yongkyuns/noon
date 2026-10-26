@@ -172,6 +172,55 @@ Premultiplication/addressing shader mutations must fail that reference. Exact
 source/package identities, executed results and remaining gates live in #2330;
 these correctness checks do not establish physical-device frame pacing.
 
+## Seeded procedural noise paint
+
+`NoisePaint(low, high, seed=0, frequency=(8, 8), phase=(0, 0))` supplies a smooth
+two-color local field through ordinary `set_fill` and `.animate.set_fill`.
+Rust uses checked `NoisePaint::new` and `Mobject`/`LiveSession::set_fill_noise`.
+Complete paired scripts are `noon::example_scenes::noise_paint` and
+`web/python/examples/noise_paint.py`, with the native `noise_paint` example and
+direct Rust/WASM host. They animate frequency, phase, transparent colors and
+opacity, hold, change to solid paint and return. No per-frame callback or extra
+clock runs a static texture.
+
+Frequency counts lattice cells along each normalized local-box axis; phase
+shifts the lattice in cell coordinates. The lower-left box corner is zero.
+The fixed u32 hash, its upper sixteen output bits and quintic interpolation
+define seeded value noise; no platform random generator is involved. Lattice
+indices wrap every 65,536 cells. Late projection splits phase into an integer
+cell and fraction before f32 narrowing, including the rounded periodic seam.
+Authored phase stays f64 and may retain multiple unwrapped cycles.
+
+The renderer derives an axis-aligned lattice footprint from the physical pixel,
+camera and inverse object transform. Widths below 1/256 cell use point sampling;
+larger widths integrate the quintic field over a lattice-aligned box using at
+most nine lattice values. Beyond one cell, a cubic fade reaches the seed
+ensemble mean at two cells. This is the finite minification profile, rather
+than a claim of arbitrary alias-free reconstruction. Centers clamp to the local
+box before mapping; the filter window may extend beyond that center. The GPU
+profile accepts positive representable frequencies up to 256 per axis.
+
+Color interpolation uses encoded-premultiplied RGBA. Intrinsic color alpha,
+fill opacity and final object opacity remain independent. Same-seed targets
+interpolate frequency, phase and colors through the shared Fill channel;
+solid/absent endpoints promote during interior samples. Exact endpoints retain
+kind, seed and authored values. Changing seed is an immediate edit; attempting
+to animate it rejects atomically. Existing stroke/text, callback-paint and
+transient-family restrictions remain. Geometry, layout and picking stay intact.
+
+The native `noise_paint_raster` oracle uses separate masked integer arithmetic
+and piecewise Gauss quadrature over the point polynomial, without production
+axis integrals or uniforms. It covers transformed primitives and concave paths,
+detail/box/coarse profiles, authored times and exact rewind. A separate native
+period-seam regression prevents phase packing from retargeting the other axis.
+Existing whole-image oracles verify Blur/Shadow/both Glow modes and unchanged
+geometry/strokes. Actual WGSL mutations ignoring seed and disabling filtering
+must fail, then exact restored source must pass. Browser qualification is
+`scripts/noise-paint-qualification.mjs`, with an independent BigInt/quadrature
+reference, full u32 seed, phase-wrap and minification profiles on WebGPU/WebGL2.
+Executed source/build evidence and unfinished promotion gates belong to the
+owning PR/#1897; these are correctness/resource checks, not frame-pacing claims.
+
 ## Radial paint authoring and qualification
 
 `RadialGradient(stops, center=(0.5, 0.5), radii=(0.5, 0.5))` uses the same

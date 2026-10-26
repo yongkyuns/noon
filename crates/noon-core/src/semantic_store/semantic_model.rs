@@ -245,6 +245,8 @@ pub enum SemanticPaint {
     LinearGradient(std::sync::Arc<crate::LinearGradient>),
     /// Elliptical radial paint in the same normalized local geometry box.
     RadialGradient(std::sync::Arc<crate::RadialGradient>),
+    /// Seeded stateless procedural color field.
+    Noise(std::sync::Arc<crate::NoisePaint>),
     /// Local image mapping over an existing immutable raster resource.
     Image(std::sync::Arc<crate::ImagePaint>),
 }
@@ -253,21 +255,32 @@ impl SemanticPaint {
     pub fn as_linear_gradient(&self) -> Option<&std::sync::Arc<crate::LinearGradient>> {
         match self {
             Self::LinearGradient(gradient) => Some(gradient),
-            Self::Solid(_) | Self::RadialGradient(_) | Self::Image(_) => None,
+            Self::Solid(_) | Self::RadialGradient(_) | Self::Noise(_) | Self::Image(_) => None,
         }
     }
 
     pub fn as_radial_gradient(&self) -> Option<&std::sync::Arc<crate::RadialGradient>> {
         match self {
             Self::RadialGradient(gradient) => Some(gradient),
-            Self::Solid(_) | Self::LinearGradient(_) | Self::Image(_) => None,
+            Self::Solid(_) | Self::LinearGradient(_) | Self::Noise(_) | Self::Image(_) => None,
+        }
+    }
+
+    pub fn as_noise(&self) -> Option<&std::sync::Arc<crate::NoisePaint>> {
+        match self {
+            Self::Noise(noise) => Some(noise),
+            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) | Self::Image(_) => {
+                None
+            }
         }
     }
 
     pub fn as_image(&self) -> Option<&crate::ImagePaint> {
         match self {
             Self::Image(image) => Some(image),
-            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) => None,
+            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) | Self::Noise(_) => {
+                None
+            }
         }
     }
 }
@@ -397,6 +410,7 @@ impl SemanticStyle {
                 Some(
                     SemanticPaint::LinearGradient(_)
                         | SemanticPaint::RadialGradient(_)
+                        | SemanticPaint::Noise(_)
                         | SemanticPaint::Image(_)
                 )
             )
@@ -418,6 +432,7 @@ impl SemanticStyle {
             Some(
                 SemanticPaint::LinearGradient(_)
                 | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Noise(_)
                 | SemanticPaint::Image(_),
             )
             | None => true,
@@ -495,6 +510,7 @@ impl SemanticStyle {
             SemanticPaint::Solid(color) => Some(*color),
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
             | SemanticPaint::Image(_) => None,
         }
     }

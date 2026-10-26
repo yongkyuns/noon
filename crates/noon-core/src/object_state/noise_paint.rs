@@ -7,6 +7,9 @@ pub enum NoisePaintError {
     InvalidFrequency,
     InvalidPhase,
     InvalidSamplePoint,
+    InvalidFootprint,
+    InvalidProgress,
+    DifferentSeed,
 }
 
 impl std::fmt::Display for NoisePaintError {
@@ -15,6 +18,13 @@ impl std::fmt::Display for NoisePaintError {
             Self::InvalidColor => "noise colors require finite RGBA channels in [0, 1]",
             Self::InvalidFrequency => "noise frequency requires two positive finite cell counts",
             Self::InvalidPhase => "noise phase requires two finite lattice coordinates",
+            Self::InvalidFootprint => {
+                "noise filter widths require finite nonnegative lattice lengths"
+            }
+            Self::InvalidProgress => "noise progress must be finite and in [0, 1]",
+            Self::DifferentSeed => {
+                "noise animation requires matching seeds; seed changes are immediate edits"
+            }
             Self::InvalidSamplePoint => "noise sample coordinates must be finite",
         })
     }
@@ -30,9 +40,9 @@ impl std::error::Error for NoisePaintError {}
 /// than a platform random-number generator. Static values have no time input.
 ///
 /// Colors interpolate in premultiplied encoded-sRGB; sampling includes no shape
-/// coverage, fill multiplier or final object opacity. This value defines neither
-/// pixel-footprint antialiasing nor a renderer admission profile. Public Scene
-/// and language-wrapper support require the subsequent shared vertical slice.
+/// coverage, fill multiplier or final object opacity. The filtered sampler
+/// defines a bounded box/minification profile; a renderer supplies its physical
+/// pixel footprint. Shared authoring/lowering owns attachment admission.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "NoisePaintInput")]
 pub struct NoisePaint {
@@ -99,38 +109,130 @@ impl NoisePaint {
         self.colors
     }
 
+    /// Split the periodic phase before GPU narrowing. Integer cells retain all
+    /// sixteen period bits while the fraction keeps precision near the seam.
+    pub fn phase_parts(&self) -> ([u32; 2], [f64; 2]) {
+        let wrapped = self.phase.map(|v| v.rem_euclid(65_536.0));
+        // rem_euclid can round a tiny negative input up to the period itself.
+        // Keep that rounded seam at cell zero, including before packing X/Y.
+        (
+            wrapped.map(|v| (v.floor() as u32) & 65_535),
+            wrapped.map(f64::fract),
+        )
+    }
+
+    pub fn interpolate(&self, to: &Self, alpha: f64) -> Result<Self, NoisePaintError> {
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return Err(NoisePaintError::InvalidProgress);
+        }
+        if self.seed != to.seed {
+            return Err(NoisePaintError::DifferentSeed);
+        }
+        if alpha == 0.0 {
+            return Ok(self.clone());
+        }
+        if alpha == 1.0 {
+            return Ok(to.clone());
+        }
+        let frequency = std::array::from_fn(|i| {
+            alpha.mul_add(to.frequency[i] - self.frequency[i], self.frequency[i])
+        });
+        let phase = std::array::from_fn(|i| {
+            if self.phase[i].is_sign_positive() == to.phase[i].is_sign_positive() {
+                alpha.mul_add(to.phase[i] - self.phase[i], self.phase[i])
+            } else {
+                self.phase[i] * (1.0 - alpha) + to.phase[i] * alpha
+            }
+        });
+        let colors = std::array::from_fn(|i| {
+            super::interpolate_premultiplied_color(self.colors[i], to.colors[i], alpha)
+        });
+        Self::new(self.seed, frequency, phase, colors)
+    }
+
     pub fn sample_premultiplied(&self, point: [f64; 2]) -> Result<[f64; 4], NoisePaintError> {
+        self.sample_filtered_premultiplied(point, [0.0; 2])
+    }
+
+    /// Lattice-aligned box reconstruction around the clamped sample center.
+    /// Widths below 1/256 cell use point reconstruction. Wider boxes integrate
+    /// quintic basis weights analytically, with at most nine lattice values.
+    /// Above one cell, a cubic fade reaches the seed ensemble mean at two cells.
+    /// This bounded coarse profile is explicit, not arbitrary alias-free filtering.
+    pub fn sample_filtered_premultiplied(
+        &self,
+        point: [f64; 2],
+        footprint: [f64; 2],
+    ) -> Result<[f64; 4], NoisePaintError> {
         if !point.into_iter().all(f64::is_finite) {
             return Err(NoisePaintError::InvalidSamplePoint);
         }
+        if footprint.into_iter().any(|v| !v.is_finite() || v < 0.0) {
+            return Err(NoisePaintError::InvalidFootprint);
+        }
+        let coarse = footprint[0].max(footprint[1]);
+        if coarse >= 2.0 {
+            return Ok(self.color_at(0.5));
+        }
+        let (phase_cell, phase_fraction) = self.phase_parts();
         let coordinates: [f64; 2] = std::array::from_fn(|axis| {
-            point[axis].clamp(0.0, 1.0) * self.frequency[axis]
-                + self.phase[axis].rem_euclid(65_536.0)
+            (point[axis].clamp(0.0, 1.0) * self.frequency[axis] + phase_fraction[axis])
+                .rem_euclid(65_536.0)
         });
-        let cell = coordinates.map(|v| v.floor().rem_euclid(65_536.0) as u32);
-        let weights = coordinates.map(|v| {
-            let t = v.fract();
-            (t * t * t * (t * (t * 6.0 - 15.0) + 10.0)).clamp(0.0, 1.0)
-        });
-        let value = |x, y| f64::from(lattice_hash(self.seed, x, y) >> 16) / 65_535.0;
-        let mix = |a: f64, b: f64, t: f64| a * (1.0 - t) + b * t;
-        let next = cell.map(|v| (v + 1) & 65_535);
-        let low = mix(value(cell[0], cell[1]), value(next[0], cell[1]), weights[0]);
-        let high = mix(value(cell[0], next[1]), value(next[0], next[1]), weights[0]);
-        let t = mix(low, high, weights[1]);
-        let premultiplied = self.colors.map(|c| {
-            let alpha = f64::from(c.alpha);
+        let axes: [(u32, [f64; 3]); 2] =
+            std::array::from_fn(|axis| noise_weights(coordinates[axis], footprint[axis].min(1.0)));
+        let mut value = 0.0;
+        for x in 0..3 {
+            for y in 0..3 {
+                let ix = (phase_cell[0] + axes[0].0 + x as u32) & 65_535;
+                let iy = (phase_cell[1] + axes[1].0 + y as u32) & 65_535;
+                let lattice = f64::from(lattice_hash(self.seed, ix, iy) >> 16) / 65_535.0;
+                value += lattice * axes[0].1[x] * axes[1].1[y];
+            }
+        }
+        let u = (coarse - 1.0).clamp(0.0, 1.0);
+        let fade = u * u * (3.0 - 2.0 * u);
+        Ok(self.color_at((value * (1.0 - fade) + 0.5 * fade).clamp(0.0, 1.0)))
+    }
+
+    fn color_at(&self, value: f64) -> [f64; 4] {
+        let colors = self.colors.map(|c| {
+            let a = f64::from(c.alpha);
             [
-                f64::from(c.red) * alpha,
-                f64::from(c.green) * alpha,
-                f64::from(c.blue) * alpha,
-                alpha,
+                f64::from(c.red) * a,
+                f64::from(c.green) * a,
+                f64::from(c.blue) * a,
+                a,
             ]
         });
-        Ok(std::array::from_fn(|i| {
-            mix(premultiplied[0][i], premultiplied[1][i], t)
-        }))
+        std::array::from_fn(|i| colors[0][i] * (1.0 - value) + colors[1][i] * value)
     }
+}
+
+fn noise_weights(center: f64, width: f64) -> (u32, [f64; 3]) {
+    let base;
+    let mut weights;
+    if width < 1.0 / 256.0 {
+        base = center.floor();
+        let t = center.fract();
+        let smooth = (t * t * t * (t * (t * 6.0 - 15.0) + 10.0)).clamp(0.0, 1.0);
+        weights = [1.0 - smooth, smooth, 0.0];
+    } else {
+        base = (center - width * 0.5).floor();
+        let lo = center - width * 0.5 - base;
+        let hi = center + width * 0.5 - base;
+        let integral = |t: f64| t * t * t * t * (t * t - 3.0 * t + 2.5);
+        let a = lo.clamp(0.0, 1.0);
+        let b = hi.clamp(0.0, 1.0);
+        let c = (lo - 1.0).clamp(0.0, 1.0);
+        let d = (hi - 1.0).clamp(0.0, 1.0);
+        let first = integral(b) - integral(a);
+        let second = integral(d) - integral(c);
+        weights = [b - a - first, first + d - c - second, second].map(|v| (v / width).max(0.0));
+        let sum: f64 = weights.iter().sum();
+        weights = weights.map(|v| v / sum);
+    }
+    (base.rem_euclid(65_536.0) as u32, weights)
 }
 
 fn lattice_hash(seed: u32, x: u32, y: u32) -> u32 {

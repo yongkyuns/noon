@@ -244,6 +244,7 @@ mod tests {
             SemanticPaint::Solid(color) => color,
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
             | SemanticPaint::Image(_) => {
                 panic!("radial family paint must stay solid")
             }

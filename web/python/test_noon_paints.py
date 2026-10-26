@@ -13,6 +13,34 @@ import _manim_updaters as updaters
 
 
 class PaintFacadeTests(unittest.TestCase):
+    def test_seeded_noise_routes_only_coercion_and_the_ordinary_fill_operation(self):
+        definition = object()
+        js = types.ModuleType("js")
+        js.noonNoisePaint = Mock(return_value=definition)
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = tuple
+        handle, context = Mock(), Mock()
+        value = object.__new__(noon.Mobject)
+        with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
+             patch.object(handles, "_handle_for", return_value=handle), \
+             patch.object(handles, "_is_shared_family", return_value=False), \
+             patch.object(handles, "_live_mutation_context", return_value=None):
+            paint = noon.NoisePaint(noon.Color(1, 0, 0, 0.5), noon.Color(0, 0, 1),
+                                    seed=4294967295, phase=(-0.173, 0.231))
+            js.noonNoisePaint.assert_called_once_with(4294967295.0, (8.0, 8.0), (-0.173, 0.231),
+                                                      (1, 0, 0, 0.5, 0, 0, 1, 1))
+            self.assertIs(copy.copy(paint), paint)
+            self.assertIs(copy.deepcopy(paint), paint)
+            value.set_fill(paint)
+            handle.setFillNoise.assert_called_once_with(definition, None)
+            with patch.object(handles, "_live_mutation_context", return_value=context):
+                value.set_fill(paint, opacity=0.25)
+                context.liveSetFillNoise.assert_called_once_with(handle, definition, 0.25)
+            updaters._canonical_vmobject_set_fill(value, paint, 0.5)
+            self.assertEqual(handle.setFillNoise.call_args.args, (definition, 0.5))
+            with self.assertRaises(TypeError):
+                noon.NoisePaint(noon.Color(1, 0, 0), noon.Color(0, 0, 1), seed=True)
+
     def test_radial_value_uses_the_shared_cold_live_and_target_fill_operation(self):
         definition = object()
         js = types.ModuleType("js")
