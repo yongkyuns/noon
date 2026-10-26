@@ -12,6 +12,8 @@ mod storage;
 use resource_budget::ResourceBudget;
 
 #[cfg(test)]
+mod payload_budget_tests;
+#[cfg(test)]
 mod resource_budget_tests;
 
 #[derive(Debug, PartialEq)]
@@ -90,6 +92,9 @@ pub struct PrefixPublisher {
     scope: Arc<()>,
     stream: Arc<()>,
     next_revision: usize,
+    // Reader-side charge includes bootstrap and all extracted batches, even
+    // pending ones. Source inverse-history cost omits new slots/resources.
+    extracted_payloads: usize,
     frontier: f64,
     finished: bool,
     object_slots: usize,
@@ -371,16 +376,6 @@ impl PrefixReceiver {
             return Err(PrefixError::UnexpectedBatch);
         }
         let resource_budget = self.resource_budget.with_additional(batch.resource_bytes)?;
-        let required = batch.required_object_capacity();
-        if required > self.object_capacity {
-            return Err(PrefixError::CapacityRequired {
-                object_slots: required,
-            });
-        }
-        runtime
-            .compiled
-            .resources()
-            .preflight_merge(&batch.resources)?;
         let history = runtime
             .replay_history
             .as_ref()
@@ -397,6 +392,18 @@ impl PrefixReceiver {
             .ok_or(ReplayError::RetentionLimit)?;
         if count > self.limits.revisions || payloads > self.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
+        }
+        runtime
+            .compiled
+            .resources()
+            .preflight_merge(&batch.resources)?;
+        // CapacityRequired is actionable only after permanent admission checks.
+        // Never request storage growth for a batch the retained history cannot fit.
+        let required = batch.required_object_capacity();
+        if required > self.object_capacity {
+            return Err(PrefixError::CapacityRequired {
+                object_slots: required,
+            });
         }
         Ok((count, payloads, resource_budget))
     }
@@ -494,6 +501,7 @@ impl SceneInstance {
             scope: history.scope.clone(),
             stream: stream.clone(),
             next_revision: history.revisions.len(),
+            extracted_payloads: history.stats.payloads_retained,
             frontier: self.frame.time,
             finished: false,
             object_slots: self.compiled.objects().len(),
@@ -629,19 +637,29 @@ impl SceneInstance {
             stats.row_payloads += saved.object_indices().count();
             inverse.push(saved);
         }
-        if stats.revisions > history.limits.revisions || stats.payloads > history.limits.payloads {
+        let new_objects = self
+            .compiled
+            .objects()
+            .get(publisher.object_slots..)
+            .ok_or(PrefixError::SourceChanged)?;
+        stats.new_object_slots = new_objects.len();
+        stats.payloads = stats
+            .payloads
+            .checked_add(stats.new_object_slots)
+            .ok_or(ReplayError::RetentionLimit)?;
+        let payloads = publisher
+            .extracted_payloads
+            .checked_add(stats.payloads)
+            .ok_or(ReplayError::RetentionLimit)?;
+        // Reject the known cumulative cost before forward conversion or cloning
+        // new rows. Resource closure entries are added below, once per handle.
+        if history.revisions.len() > history.limits.revisions || payloads > history.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
         }
         let forward = self
             .compiled
             .forward_prefix_revisions(&inverse)
             .ok_or(ReplayError::UnsupportedDomain)?;
-        let new_objects = self
-            .compiled
-            .objects()
-            .get(publisher.object_slots..)
-            .ok_or(PrefixError::SourceChanged)?
-            .to_vec();
         let resources = self
             .compiled
             .prefix_resource_delta(&forward, &publisher.resources)?;
@@ -651,14 +669,15 @@ impl SceneInstance {
             .prefix_resource_bytes()
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget = publisher.resource_budget.with_additional(resource_bytes)?;
-        stats.new_object_slots = new_objects.len();
         stats.resource_payloads = resources.prefix_payload_count();
         stats.payloads = stats
             .payloads
-            .checked_add(stats.new_object_slots)
-            .and_then(|cost| cost.checked_add(stats.resource_payloads))
+            .checked_add(stats.resource_payloads)
             .ok_or(ReplayError::RetentionLimit)?;
-        if stats.payloads > history.limits.payloads {
+        let extracted_payloads = payloads
+            .checked_add(stats.resource_payloads)
+            .ok_or(ReplayError::RetentionLimit)?;
+        if extracted_payloads > history.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
         }
         let revisions = suffix
@@ -678,7 +697,7 @@ impl SceneInstance {
             revisions,
             stats,
             from_object_slots: publisher.object_slots,
-            new_objects,
+            new_objects: new_objects.to_vec(),
             resources,
             resource_bytes,
         };
@@ -686,6 +705,7 @@ impl SceneInstance {
             .resources
             .extend_prefix_knowledge(&batch.resources);
         publisher.resource_budget = resource_budget;
+        publisher.extracted_payloads = extracted_payloads;
         publisher.object_slots = self.compiled.objects().len();
         publisher.next_revision = history.revisions.len();
         publisher.frontier = self.frame.time;
