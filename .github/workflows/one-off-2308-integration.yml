@@ -1,0 +1,142 @@
+name: One-off 2308 integration inventory
+
+on:
+  push:
+    branches: [agent/2308-merge-inventory-20261026]
+    paths: [.github/workflows/one-off-2308-integration.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout diagnostic branch without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Inspect pinned source trees and real merge conflicts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path.cwd()
+          out = Path(os.environ['RUNNER_TEMP']) / 'noon-2308-inventory'
+          out.mkdir()
+          refs = {
+              'base': 'd6afd19037d8eb421fcbd3ddc222fa20f150922b',
+              'pr2308': 'b3a4b7f484e607a4b14bc57e70f4947f8520ca42',
+              'master': 'f102a74b9bf28440f4862e799604a57c7882fa68',
+              'pr2317': 'b087d0fd93426b29137e107e2713f8537626cf1f',
+          }
+
+          def git(*args, cwd=root, check=True):
+              return subprocess.run(['git', *args], cwd=cwd, check=check,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+          fetched = git('fetch', '--no-tags', '--depth=128', 'origin', *refs.values())
+          (out / 'fetch.log').write_bytes(fetched.stdout + fetched.stderr)
+          manifest = {'refs': {}, 'diagnostic_commit': git('rev-parse', 'HEAD').stdout.decode().strip()}
+          for name, sha in refs.items():
+              actual = git('rev-parse', sha + '^{commit}').stdout.decode().strip()
+              if actual != sha:
+                  raise RuntimeError('source identity mismatch for ' + name)
+              manifest['refs'][name] = {
+                  'commit': sha,
+                  'tree': git('rev-parse', sha + '^{tree}').stdout.decode().strip(),
+              }
+          merge_base = git('merge-base', refs['pr2308'], refs['master']).stdout.decode().strip()
+          if merge_base != refs['base']:
+              raise RuntimeError('unexpected integration merge base: ' + merge_base)
+          manifest['merge_base'] = merge_base
+          manifest['memory_stack_merge_base'] = git('merge-base', refs['pr2308'], refs['pr2317']).stdout.decode().strip()
+
+          def changed(left, right):
+              return [s.decode() for s in git('diff', '--name-only', '-z', left, right).stdout.split(b'\0') if s]
+
+          head_changes = set(changed(refs['base'], refs['pr2308']))
+          master_changes = set(changed(refs['base'], refs['master']))
+          memory_base = manifest['memory_stack_merge_base']
+          memory_changes = set(changed(memory_base, refs['pr2317']))
+          manifest['pr2308_changed_files'] = sorted(head_changes)
+          manifest['master_changed_files'] = sorted(master_changes)
+          manifest['overlapping_paths'] = sorted(head_changes & master_changes)
+          manifest['memory_stack_changed_files'] = sorted(memory_changes)
+          manifest['memory_stack_overlap'] = sorted(head_changes & memory_changes)
+
+          work = Path(os.environ['RUNNER_TEMP']) / 'noon-2308-merge-worktree'
+          git('worktree', 'add', '--detach', str(work), refs['pr2308'])
+          merged = git('-c', 'user.name=Noon integration inventory', '-c',
+                       'user.email=inventory@example.invalid', 'merge', '--no-commit',
+                       '--no-ff', refs['master'], cwd=work, check=False)
+          (out / 'merge.log').write_bytes(merged.stdout + merged.stderr)
+          manifest['merge_exit_code'] = merged.returncode
+          if merged.returncode not in (0, 1):
+              raise RuntimeError('merge failed before conflict inventory; inspect merge.log')
+          stages = []
+          for row in git('ls-files', '-u', '-z', cwd=work).stdout.split(b'\0'):
+              if not row:
+                  continue
+              meta, path = row.split(b'\t', 1)
+              mode, sha, stage = meta.decode().split()
+              stages.append({'path': path.decode(), 'mode': mode, 'blob': sha, 'stage': int(stage)})
+          manifest['unmerged_entries'] = stages
+          conflicts = sorted({row['path'] for row in stages})
+          manifest['conflicting_paths'] = conflicts
+          for path in conflicts:
+              source = work / path
+              if source.is_file() and not source.is_symlink():
+                  target = out / 'conflicts' / path
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(source.read_bytes())
+          (out / 'combined-conflict.diff').write_bytes(git('diff', '--cc', cwd=work).stdout)
+          if not conflicts:
+              manifest['automatic_merge_tree'] = git('write-tree', cwd=work).stdout.decode().strip()
+          else:
+              manifest['automatic_merge_tree'] = None
+
+          for name, sha in refs.items():
+              archive = out / (name + '.tar.gz')
+              git('archive', '--format=tar.gz', '--output=' + str(archive), sha)
+              manifest['refs'][name]['archive_sha256'] = hashlib.sha256(archive.read_bytes()).hexdigest()
+              manifest['refs'][name]['archive_bytes'] = archive.stat().st_size
+              entries = []
+              for row in git('ls-tree', '-r', '-z', '--full-tree', sha).stdout.split(b'\0'):
+                  if not row:
+                      continue
+                  meta, path = row.split(b'\t', 1)
+                  mode, kind, blob = meta.decode().split()
+                  entries.append({'path': path.decode(), 'mode': mode, 'type': kind, 'sha': blob})
+              (out / (name + '-tree.json')).write_text(json.dumps(entries, indent=2) + '\n')
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps({
+              'refs': manifest['refs'],
+              'master_changed_paths': len(master_changes),
+              'overlapping_paths': manifest['overlapping_paths'],
+              'conflicting_paths': conflicts,
+              'memory_stack_merge_base': manifest['memory_stack_merge_base'],
+              'memory_stack_overlap': manifest['memory_stack_overlap'],
+              'merge_exit_code': merged.returncode,
+          }, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Read-only pinned integration inventory; no feature or master refs updated.\n\n')
+              summary.write('Merge conflicts: ' + str(len(conflicts)) + '\n\n')
+              summary.write('\n'.join('- `' + path + '`' for path in conflicts) + '\n')
+          PY
+      - name: Preserve source-bound inventory and snapshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-2308-integration-inventory
+          path: ${{ runner.temp }}/noon-2308-inventory
+          if-no-files-found: error
+          retention-days: 3
