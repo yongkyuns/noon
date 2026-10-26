@@ -9,6 +9,7 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { PYTHON_COMPAT_MODULES } from "../web/python-compat-modules.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,6 +66,8 @@ try {
       const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
       await cache.install(context);
       const page = await context.newPage(); page.setDefaultTimeout(180_000);
+      const failureTrace = createBrowserFailureTrace();
+      const detachFailureTrace = failureTrace.attach(browser, context, page);
       page.on("pageerror", error => result.errors.push(String(error)));
       page.on("console", message => result.console.push(message.text()));
       const state = () => page.evaluate(() => ({
@@ -83,7 +86,9 @@ try {
         await page.mouse.click(rect.x + 320, rect.y + 180);
       };
       try {
+        failureTrace.setPhase("navigation");
         await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
+        failureTrace.setPhase("source-bootstrap");
         await page.evaluate(async ({modules, pyodideUrl, source, scenario}) => {
           globalThis.Worker = class { constructor() { throw new Error("same-context construct attempted worker transport"); } };
           const wasm = await import("./pkg/noon_web.js"); await wasm.default();
@@ -163,7 +168,9 @@ scene = namespace["OrdinaryPrepared"]()
 await execute_construct(scene, portable_constructs=pairs)
 `)).then(() => { host.outcome = "fulfilled"; }, error => { host.outcome = "rejected"; host.failure = String(error); });
         }, {modules, pyodideUrl, source, scenario});
+        failureTrace.setPhase("waiting-first-prefix");
         await page.waitForFunction(() => constructHost.driver.state() === "waiting" || constructHost.outcome !== null);
+        failureTrace.setPhase("initial-history");
         let start = await state();
         assert.ok(start.playback, JSON.stringify(start));
         assert.equal(await page.evaluate(() => constructHost.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
@@ -178,6 +185,7 @@ await execute_construct(scene, portable_constructs=pairs)
           assert.deepEqual(settled.events, start.events);
           result.checks.push("ordinary-construct-suspended", "rust-demand-caps-history", "no-idle-task-or-frame-loop");
         }
+        failureTrace.setPhase("history-interaction");
         const baseline = await capture("baseline");
         await click();
         await page.waitForFunction(() => JSON.parse(constructHost.renderer.debugPreparedPlaybackJson()).interactions);
@@ -187,6 +195,7 @@ await execute_construct(scene, portable_constructs=pairs)
         await page.waitForFunction(() => !JSON.parse(constructHost.renderer.debugPreparedPlaybackJson()).interactions && constructHost.direct.stats().idle);
         assert.equal(changedPixels(baseline, await capture("restored")), 0);
         result.checks.push("click-while-interpreter-suspended-or-failed", "exact-restoration");
+        failureTrace.setPhase(`source-${scenario}`);
         if (scenario === "bounded") {
           await page.evaluate(() => { constructHost.renderer.seekDirect(0.75); constructHost.direct.wake(); });
           await page.waitForFunction(() => constructHost.driver.state() === "waiting" && constructHost.prepared === 3);
@@ -229,6 +238,7 @@ await execute_construct(scene, portable_constructs=pairs)
           assert.equal(stopped.events.filter(e => e.kind === "tear-down").length, 1);
           result.checks.push("source-error-not-retried", "no-false-terminal");
         }
+        failureTrace.setPhase("released-source-history");
         await page.evaluate(async () => {
           await constructHost.done;
           await constructHost.pyodide.runPythonAsync(`del scene, namespace\nimport gc\ngc.collect()`);
@@ -249,9 +259,16 @@ await execute_construct(scene, portable_constructs=pairs)
         result.final = await state(); result.status = "passed";
       } catch (error) {
         result.status = "failed"; result.error = String(error.stack ?? error);
-        try { result.state = await state(); result.failure = await page.evaluate(() => constructHost.failure); } catch {}
+        // Capture host-side evidence before querying a potentially dead page.
+        // This snapshot excludes deliberate context/browser cleanup below.
+        result.failureTrace = failureTrace.snapshot();
+        try { result.state = await state(); result.failure = await page.evaluate(() => constructHost.failure); }
+        catch (stateError) { result.stateCaptureError = String(stateError).slice(0, 2000); }
         throw error;
-      } finally { await context.close(); }
+      } finally {
+        try { await context.close(); }
+        finally { detachFailureTrace(); }
+      }
     }
     await browser.close(); browser = null;
   }
