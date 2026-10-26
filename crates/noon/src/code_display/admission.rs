@@ -253,6 +253,13 @@ impl PreparedCode {
             })
             .transpose()?
             .unwrap_or_default();
+        let number_config = CodeParagraphConfig {
+            font_size: options
+                .line_number_config
+                .font_size
+                .unwrap_or(config.font_size),
+            ..config.clone()
+        };
         let mut numbers = options
             .add_line_numbers
             .then(|| {
@@ -262,10 +269,17 @@ impl PreparedCode {
                             + i64::try_from(index)
                                 .map_err(|_| invalid("source", "too many lines"))?;
                         PreparedLine::new(
-                            number.to_string(),
+                            format!(
+                                "{number:0width$}",
+                                width =
+                                    options.line_number_config.min_digits + usize::from(number < 0),
+                            ),
                             Vec::new(),
-                            highlighted.line_number,
-                            config,
+                            options
+                                .line_number_config
+                                .color
+                                .unwrap_or(highlighted.line_number),
+                            &number_config,
                         )
                     })
                     .collect::<Result<Vec<_>, CodeAuthoringError>>()

@@ -10,7 +10,7 @@ import playwright from 'playwright';
 import {PNG} from 'pngjs';
 import {serveRepository} from './browser-test-server.mjs';
 import {browserArgs} from './manim-raster-support.mjs';
-import {checkSample, checkHighlight, checkTextRegions} from './cuda-transpose-pixels.mjs';
+import {checkSample, checkHighlight, checkTextRegions, checkCodePage} from './cuda-transpose-pixels.mjs';
 import {stringifyEvidence} from './cuda-transpose-report.mjs';
 import {createPyodideResourceCache} from './pyodide-resource-cache.mjs';
 
@@ -18,11 +18,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifactDir = path.resolve(process.env.NOON_CUDA_ARTIFACTS ?? path.join(root, 'cuda-transpose-qualification'));
 const sourcePath = 'web/python/examples/cuda_transpose_banks.py';
 const source = await readFile(path.join(root, sourcePath), 'utf8');
-const resourceCache = createPyodideResourceCache(await readFile(path.join(root, 'web/python-worker.js'), 'utf8'));
+const workerSource = await readFile(path.join(root, 'web/python-worker.js'), 'utf8');
+const resourceCache = createPyodideResourceCache(workerSource);
+const localPyodideRoot = process.env.NOON_PYODIDE_ROOT;
+let localPyodideBase = null;
+if (localPyodideRoot) {
+  localPyodideBase = workerSource.match(/https:\/\/cdn\.jsdelivr\.net\/pyodide\/v[^/]+\/full\//)?.[0];
+  assert.ok(localPyodideBase, 'worker must pin its official Pyodide distribution');
+  const pkg = JSON.parse(await readFile(path.join(localPyodideRoot, 'package.json'), 'utf8'));
+  assert.equal(localPyodideBase, `https://cdn.jsdelivr.net/pyodide/v${pkg.version}/full/`,
+    'local Pyodide version must match the actual worker');
+}
 const probe = await readFile(path.join(root, 'tools/cuda-transpose/visual_probe.py'), 'utf8');
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const report = {schema: 1, status: 'running', sceneSha256: sha256(source),
-  probeSha256: sha256(probe), oracle: 'independent-cpu-closed-form', cudaValidated: false,
+  probeSha256: sha256(probe), runnerSha256: sha256(await readFile(fileURLToPath(import.meta.url))), oracle: 'independent-cpu-closed-form', cudaValidated: false,
   // Existing source-owned continuations allow monotonic sampling, not rewind.
   seekQualification: 'not supported by the source-owned continuation control API; not claimed', cases: []};
 await mkdir(artifactDir, {recursive: true});
@@ -99,6 +109,7 @@ let browser, server;
 try {
   server = await serveRepository(root, Number(process.env.NOON_CUDA_PORT ?? 4228), {crossOriginIsolated:true});
   browser = await playwright.chromium.launch({channel:'chromium', headless:true, args:browserArgs('webgpu')});
+  report.browserVersion = browser.version();
   for (const config of cases) {
     const name = `column-${config.column}-speed-${config.speed}-${config.fault}`;
     const dir = path.join(artifactDir, name); await mkdir(dir, {recursive:true});
@@ -106,6 +117,17 @@ try {
     const queue = eventQueue(); const observations = [];
     const page = await browser.newPage({viewport:{width:1280,height:720}, deviceScaleFactor:1});
     await resourceCache.install(page.context());
+    if (localPyodideRoot) {
+      await page.context().route(url => url.href.startsWith(localPyodideBase), async route => {
+        const name = new URL(route.request().url()).pathname.split('/').at(-1);
+        assert.match(name, /^[A-Za-z0-9._-]+$/);
+        const body = await readFile(path.join(localPyodideRoot, name));
+        const contentType = name.endsWith('.mjs') || name.endsWith('.js') ? 'application/javascript'
+          : name.endsWith('.wasm') ? 'application/wasm'
+          : name.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+        await route.fulfill({body, contentType});
+      });
+    }
     let failure = null;
     page.on('console', message => {
       const text = message.text();
@@ -118,13 +140,14 @@ try {
     try {
       await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
       await page.exposeFunction('__cudaFailure', error => queue.push({type:'failure', error}));
-      await page.evaluate(async code => {
+      const runtime = await page.evaluate(async code => {
         const {PythonAuthoringClient} = await import('./authoring-client.js');
         const {AuthoringExecutionClient} = await import('./authoring-execution-client.js');
         document.body.style.margin = '0';
         const canvas = document.querySelector('#scene');
         canvas.width=1280; canvas.height=720; canvas.style.width='1280px'; canvas.style.height='720px';
         const authoring = new PythonAuthoringClient();
+        const runtimeBuildIdentity = await authoring.ready();
         let resolve, reject;
         const attached = new Promise((a,b) => {resolve=a;reject=b;});
         let rejectFailure;
@@ -143,7 +166,13 @@ try {
         window.cudaQualification = {authoring, execution, authored, failure,
           sample: time => Promise.race([execution.sampleToAuthoredTime(time), failure])};
         await Promise.race([attached, failure]);
+        return {runtimeBuildIdentity, rendererBackend:execution.rendererBackend};
       }, assembled(config));
+      assert.equal(runtime.rendererBackend, 'WebGPU', 'CUDA fidelity must use the requested renderer');
+      evidence.rendererBackend = report.rendererBackend = runtime.rendererBackend;
+      evidence.runtimeBuildIdentity = runtime.runtimeBuildIdentity;
+      if (report.runtimeBuildIdentity) assert.deepEqual(evidence.runtimeBuildIdentity, report.runtimeBuildIdentity, 'mixed worker builds');
+      else report.runtimeBuildIdentity = evidence.runtimeBuildIdentity;
       let completed = false;
       let midpointChecks = 0;
       while (!completed) {
@@ -153,13 +182,14 @@ try {
         if (event.type === 'observed') { ++evidence.semanticObservations; continue; }
         if (event.type === 'checkpoint') {
           evidence.checkpoints.push(event);
-          if (event.highlights || event.text_regions) {
+          if (event.highlights || event.text_regions || event.code_page) {
             await page.evaluate(time => window.cudaQualification.sample(time), event.time);
             const bytes = await page.locator('#scene').screenshot();
             await writeFile(path.join(dir, `checkpoint-${event.name}-${event.stride}.png`), bytes);
             const image = PNG.sync.read(bytes);
             if (event.highlights) checkHighlight(image, event.highlights);
             if (event.text_regions) checkTextRegions(image, event.text_regions);
+            if (event.code_page) event.renderedCode = checkCodePage(image, event.code_page);
           }
           continue;
         }

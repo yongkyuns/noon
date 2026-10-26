@@ -91,15 +91,41 @@ def observe_packets(packets):
 
 
 def observe_highlights(scene):
-    return {key: {"alpha": float(obj.get_fill_opacity()),
-                  "center": [float(v) for v in obj.get_center()[:2]],
-                  "width": float(obj.width), "height": float(obj.height),
-                  "text": scene.code_text[key].text,
-                  "text_id": int(scene.code_text[key].id),
-                  "text_center": [float(v) for v in scene.code_text[key].get_center()[:2]],
-                  "text_width": float(scene.code_text[key].width),
-                  "text_height": float(scene.code_text[key].height)}
-            for key, obj in scene.highlights.items()}
+    gutter_right = float(scene.code.line_numbers.get_right()[0])
+    source_left = float(scene.code.code_lines.get_left()[0])
+    gap = source_left - gutter_right
+    require(gap > 0.03, "gutter", "source overlaps its line-number gutter")
+    result = {}
+    for key, obj in scene.highlights.items():
+        h = observe_leaf(obj)
+        h["stroke_width"] = float(obj.get_stroke_width())
+        text = observe_leaf(scene.code_text[key], False)
+        # Sample the measured gutter/source gap, never an assumed code x origin.
+        # The reference is in the existing scene panel just outside this row band.
+        h.update(text=text["text"], text_id=text["id"], text_center=text["center"],
+                 text_width=text["width"], text_height=text["height"],
+                 sample_region={"center": [(gutter_right + source_left) / 2, h["center"][1]],
+                                "width": min(0.08, gap / 2), "height": min(0.10, h["height"] / 2)},
+                 reference_region={"center": [h["center"][0] - h["width"] / 2 - 0.04,
+                                               h["center"][1]], "width": 0.035,
+                                   "height": min(0.10, h["height"] / 2)})
+        result[key] = h
+    return result
+
+
+def bounds(info):
+    x, y = info["center"]
+    w, h = info["width"], info["height"]
+    require(all(math.isfinite(v) for v in (x, y, w, h)) and w > 0 and h > 0,
+            "source-layout", "invalid allocated row or ink bounds")
+    return [x - w / 2, y - h / 2, x + w / 2, y + h / 2]
+
+
+def contains(outer, inner, code="highlight-position", tolerance=0.002):
+    a, b = bounds(outer), bounds(inner)
+    require(b[0] >= a[0] - tolerance and b[1] >= a[1] - tolerance and
+            b[2] <= a[2] + tolerance and b[3] <= a[3] + tolerance,
+            code, "source ink leaves its allocated row")
 
 
 def validate_highlights(highlights, keys):
@@ -107,11 +133,90 @@ def validate_highlights(highlights, keys):
     require(active == set(keys), "highlight", "active lines %r, expected %r" % (active, keys))
     for key in keys:
         h = highlights[key]
-        close([h["center"][1]], [h["text_center"][1]], "highlight-position")
-        require(abs(h["center"][0]-h["text_center"][0]) + h["text_width"]/2 <= h["width"]/2 + 0.002,
-                "highlight-position", "highlight is not behind its CUDA statement")
-        require(highlights[key]["text"].strip() == SOURCE_TEXT[key],
+        # A Code row is a logical allocation. Its center need not equal the
+        # center of glyph ink (different statements have different ascenders).
+        contains(h, {"center": h["text_center"], "width": h["text_width"],
+                     "height": h["text_height"]})
+        require(h["text"].strip() == SOURCE_TEXT[key],
                 "source", "displayed CUDA statement does not match " + key)
+
+
+def observe_source_page(scene):
+    rows = {key: observe_leaf(obj, False) for key, obj in scene.code_text.items()}
+    numbers = [observe_leaf(obj, False) for obj in scene.code.line_numbers]
+    return {"page": "load" if "declaration" in rows else "output" if "output_x" in rows else "read",
+            "rows": rows, "numbers": numbers, "regions": observe_highlights(scene),
+            "panel": observe_leaf(scene.code.background[0]),
+            "source": scene.code.code_string,
+            "source_font_size": float(scene.code.code_lines[0].font_size),
+            "gutter_font_size": float(scene.code.line_numbers[0].font_size)}
+
+
+def validate_compact_clearance(regions):
+    # Test the entire geometric tray->bank corridor for every column/layout,
+    # against the ACTUAL allocated compact page, not a recreated line grid.
+    boxes = [bounds(region) for region in regions.values()]
+    left, bottom, right = min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes)
+    for stride in (32, 33):
+        for column in range(32):
+            for lane in range(32):
+                a = position("tray", lane, column, stride)
+                b = position("bank", lane, column, stride)
+                lo = max(0, (left - 0.46 / 2 - a[0]) / (b[0] - a[0]))
+                hi = min(1, (right + 0.46 / 2 - a[0]) / (b[0] - a[0]))
+                if lo <= hi:
+                    highest = max(a[1] + t * (b[1] - a[1]) for t in (lo, hi)) + 0.24 / 2
+                    require(highest <= bottom - 0.01, "packet-clearance",
+                            "compact CUDA page crosses the packet corridor")
+
+
+def validate_source_page(page):
+    rows, numbers, regions = page["rows"], page["numbers"], page["regions"]
+    require(len(rows) == {"load": 10, "output": 8, "read": 2}[page["page"]] and
+            len(numbers) == len(rows) and set(regions) == set(rows),
+            "source-layout", "wrong source page, row or gutter coverage")
+    require(page["source"] == "\n".join(row["text"] for row in rows.values()),
+            "source", "source aliases differ from native Code rows")
+    require(page["source_font_size"] == 16 and page["gutter_font_size"] == 11,
+            "gutter", "smaller source-number typography was lost")
+    previous_bottom = None
+    for index, ((key, row), number) in enumerate(zip(rows.items(), numbers)):
+        require(number["text"] == "%02d" % (index + 1), "gutter", "line numbers are not zero padded")
+        require(row["id"] == regions[key]["text_id"], "identity", "row alias does not match its region")
+        require(abs(regions[key]["stroke_width"]) <= 1e-9, "highlight", "source emphasis gained an outline")
+        contains(regions[key], row)
+        contains(regions[key], number, "gutter")
+        if key in SOURCE_TEXT:
+            require(row["text"].strip() == SOURCE_TEXT[key], "source", "wrong CUDA statement")
+        box = bounds(regions[key])
+        require(box[0] >= -6.835 and box[2] <= -0.185 and box[1] >= -2.15 and box[3] <= 2.38,
+                "source-layout", "source page leaves its pane or overlaps status/header")
+        if previous_bottom is not None:
+            require(box[3] <= previous_bottom + 0.002, "source-layout", "allocated source rows overlap")
+        previous_bottom = box[1]
+    require(max(n["height"] for n in numbers) < max(row["height"] for row in rows.values()),
+            "gutter", "gutter glyphs are no longer smaller than source glyphs")
+    if page["page"] == "read":
+        validate_compact_clearance(regions)
+
+
+def validate_source_edit(previous, current):
+    require(previous["page"] == current["page"] == "load", "source-edit", "unexpected page edit")
+    require(previous["source"].count("[TILE_DIM][TILE_DIM];") == 1 and
+            current["source"] == previous["source"].replace("[TILE_DIM][TILE_DIM];", "[TILE_DIM][TILE_DIM + 1];"),
+            "source-edit", "edit changes more than the padded declaration")
+    require(previous["numbers"] == current["numbers"] and previous["panel"] == current["panel"],
+            "source-edit", "edit moved or replaced the reserved panel/gutter")
+    for key, before in previous["rows"].items():
+        after = current["rows"][key]
+        for field in ("id", "center", "width", "height"):
+            require(previous["regions"][key][field] == current["regions"][key][field],
+                    "source-edit", "edit changed the allocated row " + key)
+        if key == "declaration":
+            require(before["id"] != after["id"], "source-edit", "edited row did not receive a fresh identity")
+            contains(previous["regions"][key], after, "source-edit")
+        else:
+            require(before == after, "source-edit", "edit changed an unaffected source row " + key)
 
 
 def expected_packet(lane, stage, column, stride, base, j=0):
@@ -158,6 +263,28 @@ class CudaVisualProbe:
         self.completed = []
         self.checks = 0
         self.identities = None
+        self.page_identity = None
+        self.page_snapshot = None
+        self.pending_source_capture = None
+        self.page_counts = {"load": 0, "output": 0, "read": 0}
+        self.source_edits = 0
+
+    def observe_code(self, scene):
+        if not getattr(scene, "code_objects", None):
+            return
+        identity = id(scene.code)
+        if identity == self.page_identity and scene.code.code_string == self.page_snapshot["source"]:
+            return
+        page = observe_source_page(scene)
+        validate_source_page(page)
+        if identity != self.page_identity:
+            self.page_counts[page["page"]] += 1
+            self.pending_source_capture = "source-page-" + page["page"]
+        elif page["source"] != self.page_snapshot["source"]:
+            validate_source_edit(self.page_snapshot, page)
+            self.source_edits += 1
+            self.pending_source_capture = "source-edit"
+        self.page_identity, self.page_snapshot = identity, page
 
     def checkpoint(self, scene, event, **values):
         if event == "launch":
@@ -317,9 +444,20 @@ class CudaVisualProbe:
             self.checks += 1
             self.emit({"type": "observed", "id": event["id"], "time": float(scene.time),
                        "kind": kind, "stride": proof["trace"]["stride"], "packets": observed})
+        self.observe_code(scene)
+        if self.pending_source_capture is not None:
+            page = observe_source_page(scene)
+            validate_source_page(page)
+            self.emit({"type": "checkpoint", "name": self.pending_source_capture,
+                       "time": float(scene.time), "stride": self.trace["stride"], "code_page": page})
+            self.pending_source_capture = None
         self.current = None
 
     def finish(self, scene):
         require(self.completed == [32, 33], "coverage", "source did not finish both launches")
+        require(self.page_counts == {"load": 2, "output": 2, "read": 2} and self.source_edits == 1,
+                "source-edit", "all six source pages and the padded edit must execute")
+        close([float(scene.time)], [76.14 / self.speed], "storyboard-duration", 0.000002)
         self.emit({"type": "complete", "checks": self.checks, "intervals": self.sequence,
-                   "time": float(scene.time), "layouts": self.completed})
+                   "time": float(scene.time), "layouts": self.completed,
+                   "sourcePages": self.page_counts, "sourceEdits": self.source_edits})

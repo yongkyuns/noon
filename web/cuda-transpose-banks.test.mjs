@@ -1,4 +1,4 @@
-// Source, trace, lexical, layout and helper checks; not renderer qualification.
+// Source, trace, shared-Code options, layout and helper checks; not renderer qualification.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

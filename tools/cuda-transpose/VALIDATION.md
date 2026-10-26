@@ -31,6 +31,15 @@ midpoint; endpoint checks require all 32 packets to be unoccluded. No OCR is use
 Semantic checks verify exact label content; pixel checks verify that glyphs are
 actually present, not that rasterized digits have been independently recognized.
 
+The six displayed Code pages use their observed native allocated row regions as
+bounds. Source and gutter ink must fit those regions; their ink centers need not
+coincide. The observer checks zero-padded smaller numbers, transparent inactive
+bands, no highlight outline, source/data token colors and compact-page clearance
+against every tray-to-bank corridor. The one padded edit must preserve the
+original region allocations, panel, gutter and the other nine row identities and
+positions. Full-page and completed-edit PNGs verify glyph and color coverage.
+The completed storyboard remains 76.14 seconds at speed 1.
+
 Positive runs cover columns **3, 0, and 31**, at speeds **1, 2, and 0.5**,
 respectively, for both layouts. Six negative variants alter the actual scene:
 wrong bank, wrong read highlight, detached packet label, invisible packet,
@@ -63,6 +72,8 @@ install read-only checks. Renderer sampling races the actual authoring failure
 promise, so a failed check cannot leave a sample waiting on a stopped source.
 The existing pinned Pyodide resource cache reuses immutable downloads across
 fresh per-case contexts without sharing scene or interpreter state.
+`NOON_PYODIDE_ROOT` may provide the same worker-pinned official distribution
+locally; the optional route changes byte delivery, not the runtime version.
 
 The default report explicitly says `oracle: independent-cpu-closed-form` and
 `cudaValidated: false`. Passing it is **not** evidence that CUDA executed.
@@ -138,8 +149,12 @@ Use `capture_cuda.py` for strict validation; there is no paste-into-demo mode.
 
 Default output: `cuda-transpose-qualification/report.json`, per-case observed
 runtime queries, selected PNGs and debug frames, and a failure screenshot.
-`NOON_CUDA_ARTIFACTS` can change the destination. Source/probe fingerprints bind
-the report to the tested files. Synthetic observations/images are confined to
+`NOON_CUDA_ARTIFACTS` can change the destination. Source, probe and runner
+fingerprints, the browser version and each real author's verified runtime build
+identity bind the report to the tested files. Mixed worker builds fail the run.
+A refreshed supplementary gallery poster records the exact PNG and report
+hashes, tested commit and full runtime identity; it does not borrow historical
+CI workflow or artifact identifiers. Synthetic observations/images are confined to
 unit tests of the predicates; they are never published as renderer/GPU evidence.
 
 The fixed fixture is one full interior 32-by-32 tile, a 32-by-8 thread block,

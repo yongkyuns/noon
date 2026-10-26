@@ -186,6 +186,39 @@ impl WasmCodeOptions {
         self.options.background_config.corner_radius = corner_radius;
     }
 
+    #[wasm_bindgen(js_name = setLineNumberLayout)]
+    pub fn set_line_number_layout(
+        &mut self,
+        font_size: Option<f64>,
+        min_digits: &JsValue,
+    ) -> Result<(), JsValue> {
+        let min_digits = line_index("line_number_config min_digits", min_digits)?;
+        if min_digits > 32 {
+            return Err(invalid_option(
+                "line_number_config min_digits (0..=32)",
+                min_digits as f64,
+            ));
+        }
+        let font_size = font_size
+            .map(|size| finite_f32("line_number_config font_size", size))
+            .transpose()?;
+        self.options.line_number_config.font_size = font_size;
+        self.options.line_number_config.min_digits = min_digits;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setLineNumberColor)]
+    pub fn set_line_number_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options.line_number_config.color = Some(color(red, green, blue, alpha)?);
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setBackgroundOpacity)]
     pub fn set_background_opacity(&mut self, opacity: f64) {
         self.options.background_config.fill_opacity = opacity;

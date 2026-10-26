@@ -1,7 +1,7 @@
 // Predicate unit tests with synthetic buffers. These do not render Noon.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {checkHighlight,checkSample,checkTextRegions} from './cuda-transpose-pixels.mjs';
+import {checkHighlight,checkSample,checkTextRegions,checkCodePage} from './cuda-transpose-pixels.mjs';
 function image() {
   const data=new Uint8Array(1280*720*4);
   for(let i=0;i<data.length;i+=4) data.set([21,31,49,255],i);
@@ -16,9 +16,11 @@ function paint(im,center,w,h,rgb) {
 function highlight(im, intensity=0.20) {
   const y=2.09;
   paint(im,[-3.48,y],6.14,0.32,[104,131,155].map((x,i)=>Math.round(x*intensity+[21,31,49][i]*(1-intensity))));
-  paint(im,[-4,y],0.6,0.10,[200,210,220]);
+  paint(im,[-4,y],0.6,0.10,[103,218,238]);
   return {read_src:{alpha:intensity,center:[-3.48,y],width:6.14,height:0.32,
-    text_center:[-4,y],text_width:2,text_height:0.15,text:'tile[...]'}};
+    text_center:[-4,y],text_width:2,text_height:0.15,text:'tile[...]',
+    sample_region:{center:[-6.40,y],width:0.09,height:0.12},
+    reference_region:{center:[-6.40,2.34],width:0.09,height:0.12}}};
 }
 function packets(im) {
   const expected=Array.from({length:32},(_,lane)=>({lane,center:[0.7+lane%8*0.72,1.45-Math.floor(lane/8)*0.6],
@@ -85,4 +87,30 @@ test('endpoint overlap cannot be excused as a transient crossing',()=>{
 });
 test('bank labels require rendered glyph coverage',()=>{
   const im=image();assert.throws(()=>checkTextRegions(im,[{center:[2,1],width:0.4,height:0.15,text:'B12'}]),/CUDA_PIXELS\[text\]/);
+});
+
+test('a visible source token with the wrong data color is rejected',()=>{
+  const im=image(),h=highlight(im);
+  paint(im,[-4,2.09],0.6,0.10,[237,243,252]);
+  assert.throws(()=>checkHighlight(im,h),/CUDA_PIXELS\[source-color\]/);
+});
+test('highlight sampling follows observed gap coordinates instead of the old x origin',()=>{
+  const im=image(),h=highlight(im),row=h.read_src;
+  row.sample_region.center[0] = -6.0;
+  row.reference_region.center[0] = -6.0;
+  paint(im,[-6.40,2.09],0.10,0.13,[21,31,49]);
+  assert.equal(checkHighlight(im,h).length,1);
+});
+test('full-page proof rejects revealed inactive bands and missing gutter pixels',()=>{
+  const im=image(),h=highlight(im),row=h.read_src;
+  row.alpha=0;
+  const code={center:row.text_center,width:row.text_width,height:row.text_height,text:row.text};
+  const number={center:[-6.6,2.09],width:0.15,height:0.1,text:'01'};
+  const page={rows:{read_src:code},numbers:[number],regions:h};
+  paint(im,number.center,number.width,number.height,[165,180,204]);
+  assert.throws(()=>checkCodePage(im,page),/CUDA_PIXELS\[highlight\]/);
+  paint(im,row.sample_region.center,0.10,0.13,[21,31,49]);
+  assert.equal(checkCodePage(im,page).renderedTextRegions,2);
+  paint(im,number.center,number.width,number.height,[21,31,49]);
+  assert.throws(()=>checkCodePage(im,page),/CUDA_PIXELS\[text\]/);
 });

@@ -37,15 +37,16 @@ export function checkTextRegions(image, regions) {
 }
 
 export function checkHighlight(image, highlights) {
-  const reference = mean(image, {center: [-6.40, 2.34], width: 0.09, height: 0.12});
   const active = [];
   for (const [key, h] of Object.entries(highlights)) {
-    // A reserved gap between line numbers and source text, not glyph pixels.
-    const light = mean(image, {center: [-6.40, h.center[1]], width: 0.09, height: 0.12});
+    // The read-only probe observes the native gutter/source gap for this page.
+    const reference = mean(image, h.reference_region);
+    const light = mean(image, h.sample_region);
     const delta = light - reference;
     if (h.alpha > 0.0001) {
       assert.ok(delta >= 9, `CUDA_PIXELS[highlight]: ${key} indistinguishable from background (${delta.toFixed(2)})`);
       checkTextRegions(image, [{center:h.text_center, width:h.text_width, height:h.text_height, text:h.text}]);
+      checkSourceColor(image, key, {center:h.text_center, width:h.text_width, height:h.text_height});
       active.push({key, contrastDelta: delta});
     } else {
       assert.ok(Math.abs(delta) <= 5, `CUDA_PIXELS[highlight]: inactive ${key} appears highlighted (${delta.toFixed(2)})`);
@@ -53,6 +54,34 @@ export function checkHighlight(image, highlights) {
   }
   assert.ok(active.length, 'CUDA_PIXELS[highlight]: no active source row');
   return active;
+}
+
+const SOURCE_COLORS = Object.freeze({load_dst:[103,218,238], load_src:[103,218,238],
+  read_src:[103,218,238], store_dst:[140,226,181], sync:[245,156,197]});
+function checkSourceColor(image, key, region) {
+  const expected = SOURCE_COLORS[key];
+  if (!expected) return;
+  const samples = indices(image, region.center, region.width, region.height);
+  const count = samples.filter(i => expected.every((v, c) => Math.abs(image.data[i+c]-v) < 35)).length;
+  assert.ok(count >= 3, `CUDA_PIXELS[source-color]: ${key} lost its data/barrier color (${count} pixels)`);
+}
+
+export function checkCodePage(image, page) {
+  const rows = Object.values(page.rows);
+  const renderedTextRegions = checkTextRegions(image, [...rows, ...page.numbers]);
+  for (const [key, row] of Object.entries(page.rows)) checkSourceColor(image, key, row);
+  // Full-page presentation must leave unselected rows transparent. Source-edit
+  // captures additionally prove the selected declaration retains a visible band.
+  const selected = Object.values(page.regions).some(region => region.alpha > 0.0001);
+  const highlights = selected ? checkHighlight(image, page.regions) : [];
+  if (!selected) {
+    for (const [key, region] of Object.entries(page.regions)) {
+      const delta = mean(image, region.sample_region) - mean(image, region.reference_region);
+      assert.ok(Math.abs(delta) <= 5,
+        `CUDA_PIXELS[highlight]: newly presented ${key} appears highlighted (${delta.toFixed(2)})`);
+    }
+  }
+  return {renderedTextRegions, highlights};
 }
 
 export function checkSample(image, event, alpha) {

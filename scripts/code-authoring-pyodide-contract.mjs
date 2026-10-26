@@ -28,6 +28,15 @@ try {
       error => error.category === "invalid_input" && error.code === "code.invalid_option");
   }
   const boundaryStore = new wasm.WasmAuthoringStore();
+  const numberOptions = new wasm.WasmCodeOptions("text", undefined, "vim", 4, true, -1, "rectangle");
+  for (const digits of [true, false, "2", 2n, -1, 0.5, 33, 2 ** 32, NaN, Infinity]) {
+    assert.throws(() => numberOptions.setLineNumberLayout(11, digits),
+      error => error.category === "invalid_input" && error.code === "code.invalid_option");
+  }
+  numberOptions.setLineNumberLayout(11, 2);
+  const numberedCode = boundaryStore.createCode("x\nx\nx", numberOptions);
+  assert.deepEqual(numberedCode.lineNumberSources(), ["-01", "00", "01"]);
+  report.lineNumberBoundaryChecks = "typed bounded padding, signed numbering, independent gutter size";
   const boundaryCode = boundaryStore.createCode("x\n\nz", new wasm.WasmCodeOptions(
     "python", undefined, "vim", 4, true, 9, "rectangle"));
   const invalidIndices = [true, false, "1", 1n, -1, 0.5, 2 ** 32, NaN, Infinity];

@@ -79,7 +79,8 @@ class FidelityPredicates(unittest.TestCase):
         h={'read_src':{'alpha':0.20,'text':probe.SOURCE_TEXT['read_src']},
            'store_dst':{'alpha':0,'text':probe.SOURCE_TEXT['store_dst']}}
         for value in h.values():
-            value.update(center=[0,1], width=6, text_center=[0,1], text_width=5)
+            value.update(center=[0,1.04], width=6, height=0.32,
+                         text_center=[0,1], text_width=5, text_height=0.15)
         probe.validate_highlights(h,['read_src'])
         h['store_dst']['alpha']=0.2
         with self.assertRaises(probe.FidelityError): probe.validate_highlights(h,['read_src'])
@@ -109,6 +110,69 @@ class FidelityPredicates(unittest.TestCase):
         self.assertNotIn('scene.wait(',code)
         self.assertNotIn('reference_trace(',code)
         self.assertNotIn('bank_point(',code)
+
+
+def source_page(kind="load"):
+    keys = {"load": ["declaration", "input_x", "input_y", "load_loop", "load_bounds", "load_dst", "load_src", "close_if", "close_loop", "sync"],
+            "output": ["output_x", "output_y", "store_loop", "store_bounds", "store_dst", "read_src", "close_if", "close_loop"],
+            "read": ["store_dst", "read_src"]}[kind]
+    rows, numbers, regions = {}, [], {}
+    for index, key in enumerate(keys):
+        y = 2.0 - 0.37 * index
+        text = probe.SOURCE_TEXT.get(key, "__shared__ float tile[TILE_DIM][TILE_DIM];" if key == "declaration" else "statement;")
+        rows[key] = {"id": index + 1, "center": [-3.5, y], "width": 5.7, "height": 0.15, "text": text}
+        numbers.append({"id": index + 101, "center": [-6.52, y], "width": 0.12,
+                        "height": 0.10, "text": "%02d" % (index + 1)})
+        regions[key] = {"id": index + 201, "text_id": index + 1,
+                        "center": [-3.49, y + 0.02], "width": 6.4, "height": 0.32, "stroke_width": 0}
+    return {"page": kind, "rows": rows, "numbers": numbers, "regions": regions,
+            "source": "\n".join(row["text"] for row in rows.values()),
+            "source_font_size": 16, "gutter_font_size": 11,
+            "panel": {"id": 900, "center": [-3.49, 0.3], "width": 6.4, "height": 3.7, "alpha": 0}}
+
+
+class SourcePagePredicates(unittest.TestCase):
+    def test_allocated_rows_cover_ink_without_matching_ink_centers(self):
+        for kind in ("load", "output", "read"):
+            page = source_page(kind)
+            probe.validate_source_page(page)
+        page = source_page()
+        page["regions"]["load_src"]["center"][1] += 0.2
+        with self.assertRaisesRegex(probe.FidelityError, "highlight-position"):
+            probe.validate_source_page(page)
+
+    def test_unchanged_source_and_gutter_identity_survives_bounded_edit(self):
+        previous = source_page()
+        current = copy.deepcopy(previous)
+        current["rows"]["declaration"]["text"] = current["rows"]["declaration"]["text"].replace(
+            "[TILE_DIM][TILE_DIM];", "[TILE_DIM][TILE_DIM + 1];")
+        current["rows"]["declaration"]["id"] = 301
+        current["regions"]["declaration"]["text_id"] = 301
+        current["source"] = "\n".join(row["text"] for row in current["rows"].values())
+        probe.validate_source_edit(previous, current)
+        for mutate in (lambda p: p["rows"]["load_src"]["center"].__setitem__(0, -3.4),
+                       lambda p: p["numbers"][0].__setitem__("id", 1001),
+                       lambda p: p["regions"]["declaration"]["center"].__setitem__(1, 2.2),
+                       lambda p: p["rows"]["declaration"]["center"].__setitem__(1, 2.5)):
+            bad = copy.deepcopy(current); mutate(bad)
+            with self.assertRaisesRegex(probe.FidelityError, "source-edit"):
+                probe.validate_source_edit(previous, bad)
+
+    def test_zero_padding_and_smaller_numbers_are_observed(self):
+        for mutate in (lambda p: p["numbers"][0].__setitem__("text", "1"),
+                       lambda p: p.__setitem__("gutter_font_size", 16),
+                       lambda p: p["numbers"][0].__setitem__("height", 0.2)):
+            bad = source_page(); mutate(bad)
+            with self.assertRaisesRegex(probe.FidelityError, "gutter"):
+                probe.validate_source_page(bad)
+
+    def test_compact_page_clearance_uses_all_corridors_and_actual_row_allocation(self):
+        page = source_page("read")
+        probe.validate_compact_clearance(page["regions"])
+        for region in page["regions"].values():
+            region["center"][1] -= 1
+        with self.assertRaisesRegex(probe.FidelityError, "packet-clearance"):
+            probe.validate_compact_clearance(page["regions"])
 
 
 class CapturePredicates(unittest.TestCase):

@@ -2,9 +2,10 @@
 
 use crate::{
     AnimationCompositionRequest, AnimationOptions, Code, CodeBackground, CodeHighlightOptions,
-    CodeOptions, CodeParagraphConfig, CodeSyntaxColors, Color, ContinuationStep, ExecutionSession,
-    FadeEndpoint, LiveContinuation, LiveProgram, LiveSession, ManimRotationPivot, RateFunction,
-    Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    CodeLineNumberConfig, CodeOptions, CodeParagraphConfig, CodeSyntaxColors, Color,
+    ContinuationStep, ExecutionSession, FadeEndpoint, LiveContinuation, LiveProgram, LiveSession,
+    ManimRotationPivot, RateFunction, Scene, SemanticAnimationCompositionKind,
+    SemanticFadeDirection,
 };
 
 pub const DECLARATION: &str = "__shared__ float tile[TILE_DIM][TILE_DIM];";
@@ -57,6 +58,11 @@ pub fn listing(scene: &mut Scene) -> Result<Code, String> {
             paragraph_config: CodeParagraphConfig {
                 font_size: 20.0,
                 ..Default::default()
+            },
+            line_number_config: CodeLineNumberConfig {
+                font_size: Some(11.0),
+                color: Some(Color::GRAY),
+                min_digits: 2,
             },
             ..Default::default()
         },

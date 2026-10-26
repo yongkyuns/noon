@@ -97,7 +97,7 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(entry.id, "showcase-cuda-transpose");
   assert.equal(entry.path, "python/examples/cuda_transpose_banks.py");
   assert.equal(entry.thumbnail, "thumbnails/showcase/showcase-cuda-transpose.png");
-  assert.equal(record.schema, 1);
+  assert.equal(record.schema, 2);
   assert.equal(record.publication, "rendered-cuda-fidelity-frame");
   assert.equal(record.id, entry.id);
   assert.equal(record.sourcePath, entry.path);
@@ -120,9 +120,15 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(record.sample.column, 3);
   const capture = record.capture;
   assert.equal(capture.repository, "yongkyuns/noon");
-  assert.equal(capture.workflowRunId, 39055762669);
-  assert.equal(capture.artifactId, 12110234543);
-  assert.equal(capture.testedPrHead, "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d");
+  assert.equal(capture.origin, "local-browser-qualification");
+  assert.match(capture.testedCommit, /^[a-f0-9]{40}$/);
+  for (const field of ["reportSha256", "runnerSha256", "probeSha256"]) {
+    assert.match(capture[field], /^[a-f0-9]{64}$/, `CUDA capture has no ${field}`);
+  }
+  assert.ok(typeof capture.browserVersion === "string" && capture.browserVersion.length > 0);
+  for (const obsolete of ["workflowRunId", "artifactId", "testedPrHead"]) {
+    assert.equal(capture[obsolete], undefined, "local capture must not inherit old hosted CI provenance");
+  }
   assert.equal(capture.reportStatus, "passed");
   assert.ok(Number.isFinite(capture.authoredDurationSeconds) &&
     Math.abs(capture.authoredDurationSeconds - entry.duration) <= 1e-9,
@@ -133,6 +139,15 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(capture.cudaValidated, false, "do not confuse renderer evidence with CUDA hardware execution");
   assert.equal(capture.rendererBackend, "WebGPU");
   assert.equal(capture.runtimeBuildIdentity.schema, 1);
-  assert.match(capture.runtimeBuildIdentity.sourceRevision, /^[0-9a-f]{40}$/);
-  assert.match(capture.runtimeBuildIdentity.buildId, /^[0-9a-f]{64}$/);
+  assert.equal(capture.runtimeBuildIdentity.sourceRevision, capture.testedCommit);
+  const identity = capture.runtimeBuildIdentity;
+  const paths = {worker: "./python-worker.js", wasm: "./pkg/noon_web_bg.wasm",
+    glue: "./pkg/noon_web.js", verifier: "./runtime-build-verifier.js"};
+  assert.deepEqual(Object.keys(identity.files).sort(), Object.keys(paths).sort());
+  for (const [key, expectedPath] of Object.entries(paths)) {
+    assert.equal(identity.files[key].path, expectedPath);
+    assert.match(identity.files[key].sha256, /^[0-9a-f]{64}$/);
+  }
+  const core = {schema: identity.schema, sourceRevision: identity.sourceRevision, files: identity.files};
+  assert.equal(identity.buildId, hash(JSON.stringify(core)), "CUDA runtime identity has an invalid digest");
 }

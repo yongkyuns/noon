@@ -1,10 +1,9 @@
-"""Domain, lexical, source-order and authored-geometry checks.
+"""Domain, shared-Code authoring, source-order and authored-geometry checks.
 
 These tests do NOT qualify rendering/playback. Small authoring helpers use
 unittest.mock call spies to inspect arguments; no Noon runtime is emulated.
 """
 import ast
-import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
@@ -16,11 +15,11 @@ SOURCE = SCENE_PATH.read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
 PURE = {"reference_trace", "service_batches", "tile_point",
         "queue_point", "bank_center", "bank_point", "register_point",
-        "output_point", "syntax_spans", "code_entries"}
+        "output_point", "code_entries"}
 CONSTANTS = {"TILE_LEFT", "TILE_TOP", "CELL", "QUEUE_W", "QUEUE_H",
              "REGISTER_SCALE", "REGISTER_CELL_W", "REGISTER_CELL_H",
-             "ROUND_IN", "ROUND_OUT", "SOURCE_STEPS", "CODE_TOP", "CODE_STEP", "CODE_LINE_H"}
-NS = {"re": re}
+             "ROUND_IN", "ROUND_OUT", "SOURCE_STEPS"}
+NS = {}
 nodes = []
 for n in TREE.body:
     if isinstance(n, ast.FunctionDef) and n.name in PURE:
@@ -137,49 +136,6 @@ class LayoutTests(unittest.TestCase):
             assert_nonoverlap(self, output, 0.097, 0.097)
             assert_inside(self, selected + output, 0.097, 0.097, (1.55, -1.90, 5.07, 1.62))
 
-    def test_read_requests_do_not_cross_code_area(self):
-        # Point trajectories only, not a renderer. Verify the queue -> bank path
-        # stays below the lowest source-line highlight while within the code pane.
-        code_bottom = NS["CODE_TOP"] - (len(NS["code_entries"]("read")) - 1) * NS["CODE_STEP"] - NS["CODE_LINE_H"] / 2
-        for base in (0, 1, 31):
-            for stride in (32, 33):
-                for column in range(32):
-                    for lane, _, word, _, _ in reference(stride, column, base)["reads"]:
-                        a, b = NS["queue_point"](lane), NS["bank_point"](word % 32)
-                        # Linear geometric segment endpoints plus its crossing of x=-0.185.
-                        points = [a]
-                        x_cross = -0.185 + NS["QUEUE_W"] / 2
-                        t = (x_cross - a[0]) / (b[0] - a[0])
-                        if 0 <= t <= 1:
-                            points.append((x_cross, a[1] + t * (b[1] - a[1]), 0))
-                        self.assertLessEqual(max(p[1] for p in points) + NS["QUEUE_H"] / 2,
-                                             code_bottom + 1e-8)
-
-
-class SyntaxTests(unittest.TestCase):
-    def test_real_token_ranges_are_nonoverlapping(self):
-        for stride in (32, 33):
-            for stage in ("load", "output", "read"):
-                for _, line in NS["code_entries"](stage, stride):
-                    spans = NS["syntax_spans"](line)
-                    for a, b, tag in spans:
-                        self.assertLess(a, b)
-                        self.assertTrue(0 <= a < b <= len(line))
-                    for left, right in zip(spans, spans[1:]):
-                        self.assertLessEqual(left[1], right[0])
-
-    def test_in_does_not_color_int_or_threadidx(self):
-        line = "int x = threadIdx.x; tile[x][0] = in[x];"
-        found = [(line[a:b], k) for a, b, k in NS["syntax_spans"](line)]
-        self.assertEqual(found, [("int", "keyword"), ("threadIdx.x", "index"),
-                                 ("tile", "tile"), ("0", "constant"), ("in", "in")])
-
-    def test_comment_is_a_single_range(self):
-        line = "// int tile in out 32 __syncthreads"
-        self.assertEqual(NS["syntax_spans"](line), [(0, len(line), "comment")])
-
-    def test_barrier_has_distinct_syntax_role(self):
-        self.assertEqual(NS["syntax_spans"]("__syncthreads();"), [(0, 13, "barrier")])
 
 
 class SourceContracts(unittest.TestCase):
@@ -272,10 +228,7 @@ class SourceContracts(unittest.TestCase):
             if isinstance(n, ast.Call) and ast.unparse(n.func) == "self.move_step":
                 self.assertEqual(n.args[0].value, "read")
 
-    def test_common_scale_indentation_and_matched_service_time(self):
-        self.assertIn("max_w = max(max_w, padded.width)", SOURCE)
-        self.assertIn("indent * advance * factor", SOURCE)
-        self.assertIn("new.scale(self.code_scale)", SOURCE)
+    def test_matched_service_time_and_educational_scope(self):
         self.assertEqual(SOURCE.count("seconds=ROUND_IN"), 1)
         self.assertEqual(SOURCE.count("seconds=ROUND_OUT"), 1)
         self.assertIn("same value", SOURCE.lower())
@@ -283,8 +236,81 @@ class SourceContracts(unittest.TestCase):
         self.assertIn("not GPU cycles or a benchmark", SOURCE)
 
 
+class SharedCodeAuthoringTests(unittest.TestCase):
+    """The lesson selects presentation values; Rust owns lexing and row geometry."""
+
+    @classmethod
+    def setUpClass(cls):
+        scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
+        cls.methods = {n.name: n for n in scene.body if isinstance(n, ast.AsyncFunctionDef)}
+        cls.show = cls.methods["show_code"]
+        cls.code = next(n for n in ast.walk(cls.show) if isinstance(n, ast.Call)
+                        and ast.unparse(n.func) == "Code")
+        cls.options = {kw.arg: kw.value for kw in cls.code.keywords}
+
+    def test_three_pages_use_native_code_without_a_python_lexer(self):
+        self.assertEqual([len(NS["code_entries"](page)) for page in ("load", "output", "read")],
+                         [10, 8, 2])
+        names = {n.name for n in TREE.body if isinstance(n, ast.FunctionDef)}
+        self.assertFalse(names & {"syntax_spans", "ink_for_code"})
+        self.assertFalse(any(isinstance(n, ast.Import) and
+                             any(alias.name == "re" for alias in n.names) for n in TREE.body))
+        calls = {ast.unparse(n.func) for n in ast.walk(self.show) if isinstance(n, ast.Call)}
+        self.assertNotIn("Text", calls)
+        self.assertNotIn("label", calls)
+        self.assertIn("self.code.highlight_lines", calls)
+        self.assertIn("self.code.scale_to_fit_width", calls)
+        for obsolete in ("code_scale", "CODE_TOP", "CODE_STEP", "CODE_LINE_H", "lstrip"):
+            self.assertNotIn(obsolete, ast.unparse(self.show))
+
+    def test_small_zero_padded_gutter_is_a_shared_code_option(self):
+        config = {k.value: ast.unparse(v) for k, v in
+                  zip(self.options["line_number_config"].keys, self.options["line_number_config"].values)}
+        self.assertEqual(config, {"font_size": "11", "color": "MUTED", "min_digits": "2"})
+        paragraph = {k.value: ast.literal_eval(v) for k, v in
+                     zip(self.options["paragraph_config"].keys, self.options["paragraph_config"].values)}
+        self.assertLess(ast.literal_eval(self.options["line_number_config"].values[0]),
+                        paragraph["font_size"])
+
+    def test_exact_tokens_keep_the_cuda_data_color_associations(self):
+        token_node = self.options["token_colors"].body
+        tokens = {k.value: ast.unparse(v) for k, v in zip(token_node.keys, token_node.values)}
+        for token, color in {"in": "CYAN", "tile": "CYAN", "out": "GREEN",
+                             "__syncthreads": "PINK", "__shared__": "VIOLET",
+                             "static_cast": "VIOLET", "size_t": "VIOLET",
+                             "TILE_DIM": "AMBER", "BLOCK_ROWS": "AMBER",
+                             "threadIdx.x": "AMBER", "threadIdx.y": "AMBER",
+                             "blockIdx.x": "AMBER", "blockIdx.y": "AMBER"}.items():
+            self.assertEqual(tokens[token], color)
+        syntax = self.options["syntax_colors"]
+        categories = {k.value: ast.unparse(v) for k, v in zip(syntax.keys, syntax.values)}
+        self.assertEqual(categories, {"foreground": "INK", "comment": "MUTED", "keyword": "VIOLET",
+                                      "number": "AMBER", "string": "INK", "operator": "INK"})
+
+    def test_reserved_source_and_padded_edit_use_shared_row_operations(self):
+        reservation = self.options["reserved_source"]
+        self.assertIsInstance(reservation, ast.IfExp)
+        self.assertEqual(ast.unparse(reservation.test), "page == 'load'")
+        self.assertIn("code_entries('load', 33)", ast.unparse(reservation.body))
+        calls = [n for n in ast.walk(self.methods["load_tile"]) if isinstance(n, ast.Call)]
+        replacement = next(n for n in calls if ast.unparse(n.func) == "self.code.replace_line")
+        self.assertEqual(ast.unparse(replacement.args[0]), "self.code_indices['declaration']")
+        transition = next(n for n in calls if ast.unparse(n.func) == "self.play_for"
+                          and any(kw.arg == "seconds" and isinstance(kw.value, ast.Constant)
+                                  and kw.value.value == 0.75 for kw in n.keywords))
+        animations = [ast.unparse(n) for n in transition.args]
+        self.assertIn("FadeOut(old)", animations)
+        self.assertIn("Write(new)", animations)
+        self.assertLess(replacement.lineno, transition.lineno)
+        additions = [n for n in calls if ast.unparse(n.func) == "self.add" and
+                     any(ast.unparse(arg) == "old" for arg in n.args)]
+        self.assertEqual(len(additions), 1)
+        self.assertTrue(replacement.lineno < additions[0].lineno < transition.lineno)
+        self.assertNotIn("Text", {ast.unparse(n.func) for n in calls})
+
+
 HELPERS = {'packet', 'packet_leaves', 'packet_motion'}
-PURE_CONSTANTS = {'QUEUE_W', 'QUEUE_H', 'CODE_HIGHLIGHT_FILL', 'CODE_HIGHLIGHT_STROKE', 'SOURCE_STEPS'}
+PURE_CONSTANTS = {'QUEUE_W', 'QUEUE_H', 'CODE_HIGHLIGHT_FILL', 'SOURCE_STEPS'}
 
 
 def helper_namespace():
@@ -433,9 +459,8 @@ class HighlightTests(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(active_keys=active,
                                highlights={key: leaf_spy(key) for key in keys}, play_for=AsyncMock())
 
-    async def test_active_highlight_is_twenty_percent_fill_no_outline(self):
+    async def test_active_highlight_is_twenty_percent_fill(self):
         self.assertEqual(self.ns['CODE_HIGHLIGHT_FILL'], 0.20)
-        self.assertEqual(self.ns['CODE_HIGHLIGHT_STROKE'], 0)
         self.assertIn('CODE_HIGHLIGHT_COLOR = color_from_hex("#68839B")', SOURCE)
         self.assertNotIn('.set_opacity(', SOURCE)
         s = self.scene_spy(('load_dst', 'load_src'))

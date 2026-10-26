@@ -12,7 +12,6 @@ is illustrative, not measured GPU execution time. Correctness validation and
 optional CUDA capture are separate tools in tools/cuda-transpose.
 """
 from noon import *
-import re
 
 SPEED = 1.0
 COLUMN = 3
@@ -22,7 +21,6 @@ SYNTAX_HIGHLIGHT = True
 # Tune fill between 0.15 (softer) and 0.25 (stronger) for your display.
 CODE_HIGHLIGHT_COLOR = color_from_hex("#68839B")
 CODE_HIGHLIGHT_FILL = 0.20
-CODE_HIGHLIGHT_STROKE = 0
 
 # Every constructor receives a Noon Color, never an unconverted CSS string.
 BG = color_from_hex("#0C1220")
@@ -41,7 +39,6 @@ ROW_COLORS = (CYAN, AMBER, VIOLET, PINK)
 
 # Shared authored layout constants. Tests check these exact coordinates.
 TILE_LEFT, TILE_TOP, CELL = 1.55, 1.62, 0.11
-CODE_TOP, CODE_STEP, CODE_LINE_H = 2.09, 0.37, 0.32
 QUEUE_W, QUEUE_H = 0.46, 0.24
 REGISTER_SCALE = 0.58
 REGISTER_CELL_W = 0.33
@@ -171,42 +168,6 @@ def code_entries(stage, stride=32):
     raise ValueError("unknown code page")
 
 
-def syntax_spans(source):
-    """Nonoverlapping ASCII token spans; identifiers are never substring-matched.
-
-    These are lexical colors, not a CUDA compiler or execution model.
-    """
-    spans = []
-    pattern = r"//[^\n]*|[A-Za-z_]\w*(?:\.[xy])?|\b\d+\b"
-    for match in re.finditer(pattern, source):
-        token = match.group()
-        kind = None
-        if token.startswith("//"):
-            kind = "comment"
-        elif token == "__syncthreads":
-            kind = "barrier"
-        elif token in ("__shared__", "int", "float", "for", "if",
-                       "static_cast", "size_t"):
-            kind = "keyword"
-        elif token.startswith(("threadIdx.", "blockIdx.")):
-            kind = "index"
-        elif token in ("TILE_DIM", "BLOCK_ROWS") or token.isdigit():
-            kind = "constant"
-        elif token in ("in", "tile", "out"):
-            kind = token
-        if kind:
-            spans.append((match.start(), match.end(), kind))
-    return spans
-
-
-def ink_for_code(source):
-    palette = {"comment": MUTED, "barrier": PINK, "keyword": VIOLET,
-               "index": AMBER, "constant": AMBER,
-               "in": CYAN, "tile": CYAN, "out": GREEN}
-    return {"[%d:%d]" % (a, b): palette[k]
-            for a, b, k in syntax_spans(source)}
-
-
 def label(s, x=0, y=0, size=20, color=INK, width=12.6, left=False):
     m = Text(str(s), font="DejaVu Sans Mono", font_size=size, color=color)
     w = m.get_right()[0] - m.get_left()[0]
@@ -314,50 +275,46 @@ class CudaTransposeBanks(Scene):
         self.phase_text = new
 
     async def show_code(self, page, stride):
-        """Common font scale, explicit indentation, and one Text per code line."""
+        """Present CUDA source; Code owns its typography, gutter and row regions."""
         await self.fade(self.code_objects, 0.25)
         entries = code_entries(page, stride)
-        size = 16
-        # Measuring two equal glyph strings yields monospace *advance*, not ink width.
-        mm = label("MM", size=size)
-        m = label("M", size=size)
-        advance = mm.width - m.width
-        prepared = []
-        for key, source in entries:
-            body = source.lstrip()
-            indent = len(source) - len(body)
-            obj = Text(body, font="DejaVu Sans Mono", font_size=size,
-                       color=INK, t2c=ink_for_code(body) if SYNTAX_HIGHLIGHT else None)
-            prepared.append((key, obj, indent))
-        max_w = max(o.width + indent * advance for _, o, indent in prepared)
-        if page == "load":
-            # Reserve the longer padded declaration BEFORE the edit: no font-size jump.
-            padded = Text(code_entries("load", 33)[0][1], font="DejaVu Sans Mono",
-                          font_size=size, color=INK)
-            max_w = max(max_w, padded.width)
-        max_h = max(o.height for _, o, _ in prepared)
-        factor = min(1.0, 5.70 / max_w, 0.245 / max_h)
-        self.highlights, self.code_objects, self.code_text = {}, [], {}
-        self.code_scale = factor
-        for n, (key, obj, indent) in enumerate(prepared):
-            y = CODE_TOP - n * CODE_STEP
-            obj.scale(factor)
-            # Leading whitespace never depends on the engine's ink bounds.
-            obj.move_to((-6.28 + indent * advance * factor + obj.width / 2, y, 0))
-            gutter = label("%02d" % (n + 1), -6.60, y, 11, MUTED)
-            # Animate fill alpha explicitly; set_opacity(1) can overwrite a
-            # VMobject's faint fill/stroke alpha instead of just revealing it.
-            highlight = rect(-3.48, y, 6.14, CODE_LINE_H,
-                             CODE_HIGHLIGHT_COLOR, 0.0,
-                             CODE_HIGHLIGHT_STROKE)
-            self.highlights[key] = highlight
-            self.code_text[key] = obj
-            self.code_objects.extend((highlight, gutter, obj))
+        self.code = Code(
+            code_string="\n".join(source for _, source in entries),
+            # Allocate the padded variant before fitting; the later edit cannot reflow.
+            reserved_source=("\n".join(source for _, source in code_entries("load", 33))
+                             if page == "load" else None),
+            language="cuda" if SYNTAX_HIGHLIGHT else "text",
+            formatter_style="monokai",
+            paragraph_config={"font": "DejaVu Sans Mono", "font_size": 16,
+                              "line_spacing": 1.5},
+            line_number_config={"font_size": 11, "color": MUTED, "min_digits": 2},
+            background_config={"buff": 0.05, "corner_radius": 0,
+                               "fill_opacity": 0, "stroke_width": 0},
+            syntax_colors={"foreground": INK, "comment": MUTED, "keyword": VIOLET,
+                           "number": AMBER, "string": INK, "operator": INK},
+            token_colors={"in": CYAN, "tile": CYAN, "out": GREEN,
+                          "__syncthreads": PINK, "__shared__": VIOLET,
+                          "static_cast": VIOLET, "size_t": VIOLET,
+                          "TILE_DIM": AMBER, "BLOCK_ROWS": AMBER,
+                          "threadIdx.x": AMBER, "threadIdx.y": AMBER,
+                          "blockIdx.x": AMBER, "blockIdx.y": AMBER}
+                         if SYNTAX_HIGHLIGHT else None,
+        )
+        self.code.scale_to_fit_width(self.panels[0].width - 0.30)
+        self.code.next_to(self.phase_text, DOWN, buff=0.18)
+        self.code.align_to(self.panels[0], LEFT).shift(RIGHT * 0.15)
+        self.code_indices = {key: index for index, (key, _) in enumerate(entries)}
+        self.code_text = {key: self.code.code_lines[index]
+                          for key, index in self.code_indices.items()}
+        self.highlights = {
+            key: self.code.highlight_lines(index, include_line_numbers=True,
+                                           color=CODE_HIGHLIGHT_COLOR, fill_opacity=0)
+            for key, index in self.code_indices.items()
+        }
+        self.code_objects = [self.code]
         self.active_keys = ()
-        # Add transparent markers first; only glyphs/gutter fade in.
-        self.add(*(self.code_objects[i] for i in range(0, len(self.code_objects), 3)))
-        await self.play_for(*(FadeIn(o) for i, o in enumerate(self.code_objects) if i % 3),
-                      seconds=0.40)
+        # Ordinary family FadeIn preserves the transparent panel and inactive bands.
+        await self.play_for(FadeIn(self.code), seconds=0.40)
 
     async def focus(self, step):
         keys = SOURCE_STEPS[step]
@@ -439,20 +396,14 @@ class CudaTransposeBanks(Scene):
             await self.narrate("Add one unused float to every row.",
                          "This is a recompile and rerun, not a live GPU array resize.", GREEN)
             # Only the changed declaration is replaced; the rest of the page stays put.
-            old = self.code_text["declaration"]
-            old_index = self.code_objects.index(old)
             body = code_entries("load", 33)[0][1]
-            new = Text(body, font="DejaVu Sans Mono", font_size=16, color=INK,
-                       t2c=ink_for_code(body) if SYNTAX_HIGHLIGHT else None)
-            # Keep exactly the original page font scale, reserved for this longer line.
-            new.scale(self.code_scale)
-            new.move_to((-6.28 + new.width / 2, CODE_TOP, 0))
+            old, new = self.code.replace_line(self.code_indices["declaration"], body)
+            self.code_text["declaration"] = new
+            self.add(old)
             pad = rect(TILE_LEFT + 32.5 * CELL, TILE_TOP - 16 * CELL,
                        CELL, 32 * CELL, GREEN, 0.30, 1)
             pad_label = label("+1", TILE_LEFT + 32 * CELL + 0.53, 0.15, 15, GREEN)
             await self.play_for(FadeOut(old), Write(new), FadeIn(pad), FadeIn(pad_label), seconds=0.75)
-            self.code_objects[old_index] = new
-            self.code_text["declaration"] = new
             visual += [pad, pad_label]
             await self.phase("01  LOAD ROWS", stride)
             await self.pause(1.6)
