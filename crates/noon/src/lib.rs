@@ -166,6 +166,8 @@ pub mod plot_presentation;
 mod point_matching;
 mod point_promotion;
 pub use point_promotion::{PointAlignment, PointAlignmentSide};
+mod presentation;
+pub use presentation::{ColorRole, PresentationError, SpacingRole, TextRole, TextStyle, Theme};
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod sample_space;
@@ -415,6 +417,7 @@ pub mod prelude {
         Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,
         CodeParagraphConfig,
     };
+    pub use crate::{ColorRole, PresentationError, SpacingRole, TextRole, TextStyle, Theme};
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
         ManimNumberLineOptions, SemanticNumberLineScale,

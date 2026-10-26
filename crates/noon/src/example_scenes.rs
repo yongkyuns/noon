@@ -56,6 +56,8 @@ pub mod painter_order_overlap;
 pub mod point_promotion;
 pub mod pointer_input_trace;
 pub mod polar_plane;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod presentation_presets;
 pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
