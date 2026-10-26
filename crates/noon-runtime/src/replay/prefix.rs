@@ -7,12 +7,16 @@ use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
 use noon_core::{GeometryRef, ObjectId, SemanticClickIndicate};
 use std::sync::Arc;
 
+mod history_payload_budget;
 mod resource_budget;
 mod storage;
+use history_payload_budget::HistoryPayloadBudget;
 use resource_budget::ResourceBudget;
 
 #[cfg(test)]
 mod history_index_budget_tests;
+#[cfg(test)]
+mod history_payload_budget_tests;
 #[cfg(test)]
 mod payload_budget_tests;
 #[cfg(test)]
@@ -54,6 +58,13 @@ pub enum PrefixError {
     HistoryIndexBudgetExceeded {
         revision_capacity: usize,
         bytes_per_revision: usize,
+        limit_bytes: usize,
+    },
+    /// Saved row/channel/track vector capacity exceeds the stream ceiling.
+    /// This excludes indirect payloads, the revision index and allocator peaks.
+    HistoryPayloadBudgetExceeded {
+        retained_bytes: usize,
+        additional_bytes: usize,
         limit_bytes: usize,
     },
     Resources(CompiledResourceError),
@@ -109,9 +120,16 @@ pub struct PrefixPublisher {
     object_slots: usize,
     resources: CompiledResources,
     resource_budget: ResourceBudget,
+    history_payload_budget: HistoryPayloadBudget,
 }
 
 impl PrefixPublisher {
+    /// Saved revision-vector bytes extracted, including undelivered batches.
+    /// Not total history/heap memory; see the compiler-owned accounting contract.
+    pub fn extracted_history_payload_bytes(&self) -> usize {
+        self.history_payload_budget.bytes()
+    }
+
     /// Resource payload bytes extracted for this stream, including pending output.
     /// This is not a delivery receipt or process/allocator/GPU memory measurement.
     pub fn extracted_resource_bytes(&self) -> usize {
@@ -143,8 +161,14 @@ pub struct PrefixBatch {
     new_objects: Vec<CompiledObject>,
     resources: CompiledResources,
     resource_bytes: usize,
+    history_payload_bytes: usize,
 }
 impl PrefixBatch {
+    /// Actual row/channel/track vector backing bytes moved into the reader.
+    pub fn history_payload_bytes(&self) -> usize {
+        self.history_payload_bytes
+    }
+
     /// Newly introduced immutable payload bytes; known resource handles cost zero.
     pub fn resource_bytes(&self) -> usize {
         self.resource_bytes
@@ -196,8 +220,15 @@ pub struct PrefixReceiver {
     object_capacity: usize,
     initial_object_slots: usize,
     resource_budget: ResourceBudget,
+    history_payload_budget: HistoryPayloadBudget,
 }
 impl PrefixReceiver {
+    /// Saved revision-vector bytes held by this reader, including future history.
+    /// Seeking or removing visible membership does not release this charge.
+    pub fn retained_history_payload_bytes(&self) -> usize {
+        self.history_payload_budget.bytes()
+    }
+
     /// Logical immutable-resource bytes pinned by the adopted history, not heap/VRAM.
     /// Future resources remain charged even while an older frame is displayed.
     pub fn retained_resource_bytes(&self) -> usize {
@@ -370,7 +401,7 @@ impl PrefixReceiver {
         &self,
         runtime: &SceneInstance,
         batch: &PrefixBatch,
-    ) -> Result<(usize, usize, ResourceBudget), PrefixError> {
+    ) -> Result<(usize, usize, ResourceBudget, HistoryPayloadBudget), PrefixError> {
         self.validate_runtime(runtime)?;
         if self.finished
             || !Arc::ptr_eq(&self.stream, &batch.stream)
@@ -385,6 +416,9 @@ impl PrefixReceiver {
             return Err(PrefixError::UnexpectedBatch);
         }
         let resource_budget = self.resource_budget.with_additional(batch.resource_bytes)?;
+        let history_payload_budget = self
+            .history_payload_budget
+            .with_additional(batch.history_payload_bytes)?;
         let history = runtime
             .replay_history
             .as_ref()
@@ -414,7 +448,7 @@ impl PrefixReceiver {
                 object_slots: required,
             });
         }
-        Ok((count, payloads, resource_budget))
+        Ok((count, payloads, resource_budget, history_payload_budget))
     }
 
     /// Install only future history. The displayed frame, runtime identity,
@@ -427,7 +461,8 @@ impl PrefixReceiver {
         runtime: &mut SceneInstance,
         batch: PrefixBatch,
     ) -> Result<PrefixBatchStats, PrefixError> {
-        let (count, payloads, resource_budget) = self.validate_append(runtime, &batch)?;
+        let (count, payloads, resource_budget, history_payload_budget) =
+            self.validate_append(runtime, &batch)?;
         let history = runtime
             .replay_history
             .as_mut()
@@ -443,6 +478,7 @@ impl PrefixReceiver {
         history.stats.payloads_retained = payloads;
         history.end = Some(batch.frontier);
         self.resource_budget = resource_budget;
+        self.history_payload_budget = history_payload_budget;
         self.received_revisions = count;
         self.frontier = batch.frontier;
         self.finished = batch.terminal;
@@ -460,6 +496,11 @@ impl SceneInstance {
     /// including unused Vec capacity. This excludes nested row/track payloads,
     /// source history, object storage, allocator overhead and GPU residency.
     pub const MAX_PREFIX_HISTORY_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Provisional aggregate ceiling for saved row/channel/track Vec storage.
+    /// Separate from the index cap; excludes pointed-to/shared payloads, source
+    /// allocations, active object/track storage, allocator overhead and GPU state.
+    pub const MAX_PREFIX_HISTORY_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 
     /// Low-level bootstrap. The owning ExecutionSession must additionally prove
     /// its source segment and callback completion BEFORE invoking this method.
@@ -481,6 +522,19 @@ impl SceneInstance {
     pub fn create_prefix_projection_with_resource_budget(
         &self,
         resource_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_with_budgets(
+            resource_budget_bytes,
+            Self::MAX_PREFIX_HISTORY_PAYLOAD_BYTES,
+        )
+    }
+
+    // Internal limit parameter permits small deterministic admission tests. No
+    // additional frontend configuration or public migration mode is introduced.
+    fn create_prefix_projection_with_budgets(
+        &self,
+        resource_budget_bytes: usize,
+        history_payload_budget_bytes: usize,
     ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
         let history = self
             .replay_history
@@ -514,24 +568,31 @@ impl SceneInstance {
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
+        let history_payload_budget = HistoryPayloadBudget::new(history_payload_budget_bytes);
+        // Check the requested nested-vector storage before cloning the runtime.
+        // Source spare capacity is not copied, so this pass uses occupied lengths.
+        history_payload_budget.with_additional(history_payload_budget::clone_bytes(
+            history
+                .revisions
+                .iter()
+                .filter_map(|revision| revision.inverse.as_ref()),
+        )?)?;
         let stream = Arc::new(());
-        let publisher = PrefixPublisher {
-            source: self.runtime_identity(),
-            scope: history.scope.clone(),
-            stream: stream.clone(),
-            next_revision: history.revisions.len(),
-            extracted_payloads: history.stats.payloads_retained,
-            frontier: self.frame.time,
-            finished: false,
-            object_slots: self.compiled.objects().len(),
-            resources: self.compiled.resources().clone(),
-            resource_budget,
-        };
         let mut runtime = self.clone();
         let copied = runtime
             .replay_history
             .as_mut()
             .expect("cloned finite history");
+        // Validate reported capacities too, before exposing the reader. This
+        // cannot bound an allocator's transient over-allocation or clone peak.
+        let history_payload_budget = history_payload_budget.with_additional(
+            history_payload_budget::retained_bytes(
+                copied
+                    .revisions
+                    .iter()
+                    .filter_map(|revision| revision.inverse.as_ref()),
+            )?,
+        )?;
         // A named, bounded bootstrap allocation, not an unpredictable O(history)
         // relocation on every append. Payload budgets retain existing semantics.
         let extra = history
@@ -547,6 +608,19 @@ impl SceneInstance {
         storage::preflight_history_index_capacity(copied.revisions.capacity())?;
         runtime.seal_replay()?;
         runtime.seek(history.start)?;
+        let publisher = PrefixPublisher {
+            source: self.runtime_identity(),
+            scope: history.scope.clone(),
+            stream: stream.clone(),
+            next_revision: history.revisions.len(),
+            extracted_payloads: history.stats.payloads_retained,
+            frontier: self.frame.time,
+            finished: false,
+            object_slots: self.compiled.objects().len(),
+            resources: self.compiled.resources().clone(),
+            resource_budget,
+            history_payload_budget,
+        };
         let receiver = PrefixReceiver {
             runtime: runtime.runtime_identity(),
             scope: history.scope.clone(),
@@ -559,6 +633,7 @@ impl SceneInstance {
             object_capacity: self.compiled.objects().len(),
             initial_object_slots: self.compiled.objects().len(),
             resource_budget,
+            history_payload_budget,
         };
         Ok((publisher, runtime, receiver))
     }
@@ -679,10 +754,19 @@ impl SceneInstance {
         {
             return Err(ReplayError::RetentionLimit.into());
         }
+        // Forward conversion preserves vector lengths, not necessarily their
+        // reported capacities. Admit its known cost before allocating that copy.
+        publisher.history_payload_budget.with_additional(
+            history_payload_budget::clone_bytes(inverse.iter().copied())?,
+        )?;
         let forward = self
             .compiled
             .forward_prefix_revisions(&inverse)
             .ok_or(ReplayError::UnsupportedDomain)?;
+        let history_payload_bytes = history_payload_budget::retained_bytes(forward.iter())?;
+        let history_payload_budget = publisher
+            .history_payload_budget
+            .with_additional(history_payload_bytes)?;
         let resources = self
             .compiled
             .prefix_resource_delta(&forward, &publisher.resources)?;
@@ -723,11 +807,13 @@ impl SceneInstance {
             new_objects: new_objects.to_vec(),
             resources,
             resource_bytes,
+            history_payload_bytes,
         };
         publisher
             .resources
             .extend_prefix_knowledge(&batch.resources);
         publisher.resource_budget = resource_budget;
+        publisher.history_payload_budget = history_payload_budget;
         publisher.extracted_payloads = extracted_payloads;
         publisher.object_slots = self.compiled.objects().len();
         publisher.next_revision = history.revisions.len();
