@@ -1,5 +1,44 @@
 # Visual-effects contract fixtures
 
+## Current image-source extension
+
+The executable leaf-glow profile now includes immutable planar raster images,
+alongside geometry and Text/MathTypst. Image effects use the same `set_glow`,
+`.animate.set_glow`, named attachment, and explicit removal operations. The paired
+`image_glow` Rust/Python examples prepare one RGBA texture, share it between two
+images, and animate only ordinary pose and glow parameters.
+
+Image coverage is its sampled intrinsic alpha, including soft and fully
+transparent texels. `source="painted"` also includes image fill opacity;
+`source="silhouette"` ignores that paint modulation but retains intrinsic alpha.
+Neither mode substitutes the rectangular image bounds for a transparent cutout.
+Final object opacity and appearance apply once to the composed source and halo.
+All three existing image sampling modes use the ordinary premultiplied-alpha
+image shader; hidden RGB in alpha-zero texels does not supply painted coverage.
+
+Image capture borrows the resident texture and image pipeline. Its disposable
+normalized instance binding is distinct from the ordinary instance, so enabling
+an effect does not modify the image used elsewhere. Radius/color/intensity edits
+reuse immutable image pixels. Source capture remains a renderer responsibility,
+not another authored resource, shader clock, or scene representation.
+
+`image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle` in the existing
+native `glow_scene_raster` target compares all RGBA channels against an independent
+full two-dimensional Gaussian using separate ordinary image renders. It covers
+nearest/bilinear/bicubic sampling, both source modes, paint and scope opacity,
+affine movement, same-time and seek equality, neutral restoration and removal.
+This qualifies filter/composition behavior, not independent image rasterization
+or physical-GPU speed. The existing browser authoring smoke executes the paired
+Python example and verifies completion and the retained ordinary image.
+
+Arbitrary image fills inside vector geometry, procedural paint, effect stacks,
+composed groups, backdrop capture, custom shaders and `GlowPulse` remain separate
+work under [#1897](https://github.com/yongkyuns/noon/issues/1897). The following M0
+sections preserve the original design and declaration-stage evidence; their
+historical execution guards are not a current support matrix.
+
+## Historical M0 contract and evidence
+
 M0 work for [#1897](https://github.com/yongkyuns/noon/issues/1897).
 `docs/architecture.md` is the sole architecture/roadmap authority; this is an
 acceptance specification and reference-fixture description, not another roadmap.

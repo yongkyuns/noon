@@ -1,5 +1,5 @@
 struct Camera { center: vec2<f32>, clip_scale: vec2<f32>, viewport_size: vec2<f32>, viewport_origin: vec2<f32>, };
-struct Image { translation: vec2<f32>, scale: vec2<f32>, rotation: f32, opacity: f32, sampling: u32, padding: u32, dimensions: vec2<f32>, padding2: vec2<f32>, };
+struct Image { translation: vec2<f32>, scale: vec2<f32>, rotation: f32, opacity: f32, sampling: u32, padding: u32, dimensions: vec2<f32>, crop_origin: vec2<f32>, };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var image: texture_2d<f32>;
 @group(2) @binding(0) var<uniform> object: Image;
@@ -37,8 +37,11 @@ struct VertexOutput {
     let extent = vec2(abs(c)*half_size.x+abs(s)*half_size.y,
                       abs(s)*half_size.x+abs(c)*half_size.y)
         *camera.clip_scale*camera.viewport_size*0.5;
-    // Match the integer destination crop of the Cairo image transform.
-    output.clip_bounds = trunc(vec4(center-extent,center+extent));
+    // Match the integer destination crop in final output coordinates. Offscreen
+    // capture origins can be negative; truncation must precede that translation.
+    // Ordinary images and insets have a zero origin and retain the same crop.
+    let crop_origin = object.crop_origin.xyxy;
+    output.clip_bounds = trunc(vec4(center-extent,center+extent)+crop_origin)-crop_origin;
     // Flat camera values keep the existing vertex-only camera binding ABI.
     output.camera_pose = vec4(camera.center,camera.viewport_origin);
     output.camera_scale = vec4(camera.viewport_size,camera.clip_scale);

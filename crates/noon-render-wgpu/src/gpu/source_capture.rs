@@ -5,14 +5,18 @@
 //! module has no effect definitions, scheduling, semantic identity or filter graph.
 
 use super::{
-    retained_text::{PreparedRetainedGpuFrame, RetainedRenderItem, RetainedTextGpuState},
+    raster_image_gpu::{CapturedImageBinding, RasterImageDrawError},
+    raster_image_prepare::ImageUniform,
+    retained_text::{
+        PreparedRetainedGpuFrame, RetainedDrawError, RetainedRenderItem, RetainedTextGpuState,
+    },
     GpuRenderer, ResolvedOrderedBatch, PATH_SAMPLE_COUNT,
 };
 use crate::{
     text::{atlas::GlyphAtlasPlane, GlyphQuadInstance, PreparedTextItem},
     OrderedRenderBatch, PackedStyle, PackedTransform, PreparedFrame, RenderPrimitive,
 };
-use noon_core::{Rect, Vec2};
+use noon_core::{RasterImageResourceHandle, Rect, Vec2};
 
 #[derive(Clone, Debug, PartialEq)]
 enum SourceDraw {
@@ -24,6 +28,10 @@ enum SourceDraw {
     Glyph {
         item: PreparedTextItem,
         bytes: std::ops::Range<u64>,
+    },
+    Image {
+        object_index: usize,
+        resource: RasterImageResourceHandle,
     },
 }
 
@@ -176,7 +184,33 @@ impl PreparedSource {
                         });
                     }
                 }
-                RetainedRenderItem::Image { .. } => return None,
+                RetainedRenderItem::Image { object_index, .. } => {
+                    // A leaf image owns exactly one canonical raster draw. Its
+                    // immutable texture stays in the ordinary image residency.
+                    if !source.draws.is_empty() {
+                        return None;
+                    }
+                    let image = frame.capture_image(*object_index)?;
+                    if image.object != object {
+                        return None;
+                    }
+                    let half = Vec2::new(
+                        image.content.width() as f32 * 0.5,
+                        image.content.height() as f32 * 0.5,
+                    );
+                    source.include(transformed(
+                        Rect::new(half * -1.0, half),
+                        image.uniform.transform(),
+                    )?);
+                    // Texture alpha is intrinsic coverage, not paint modulation.
+                    // Both modes preserve cutouts; silhouette ignores fill alpha.
+                    let uniform = image.uniform.captured(image.paint_opacity, silhouette);
+                    source.bytes.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    source.draws.push(SourceDraw::Image {
+                        object_index: *object_index,
+                        resource: image.content.resource(),
+                    });
+                }
             }
         }
         Some(source)
@@ -191,6 +225,43 @@ impl PreparedSource {
         }));
     }
 
+    pub(super) fn set_capture_origin(&mut self, origin: [i32; 2]) {
+        if matches!(self.draws.first(), Some(SourceDraw::Image { .. })) {
+            let uniform = bytemuck::pod_read_unaligned::<ImageUniform>(&self.bytes)
+                .with_capture_origin(origin);
+            self.bytes.copy_from_slice(bytemuck::bytes_of(&uniform));
+        }
+    }
+
+    /// Rebind only when an immutable image resource or the capture buffer changes.
+    /// Uniform-only edits keep both the texture and this GPU binding resident.
+    pub(super) fn prepare_image_binding(
+        &self,
+        renderer: &GpuRenderer,
+        device: &wgpu::Device,
+        instances: &wgpu::Buffer,
+        binding: &mut Option<CapturedImageBinding>,
+    ) -> Result<(), RasterImageDrawError> {
+        let Some(SourceDraw::Image {
+            object_index,
+            resource,
+        }) = self.draws.first()
+        else {
+            *binding = None;
+            return Ok(());
+        };
+        if binding.as_ref().is_none_or(|old| old.resource != *resource) {
+            *binding = Some(
+                renderer
+                    .images
+                    .as_ref()
+                    .ok_or(RasterImageDrawError::NotUploaded)?
+                    .bind_captured(device, *object_index, *resource, instances)?,
+            );
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn encode(
         &self,
@@ -203,7 +274,8 @@ impl PreparedSource {
         camera: &wgpu::BindGroup,
         text_camera: &wgpu::BindGroup,
         instances: &wgpu::Buffer,
-    ) -> Result<(), crate::text::TextGpuDrawError> {
+        image: Option<&CapturedImageBinding>,
+    ) -> Result<(), RetainedDrawError> {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: multisampled,
             depth_slice: None,
@@ -246,6 +318,19 @@ impl PreparedSource {
                         text_camera,
                         Some(instances.slice(bytes.clone())),
                     )?;
+                    binding = None;
+                }
+                SourceDraw::Image { .. } => {
+                    renderer
+                        .images
+                        .as_ref()
+                        .ok_or(RasterImageDrawError::NotUploaded)?
+                        .draw_captured(
+                            &mut pass,
+                            camera,
+                            image.ok_or(RasterImageDrawError::NotUploaded)?,
+                            PATH_SAMPLE_COUNT,
+                        );
                     binding = None;
                 }
             }

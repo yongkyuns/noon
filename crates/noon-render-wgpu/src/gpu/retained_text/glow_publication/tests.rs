@@ -4,6 +4,15 @@ use noon_core::{Glow, GlowUpdate, Pixels, SemanticNodeId};
 use noon_runtime::SceneInstance;
 
 fn runtime(count: usize, glowing: bool, mixed: bool) -> SceneInstance {
+    runtime_profile(count, glowing, mixed, None)
+}
+
+fn runtime_profile(
+    count: usize,
+    glowing: bool,
+    mixed: bool,
+    image: Option<noon_core::GlowSource>,
+) -> SceneInstance {
     let mut objects = (0..count)
         .map(|index| {
             CompiledObject::new(
@@ -43,6 +52,35 @@ fn runtime(count: usize, glowing: bool, mixed: bool) -> SceneInstance {
         objects[0].content = ObjectContentRef::Text(handle);
         objects[0].text_bounds = Some(bounds);
     }
+    if let Some(source) = image {
+        let mut images = noon_core::RasterImageResourceArena::new();
+        let handle = images
+            .intern_rgba8(
+                2,
+                2,
+                vec![
+                    255, 0, 0, 0, 32, 128, 255, 128, 0, 0, 255, 255, 255, 255, 0, 64,
+                ],
+            )
+            .unwrap();
+        let content = resources
+            .capture_image_from_arena(&images, noon_core::SemanticImageContent::new(handle))
+            .unwrap();
+        objects[1].content = ObjectContentRef::Image(content);
+        // The shared circle fixture inherits a nonzero default stroke width.
+        // Images require the ordinary stroke-free image presentation profile.
+        objects[1].base_style.stroke_width = 0.0;
+        objects[1].base_style.opacity = 0.55;
+        objects[1].base_style.fill = Some(Color {
+            alpha: 0.43,
+            ..Color::WHITE
+        });
+        objects[1].glow = Some(Arc::new(CompiledGlow {
+            attachment: SemanticNodeId::new(31, 5),
+            definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0)).source(source))
+                .unwrap(),
+        }));
+    }
     // Painter order differs from source index order: a visibility union must NOT
     // sort by object index. This also forces original index1 -> mixed scratch0.
     objects[0].base_z_index = 2.0;
@@ -58,6 +96,7 @@ struct Fixture {
     renderer: GpuRenderer,
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
+    last_image_upload: RasterImageUploadStats,
 }
 impl Fixture {
     fn new() -> Self {
@@ -75,6 +114,7 @@ impl Fixture {
             renderer,
             preparer: RetainedFramePreparer::new(),
             text,
+            last_image_upload: RasterImageUploadStats::default(),
         }
     }
 
@@ -105,8 +145,10 @@ impl Fixture {
             .preparer
             .prepare_planned_publication_visible(&self.device, &publication, expanded, metrics)
             .unwrap();
-        self.renderer
-            .upload_retained(&self.device, &self.queue, &prepared, &mut self.text);
+        self.last_image_upload = self
+            .renderer
+            .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
+            .images;
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let result = self
             .renderer
@@ -128,6 +170,98 @@ impl Fixture {
         }
         visible.clear();
         result
+    }
+}
+
+#[test]
+fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
+    for source in [
+        noon_core::GlowSource::Painted,
+        noon_core::GlowSource::Silhouette,
+    ] {
+        let mut fixture = Fixture::new();
+        let mut runtime = runtime_profile(4096, true, false, Some(source));
+        let first = fixture.prepare(&mut runtime, true);
+        assert_eq!(first.rows_examined, 4096);
+        assert_eq!(
+            first.source_passes,
+            if source == noon_core::GlowSource::Painted {
+                1
+            } else {
+                2
+            }
+        );
+        assert_eq!(fixture.last_image_upload.textures_uploaded, 1);
+        assert_eq!(fixture.last_image_upload.pixel_bytes_uploaded, 16);
+        let resident = fixture.renderer.image_residency_stats();
+        assert_eq!(
+            (resident.textures, resident.objects, resident.pixel_bytes),
+            (1, 1, 16)
+        );
+        let clean = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            clean.bytes_uploaded + clean.source_passes + clean.blur_passes + clean.composite_passes,
+            0
+        );
+        assert_eq!(fixture.last_image_upload, RasterImageUploadStats::default());
+
+        let object = runtime.frame().objects[1].id;
+        let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
+        glow.definition = GlowUpdate::default()
+            .intensity(0.8)
+            .apply_to(glow.definition)
+            .unwrap();
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetGlow {
+                object,
+                glow: Arc::new(glow),
+            })
+            .unwrap();
+        let edited = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            (
+                edited.rows_examined,
+                edited.source_passes,
+                edited.blur_passes,
+                edited.composite_passes,
+                edited.texture_allocations
+            ),
+            (1, 0, 0, 1, 0)
+        );
+        assert_eq!(fixture.last_image_upload, RasterImageUploadStats::default());
+
+        let mut style = runtime.frame().objects[1].style;
+        style.opacity = 0.37;
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle { object, style })
+            .unwrap();
+        let faded = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            (
+                faded.rows_examined,
+                faded.source_passes,
+                faded.blur_passes,
+                faded.composite_passes,
+                faded.texture_allocations
+            ),
+            (1, 0, 0, 1, 0)
+        );
+        assert_eq!(
+            fixture.last_image_upload.textures_uploaded
+                + fixture.last_image_upload.pixel_bytes_uploaded,
+            0
+        );
+        assert_eq!(fixture.last_image_upload.instances_uploaded, 1);
+        assert_eq!(fixture.renderer.image_residency_stats(), resident);
+
+        runtime
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(object))
+            .unwrap();
+        let retired = fixture.prepare(&mut runtime, true);
+        assert_eq!(retired.retained_texture_bytes, 0);
+        assert_eq!(fixture.last_image_upload.textures_retired, 1);
+        assert_eq!(fixture.renderer.image_residency_stats().textures, 0);
+        assert!(!fixture.renderer.has_draw_source_glow(object));
     }
 }
 
