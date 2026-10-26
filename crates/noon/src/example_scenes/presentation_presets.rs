@@ -56,6 +56,5 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
         content.shift(x, 0.0)?;
         scene.add_many(&[(&panel).into(), (&content).into()])?;
     }
-    scene.wait(1.0)?;
     Ok(scene.execution_session()?)
 }

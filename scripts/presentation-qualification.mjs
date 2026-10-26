@@ -8,7 +8,7 @@ await qualifyPairedAuthoring({
   cases: [{
     id: "presentation-presets", file: "presentation_presets.py", scene: "PresentationPresets",
     factory: "createDirectPresentationPresetsSmokeRenderer", objectCount: 26,
-    duration: 1, sampleTime: 1, stopAtSourceCompletion: true,
+    duration: 0, sampleTime: 0,
   }],
   qualifyPixels({ rust }) {
     // Distinct panels must both be present; exact frontend equality alone

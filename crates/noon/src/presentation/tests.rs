@@ -145,4 +145,5 @@ fn themed_text_uses_ordinary_admission_and_explicit_overrides() {
 fn paired_example_uses_the_normal_execution_session() {
     let session = crate::example_scenes::presentation_presets::session().unwrap();
     assert_eq!(session.frame().objects.len(), 26);
+    assert_eq!(session.finite_timeline_end_time(), Some(0.0));
 }

@@ -23,4 +23,3 @@ class PresentationPresets(Scene):
             content = VGroup(title, body, caption, override, swatches)
             content.arrange(DOWN, buff=theme.spacing("large")).shift(x * RIGHT)
             self.add(panel, content)
-        self.wait(1.0)
