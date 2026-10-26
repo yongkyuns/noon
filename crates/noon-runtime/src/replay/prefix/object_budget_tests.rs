@@ -347,9 +347,107 @@ fn object_vector_foreign_reader_rejects_before_reservation() {
     let (_, runtime, mut receiver) = source.create_prefix_projection().unwrap();
     let mut foreign = runtime.clone();
     let bytes = object_budget::reserved_bytes(&foreign, 0);
-    assert_eq!(
-        receiver.reserve_object_capacity(&mut foreign, 2),
-        Err(PrefixError::ReaderChanged)
-    );
-    assert_eq!(object_budget::reserved_bytes(&foreign, 0), bytes);
+    // Identity admission must win even on the no-op path and with no budget.
+    receiver.object_vector_budget_bytes = 0;
+    for total in [0, receiver.object_capacity, 2] {
+        assert_eq!(
+            receiver.reserve_object_capacity(&mut foreign, total),
+            Err(PrefixError::ReaderChanged)
+        );
+        assert_eq!(object_budget::reserved_bytes(&foreign, 0), bytes);
+    }
+}
+
+#[test]
+fn object_vector_noop_reservation_rechecks_capacity_left_by_partial_growth() {
+    for terminal in [false, true] {
+        let mut source = source();
+        let (mut publisher, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
+        create(&mut source, 1, 2.0);
+        let pending = if terminal {
+            source.seal_replay().unwrap();
+            source.prepare_prefix_finish(&mut publisher).unwrap()
+        } else {
+            source.prepare_prefix_update(&mut publisher).unwrap()
+        };
+        drop((source, publisher));
+        let budget = receiver.object_vector_budget_bytes;
+        let capacity = receiver.object_capacity;
+        let frame = runtime.frame().clone();
+        let publication = runtime.publication_context();
+        let stats = runtime.replay_stats();
+        let limit = object_budget::reserved_bytes(&runtime, 0).unwrap();
+        receiver.object_vector_budget_bytes = limit;
+        // Inject only the post-failure shape: one buffer has grown, while the
+        // advertised capacity and logical state have not. This does not induce
+        // or claim to reproduce an actual allocator failure/over-reservation.
+        runtime.frame.objects.reserve_exact(8);
+        let retained = object_budget::reserved_bytes(&runtime, 0).unwrap();
+        assert!(retained > limit);
+        let pointer = runtime.frame.objects.as_ptr();
+        for total in [0, capacity, 0, capacity] {
+            assert_eq!(
+                receiver.reserve_object_capacity(&mut runtime, total),
+                Err(PrefixError::ObjectStorageBudgetExceeded {
+                    object_slots: total,
+                    required_bytes: Some(retained),
+                    limit_bytes: limit,
+                })
+            );
+            assert_eq!(receiver.object_capacity, capacity);
+            assert_eq!(receiver.frontier(), 1.0);
+            assert_eq!(receiver.end_time(), None);
+            assert_eq!(runtime.frame(), &frame);
+            assert_eq!(runtime.publication_context(), publication);
+            assert_eq!(runtime.replay_stats(), stats);
+            assert_eq!(object_budget::reserved_bytes(&runtime, 0), Some(retained));
+            assert_eq!(runtime.frame.objects.as_ptr(), pointer);
+        }
+        assert!(matches!(
+            receiver.preflight_append(&runtime, &pending),
+            Err(PrefixError::ObjectStorageBudgetExceeded { .. })
+        ));
+        // The rejection does not discard or disable already-published history.
+        receiver.prepare_seek(&mut runtime, 0.5).unwrap();
+        runtime.seek(0.5).unwrap();
+        assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), 1);
+        assert_eq!(receiver.end_time(), None);
+        // Restore only the private test limit, then adopt the SAME owned batch.
+        // This is not a public recovery API or allocation rollback policy.
+        receiver.object_vector_budget_bytes = budget;
+        adopt(&mut receiver, &mut runtime, pending);
+        assert_eq!(receiver.end_time(), terminal.then_some(2.0));
+        for (time, count) in [(1.5, 2), (0.5, 1)] {
+            receiver.prepare_seek(&mut runtime, time).unwrap();
+            runtime.seek(time).unwrap();
+            assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), count);
+        }
+    }
+}
+
+#[test]
+fn object_vector_noop_reservation_at_exact_limit_changes_nothing() {
+    let source = source();
+    let (_, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
+    let capacity = receiver.object_capacity;
+    let retained = object_budget::reserved_bytes(&runtime, 0).unwrap();
+    receiver.object_vector_budget_bytes = retained;
+    let frame = runtime.frame().clone();
+    let publication = runtime.publication_context();
+    let stats = runtime.replay_stats();
+    let pointer = runtime.frame.objects.as_ptr();
+    for total in [0, capacity, 0, capacity] {
+        assert_eq!(
+            receiver.reserve_object_capacity(&mut runtime, total),
+            Ok(capacity)
+        );
+        assert_eq!(receiver.object_capacity, capacity);
+        assert_eq!(receiver.frontier(), 1.0);
+        assert_eq!(receiver.end_time(), None);
+        assert_eq!(runtime.frame(), &frame);
+        assert_eq!(runtime.publication_context(), publication);
+        assert_eq!(runtime.replay_stats(), stats);
+        assert_eq!(object_budget::reserved_bytes(&runtime, 0), Some(retained));
+        assert_eq!(runtime.frame.objects.as_ptr(), pointer);
+    }
 }

@@ -60,6 +60,7 @@ impl PrefixReceiver {
     /// next batch's required_object_capacity(). Returns requested total slots.
     /// Allocation failure changes capacity only, never frame/history/publication.
     /// The separate object-vector byte cap includes existing spare capacity.
+    /// No-op requests also check it; previously published history stays usable.
     /// It excludes maps, indirect payloads and allocator/whole-process peaks.
     pub fn reserve_object_capacity(
         &mut self,
@@ -68,6 +69,9 @@ impl PrefixReceiver {
     ) -> Result<usize, PrefixError> {
         self.validate_runtime(runtime)?;
         if total <= self.object_capacity {
+            // Failed growth may leave excess spare capacity without committing
+            // object_capacity. A no-op must not report that storage as admitted.
+            object_budget::preflight_reserved(runtime, total, self.object_vector_budget_bytes)?;
             return Ok(self.object_capacity);
         }
         if total > u32::MAX as usize
