@@ -1,0 +1,59 @@
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input.rs
+@@ -23,7 +23,7 @@
+ /// ordinary native pointer behavior.
+ pub(super) struct PlayerPointerTarget<'a> {
+     pub(super) session: &'a mut ExecutionSession,
+-    pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
++    pub(super) semantics: &'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
+     /// The same committed input receipt, observed only after the shared
+     /// transaction returns. No target or click is inferred by this adapter.
+@@ -105,20 +105,14 @@
+         token: &NativePointerInputToken,
+         input: NativePointerInput,
+     ) -> Result<NativePointerInputPublication, String> {
+-        let publication = if let Some(semantics) = self.semantics.as_ref() {
+-            let receipt = self
+-                .session
+-                .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
+-                .map_err(|error| error.to_string())?;
+-            if let Some(undo) = receipt.undo {
+-                *self.translation_drag_undo = Some(undo);
+-            }
+-            receipt.input
+-        } else {
+-            self.session
+-                .submit_native_pointer_input(token, input)
+-                .map_err(|error| error.to_string())?
+-        };
++        let receipt = self
++            .session
++            .submit_translation_drag_input(&mut self.semantics.borrow_mut(), token, input)
++            .map_err(|error| error.to_string())?;
++        if let Some(undo) = receipt.undo {
++            *self.translation_drag_undo = Some(undo);
++        }
++        let publication = receipt.input;
+         if publication.playback_control().is_some() {
+             self.control_publication = Some(publication);
+         }
+@@ -169,8 +163,17 @@
+ #[cfg(test)]
+ impl SemanticExecutionPlayer {
+     fn submit_test_frame_input(&mut self, input: BrowserPointerInput) -> Result<(), String> {
++        let mut target = PlayerPointerTarget {
++            session: &mut self.session,
++            semantics: self
++                .semantics
++                .as_ref()
++                .ok_or("execution player lost its semantic store")?,
++            translation_drag_undo: &mut self.translation_drag_undo,
++            control_publication: None,
++        };
+         submit_test_frame(
+-            &mut self.session,
++            &mut target,
+             &mut self.browser_pointer_binding,
+             &mut self.next_native_event_sequence,
+             input,
