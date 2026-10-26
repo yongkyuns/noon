@@ -38,6 +38,7 @@ impl CompiledScene {
             expected,
             next.as_deref(),
         )?;
+        self.require_continuous_paint_source(index, next.is_none())?;
         for property in CompiledGlow::PARAMETER_PROPERTIES {
             let channel = CompiledChannelKey::new(index, property);
             if let Some(retired) = self.tracks.remove(&channel) {

@@ -569,6 +569,9 @@ fn map_object_track_values<R, T>(
     mut map: impl FnMut(&R) -> T,
 ) -> SemanticObjectTrackValues<T> {
     match values {
+        SemanticObjectTrackValues::Paint { transition } => SemanticObjectTrackValues::Paint {
+            transition: transition.clone(),
+        },
         SemanticObjectTrackValues::Bool { from, to } => SemanticObjectTrackValues::Bool {
             from: *from,
             to: *to,

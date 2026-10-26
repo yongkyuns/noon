@@ -46,6 +46,9 @@ const expectedJavascriptSurface = [
   // Generated bindings must match the optional Python effects facade. Checking
   // the exact class token avoids mistaking WasmGlowUpdate for WasmGlow.
   "export class WasmGlow {",
+  "export class WasmLinearGradient {",
+  "setFillGradient(",
+  "liveSetFillGradient(",
   "export class WasmGlowUpdate {",
   "export class WasmEffectHandle {",
   "authoredDefinition()",
