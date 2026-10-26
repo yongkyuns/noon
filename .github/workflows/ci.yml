@@ -244,6 +244,7 @@ jobs:
         run: |
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes --nocapture
       - name: Qualify public Rust animated linear paint on native GPU
         # The linear-paint oracle uses the same public Scene and retained GPU path.
         # Absence of the requested native adapter is a failure.

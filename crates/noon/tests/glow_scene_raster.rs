@@ -2991,3 +2991,80 @@ fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
     }
     eprintln!("image fill source/filter qualification: {samples} whole-image comparisons, max allowed byte error 1");
 }
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
+    use noon::ImagePaintOptions;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut images = 0;
+    for kind in 0..3 {
+        for opaque in [false, true] {
+            let make = |image: bool| {
+                let mut scene = Scene::new();
+                let mut source = match kind {
+                    0 => scene.circle(0.8).unwrap(),
+                    1 => scene.rectangle(2.0, 1.5).unwrap(),
+                    _ => scene
+                        .path(
+                            noon_core::VectorPath::new()
+                                .move_to(Vec2::new(-1.0, -1.0))
+                                .line_to(Vec2::new(1.0, -1.0))
+                                .line_to(Vec2::new(0.2, 0.0))
+                                .line_to(Vec2::new(1.0, 1.0))
+                                .line_to(Vec2::new(-1.0, 1.0))
+                                .close(),
+                            noon_core::SemanticStyle::default(),
+                        )
+                        .unwrap(),
+                };
+                if image {
+                    let rgba = if opaque { [255; 4] } else { [255, 0, 255, 0] };
+                    source
+                        .set_fill_image(ImagePaintOptions::rgba8(1, 1, rgba).unwrap(), Some(0.73))
+                        .unwrap();
+                } else if opaque {
+                    source.set_fill(1.0, 1.0, 1.0, 0.73).unwrap();
+                } else {
+                    source.disable_fill().unwrap();
+                }
+                source.set_stroke_color(0.1, 0.8, 0.2, 0.67).unwrap();
+                source.set_stroke_width(0.18).unwrap();
+                source.set_object_opacity(0.37).unwrap();
+                source.scale(-0.9, 1.2).unwrap();
+                source.rotate(0.413).unwrap();
+                source.shift(0.17, -0.23).unwrap();
+                scene.add(&source).unwrap();
+                scene
+            };
+            let mut image = make(true).execution_session().unwrap();
+            let mut ordinary = make(false).execution_session().unwrap();
+            let image = Surface::new(&device, &queue).render_on(
+                &device,
+                &queue,
+                &mut image,
+                wgpu::Color::TRANSPARENT,
+            );
+            let ordinary = Surface::new(&device, &queue).render_on(
+                &device,
+                &queue,
+                &mut ordinary,
+                wgpu::Color::TRANSPARENT,
+            );
+            assert_eq!(
+                image, ordinary,
+                "image paint changed geometry/stroke kind={kind} opaque={opaque}"
+            );
+            assert!(
+                image
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[1] > pixel[0] && pixel[1] > pixel[2]),
+                "fixture must contain a visible green stroke"
+            );
+            images += 1;
+        }
+    }
+    eprintln!("image paint coverage/strokes: {images} byte-identical whole images");
+}

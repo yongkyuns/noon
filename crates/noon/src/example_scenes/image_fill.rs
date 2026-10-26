@@ -99,3 +99,42 @@ pub fn program() -> Result<LiveProgram<ImageSurface>, String> {
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
+
+/// Static finite-profile corpus used by native/direct-WASM and Python oracles.
+/// The index selects authored parameters only; execution remains the normal Scene.
+pub fn profile_scene(index: u32) -> Result<Scene, String> {
+    if index >= 27 {
+        return Err("image paint profile must be in 0..27".into());
+    }
+    let fit = [ImageFit::Stretch, ImageFit::Cover, ImageFit::Contain][(index / 9) as usize];
+    let address = [
+        ImageAddressMode::Transparent,
+        ImageAddressMode::Clamp,
+        ImageAddressMode::Repeat,
+    ][((index / 3) % 3) as usize];
+    let sampling = [
+        crate::RasterImageSampling::Nearest,
+        crate::RasterImageSampling::Linear,
+        crate::RasterImageSampling::Bicubic,
+    ][(index % 3) as usize];
+    let mut scene = Scene::new();
+    let mut panel =
+        Mobject::manim_rectangle(std::rc::Rc::clone(scene.integration_store()), 4.0, 2.0)
+            .map_err(message)?;
+    panel.disable_stroke().map_err(message)?;
+    let mut options = ImagePaintOptions::rgba8(3, 2, pixels()).map_err(message)?;
+    options.set_sampling(sampling);
+    options.set_mapping(
+        ImageMapping::new(
+            fit,
+            [0.23, 0.71],
+            address,
+            ImageUvTransform::new([0.173, -0.231], [-0.71, 0.58], 0.37).map_err(message)?,
+        )
+        .map_err(message)?,
+    );
+    panel.set_fill_image(options, Some(0.7)).map_err(message)?;
+    panel.set_object_opacity(0.6).map_err(message)?;
+    scene.add(&panel).map_err(message)?;
+    Ok(scene)
+}
