@@ -913,10 +913,63 @@ async function clickGlowPulseParity(backend) {
       equalPixels(restored.direct, restored.worker, `${backend} ${target.label} restored click-GlowPulse`);
     }
 
+    // A genuine viewer seek must retire a visible input pulse through the same
+    // source owner, even when the authored playhead is already at the target.
+    const temporary = targets[1];
+    const sought = {};
+    for (const host of ["direct", "worker"]) {
+      const point = shapeSurfaceCenter(temporary);
+      const bounds = await pages[host].locator("#scene").boundingBox();
+      assert.ok(bounds);
+      await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
+      const active = await waitUntil(`${host} temporary glow before seek`, async () => {
+        const frame = await frameFor(host);
+        return frame.interactions_active && frame.objects[1].glow?.definition.intensity > 0.15 && frame;
+      }, 5000);
+      const visible = await waitUntil(`${host} presented halo before seek`, async () => {
+        if (host === "direct") await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render());
+        const pixels = await capture(host, "active-pulse-before-seek");
+        const coverage = inspectClickGlowHalo(baseline[host], pixels, temporary,
+          `${backend} ${host} temporary before seek`);
+        return coverage.haloPixels > 40 && coverage;
+      }, 5000);
+      await pages[host].evaluate(async ({ host, attachment }) => {
+        const current = host === "direct"
+          ? JSON.parse(clickGlowPulseParity.renderer.debugSelectionFrameJson())
+          : await clickGlowPulseParity.execution.debugFrame();
+        if (!current.interactions_active ||
+            JSON.stringify(current.objects[1].glow?.attachment) !== JSON.stringify(attachment)) {
+          throw new Error("seek must cancel the exact active attachment whose halo was observed");
+        }
+        if (host === "direct") {
+          clickGlowPulseParity.renderer.seekDirect(0);
+          clickGlowPulseParity.driver.wake();
+        } else {
+          await clickGlowPulseParity.execution.seek(0);
+        }
+      }, { host, attachment: active.objects[1].glow.attachment });
+      await waitUntil(`${host} seek retirement`, async () => {
+        const frame = await frameFor(host);
+        if (frame.interactions_active || frame.objects[1].glow !== null || frame.time !== 0) return false;
+        assert.deepEqual(frame.objects[0].glow, initial[host].objects[0].glow,
+          `${host}: seeking temporary pulse changed the persistent attachment`);
+        if (host === "direct") return pages.direct.evaluate(() => clickGlowPulseParity.driver.stats().idle);
+        return pages.worker.evaluate(async () => {
+          const { metrics } = await clickGlowPulseParity.execution.metrics();
+          return !metrics.needsPresent && metrics.bufferedDeltas === 0;
+        });
+      });
+      await pages[host].evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      sought[host] = await capture(host, "active-pulse-seek");
+      assertExactPixels(sought[host], baseline[host], `${backend} ${host} active-pulse seek`, VIEW);
+      checkpoints.push({ id: `${host}-active-pulse-seek`, attachment: active.objects[1].glow.attachment,
+        ...visible, sha256: hash(sought[host].data) });
+    }
+    equalPixels(sought.direct, sought.worker, `${backend} click-GlowPulse seek parity`);
+
     // Replace the source while its input-owned attachment is still live. Worker
     // replacement uses the same fresh Run/reconcile seam as the Playground;
     // direct Rust destroys its old typed source and creates a new one.
-    const temporary = targets[1];
     const reloaded = {};
     for (const host of ["direct", "worker"]) {
       const previousSession = host === "worker" ? await pages.worker.evaluate(async () =>
@@ -1047,7 +1100,7 @@ async function clickGlowPulseParity(backend) {
     assert.deepEqual(errors, { direct: [], worker: [] });
     assert.deepEqual(await pages.direct.evaluate(() => clickGlowPulseParity.errors), []);
     assert.deepEqual(await pages.worker.evaluate(() => clickGlowPulseParity.errors), []);
-    console.log(`CLICK_GLOW_PULSE_PASS backend=${expectedBackend} transport=transferable profiles=2 actual_dom=true active_halo=true restoration_exact=true temporary_retirement=true active_reload_exact=true idle=true`);
+    console.log(`CLICK_GLOW_PULSE_PASS backend=${expectedBackend} transport=transferable profiles=2 actual_dom=true active_halo=true restoration_exact=true temporary_retirement=true active_seek_exact=true active_reload_exact=true idle=true`);
     return checkpoints;
   } finally {
     await pages.direct?.evaluate(() => {
