@@ -324,7 +324,8 @@ _presentation_example_json = json.dumps({"families": len(scene.mobjects), "time"
   report.presentation.example = JSON.parse(pyodide.globals.get("_presentation_example_json"));
   assert.equal(report.presentation.example.families, 4);
   assert.equal(report.presentation.example.time, 0);
-  assert.equal(report.presentation.example.ownership, "active");
+  assert.equal(report.presentation.example.ownership, "none",
+    "static authoring must not invent a live continuation");
   report.result = "PASS";
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {
