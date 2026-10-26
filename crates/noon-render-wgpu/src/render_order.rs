@@ -471,7 +471,7 @@ fn project_mega_render_batches(
             .mega_path_segments
             .get(path_batch_index)
             .and_then(|segment| segment.as_ref())
-            .filter(|_| !preparer.path_range_has_gradient(&ordered_batch.instance_range))
+            .filter(|_| !preparer.path_range_has_paint(&ordered_batch.instance_range))
             .filter(|_| {
                 !preparer
                     .mega_path_detached
@@ -523,6 +523,9 @@ fn projected_frame<'a>(
     stats: RenderStats,
 ) -> PreparedFrame<'a> {
     PreparedFrame {
+        fill_image_paints: &preparer.fill_image_paints,
+        image_paint_changes: &preparer.image_paint_changes,
+        image_paint_indices: &preparer.image_paint_indices,
         fill_gradients: &preparer.fill_gradients,
         gradient_changes: &preparer.gradient_changes,
         gradient_indices: &preparer.gradient_indices,
@@ -1126,6 +1129,7 @@ mod tests {
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -1842,6 +1846,7 @@ mod derived_display_tests {
     fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
             fill_gradient: None,
+            fill_image: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,

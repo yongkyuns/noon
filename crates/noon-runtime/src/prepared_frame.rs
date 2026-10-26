@@ -1153,6 +1153,7 @@ mod tests {
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     opacity: 0.5,

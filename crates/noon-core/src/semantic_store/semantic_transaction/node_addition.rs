@@ -313,12 +313,18 @@ pub(super) fn preflight_add_node(
             if !state.is_valid() || !matches!(state.role, SemanticObjectRole::Ordinary) {
                 return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
             }
+            super::validate_style_resources(store, &state.style, index)?;
             return Ok(());
         }
         SemanticNodeCreation::Object { state, .. }
         | SemanticNodeCreation::Family {
             state: Some(state), ..
         } => {
+            if matches!(creation, SemanticNodeCreation::Family { .. })
+                && super::style_contains_image_paint(&state.style)
+            {
+                return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
+            }
             if !state.transform.translation.is_finite()
                 || !state.transform.scale.is_finite()
                 || !state.transform.is_valid()
@@ -333,6 +339,7 @@ pub(super) fn preflight_add_node(
                 return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
             }
             validate_object_content_resource(store, state.content, index)?;
+            super::validate_style_resources(store, &state.style, index)?;
             validate_spatial_material_resource(
                 store,
                 state.spatial_material(),

@@ -720,6 +720,7 @@ impl Scene {
             .map_err(AuthoringError::from)?;
         Ok(crate::EffectiveMobjectState {
             fill_gradient: observed.object.fill_gradient.clone(),
+            fill_image: observed.object.fill_image.clone(),
             z_index: observed.object.z_index,
             transform: observed.object.transform,
             style: observed.object.style,

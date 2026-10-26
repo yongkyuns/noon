@@ -1360,10 +1360,12 @@ impl SceneInstance {
             ExecutionPatch::SetStyle {
                 style,
                 fill_gradient,
+                fill_image,
                 ..
             } => {
                 self.frame.objects[index].style = *style;
                 self.frame.objects[index].fill_gradient = fill_gradient.clone();
+                self.frame.objects[index].fill_image = fill_image.clone();
                 self.reapply_properties(
                     index,
                     &[
@@ -1518,6 +1520,7 @@ impl SceneInstance {
                 Property::Fill => {
                     self.frame.objects[object_index].style.fill = object.base_style.fill;
                     self.frame.objects[object_index].fill_gradient = object.fill_gradient.clone();
+                    self.frame.objects[object_index].fill_image = object.fill_image.clone();
                 }
                 Property::Stroke => {
                     self.frame.objects[object_index].style.stroke = object.base_style.stroke
@@ -1888,6 +1891,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .enumerate()
         .map(|(index, object)| FrameObjectState {
             fill_gradient: object.fill_gradient.clone(),
+            fill_image: object.fill_image.clone(),
             draw_enabled: object.draw_enabled,
             glow: object.glow.clone(),
             z_index: initial_z_index(compiled, index),
@@ -2059,6 +2063,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
         fill_gradient: object.fill_gradient.clone(),
+        fill_image: object.fill_image.clone(),
         draw_enabled: object.draw_enabled,
         glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
@@ -2103,6 +2108,7 @@ fn reset_object_frame(
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
         fill_gradient: object.fill_gradient.clone(),
+        fill_image: object.fill_image.clone(),
         draw_enabled: object.draw_enabled,
         glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
@@ -2613,9 +2619,13 @@ fn apply_group_to_row(
     {
         if group.channel.property == Property::Fill {
             let gradient = &compiled.objects()[group.channel.object_index as usize].fill_gradient;
-            let changed = row.style.fill != base_style.fill || *row.fill_gradient != *gradient;
+            let image = &compiled.objects()[group.channel.object_index as usize].fill_image;
+            let changed = row.style.fill != base_style.fill
+                || *row.fill_gradient != *gradient
+                || *row.fill_image != *image;
             row.style.fill = base_style.fill;
             *row.fill_gradient = gradient.clone();
+            *row.fill_image = image.clone();
             return changed;
         }
         if group.channel.property == Property::Morph
@@ -2759,8 +2769,10 @@ fn apply_evaluated_value(
             changed || render_changed
         }
         (Property::Fill, EvaluatedValue::Color(value)) => {
-            let changed = row.style.fill != value || row.fill_gradient.is_some();
+            let changed =
+                row.style.fill != value || row.fill_gradient.is_some() || row.fill_image.is_some();
             *row.fill_gradient = None;
+            *row.fill_image = None;
             row.style.fill = value;
             changed
         }
@@ -2832,23 +2844,31 @@ fn apply_paint_track(
     let (paint, opacity) = transition
         .sample(progress)
         .expect("validated continuous fill sample");
-    let (fill, gradient) = match paint {
+    let (fill, gradient, image) = match paint {
         Some(noon_core::SemanticPaint::Solid(mut color)) => {
             color.alpha = (f64::from(color.alpha) * opacity) as f32;
-            (Some(color), None)
+            (Some(color), None, None)
         }
         Some(noon_core::SemanticPaint::LinearGradient(gradient)) => (
             Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)),
             Some(gradient),
+            None,
         ),
-        None => (None, None),
+        Some(noon_core::SemanticPaint::Image(image)) => (
+            Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)),
+            None,
+            Some(image),
+        ),
+        None => (None, None, None),
         Some(noon_core::SemanticPaint::Resource(_)) => {
             unreachable!("checked fill transition excludes unresolved paint")
         }
     };
-    let changed = row.style.fill != fill || *row.fill_gradient != gradient;
+    let changed =
+        row.style.fill != fill || *row.fill_gradient != gradient || *row.fill_image != image;
     row.style.fill = fill;
     *row.fill_gradient = gradient;
+    *row.fill_image = image.clone();
     changed
 }
 
@@ -5040,6 +5060,7 @@ mod tests {
         };
         let style_patch = ExecutionPatch::SetStyle {
             fill_gradient: None,
+            fill_image: None,
             object,
             style: source.base_style,
         };
@@ -5304,6 +5325,7 @@ mod tests {
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object,
                 style: Style {
                     fill: Some(Color::rgb(0.2, 0.4, 0.8)),
@@ -5378,6 +5400,7 @@ mod tests {
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: patched,
                 style: Style {
                     opacity: 0.5,

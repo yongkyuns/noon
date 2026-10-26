@@ -236,6 +236,7 @@ mod operation_selection_tests {
 
         let first_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -249,6 +250,7 @@ mod operation_selection_tests {
         };
         let second_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -277,6 +279,7 @@ mod operation_selection_tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -290,6 +293,7 @@ mod operation_selection_tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -303,6 +307,7 @@ mod operation_selection_tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,

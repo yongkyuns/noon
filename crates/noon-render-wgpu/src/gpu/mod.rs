@@ -6,6 +6,7 @@ use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
 mod derived_display;
+mod image_paint;
 mod linear_gradient;
 mod source_capture;
 pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
@@ -512,6 +513,7 @@ impl std::error::Error for PathPreloadUploadError {}
 #[derive(Debug)]
 pub struct GpuRenderer {
     fill_gradients: Option<Box<linear_gradient::LinearGradientGpu>>,
+    fill_image_paints: Option<Box<image_paint::ImagePaintGpu>>,
     analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
     retained_glow: retained_text::glow_publication::RetainedGlowPublication,
     spatial: mesh::SpatialGpuState,
@@ -879,6 +881,7 @@ impl GpuRenderer {
             images: None,
             analytic_glows: None,
             fill_gradients: None,
+            fill_image_paints: None,
             retained_glow: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
@@ -1111,6 +1114,14 @@ impl GpuRenderer {
         })
     }
 
+    /// Upload a prepared geometry projection. Resource-backed image fills must
+    /// first be admitted by `RetainedFramePreparer` and uploaded through
+    /// [`Self::upload_retained`], which shares the existing raster texture cache.
+    ///
+    /// # Panics
+    /// Panics before geometry writes if a new image fill has no retained image
+    /// resource. The ordinary retained preparation path reports invalid or
+    /// unsupported image publications as an error before reaching this uploader.
     pub fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -1154,6 +1165,16 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         mut trace: Option<&mut UploadWriteTrace<'_>>,
     ) -> UploadStats {
+        if !prepared.fill_image_paints.is_empty() {
+            let images = self.images.as_ref().expect(
+                "image fills require retained image resource preparation and upload_retained",
+            );
+            for id in prepared.image_paint_changes {
+                if let Some(paint) = prepared.fill_image_paints.get(id) {
+                    assert!(images.texture_binding(paint.definition.resource()).is_some(), "image fills require retained image resource preparation and upload_retained");
+                }
+            }
+        }
         let circle_bytes = std::mem::size_of_val(prepared.circles);
         let rectangle_bytes = std::mem::size_of_val(prepared.rectangles);
         let line_bytes = std::mem::size_of_val(prepared.lines);
@@ -1328,9 +1349,12 @@ impl GpuRenderer {
         );
 
         let gradients = self.upload_fill_gradients(device, queue, prepared);
+        let images = self.upload_fill_image_paints(device, queue, prepared);
         UploadStats {
-            bytes_uploaded: bytes_uploaded + gradients.bytes_uploaded,
-            buffer_reallocations: buffer_reallocations + gradients.buffer_reallocations,
+            bytes_uploaded: bytes_uploaded + gradients.bytes_uploaded + images.bytes_uploaded,
+            buffer_reallocations: buffer_reallocations
+                + gradients.buffer_reallocations
+                + images.buffer_reallocations,
         }
     }
 
@@ -1736,10 +1760,10 @@ impl GpuRenderer {
         let mut stats = DrawStats::default();
         for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
             let mut start = instance_range.start;
-            if let Some(indices) =
-                prepared.gradient_indices(resolved.batch.primitive, instance_range.clone())
             {
-                for &index in indices {
+                for index in
+                    prepared.painted_indices(resolved.batch.primitive, instance_range.clone())
+                {
                     if start < index {
                         let solid = ResolvedOrderedBatch {
                             batch: OrderedRenderBatch {
@@ -1756,14 +1780,26 @@ impl GpuRenderer {
                             binding,
                         );
                     }
-                    if let Some(drawn) = self.draw_gradient_instance(
-                        pass,
-                        prepared,
-                        resolved.batch.primitive,
-                        index,
-                        single_sample_analytics,
-                        binding,
-                    ) {
+                    if let Some(drawn) = self
+                        .draw_gradient_instance(
+                            pass,
+                            prepared,
+                            resolved.batch.primitive,
+                            index,
+                            single_sample_analytics,
+                            binding,
+                        )
+                        .or_else(|| {
+                            self.draw_image_paint_instance(
+                                pass,
+                                prepared,
+                                resolved.batch.primitive,
+                                index,
+                                single_sample_analytics,
+                                binding,
+                            )
+                        })
+                    {
                         stats += drawn;
                     }
                     start = index + 1;
@@ -2507,6 +2543,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2520,6 +2557,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2536,6 +2574,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2570,6 +2609,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     z_index: 0.0,
@@ -2590,6 +2630,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,

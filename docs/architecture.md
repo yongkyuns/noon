@@ -1112,6 +1112,33 @@ its packed carrier row is unchanged. Parameter-only glow edits reuse the source
 and blur. Mixed-frame scratch identities are resolved through the canonical
 per-object draw range, rather than assuming they equal semantic object IDs.
 
+Local image fills use the existing semantic fill value and immutable raster
+resource arena. Cover/contain/stretch, alignment, address mode and UV placement
+are checked Rust values. Compatible placement and fill-opacity transitions use
+the ordinary Fill channel, target capture, completion and seek; resource,
+sampling, fit and address changes are immediate edits. Image scale interpolation
+cannot cross zero. Object pose does not change the intrinsic local fit rectangle.
+Semantic objects and paint-animation endpoints retain their resource references;
+compiled snapshots retain their own closure. Store cloning remaps those handles.
+
+The initial image-fill renderer profile covers ordinary planar circles,
+rectangles and vector paths. It uses their existing coverage and painter ranges,
+shares image textures with ordinary image objects, and updates local uniforms
+without regenerating pixels or geometry. Sampling premultiplies each texel before
+nearest, linear or bicubic reconstruction; contain margins remain empty and
+addressing applies to each filter tap. Fill and final object opacity remain
+independent. The resource-aware retained preparation path validates the complete
+publication before installation. The geometry-only uploader cannot admit image
+resources. World/inset content, text, family/transient effects, reveal/morph and
+image-fill-plus-glow remain explicit admission gates for this profile.
+
+At the genuine execution/render worker boundary, the image fill carries only a
+versioned source handle, mapping and sampling value. The existing resource bundle
+installs its pixels once, the receiver resolves local handles before publication,
+and the existing sparse resource index retains content and paint references
+together. Unreferenced image resources can retire without a scene scan. This
+transport does not participate in native or single-context Rust/WASM execution.
+
 A backend may internally use render bundles, display-list-like recordings, bind-group caches, instance groups or other derived accelerators, but those are disposable renderer optimizations. A recorded drawing command stream is not the Execution Plan and cannot replace semantic/runtime data needed for mutation, hit testing, reactive dependencies or live authoring.
 
 Where backend/host support allows it, CPU/runtime work for a later frame may overlap renderer/GPU work from an earlier frame as long as `FrameEpoch`, `ResourceVersion` and `SubmissionSerial` rules make publication and lifetime coherent.

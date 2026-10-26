@@ -9,6 +9,7 @@ mod initial_animation;
 mod membership;
 pub(crate) mod paint;
 pub use paint::lower_fill as lower_semantic_fill;
+pub use paint::lower_image_fill as lower_semantic_image_fill;
 mod projection;
 mod publication;
 mod reachability;

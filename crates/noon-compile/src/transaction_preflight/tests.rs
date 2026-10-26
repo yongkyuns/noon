@@ -89,6 +89,7 @@ fn property_batch_ignores_one_hundred_thousand_unrelated_objects_and_tracks() {
         .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: target,
                 style: Style::default(),
             },
@@ -116,6 +117,7 @@ fn late_presence_replacement_rejects_without_touching_unrelated_tracks() {
         .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: unrelated,
                 style: Style::default(),
             },
@@ -385,6 +387,7 @@ fn sparse_preflight_agrees_with_sequential_compiler_validation() {
                 4 => ExecutionPatch::RemoveTrack(id),
                 _ => ExecutionPatch::SetStyle {
                     fill_gradient: None,
+                    fill_image: None,
                     object,
                     style: Style::default(),
                 },

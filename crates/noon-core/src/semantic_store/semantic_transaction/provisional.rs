@@ -107,6 +107,10 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn contains_image_resource(&self, handle: crate::RasterImageResourceHandle) -> bool {
+        self.store.raster_image_resources().get(handle).is_some()
+    }
+
     pub(super) fn is_static_vector_path(
         &self,
         node: SemanticTransactionNodeRef,

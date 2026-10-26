@@ -89,6 +89,9 @@ pub enum PreparedMatchingShapeActivationError {
     UnsupportedGeometry {
         node: SemanticNodeId,
     },
+    UnsupportedImagePaint {
+        node: SemanticNodeId,
+    },
     MissingSourceKey {
         node: SemanticNodeId,
     },
@@ -150,6 +153,12 @@ impl std::fmt::Display for PreparedMatchingShapeActivationError {
                 node.slot(),
                 node.generation(),
                 execution_object_id.get()
+            ),
+            Self::UnsupportedImagePaint { node } => write!(
+                formatter,
+                "matching-shape leaf {}:{} does not support image paint",
+                node.slot(),
+                node.generation()
             ),
             Self::InvalidTargetTransform { node } => write!(
                 formatter,
@@ -264,6 +273,11 @@ where
                 execution_object_id,
             },
         )?;
+        if effective.fill_image.is_some()
+            || matches!(state.style.fill, Some(noon_core::SemanticPaint::Image(_)))
+        {
+            return Err(PreparedMatchingShapeActivationError::UnsupportedImagePaint { node });
+        }
         let content = completed_content_before(
             state.content,
             execution_object_id,
@@ -293,6 +307,9 @@ where
         let state = store
             .semantic_object_state_checked(node)
             .map_err(|_| PreparedMatchingShapeActivationError::ObjectState { node })?;
+        if matches!(state.style.fill, Some(noon_core::SemanticPaint::Image(_))) {
+            return Err(PreparedMatchingShapeActivationError::UnsupportedImagePaint { node });
+        }
         let transform = lower_semantic_transform_value(state)
             .map_err(|_| PreparedMatchingShapeActivationError::InvalidTargetTransform { node })?;
         let key = matching_key(store, node, state.content, transform, mode)?;
@@ -414,6 +431,7 @@ mod tests {
     fn effective() -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             fill_gradient: None,
+            fill_image: None,
             glow: None,
             z_index: 0.0,
             transform: Transform2D::IDENTITY,

@@ -93,6 +93,14 @@ fn glow_transaction(
     update: GlowUpdate,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     object.validate()?;
+    if matches!(
+        object.state()?.style.fill,
+        Some(noon_core::SemanticPaint::Image(_))
+    ) {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ContinuousPaintProfile,
+        ));
+    }
     let existing = object
         .integration_store()
         .borrow()
@@ -112,6 +120,14 @@ fn add_transaction(
     name: &str,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     object.validate()?;
+    if matches!(
+        object.state()?.style.fill,
+        Some(noon_core::SemanticPaint::Image(_))
+    ) {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ContinuousPaintProfile,
+        ));
+    }
     let mut tx = SemanticMutationTransaction::new();
     tx.create_effect(object.node_id(), name, definition);
     Ok(tx)

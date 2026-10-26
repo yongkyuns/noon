@@ -12,6 +12,7 @@ use crate::release_render_transform;
 pub struct FrameObjectState {
     /// Effective continuous fill from the same publication as the compact style.
     pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    pub fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     /// Effective root drawing eligibility, independent from paint and presence.
     pub draw_enabled: bool,
     /// Current persistent leaf effect, published with this row and its frame epoch.
@@ -89,6 +90,7 @@ mod spatial_render_routing_tests {
     fn row(domain: Domain, draw_kind: CompiledSpatialDrawKind) -> FrameObjectState {
         FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             z_index: 0.0,
@@ -416,6 +418,7 @@ impl EffectiveBoundsBasis {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FrameRowState {
     pub(super) fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    pub(super) fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     pub(super) glow: Option<Arc<noon_compile::CompiledGlow>>,
     pub(super) z_index: f64,
     pub(super) transform: Transform2D,
@@ -435,6 +438,7 @@ impl FrameRowState {
         Self {
             glow: frame.objects[object_index].glow.clone(),
             fill_gradient: frame.objects[object_index].fill_gradient.clone(),
+            fill_image: frame.objects[object_index].fill_image.clone(),
             z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
             spatial: frame.objects[object_index].spatial.as_deref().cloned(),
@@ -452,6 +456,7 @@ impl FrameRowState {
     pub(super) fn write_to_frame(self, frame: &mut FrameState, object_index: usize) {
         let object = &mut frame.objects[object_index];
         object.fill_gradient = self.fill_gradient;
+        object.fill_image = self.fill_image;
         object.glow = self.glow;
         object.z_index = self.z_index;
         object.transform = self.transform;
@@ -474,6 +479,7 @@ impl FrameRowState {
     pub(crate) fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
         let object = &frame.objects[object_index];
         self.fill_gradient != object.fill_gradient
+            || self.fill_image != object.fill_image
             || self.glow != object.glow
             || self.z_index != object.z_index
             || self.transform != object.transform
@@ -527,6 +533,7 @@ impl FrameRowState {
     pub(super) fn as_mut<'a>(&'a mut self, base_content: &'a ObjectContentRef) -> FrameRowMut<'a> {
         FrameRowMut {
             fill_gradient: &mut self.fill_gradient,
+            fill_image: &mut self.fill_image,
             glow: &mut self.glow,
             content: FrameContentMut::Staged {
                 base: base_content,
@@ -572,6 +579,7 @@ impl FrameContentMut<'_> {
 
 pub(super) struct FrameRowMut<'a> {
     pub(super) fill_gradient: &'a mut Option<Arc<noon_core::LinearGradient>>,
+    pub(super) fill_image: &'a mut Option<std::sync::Arc<noon_core::ImagePaint>>,
     pub(super) glow: &'a mut Option<Arc<noon_compile::CompiledGlow>>,
     pub(super) z_index: &'a mut f64,
     pub(super) content: FrameContentMut<'a>,
@@ -590,6 +598,7 @@ pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> Fram
     let object = &mut frame.objects[object_index];
     FrameRowMut {
         fill_gradient: &mut object.fill_gradient,
+        fill_image: &mut object.fill_image,
         glow: &mut object.glow,
         content: FrameContentMut::Direct(&mut object.content),
         z_index: &mut object.z_index,

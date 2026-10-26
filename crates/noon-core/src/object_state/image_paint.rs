@@ -3,8 +3,8 @@
 //!
 //! Local points use the same lower-left normalized geometry box as gradients.
 //! Image rows are top-first. Sampling returns encoded-premultiplied RGBA before
-//! geometry coverage, fill opacity or final object opacity. These values do not
-//! by themselves enable a Scene setter or renderer admission profile.
+//! geometry coverage, fill opacity or final object opacity. Shared Scene/Mobject
+//! lowering owns admission of the supported image-filled geometry profile.
 //!
 //! Nearest samples floor(uv * dimensions); linear uses the four neighboring
 //! texel centers. Bicubic uses the existing raster image cubic-convolution
@@ -339,7 +339,8 @@ impl ImageMapping {
 
 /// Immutable paint parameters over one versioned resource capability. Resource
 /// admission, retention, clone remapping and publication belong to the store.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImagePaint {
     resource: RasterImageResourceHandle,
     mapping: ImageMapping,

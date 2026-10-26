@@ -251,6 +251,26 @@ pub(super) fn install_initial_animation_root(
                 target: *target,
             })?;
         let (property, values) = lower_object_track_values(store, animation, *property, values)?;
+        if let TrackValues::Paint { transition } = &values {
+            if let Some(paints) = transition.images() {
+                for paint in paints {
+                    compiled
+                        .resources
+                        .capture_image(
+                            store,
+                            noon_core::SemanticImageContent::with_sampling(
+                                paint.resource(),
+                                paint.sampling(),
+                            ),
+                        )
+                        .map_err(|error| {
+                            SemanticInitialAnimationError::Compiled(
+                                crate::CompilePatchError::Resource(error),
+                            )
+                        })?;
+                }
+            }
+        }
         let id = TrackId::new(
             u64::try_from(definitions.len())
                 .map_err(|_| SemanticInitialAnimationError::TooManyTracks(definitions.len()))?,

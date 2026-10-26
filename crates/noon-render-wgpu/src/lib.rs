@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod gpu;
+mod image_paint;
 mod linear_gradient;
 mod mega_mesh;
 mod path_residency;
@@ -273,6 +274,9 @@ pub struct RenderStats {
 
 #[derive(Debug)]
 pub struct PreparedFrame<'a> {
+    pub(crate) fill_image_paints: &'a HashMap<ObjectId, image_paint::PreparedImagePaint>,
+    pub(crate) image_paint_changes: &'a [ObjectId],
+    pub(crate) image_paint_indices: &'a [std::collections::BTreeSet<u32>; 3],
     pub(crate) fill_gradients: &'a HashMap<ObjectId, linear_gradient::PreparedGradient>,
     pub(crate) gradient_changes: &'a [ObjectId],
     pub(crate) gradient_indices: &'a [std::collections::BTreeSet<u32>; 3],
@@ -642,6 +646,12 @@ struct PathGroup {
 
 #[derive(Debug, Default)]
 pub struct FramePreparer {
+    fill_image_paints: HashMap<ObjectId, image_paint::PreparedImagePaint>,
+    image_paint_changes: Vec<ObjectId>,
+    image_paint_order_changes: Vec<usize>,
+    image_paint_indices: [std::collections::BTreeSet<u32>; 3],
+    image_paint_routes: HashMap<ObjectId, (usize, u32)>,
+    image_paint_routes_pending: Vec<ObjectId>,
     fill_gradients: HashMap<ObjectId, linear_gradient::PreparedGradient>,
     gradient_changes: Vec<ObjectId>,
     gradient_order_changes: Vec<usize>,
@@ -838,11 +848,16 @@ impl FramePreparer {
         let mut geometry_cache_misses = 0;
         for &object_index in changes.object_indices() {
             self.sync_fill_gradient(frame, object_index);
+            self.sync_fill_image_paint(frame, object_index);
         }
         let mut path_vertices_repacked = 0;
         let mut path_indices_repacked = 0;
         let mut replacement_chunks = std::collections::BTreeSet::new();
-        for &index in &self.gradient_order_changes {
+        for &index in self
+            .gradient_order_changes
+            .iter()
+            .chain(&self.image_paint_order_changes)
+        {
             let position = if self.painter_order_installed {
                 self.painter_order_positions.get(index).copied().flatten()
             } else {
@@ -1055,6 +1070,7 @@ impl FramePreparer {
         }
 
         self.sync_gradient_routes();
+        self.sync_image_paint_routes();
         self.prepared_frame(
             frame.time,
             0,
@@ -1607,6 +1623,11 @@ impl FramePreparer {
         self.zero_contribution = Default::default();
         self.clear_dirty_ranges();
 
+        self.image_paint_changes
+            .extend(self.fill_image_paints.keys().copied());
+        self.fill_image_paints.clear();
+        self.image_paint_indices = Default::default();
+        self.image_paint_routes.clear();
         self.gradient_changes
             .extend(self.fill_gradients.keys().copied());
         self.fill_gradients.clear();
@@ -1618,6 +1639,7 @@ impl FramePreparer {
         let mut geometry_cache_misses = 0;
         for (object_index, object) in frame.objects.iter().enumerate() {
             self.sync_fill_gradient(frame, object_index);
+            self.sync_fill_image_paint(frame, object_index);
             if !frame.is_drawable(object_index) {
                 self.slots.push(PreparedSlot::Absent);
                 self.slot_presences.push(false);
@@ -1796,6 +1818,7 @@ impl FramePreparer {
             .count();
 
         self.sync_gradient_routes();
+        self.sync_image_paint_routes();
         self.prepared_frame(
             frame.time,
             capacity_growths,
@@ -1915,6 +1938,9 @@ impl FramePreparer {
             + dirty_len(&self.line_dirty_ranges);
         let dirty_instance_count = dirty_instance_count + dirty_len(&self.path_dirty_ranges);
         PreparedFrame {
+            fill_image_paints: &self.fill_image_paints,
+            image_paint_changes: &self.image_paint_changes,
+            image_paint_indices: &self.image_paint_indices,
             fill_gradients: &self.fill_gradients,
             gradient_changes: &self.gradient_changes,
             gradient_indices: &self.gradient_indices,
@@ -2014,6 +2040,9 @@ impl FramePreparer {
     }
 
     fn clear_dirty_ranges(&mut self) {
+        self.image_paint_changes.clear();
+        self.image_paint_order_changes.clear();
+        self.image_paint_routes_pending.clear();
         self.gradient_changes.clear();
         self.gradient_order_changes.clear();
         self.gradient_routes_pending.clear();
@@ -3130,6 +3159,7 @@ mod tests {
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -5216,6 +5246,7 @@ mod structural_execution_delta_tests {
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

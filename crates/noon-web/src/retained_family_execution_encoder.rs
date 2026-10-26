@@ -231,6 +231,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             let stable = previous.is_some_and(|previous| {
                 previous.order == row.order
                     && previous.fill_gradient == row.fill_gradient
+                    && previous.fill_image == row.fill_image
                     && previous.object == row.object
                     && previous.z_index == row.z_index
                     && previous.content == row.content
@@ -361,14 +362,19 @@ impl RetainedFamilyExecutionDeltaEncoder {
             .retained
             .objects
             .iter()
-            .filter_map(|object| match object.content {
-                crate::TransportObjectContent::Image { image, .. }
-                    if !self.resources.contains_image(image) =>
-                {
-                    Some(noon_core::RasterImageResourceHandle::from(image))
-                }
-                _ => None,
+            .flat_map(|object| {
+                [
+                    match object.content {
+                        crate::TransportObjectContent::Image { image, .. } => Some(image),
+                        _ => None,
+                    },
+                    object.fill_image.map(|paint| paint.image),
+                ]
+                .into_iter()
+                .flatten()
             })
+            .filter(|image| !self.resources.contains_image(*image))
+            .map(noon_core::RasterImageResourceHandle::from)
             .collect::<std::collections::BTreeSet<_>>();
         let new_texts = text_handles
             .into_iter()
@@ -931,6 +937,7 @@ mod tests {
     ) {
         let first = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -944,6 +951,7 @@ mod tests {
         };
         let second = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -978,6 +986,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -991,6 +1000,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,

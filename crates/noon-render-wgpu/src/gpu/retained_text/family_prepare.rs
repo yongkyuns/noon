@@ -569,6 +569,7 @@ mod tests {
         store.add_member(family, second).unwrap();
         let first_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -582,6 +583,7 @@ mod tests {
         };
         let second_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -609,6 +611,7 @@ mod tests {
             objects: vec![
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -622,6 +625,7 @@ mod tests {
                 },
                 FrameObjectState {
                     fill_gradient: None,
+                    fill_image: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -700,6 +704,7 @@ mod tests {
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -722,6 +727,7 @@ mod tests {
             time: 1.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,

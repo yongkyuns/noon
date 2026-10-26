@@ -7,6 +7,36 @@ use noon_runtime::FrameState;
 use crate::{FramePreparer, PreparedFrame, RenderPrimitive};
 
 impl PreparedFrame<'_> {
+    pub(crate) fn painted_indices(
+        &self,
+        primitive: RenderPrimitive,
+        range: std::ops::Range<u32>,
+    ) -> impl Iterator<Item = u32> + '_ {
+        let mut gradients = self
+            .gradient_indices(primitive, range.clone())
+            .into_iter()
+            .flatten()
+            .copied()
+            .peekable();
+        let mut images = self
+            .image_paint_indices(primitive, range)
+            .into_iter()
+            .flatten()
+            .copied()
+            .peekable();
+        std::iter::from_fn(move || match (gradients.peek(), images.peek()) {
+            (Some(a), Some(b)) if a < b => gradients.next(),
+            (Some(a), Some(b)) if a == b => {
+                images.next();
+                gradients.next()
+            }
+            (Some(_), Some(_)) => images.next(),
+            (Some(_), None) => gradients.next(),
+            (None, Some(_)) => images.next(),
+            (None, None) => None,
+        })
+    }
+
     pub(crate) fn gradient_indices(
         &self,
         primitive: RenderPrimitive,
@@ -54,12 +84,12 @@ impl FramePreparer {
             }
         }
     }
-    pub(crate) fn path_range_has_gradient(&self, range: &std::ops::Range<u32>) -> bool {
-        !self.fill_gradients.is_empty()
+    pub(crate) fn path_range_has_paint(&self, range: &std::ops::Range<u32>) -> bool {
+        (!self.fill_gradients.is_empty() || !self.fill_image_paints.is_empty())
             && range.clone().any(|index| {
-                self.path_ids
-                    .get(index as usize)
-                    .is_some_and(|id| self.fill_gradients.contains_key(id))
+                self.path_ids.get(index as usize).is_some_and(|id| {
+                    self.fill_gradients.contains_key(id) || self.fill_image_paints.contains_key(id)
+                })
             })
     }
     pub(crate) fn sync_fill_gradient(&mut self, frame: &FrameState, index: usize) {

@@ -50,6 +50,7 @@ fn repeated_local_property_edits_stay_bounded_and_local() {
             style.opacity = 0.25 + 0.5 * ((edit % 8) as f32 / 7.0);
             live.apply_execution_patch(&ExecutionPatch::SetStyle {
                 fill_gradient: None,
+                fill_image: None,
                 object: target,
                 style,
             })

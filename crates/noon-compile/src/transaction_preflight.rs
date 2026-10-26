@@ -25,6 +25,7 @@ struct TrackShadow {
     reconciled: bool,
     presence: Option<(bool, bool)>,
     continuous_paint: bool,
+    image_paint: bool,
 }
 
 impl TrackShadow {
@@ -42,6 +43,7 @@ impl TrackShadow {
             reconciled: track.reconciled,
             presence: presence_endpoints(track.property, &track.values),
             continuous_paint: matches!(track.values, TrackValues::Paint { .. }),
+            image_paint: crate::image_paint_track_values(&track.values).is_some(),
         }
     }
 
@@ -60,6 +62,7 @@ impl TrackShadow {
             reconciled: false,
             presence: presence_endpoints(track.property, &track.values),
             continuous_paint: matches!(track.values, TrackValues::Paint { .. }),
+            image_paint: crate::image_paint_track_values(&track.values).is_some(),
         }
     }
 }
@@ -82,6 +85,7 @@ enum ObjectOverlay {
         index: u32,
         is_text: bool,
         continuous_fill: bool,
+        image_fill: bool,
         spatial: Option<Box<crate::CompiledSpatialState>>,
     },
     Removed {
@@ -95,6 +99,7 @@ enum ObjectOverlay {
 struct PreflightOverlay {
     objects: BTreeMap<ObjectId, ObjectOverlay>,
     paint_definitions: BTreeMap<u32, bool>,
+    image_definitions: BTreeMap<u32, bool>,
     tracks: BTreeMap<TrackId, Option<TrackShadow>>,
     channels: BTreeMap<CompiledChannelKey, BTreeSet<TrackId>>,
     seen_objects: BTreeSet<ObjectId>,
@@ -108,6 +113,7 @@ impl PreflightOverlay {
         Self {
             objects: BTreeMap::new(),
             paint_definitions: BTreeMap::new(),
+            image_definitions: BTreeMap::new(),
             tracks: BTreeMap::new(),
             channels: BTreeMap::new(),
             seen_objects: BTreeSet::new(),
@@ -115,6 +121,22 @@ impl PreflightOverlay {
             next_object_index: scene.objects.len(),
             track_metadata_visits: 0,
         }
+    }
+
+    fn has_image_fill(&mut self, scene: &CompiledScene, index: u32) -> bool {
+        self.image_definitions
+            .get(&index)
+            .copied()
+            .unwrap_or_else(|| {
+                scene
+                    .objects
+                    .get(index as usize)
+                    .is_some_and(|object| object.fill_image.is_some())
+            })
+            || self
+                .channel(scene, index, Property::Fill)
+                .iter()
+                .any(|track| track.image_paint)
     }
 
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
@@ -168,6 +190,9 @@ impl PreflightOverlay {
                     continuous_fill: crate::continuous_fill_content_supported(
                         &scene.objects[index as usize].content,
                     ),
+                    image_fill: crate::image_fill_content_supported(
+                        &scene.objects[index as usize].content,
+                    ),
                     spatial: scene.objects[index as usize].spatial.clone(),
                 },
             );
@@ -214,6 +239,9 @@ impl PreflightOverlay {
                     continuous_fill: crate::continuous_fill_content_supported(
                         &scene.objects[index as usize].content,
                     ),
+                    image_fill: crate::image_fill_content_supported(
+                        &scene.objects[index as usize].content,
+                    ),
                     spatial: spatial.map(Box::new),
                 },
             );
@@ -240,6 +268,16 @@ impl PreflightOverlay {
             Some(ObjectOverlay::Removed { .. }) => false,
             None => scene.object_indices.get(&id).is_some_and(|&index| {
                 crate::continuous_fill_content_supported(&scene.objects[index as usize].content)
+            }),
+        }
+    }
+
+    fn supports_image_fill(&self, scene: &CompiledScene, id: ObjectId) -> bool {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { image_fill, .. }) => *image_fill,
+            Some(ObjectOverlay::Removed { .. }) => false,
+            None => scene.object_indices.get(&id).is_some_and(|&index| {
+                crate::image_fill_content_supported(&scene.objects[index as usize].content)
             }),
         }
     }
@@ -351,10 +389,9 @@ impl PreflightOverlay {
             .get(&index)
             .copied()
             .unwrap_or_else(|| {
-                scene
-                    .objects
-                    .get(index as usize)
-                    .is_some_and(|object| object.fill_gradient.is_some())
+                scene.objects.get(index as usize).is_some_and(|object| {
+                    object.fill_gradient.is_some() || object.fill_image.is_some()
+                })
             });
         if !supported
             && (painted
@@ -392,6 +429,11 @@ pub(super) fn preflight_transaction_with_resources(
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
                 validate_compiled_object(object)?;
+                crate::validate_execution_image_paint_resource(
+                    &scene.resources,
+                    Some(additions),
+                    object.fill_image.as_deref(),
+                )?;
                 validate_execution_content_resource(
                     &scene.resources,
                     Some(additions),
@@ -413,8 +455,12 @@ pub(super) fn preflight_transaction_with_resources(
                     },
                 };
                 overlay
-                    .paint_definitions
-                    .insert(index, object.fill_gradient.is_some());
+                    .image_definitions
+                    .insert(index, object.fill_image.is_some());
+                overlay.paint_definitions.insert(
+                    index,
+                    object.fill_gradient.is_some() || object.fill_image.is_some(),
+                );
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
@@ -422,6 +468,7 @@ pub(super) fn preflight_transaction_with_resources(
                         index,
                         is_text: object.text().is_some(),
                         continuous_fill: crate::continuous_fill_content_supported(&object.content),
+                        image_fill: crate::image_fill_content_supported(&object.content),
                         spatial: object.spatial.clone(),
                     },
                 );
@@ -475,6 +522,13 @@ pub(super) fn preflight_transaction_with_resources(
                         });
                     }
                 }
+                if overlay.has_image_fill(scene, index)
+                    && !crate::image_fill_content_supported(content)
+                {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidPaintValues,
+                    ));
+                }
                 let spatial = overlay.spatial(scene, *object);
                 let glow = overlay.glow(scene, *object);
                 overlay.require_paint_source(
@@ -489,6 +543,7 @@ pub(super) fn preflight_transaction_with_resources(
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
                         continuous_fill: crate::continuous_fill_content_supported(content),
+                        image_fill: crate::image_fill_content_supported(content),
                         spatial: spatial.map(Box::new),
                     },
                 );
@@ -601,6 +656,14 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                if overlay.has_image_fill(scene, index) {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidPaintValues,
+                    ));
+                }
                 let previous = overlay.glow(scene, *object);
                 crate::execution_patch::validate_glow_replacement(
                     *object,
@@ -617,6 +680,11 @@ pub(super) fn preflight_transaction_with_resources(
                 let index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                if glow.is_some() && overlay.has_image_fill(scene, index) {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidPaintValues,
+                    ));
+                }
                 let previous = overlay.glow(scene, *object);
                 crate::glow_attachment::validate_change(
                     *object,
@@ -637,15 +705,45 @@ pub(super) fn preflight_transaction_with_resources(
                 object,
                 style,
                 fill_gradient,
+                fill_image,
             } => {
                 let index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 crate::execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
-                let supported = overlay.supports_continuous_fill(scene, *object)
-                    && overlay.spatial(scene, *object).is_none();
-                if fill_gradient.is_some() && !supported {
+                crate::execution_patch::validate_fill_image(*object, fill_image.as_deref())?;
+                crate::validate_execution_image_paint_resource(
+                    &scene.resources,
+                    Some(additions),
+                    fill_image.as_deref(),
+                )?;
+                if fill_image.is_some()
+                    && [Property::Reveal, Property::Morph, Property::Transform]
+                        .into_iter()
+                        .any(|property| !overlay.channel(scene, index, property).is_empty())
+                {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidPaintValues,
+                    ));
+                }
+                overlay
+                    .image_definitions
+                    .insert(index, fill_image.is_some());
+                if fill_image.is_some()
+                    && (fill_gradient.is_some() || overlay.glow(scene, *object).is_some())
+                {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Style,
+                    });
+                }
+                let supported = (if fill_image.is_some() {
+                    overlay.supports_image_fill(scene, *object)
+                } else {
+                    overlay.supports_continuous_fill(scene, *object)
+                }) && overlay.spatial(scene, *object).is_none();
+                if (fill_gradient.is_some() || fill_image.is_some()) && !supported {
                     return Err(CompilePatchError::InvalidObjectState {
                         object: *object,
                         field: noon_core::ObjectStateField::Style,
@@ -653,7 +751,7 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 overlay
                     .paint_definitions
-                    .insert(index, fill_gradient.is_some());
+                    .insert(index, fill_gradient.is_some() || fill_image.is_some());
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -717,6 +815,37 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                if overlay.has_image_fill(scene, object_index)
+                    && matches!(
+                        track.property,
+                        Property::Reveal | Property::Morph | Property::Transform
+                    )
+                {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidPaintValues,
+                    ));
+                }
+                if let Some(images) = crate::image_paint_track_values(&track.values) {
+                    if !overlay.supports_image_fill(scene, track.object)
+                        || overlay.glow(scene, track.object).is_some()
+                        || [Property::Reveal, Property::Morph, Property::Transform]
+                            .into_iter()
+                            .any(|property| {
+                                !overlay.channel(scene, object_index, property).is_empty()
+                            })
+                    {
+                        return Err(CompilePatchError::InvalidTrack(
+                            noon_core::TimelineError::InvalidPaintValues,
+                        ));
+                    }
+                    for image in images {
+                        crate::validate_execution_image_paint_resource(
+                            &scene.resources,
+                            Some(additions),
+                            Some(image),
+                        )?;
+                    }
+                }
                 if matches!(track.values, TrackValues::Glow { .. }) {
                     crate::validate_glow_track_attachment(
                         track,
@@ -767,6 +896,37 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                if overlay.has_image_fill(scene, object_index)
+                    && matches!(
+                        track.property,
+                        Property::Reveal | Property::Morph | Property::Transform
+                    )
+                {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidPaintValues,
+                    ));
+                }
+                if let Some(images) = crate::image_paint_track_values(&track.values) {
+                    if !overlay.supports_image_fill(scene, track.object)
+                        || overlay.glow(scene, track.object).is_some()
+                        || [Property::Reveal, Property::Morph, Property::Transform]
+                            .into_iter()
+                            .any(|property| {
+                                !overlay.channel(scene, object_index, property).is_empty()
+                            })
+                    {
+                        return Err(CompilePatchError::InvalidTrack(
+                            noon_core::TimelineError::InvalidPaintValues,
+                        ));
+                    }
+                    for image in images {
+                        crate::validate_execution_image_paint_resource(
+                            &scene.resources,
+                            Some(additions),
+                            Some(image),
+                        )?;
+                    }
+                }
                 if matches!(track.values, TrackValues::Glow { .. }) {
                     crate::validate_glow_track_attachment(
                         track,

@@ -25,6 +25,35 @@ pub fn validate_fill_gradient(
     Ok(())
 }
 
+pub fn validate_fill_image(
+    object: ObjectId,
+    image: Option<&noon_core::ImagePaint>,
+) -> Result<(), crate::CompilePatchError> {
+    if let Some(image) = image {
+        crate::semantic_lowering::paint::validate_image_definition(image).map_err(|_| {
+            crate::CompilePatchError::InvalidObjectState {
+                object,
+                field: noon_core::ObjectStateField::Style,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+pub fn validate_image_paint_bounds(
+    object: ObjectId,
+    image: &noon_core::ImagePaint,
+    bounds: Rect,
+    dimensions: [u32; 2],
+) -> Result<(), crate::CompilePatchError> {
+    crate::semantic_lowering::paint::validate_image_bounds(image, bounds, dimensions).map_err(
+        |_| crate::CompilePatchError::InvalidObjectState {
+            object,
+            field: noon_core::ObjectStateField::Style,
+        },
+    )
+}
+
 /// Sparse lowered relation between ordinary rectangle rows. Geometry and pose
 /// remain owned by those rows; this contains no separately evaluated view state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +130,7 @@ pub enum ExecutionPatch {
         object: ObjectId,
         style: Style,
         fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+        fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     },
     /// Replace one display's relation. The camera may be detached; the relation
     /// becomes visible only while both execution rows are live.
@@ -238,10 +268,12 @@ impl CompiledScene {
         object_index: u32,
         style: Style,
         fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+        fill_image: Option<std::sync::Arc<noon_core::ImagePaint>>,
     ) {
         let object = &mut self.objects[object_index as usize];
         object.base_style = style;
         object.fill_gradient = fill_gradient;
+        object.fill_image = fill_image;
     }
 }
 

@@ -301,6 +301,7 @@ mod tests {
             time: 0.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,

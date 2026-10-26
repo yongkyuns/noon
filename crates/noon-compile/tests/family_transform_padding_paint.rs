@@ -66,6 +66,7 @@ fn lower(
         let position = source_ids.iter().position(|source| *source == id).unwrap();
         Some(EffectiveAnimationProperties {
             fill_gradient: None,
+            fill_image: None,
             glow: None,
             world_transform: None,
             camera_profile: None,

@@ -1999,6 +1999,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_fill_image(
+        &mut self,
+        mobject: &noon::Mobject,
+        paint: noon::ImagePaint,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_fill_image(mobject, paint, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill_gradient(
         &mut self,
         mobject: &noon::Mobject,
@@ -4196,11 +4207,14 @@ impl SemanticExecutionPlayer {
         )
         .and_then(|bundle| {
             bundle.with_images(
-                session
-                    .frame()
-                    .objects
-                    .iter()
-                    .filter_map(|object| object.content.image().map(|image| image.resource())),
+                session.frame().objects.iter().flat_map(|object| {
+                    [
+                        object.content.image().map(|image| image.resource()),
+                        object.fill_image.as_ref().map(|paint| paint.resource()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                }),
                 session.raster_image_resources(),
             )
         })

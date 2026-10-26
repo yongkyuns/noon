@@ -48,6 +48,7 @@ fn materialize_derived_family_occurrences(
         })?;
         let base = DerivedDisplayObjectState {
             fill_gradient: row.fill_gradient.clone(),
+            fill_image: row.fill_image.clone(),
             z_index: row.z_index,
             content: row.content.clone(),
             text_bounds: row.text_bounds,
@@ -313,6 +314,7 @@ fn materialize_matching_shape_target_leftovers(
             occurrence_index,
             base: DerivedDisplayObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 z_index: fade.base.z_index,
                 content: fade.base.content.clone(),
                 text_bounds: None,
@@ -676,6 +678,7 @@ mod matching_target_tests {
             target_state: SemanticNodeId::new(2, 0),
             effective_source: EffectiveAnimationProperties {
                 fill_gradient: None,
+                fill_image: None,
                 glow: None,
                 z_index: 0.0,
                 transform: Transform2D::IDENTITY,

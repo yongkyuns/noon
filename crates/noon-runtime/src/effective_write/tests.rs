@@ -389,6 +389,7 @@ fn authored_transaction_and_narrow_carry_forward_merge_at_commit() {
         },
         ExecutionPatch::SetStyle {
             fill_gradient: None,
+            fill_image: None,
             object: object(),
             style,
         },

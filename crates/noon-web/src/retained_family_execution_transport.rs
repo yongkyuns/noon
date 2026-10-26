@@ -28,6 +28,8 @@ pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState
 pub struct RetainedTransientPresentationOccurrence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_image: Option<crate::TransportImagePaint>,
     pub anchor: ObjectId,
     pub before_anchor: bool,
     pub occurrence_index: u32,
@@ -55,6 +57,13 @@ impl RetainedTransientPresentationOccurrence {
             RetainedFamilyExecutionTransportError::InvalidTransientAnchorIndex(anchor_index),
         )?;
         let state = object.state();
+        if state.fill_image.is_some() {
+            return Err(
+                RetainedFamilyExecutionTransportError::UnsupportedTransientContent(
+                    object.occurrence_index(),
+                ),
+            );
+        }
         let geometry = match &state.content {
             ObjectContentRef::Geometry(geometry) => geometry.clone(),
             ObjectContentRef::Text(_) | ObjectContentRef::Image(_) => {
@@ -71,6 +80,7 @@ impl RetainedTransientPresentationOccurrence {
             occurrence_index: object.occurrence_index(),
             z_index: state.z_index,
             fill_gradient: state.fill_gradient.clone(),
+            fill_image: None,
             geometry,
             transform: state.transform,
             style: state.style,
@@ -89,6 +99,7 @@ impl RetainedTransientPresentationOccurrence {
             self.occurrence_index,
             TransientPresentationState {
                 fill_gradient: self.fill_gradient.clone(),
+                fill_image: None,
                 z_index: self.z_index,
                 content: ObjectContentRef::Geometry(self.geometry.clone()),
                 text_bounds: None,
@@ -355,6 +366,13 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         }
         let mut occurrences = HashSet::with_capacity(self.transient_presentations.len());
         for object in &self.transient_presentations {
+            if object.fill_image.is_some() {
+                return Err(
+                    RetainedFamilyExecutionTransportError::UnsupportedTransientContent(
+                        object.occurrence_index,
+                    ),
+                );
+            }
             if !occurrences.insert(object.occurrence_index) {
                 return Err(
                     RetainedFamilyExecutionTransportError::DuplicateTransientOccurrence(
@@ -889,6 +907,7 @@ mod tests {
             time: 0.0,
             objects: vec![FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -921,6 +940,7 @@ mod tests {
             inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 slot: TransportSlotId {
                     slot: 0,
@@ -955,6 +975,7 @@ mod tests {
     fn geometry_plan() -> RetainedFamilyAnimationPlan {
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -1029,6 +1050,7 @@ mod tests {
             7,
             TransientPresentationState {
                 fill_gradient: None,
+                fill_image: None,
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::VectorPath(path.clone())),
                 text_bounds: None,
@@ -1073,6 +1095,7 @@ mod tests {
                 9,
                 TransientPresentationState {
                     fill_gradient: None,
+                    fill_image: None,
                     z_index: 0.0,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
                     text_bounds: None,

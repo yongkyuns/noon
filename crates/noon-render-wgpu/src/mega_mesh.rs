@@ -222,7 +222,7 @@ impl FramePreparer {
                 .mega_path_segments
                 .get(path_batch_index)
                 .and_then(|segment| segment.as_ref())
-                .filter(|_| !self.path_range_has_gradient(&ordered_batch.instance_range))
+                .filter(|_| !self.path_range_has_paint(&ordered_batch.instance_range))
                 .filter(|_| {
                     !self
                         .mega_path_detached

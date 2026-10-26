@@ -198,8 +198,27 @@ fn materialize_semantic_projection(
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
         let (content, text_bounds) =
             lower_content(object.semantic_id, object.content, store, &mut resources)?;
+        if let Some(image) = &object.fill_image {
+            let store = store.ok_or(SemanticCompiledSceneError::Resource {
+                node: object.semantic_id,
+                error: CompiledResourceError::MissingImage(image.resource()),
+            })?;
+            resources
+                .capture_image(
+                    store,
+                    noon_core::SemanticImageContent::with_sampling(
+                        image.resource(),
+                        image.sampling(),
+                    ),
+                )
+                .map_err(|error| SemanticCompiledSceneError::Resource {
+                    node: object.semantic_id,
+                    error,
+                })?;
+        }
         objects.push(CompiledObject {
             fill_gradient: object.fill_gradient.clone(),
+            fill_image: object.fill_image.clone(),
             draw_enabled: object.presentation.draw_enabled,
             glow: object.glow.clone(),
             id: object.execution_id,

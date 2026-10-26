@@ -560,6 +560,31 @@ pub struct SemanticAnimationState {
 }
 
 impl SemanticAnimationState {
+    pub(crate) fn image_paints(&self) -> Option<&[crate::ImagePaint; 2]> {
+        match &self.intent {
+            SemanticAnimationIntent::ObjectPropertyTrack {
+                values: SemanticObjectTrackValues::Paint { transition },
+                ..
+            } => transition.images(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        if let SemanticAnimationIntent::ObjectPropertyTrack {
+            values: SemanticObjectTrackValues::Paint { transition },
+            ..
+        } = &mut self.intent
+        {
+            if transition.images().is_some() {
+                std::sync::Arc::make_mut(transition).remap_image_resources(remap);
+            }
+        }
+    }
+
     pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
         Self {
             intent,
@@ -863,6 +888,17 @@ impl SemanticStore {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
         validate_object_property_track(property, &values, timing, &time_map)?;
+        if let SemanticObjectTrackValues::Paint { transition } = &values {
+            if transition.images().is_some_and(|paints| {
+                paints.iter().any(|paint| {
+                    self.raster_image_resources()
+                        .get(paint.resource())
+                        .is_none()
+                })
+            }) {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
         validate_camera_profile_track_target(
             self.semantic_object_state_checked(target)?,
             property,

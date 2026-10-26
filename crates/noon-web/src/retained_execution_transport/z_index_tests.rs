@@ -12,6 +12,7 @@ fn frame() -> FrameState {
         .enumerate()
         .map(|(index, z_index)| FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -148,6 +149,7 @@ fn transient(frame: &FrameState, side: TransientAnchorSide) -> TransientPresenta
         9,
         TransientPresentationState {
             fill_gradient: None,
+            fill_image: None,
             z_index: anchor.z_index,
             content: anchor.content.clone(),
             text_bounds: None,

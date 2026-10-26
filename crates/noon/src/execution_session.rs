@@ -4305,6 +4305,7 @@ impl ExecutionSession {
                 let row = frame.objects.get(index)?;
                 Some(EffectiveAnimationProperties {
                     fill_gradient: row.fill_gradient.clone(),
+                    fill_image: row.fill_image.clone(),
                     glow: row.glow.as_deref().copied(),
                     z_index: row.z_index,
                     transform: row.transform,
@@ -4362,6 +4363,7 @@ impl ExecutionSession {
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
                                 fill_gradient: row.fill_gradient.clone(),
+                                fill_image: row.fill_image.clone(),
                                 glow: row.glow.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
@@ -4409,6 +4411,7 @@ impl ExecutionSession {
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
                                 fill_gradient: row.fill_gradient.clone(),
+                                fill_image: row.fill_image.clone(),
                                 glow: row.glow.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,

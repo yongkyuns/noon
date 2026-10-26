@@ -115,6 +115,17 @@ impl Raster {
         self.capture_frame(publication, false, None)
     }
 
+    // Independent sessions have unrelated epochs and resource handles. Keep the
+    // adapter and target, but start a fresh retained publication/resource owner.
+    #[allow(dead_code)]
+    pub fn reset_scene(&mut self) {
+        self.preparer.reset_publication_context();
+        self.renderer.reset_spatial_publication_context();
+        self.text = self
+            .renderer
+            .create_retained_text_state(&self.device, &self.queue);
+    }
+
     // Shared support is compiled independently by non-interactive integration tests.
     #[allow(dead_code)]
     pub fn capture_interactive(

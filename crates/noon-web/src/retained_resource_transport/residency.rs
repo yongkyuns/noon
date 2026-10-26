@@ -30,13 +30,15 @@ impl ResourceRoot {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ResourceResidency {
-    slots: HashMap<TransportSlotId, ResourceRoot>,
+    // Content and local image fill are independent roots. A fixed pair keeps
+    // per-row updates bounded without allocating a resource list for each row.
+    slots: HashMap<TransportSlotId, [Option<ResourceRoot>; 2]>,
     references: HashMap<ResourceRoot, usize>,
 }
 
 pub(crate) struct StagedResourceResidency {
     snapshot: Option<ResourceResidency>,
-    updates: HashMap<TransportSlotId, Option<ResourceRoot>>,
+    updates: HashMap<TransportSlotId, [Option<ResourceRoot>; 2]>,
     deltas: HashMap<ResourceRoot, isize>,
 }
 
@@ -45,8 +47,16 @@ impl ResourceResidency {
         if delta.snapshot {
             let mut snapshot = Self::default();
             for object in &delta.objects {
-                if let Some(root) = ResourceRoot::from_object(object) {
-                    snapshot.slots.insert(object.slot, root);
+                let roots = [
+                    ResourceRoot::from_object(object),
+                    object
+                        .fill_image
+                        .map(|paint| ResourceRoot::Image(paint.image)),
+                ];
+                if roots.iter().any(Option::is_some) {
+                    snapshot.slots.insert(object.slot, roots);
+                }
+                for root in roots.into_iter().flatten() {
                     *snapshot.references.entry(root).or_default() += 1;
                 }
             }
@@ -58,7 +68,7 @@ impl ResourceResidency {
         }
         let mut updates = HashMap::new();
         for slot in &delta.removed_slots {
-            updates.insert(*slot, None);
+            updates.insert(*slot, [None; 2]);
         }
         for object in &delta.objects {
             let next = ResourceRoot::from_object(object).or_else(|| {
@@ -69,22 +79,30 @@ impl ResourceResidency {
                     TransportObjectContent::Geometry { resource: None, .. }
                 ) && object.render_transform.is_some()
                     && object.render_geometry.is_none())
-                .then(|| self.slots.get(&object.slot).copied())
+                .then(|| self.slots.get(&object.slot).and_then(|roots| roots[0]))
                 .flatten()
                 .filter(|root| matches!(root, ResourceRoot::RenderGeometry(_)))
             });
-            updates.insert(object.slot, next);
+            updates.insert(
+                object.slot,
+                [
+                    next,
+                    object
+                        .fill_image
+                        .map(|paint| ResourceRoot::Image(paint.image)),
+                ],
+            );
         }
         let mut deltas = HashMap::new();
         for (&slot, &next) in &updates {
-            let old = self.slots.get(&slot).copied();
+            let old = self.slots.get(&slot).copied().unwrap_or([None; 2]);
             if old == next {
                 continue;
             }
-            if let Some(root) = old {
+            for root in old.into_iter().flatten() {
                 *deltas.entry(root).or_default() -= 1;
             }
-            if let Some(root) = next {
+            for root in next.into_iter().flatten() {
                 *deltas.entry(root).or_default() += 1;
             }
         }
@@ -145,13 +163,10 @@ impl ResourceResidency {
             return;
         }
         for (slot, next) in staged.updates {
-            match next {
-                Some(root) => {
-                    self.slots.insert(slot, root);
-                }
-                None => {
-                    self.slots.remove(&slot);
-                }
+            if next.iter().any(Option::is_some) {
+                self.slots.insert(slot, next);
+            } else {
+                self.slots.remove(&slot);
             }
         }
         for (root, delta) in staged.deltas {
@@ -188,7 +203,7 @@ mod tests {
                 id: u64::from(slot),
                 version: 1,
             });
-            residency.slots.insert(id, root);
+            residency.slots.insert(id, [Some(root), None]);
             residency.references.insert(root, 1);
         }
         let slot = TransportSlotId {

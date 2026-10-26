@@ -632,3 +632,13 @@ fn image_paint_handles_do_not_pin_pixels_or_alias_foreign_and_later_resources() 
         Err(ImagePaintError::MissingResource)
     );
 }
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn image_paint_storage_does_not_expand_the_common_semantic_style() {
+    use std::{mem::size_of, sync::Arc};
+    // Solid Color already requires 16 bytes plus the enum's tag/alignment.
+    // Keeping image values shared avoids adding their UV payload to every style.
+    assert_eq!(size_of::<crate::SemanticPaint>(), 24);
+    assert_eq!(size_of::<Option<Arc<crate::ImagePaint>>>(), 8);
+}

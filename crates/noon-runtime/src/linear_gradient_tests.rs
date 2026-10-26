@@ -50,6 +50,7 @@ fn transaction(index: usize, paint: Option<Arc<LinearGradient>>) -> ExecutionMut
         object: ObjectId::new(index as u64),
         style: Style::default(),
         fill_gradient: paint,
+        fill_image: None,
     }])
 }
 
@@ -129,11 +130,13 @@ fn invalid_gradient_in_late_patch_preserves_all_earlier_values() {
             object: ObjectId::new(0),
             style: Style::default(),
             fill_gradient: Some(gradient(2)),
+            fill_image: None,
         },
         ExecutionPatch::SetStyle {
             object: ObjectId::new(1),
             style: Style::default(),
             fill_gradient: Some(gradient(17)),
+            fill_image: None,
         },
     ]);
     assert!(runtime
@@ -268,6 +271,7 @@ fn paint_seek_matches_forward_and_recovers_source_before_reconciled_delayed_trac
                 ..Style::default()
             },
             fill_gradient: None,
+            fill_image: None,
         })
         .unwrap();
     runtime
@@ -290,6 +294,7 @@ fn paint_seek_matches_forward_and_recovers_source_before_reconciled_delayed_trac
             object: ObjectId::new(0),
             style: target.style,
             fill_gradient: target.fill_gradient.clone(),
+            fill_image: target.fill_image.clone(),
         })
         .unwrap();
     for time in [2.5, 0.5, 3.0, 2.25, 1.0, 2.5, 4.0] {
@@ -351,6 +356,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
         object: ObjectId::new(0),
         style: Style::default(),
         fill_gradient: Some(gradient(2)),
+        fill_image: None,
     };
     let track = ExecutionPatch::AddTrack(paint_track(0, 0.0));
     for paint in [style, track] {
@@ -404,6 +410,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                     object: ObjectId::new(0),
                     style,
                     fill_gradient: runtime.frame().objects[0].fill_gradient.clone(),
+                    fill_image: runtime.frame().objects[0].fill_image.clone(),
                 })
                 .unwrap();
             assert_eq!(

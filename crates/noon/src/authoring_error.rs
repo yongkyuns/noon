@@ -81,7 +81,7 @@ pub enum UnsupportedAuthoringOperation {
 impl std::fmt::Display for UnsupportedAuthoringOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::ContinuousPaintProfile => "continuous paint requires ordinary planar vector content and a representable finite gradient",
+            Self::ContinuousPaintProfile => "continuous paint requires a representable gradient or image mapping on supported planar circles, rectangles or paths; image paints do not support effects or derived geometry",
             Self::ImageContent => "this operation requires raster-image content",
             Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",

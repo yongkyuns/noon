@@ -2,7 +2,7 @@ struct Camera {
     center: vec2<f32>,
     clip_scale: vec2<f32>,
     viewport_size: vec2<f32>,
-    padding: vec2<f32>,
+    viewport_origin: vec2<f32>,
 };
 
 @group(0) @binding(0)

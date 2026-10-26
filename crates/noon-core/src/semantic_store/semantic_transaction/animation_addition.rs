@@ -693,6 +693,17 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
             }
             catalog.ensure_animation_target(*target, index)?;
+            if let SemanticObjectTrackValues::Paint { transition } = values {
+                if transition.images().is_some_and(|paints| {
+                    paints
+                        .iter()
+                        .any(|paint| !catalog.contains_image_resource(paint.resource()))
+                }) {
+                    return Err(
+                        SemanticMutationTransactionError::InvalidObjectPropertyTrack { index },
+                    );
+                }
+            }
             let state =
                 catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
             if validate_camera_profile_track_target(state, *property, values).is_err() {

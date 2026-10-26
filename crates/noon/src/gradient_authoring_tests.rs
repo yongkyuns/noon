@@ -124,7 +124,7 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
     let source_style = scene.live(&mut session).authored(&source).unwrap().style;
     assert_eq!(
         source_style
-            .capture_effective_fill(row(&session, &source).style.fill, Some(&current))
+            .capture_effective_fill(row(&session, &source).style.fill, Some(&current), None)
             .0,
         Some(SemanticPaint::LinearGradient(current))
     );

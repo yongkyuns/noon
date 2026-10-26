@@ -10213,6 +10213,27 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFillImage)]
+        pub fn live_set_fill_image(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            paint: &crate::WasmImagePaint,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            let value = paint
+                .value_for(handle.semantic_mobject())
+                .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_image(handle.semantic_mobject(), value, opacity)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFillGradient)]
         pub fn live_set_fill_gradient(
             &mut self,

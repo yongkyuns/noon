@@ -272,3 +272,54 @@ fn invalid_progress_opacity_resource_and_stop_topology_fail_closed() {
         );
     }
 }
+
+#[test]
+fn image_paint_transition_preserves_resource_kind_and_exact_endpoints() {
+    let mut images = crate::RasterImageResourceArena::default();
+    let handle = images.admit_rgba8(1, 1, vec![255, 0, 0, 128]).unwrap().0;
+    let from = crate::ImagePaint::new(
+        handle,
+        crate::ImageMapping::default(),
+        crate::RasterImageSampling::Linear,
+    );
+    let mapping = crate::ImageMapping::new(
+        crate::ImageFit::Cover,
+        [0.5; 2],
+        crate::ImageAddressMode::Clamp,
+        crate::ImageUvTransform::new([0.4, -0.2], [0.5, 1.5], 0.5).unwrap(),
+    )
+    .unwrap();
+    let to = crate::ImagePaint::new(handle, mapping, from.sampling());
+    let transition = PaintTransition::new(
+        Some(SemanticPaint::Image(Arc::new(from))),
+        0.123456789012345,
+        Some(SemanticPaint::Image(Arc::new(to))),
+        0.75,
+    )
+    .unwrap();
+    assert_eq!(
+        transition.sample(0.0).unwrap(),
+        (
+            Some(SemanticPaint::Image(Arc::new(from))),
+            0.123456789012345
+        )
+    );
+    assert_eq!(
+        transition.sample(1.0).unwrap(),
+        (Some(SemanticPaint::Image(Arc::new(to))), 0.75)
+    );
+    let (Some(SemanticPaint::Image(middle)), opacity) = transition.sample(0.5).unwrap() else {
+        panic!("image sample");
+    };
+    assert_eq!(middle.resource(), handle);
+    assert_eq!(middle.mapping().transform().translation(), [0.2, -0.1]);
+    assert_eq!(middle.mapping().transform().scale(), [0.75, 1.25]);
+    assert_eq!(opacity, (0.123456789012345 + 0.75) * 0.5);
+    assert!(PaintTransition::new(
+        Some(SemanticPaint::Image(Arc::new(from))),
+        1.0,
+        Some(SemanticPaint::Solid(Color::WHITE)),
+        1.0
+    )
+    .is_err());
+}

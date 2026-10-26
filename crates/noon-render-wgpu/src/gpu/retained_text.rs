@@ -2351,6 +2351,7 @@ impl RetainedFramePreparer {
             scratch.transform = frame.render_transform(index);
             scratch.style = object.style;
             scratch.fill_gradient = object.fill_gradient.clone();
+            scratch.fill_image = object.fill_image.clone();
             scratch.appearance = object.appearance;
             self.scratch.reveals[scratch_slot] = frame.reveal(index);
             self.scratch.morphs[scratch_slot] = frame.morph(index);
@@ -2654,6 +2655,7 @@ fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
             Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
         ) && object.style.fill.is_some()
             && object.fill_gradient.is_none()
+            && object.fill_image.is_none()
             && object.style.stroke.is_none()
             && reveal == 1.0)
 }
@@ -2735,6 +2737,7 @@ impl RetainedFramePreparer {
                         frame.morph(object_index),
                     );
                     self.scratch.objects[scratch_slot].fill_gradient = object.fill_gradient.clone();
+                    self.scratch.objects[scratch_slot].fill_image = object.fill_image.clone();
                     self.scratch_slots[object_index] = Some(scratch_slot);
                 }
                 ObjectContentRef::Text(handle) => {
@@ -2819,6 +2822,7 @@ impl RetainedFramePreparer {
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -3667,6 +3671,16 @@ impl GpuRenderer {
             &mut Vec<crate::UploadWrite>,
         )>,
     ) -> RetainedUploadStats {
+        let images = if prepared.images.objects.is_empty()
+            && prepared.images.paint_objects.is_empty()
+            && self.images.is_none()
+        {
+            RasterImageUploadStats::default()
+        } else {
+            self.images
+                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format))
+                .upload(device, queue, prepared.images)
+        };
         let geometry = if let Some((observed, writes)) = observed_uploads.as_mut() {
             let mut trace = |buffer, range, offset, bytes: &[u8]| {
                 if observed_geometry_write_matches(observed, buffer, &range) {
@@ -3735,13 +3749,6 @@ impl GpuRenderer {
             uploaded
         } else {
             TextGpuUploadStats::default()
-        };
-        let images = if prepared.images.objects.is_empty() && self.images.is_none() {
-            RasterImageUploadStats::default()
-        } else {
-            self.images
-                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format))
-                .upload(device, queue, prepared.images)
         };
         RetainedUploadStats {
             images,
@@ -4599,6 +4606,7 @@ mod tests {
                 objects: vec![
                     FrameObjectState {
                         fill_gradient: None,
+                        fill_image: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4612,6 +4620,7 @@ mod tests {
                     },
                     FrameObjectState {
                         fill_gradient: None,
+                        fill_image: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4655,6 +4664,7 @@ mod tests {
                 objects: vec![
                     FrameObjectState {
                         fill_gradient: None,
+                        fill_image: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4668,6 +4678,7 @@ mod tests {
                     },
                     FrameObjectState {
                         fill_gradient: None,
+                        fill_image: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4982,6 +4993,7 @@ mod tests {
             };
             FrameObjectState {
                 fill_gradient: None,
+                fill_image: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -5662,6 +5674,7 @@ mod tests {
         );
         frame.objects.push(FrameObjectState {
             fill_gradient: None,
+            fill_image: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

@@ -138,6 +138,44 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
+fn image_fill_rejects_click_glow_enrollment_without_acknowledging_release() {
+    let mut f = Fixture::new(None);
+    let source = f
+        .scene
+        .live(&mut f.session)
+        .create_image(crate::ImageMobjectOptions::rgba8(1, 1, vec![255, 0, 0, 255]).unwrap())
+        .unwrap();
+    let paint = source
+        .image_paint(crate::ImageMapping::default(), None)
+        .unwrap();
+    f.scene
+        .live(&mut f.session)
+        .set_fill_image(&f.targets[0], paint, None)
+        .unwrap();
+    f.send(1, 0, true).unwrap();
+    let frame = f.session.frame().clone();
+    let revision = f.scene.revision();
+    let token = f.session.native_pointer_input_token().unwrap();
+    let nodes = f.scene.integration_store().borrow().len();
+    assert!(f.send(2, 0, false).is_err());
+    assert_eq!(f.session.frame(), &frame);
+    assert_eq!(f.scene.revision(), revision);
+    assert_eq!(f.session.native_pointer_input_token().unwrap(), token);
+    assert_eq!(f.scene.integration_store().borrow().len(), nodes);
+    assert_eq!(f.effect(0), None);
+    assert!(!f.session.interactions_active());
+    f.scene
+        .live(&mut f.session)
+        .on_click(&f.targets[0], None)
+        .unwrap();
+    f.send(2, 0, false).unwrap();
+    assert_eq!(
+        f.session.frame().objects[0].fill_image.as_deref().copied(),
+        Some(paint)
+    );
+}
+
+#[test]
 fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
     use crate::{GradientStop, LinearGradient};
     use std::sync::Arc;

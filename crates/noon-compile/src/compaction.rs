@@ -283,10 +283,28 @@ impl CompiledScene {
             }
         }
 
-        // Ordinary property tracks carry no resource handles, but transform
+        for object in self.objects.iter().filter(|object| object.live) {
+            if let Some(image) = &object.fill_image {
+                if !self.resources.images.contains_key(&image.resource()) {
+                    return 0;
+                }
+                images.insert(image.resource());
+            }
+        }
+        // Transform and paint endpoints may retain resource handles.
         // endpoints and prepared morphs may name external geometry. Resolve
         // those IDs before pruning, just like live object content above.
         for track in self.tracks.values().flatten() {
+            if let TrackValues::Paint { transition } = &track.values {
+                if let Some(paints) = transition.images() {
+                    for paint in paints {
+                        if !self.resources.images.contains_key(&paint.resource()) {
+                            return 0;
+                        }
+                        images.insert(paint.resource());
+                    }
+                }
+            }
             let geometry_refs: &[&GeometryRef] = match &track.values {
                 TrackValues::Object { from, to } => &[&from.geometry, &to.geometry],
                 TrackValues::PreparedMorph { geometry, .. } => &[geometry],

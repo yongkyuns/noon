@@ -36,6 +36,7 @@ pub mod foreground_membership;
 pub mod glow_pulse;
 pub mod graph_queries;
 pub mod image_glow;
+pub mod image_paint;
 pub mod line_passing_flash;
 pub mod linear_gradient;
 pub mod live_geometry_construction;
