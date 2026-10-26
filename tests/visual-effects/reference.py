@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from fractions import Fraction
 
 
 def number(value: float, low: float = 0.0, high: float = math.inf) -> float:
@@ -146,3 +147,60 @@ def assert_field(actual: Sequence[Sequence[float]], expected: Sequence[Sequence[
         for x, (a, b) in enumerate(zip(observed, reference)):
             if abs(a - b) > absolute:
                 raise AssertionError(f"pixel ({x}, {y}): {a} != {b}")
+
+
+def linear_gradient_pixel(start: Sequence[float], end: Sequence[float],
+                          stops: Sequence[tuple[float, Sequence[float]]],
+                          point: Sequence[float], *, coverage: float = 1.0,
+                          fill_opacity: float = 1.0, object_opacity: float = 1.0
+                          ) -> tuple[float, ...]:
+    """Independent exact-rational local-paint oracle; no production imports.
+
+    Input decimal spellings define exact fractions. Project before pad extension,
+    choose the rightmost coincident stop, interpolate encoded-premultiplied RGBA,
+    then multiply coverage and the two distinct opacity domains exactly once.
+    This is a point/coverage oracle, not an independent geometry rasterizer.
+    """
+    def fraction(value, low=-math.inf, high=math.inf):
+        number(value, low, high)
+        return Fraction(str(value))
+
+    if len(start) != 2 or len(end) != 2 or len(point) != 2:
+        raise ValueError("expected two-dimensional normalized local coordinates")
+    a = tuple(fraction(v, 0, 1) for v in start)
+    b = tuple(fraction(v, 0, 1) for v in end)
+    p = tuple(fraction(v) for v in point)
+    axis = tuple(b[i] - a[i] for i in range(2))
+    length_squared = sum(v * v for v in axis)
+    if not length_squared:
+        raise ValueError("degenerate gradient axis")
+    if len(stops) < 2:
+        raise ValueError("expected at least two stops")
+    checked = []
+    for position, color in stops:
+        position = fraction(position, 0, 1)
+        if len(color) != 4:
+            raise ValueError("expected straight encoded RGBA")
+        color = tuple(fraction(v, 0, 1) for v in color)
+        if checked and position < checked[-1][0]:
+            raise ValueError("unordered stops")
+        checked.append((position, tuple(v * color[3] for v in color[:3]) + color[3:]))
+    t = sum((p[i] - a[i]) * axis[i] for i in range(2)) / length_squared
+    left = None
+    right = None
+    for entry in checked:
+        if entry[0] <= t:
+            left = entry
+        elif right is None:
+            right = entry
+    if left is None:
+        color = checked[0][1]
+    elif right is None:
+        color = left[1]
+    else:
+        weight = (t - left[0]) / (right[0] - left[0])
+        color = tuple((1 - weight) * x + weight * y
+                      for x, y in zip(left[1], right[1]))
+    opacity = (fraction(coverage, 0, 1) * fraction(fill_opacity, 0, 1)
+               * fraction(object_opacity, 0, 1))
+    return tuple(float(v * opacity) for v in color)

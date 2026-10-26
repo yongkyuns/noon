@@ -8,6 +8,23 @@ use crate::{
     CompiledSpatialState,
 };
 
+/// Validate the finite continuous-paint execution profile at a genuine external
+/// boundary as well as typed execution-plan publication.
+pub fn validate_fill_gradient(
+    object: ObjectId,
+    gradient: Option<&noon_core::LinearGradient>,
+) -> Result<(), crate::CompilePatchError> {
+    if let Some(gradient) = gradient {
+        crate::semantic_lowering::paint::validate_definition(gradient).map_err(|_| {
+            crate::CompilePatchError::InvalidObjectState {
+                object,
+                field: noon_core::ObjectStateField::Style,
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// Sparse lowered relation between ordinary rectangle rows. Geometry and pose
 /// remain owned by those rows; this contains no separately evaluated view state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +100,7 @@ pub enum ExecutionPatch {
     SetStyle {
         object: ObjectId,
         style: Style,
+        fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
     },
     /// Replace one display's relation. The camera may be detached; the relation
     /// becomes visible only while both execution rows are live.
@@ -215,8 +233,15 @@ impl CompiledScene {
     /// Commit one style value whose object slot and payload were already validated
     /// by the caller's prepared publication proof.
     #[doc(hidden)]
-    pub fn commit_prepared_style_value(&mut self, object_index: u32, style: Style) {
-        self.objects[object_index as usize].base_style = style;
+    pub fn commit_prepared_style_value(
+        &mut self,
+        object_index: u32,
+        style: Style,
+        fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    ) {
+        let object = &mut self.objects[object_index as usize];
+        object.base_style = style;
+        object.fill_gradient = fill_gradient;
     }
 }
 

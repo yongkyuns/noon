@@ -355,6 +355,7 @@ impl SemanticExecutionIndex {
         let objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
+                fill_gradient: state.fill_gradient,
                 semantic_id,
                 glow: state.glow,
                 execution_id: self.ensure_object(semantic_id),
@@ -454,6 +455,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
+    pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     /// Authoritative scene-global semantic identity.
@@ -531,6 +533,10 @@ pub enum SemanticLoweringError {
     UnsupportedGlowProfile {
         owner: SemanticNodeId,
     },
+    UnsupportedPaintProfile {
+        node: SemanticNodeId,
+        field: SemanticExecutionField,
+    },
     Store(SemanticStoreError),
     SceneOperation(noon_core::SemanticSceneOperationError),
     /// A visible object leaf came from a migration-only legacy/state-less path
@@ -603,6 +609,11 @@ impl std::fmt::Display for SemanticLoweringError {
                 "glow on {}:{} requires one attachment on ordinary planar 2D content",
                 owner.slot(),
                 owner.generation()
+            ),
+            Self::UnsupportedPaintProfile { node, field } => write!(
+                formatter,
+                "semantic object {}:{} has unsupported {field}; linear paint requires a finite planar geometry fill with at most 16 GPU-representable stops",
+                node.slot(), node.generation(),
             ),
             Self::Store(error) => error.fmt(formatter),
             Self::SceneOperation(error) => error.fmt(formatter),
@@ -877,6 +888,7 @@ fn lower_graph_dependencies(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
+    pub(super) fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
     pub(super) glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
@@ -989,6 +1001,7 @@ pub(super) fn validate_glow_source_profile(
     };
     lower_semantic_style(owner, state)?;
     if !geometry_supported
+        || matches!(state.style.fill, Some(SemanticPaint::LinearGradient(_)))
         || object_requires_spatial_lowering(state, store)
         || !matches!(
             state.role(),
@@ -1090,6 +1103,7 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     };
     Ok(LoweredObjectState {
+        fill_gradient: super::paint::lower_fill(semantic_id, state, store)?,
         glow: None,
         content: state.content,
         base_transform,
@@ -1111,6 +1125,9 @@ pub(super) fn lower_semantic_transform(
 /// Value-lowering failure before a transaction-local node has a permanent semantic ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticExecutionValueError {
+    UnsupportedPaintProfile {
+        field: SemanticExecutionField,
+    },
     NonFiniteValue {
         field: SemanticExecutionField,
     },
@@ -1127,6 +1144,9 @@ pub enum SemanticExecutionValueError {
 impl std::fmt::Display for SemanticExecutionValueError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedPaintProfile { field } => {
+                write!(formatter, "unsupported {field} paint profile")
+            }
             Self::NonFiniteValue { field } => write!(formatter, "non-finite {field} state"),
             Self::ValueOutOfRange { field } => {
                 write!(
@@ -1149,6 +1169,9 @@ impl std::error::Error for SemanticExecutionValueError {}
 impl SemanticExecutionValueError {
     pub(super) fn with_node(self, node: SemanticNodeId) -> SemanticLoweringError {
         match self {
+            Self::UnsupportedPaintProfile { field } => {
+                SemanticLoweringError::UnsupportedPaintProfile { node, field }
+            }
             Self::NonFiniteValue { field } => SemanticLoweringError::NonFiniteValue { node, field },
             Self::ValueOutOfRange { field } => {
                 SemanticLoweringError::ValueOutOfRange { node, field }
@@ -1290,6 +1313,15 @@ fn lower_paint(
     };
 
     match paint {
+        SemanticPaint::LinearGradient(gradient) => {
+            if paint_field != SemanticExecutionField::FillPaint {
+                return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+                    field: paint_field,
+                });
+            }
+            super::paint::validate_definition(gradient)?;
+            Ok(Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)))
+        }
         SemanticPaint::Solid(color) => {
             if !color.red.is_finite()
                 || !color.green.is_finite()

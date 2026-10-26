@@ -1152,6 +1152,7 @@ mod tests {
         let object = instance.frame().objects[0].id;
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     opacity: 0.5,

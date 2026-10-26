@@ -350,6 +350,8 @@ impl From<&ObjectContentRef> for TransportObjectContent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTransportObjectState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
     pub draw_enabled: bool,
     pub slot: TransportSlotId,
     pub order: u32,
@@ -1805,6 +1807,7 @@ fn transport_object(
     let slot_index = u32::try_from(index)
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
+        fill_gradient: object.fill_gradient.clone(),
         draw_enabled: object.draw_enabled,
         slot: TransportSlotId {
             slot: slot_index,
@@ -1860,6 +1863,8 @@ fn validate_object_state(
 fn validate_object_fields(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
+    noon_compile::validate_fill_gradient(object.object, object.fill_gradient.as_deref())
+        .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
     if object.glow.is_some_and(|glow| glow.to_compiled().is_none())
         || (object.glow.is_some()
             && (!glow_content_is_supported(&object.content)
@@ -2022,6 +2027,7 @@ fn frame_object(
         None => None,
     };
     Ok(FrameObjectState {
+        fill_gradient: object.fill_gradient.clone(),
         draw_enabled: object.draw_enabled,
         glow: object
             .glow
@@ -2102,6 +2108,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2114,6 +2121,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2135,6 +2143,58 @@ mod tests {
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
         }
+    }
+
+    #[test]
+    fn checked_gradient_survives_snapshot_replacement_and_removal_at_worker_boundary() {
+        let gradient = Arc::new(
+            noon_core::LinearGradient::new(
+                [0.0, 0.5],
+                [1.0, 0.5],
+                [
+                    noon_core::GradientStop::new(0.0, Color::rgba(1.0, 0.0, 0.0, 0.0)).unwrap(),
+                    noon_core::GradientStop::new(1.0, Color::rgb(0.0, 0.0, 1.0)).unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+        let mut frame = mixed_frame();
+        frame.objects[0].fill_gradient = Some(gradient.clone());
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert_eq!(
+            json.matches("\"fill_gradient\"").count(),
+            1,
+            "ordinary rows omit paint payload"
+        );
+        let mut mirror = test_mirror();
+        mirror.apply(serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].fill_gradient.as_deref(),
+            Some(gradient.as_ref())
+        );
+        frame.objects[0].fill_gradient = None;
+        let delta = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        mirror.apply(delta).unwrap();
+        assert!(mirror.frame().unwrap().objects[0].fill_gradient.is_none());
+        let mut value = serde_json::to_value(gradient.as_ref()).unwrap();
+        value["stops"][0]["position"] = serde_json::json!(-0.1);
+        assert!(serde_json::from_value::<noon_core::LinearGradient>(value).is_err());
     }
 
     #[test]
@@ -3312,6 +3372,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -3433,6 +3494,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

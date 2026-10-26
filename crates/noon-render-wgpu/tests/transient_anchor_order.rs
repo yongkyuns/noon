@@ -14,6 +14,7 @@ fn state(geometry: GeometryRef, x: f32, color: Color) -> TransientPresentationSt
     let mut transform = Transform2D::IDENTITY;
     transform.translation = Vec2::new(x, 0.0);
     TransientPresentationState {
+        fill_gradient: None,
         z_index: 0.0,
         content: ObjectContentRef::Geometry(geometry),
         text_bounds: None,

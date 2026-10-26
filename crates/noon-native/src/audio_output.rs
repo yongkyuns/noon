@@ -15,8 +15,6 @@ use cpal::{FromSample, SampleFormat, SizedSample, StreamInstant};
 use noon::integration::{AudioMixFormat, PreparedAudioMix, MAX_AUDIO_MIX_BLOCK_FRAMES};
 use noon::ExecutionSession;
 
-#[cfg(test)]
-use crate::NativeApp;
 use crate::{NativeHostError, RealtimeClock};
 
 const MIX_BLOCK_FRAMES: usize = 1_024;

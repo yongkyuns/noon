@@ -1754,6 +1754,7 @@ mod tests {
             time: 0.0,
             objects: (0..2)
                 .map(|index| noon_runtime::FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     id: noon_core::ObjectId::new(index + 1),

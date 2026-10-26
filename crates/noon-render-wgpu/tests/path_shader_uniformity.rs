@@ -10,7 +10,7 @@ fn shader_function(name: &str) -> &'static str {
 
 #[test]
 fn reveal_derivative_runs_before_reveal_control_flow() {
-    for entry in ["fs_path", "fs_path_compact", "fs_path_stroke"] {
+    for entry in ["path_color", "fs_path_compact", "path_stroke_color"] {
         let fragment = shader_function(entry);
         let derivative = fragment
             .find("let edge = max(fwidth(input.path_progress)")
@@ -28,6 +28,12 @@ fn reveal_derivative_runs_before_reveal_control_flow() {
                 "derive coverage before fragment branches"
             );
         }
+    }
+    for (entry, helper) in [
+        ("fs_path", "path_color"),
+        ("fs_path_stroke", "path_stroke_color"),
+    ] {
+        assert!(shader_function(entry).contains(&format!("return {helper}(input)")));
     }
     let reveal = shader_function("revealed_path_color");
     assert!(

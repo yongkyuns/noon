@@ -18,6 +18,7 @@ use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 /// second geometry/text world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayObjectState {
+    pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
     pub z_index: f64,
     pub content: ObjectContentRef,
     pub text_bounds: Option<Rect>,
@@ -478,6 +479,7 @@ mod derived_display_tests {
 
     fn derived_state() -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
+            fill_gradient: None,
             z_index: 2.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             text_bounds: None,
@@ -499,6 +501,7 @@ mod derived_display_tests {
         FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                fill_gradient: None,
                 draw_enabled: true,
                 glow: None,
                 id: ObjectId::new(1),
@@ -592,6 +595,7 @@ mod derived_display_tests {
             ..Transform2D::IDENTITY
         };
         let state = DerivedDisplayObjectState {
+            fill_gradient: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             text_bounds: None,

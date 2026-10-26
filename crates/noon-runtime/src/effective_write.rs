@@ -160,6 +160,7 @@ impl EffectivePropertyWrite {
                 }
             }
             Self::Presence { object, .. } => ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style::default(),
             },
@@ -174,7 +175,11 @@ impl EffectivePropertyWrite {
                     orientation: SemanticOrientation::Spatial(world.rotation),
                 },
             },
-            Self::Style { object, style } => ExecutionPatch::SetStyle { object, style },
+            Self::Style { object, style } => ExecutionPatch::SetStyle {
+                fill_gradient: None,
+                object,
+                style,
+            },
             Self::Translation {
                 object,
                 translation,
@@ -200,6 +205,7 @@ impl EffectivePropertyWrite {
                 },
             },
             Self::Fill { object, fill } => ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     fill,
@@ -207,6 +213,7 @@ impl EffectivePropertyWrite {
                 },
             },
             Self::Stroke { object, stroke } => ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     stroke,
@@ -217,6 +224,7 @@ impl EffectivePropertyWrite {
                 object,
                 stroke_width,
             } => ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     stroke_width,
@@ -224,6 +232,7 @@ impl EffectivePropertyWrite {
                 },
             },
             Self::Opacity { object, opacity } => ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     opacity,
@@ -279,6 +288,7 @@ pub(crate) fn apply_effective_property_to_row(
             return;
         }
         EffectivePropertyWrite::Style { style, .. } => {
+            *row.fill_gradient = None;
             *row.style = style;
             return;
         }

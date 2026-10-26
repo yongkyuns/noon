@@ -50,8 +50,8 @@ use noon_core::{
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
 pub use execution_patch::{
-    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, CompiledInset2DView,
-    ExecutionMutationTransaction, ExecutionPatch,
+    validate_fill_gradient, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
+    CompiledInset2DView, ExecutionMutationTransaction, ExecutionPatch,
 };
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
@@ -122,6 +122,8 @@ impl DynamicProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
+    /// Derived continuous fill definition; solid fills retain the compact style.
+    pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
     /// Whether this object can draw; its query geometry remains available.
     pub draw_enabled: bool,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
@@ -244,6 +246,7 @@ impl CompiledObject {
         base_style: Style,
     ) -> Self {
         Self {
+            fill_gradient: None,
             draw_enabled: true,
             id,
             content: content.into(),
@@ -1929,9 +1932,14 @@ impl CompiledScene {
             ExecutionPatch::SetDrawEnabled { object, enabled } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].draw_enabled != *enabled),
-            ExecutionPatch::SetStyle { object, style } => self
-                .object_index(*object)
-                .is_none_or(|index| self.objects[index as usize].base_style != *style),
+            ExecutionPatch::SetStyle {
+                object,
+                style,
+                fill_gradient,
+            } => self.object_index(*object).is_none_or(|index| {
+                self.objects[index as usize].base_style != *style
+                    || self.objects[index as usize].fill_gradient != *fill_gradient
+            }),
             ExecutionPatch::SetGlow { object, glow } => {
                 self.object_index(*object).is_none_or(|index| {
                     self.objects[index as usize].glow.as_deref() != Some(glow.as_ref())
@@ -2292,12 +2300,18 @@ impl CompiledScene {
                 }
                 self.refresh_cairo_path_control_points(index);
             }
-            ExecutionPatch::SetStyle { object, style } => {
+            ExecutionPatch::SetStyle {
+                object,
+                style,
+                fill_gradient,
+            } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
+                execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
                 self.objects[index as usize].base_style = *style;
+                self.objects[index as usize].fill_gradient = fill_gradient.clone();
             }
             ExecutionPatch::SetGlow { object, glow } => {
                 let index = self
@@ -2850,6 +2864,7 @@ fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchE
     }
     validate_execution_content(object.id, &object.content, object.text_bounds)?;
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
+    execution_patch::validate_fill_gradient(object.id, object.fill_gradient.as_deref())?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
 }
 
@@ -4467,6 +4482,7 @@ mod tests {
         assert_eq!(compiled.objects()[0].base_transform, Transform2D::IDENTITY);
 
         let valid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+            fill_gradient: None,
             object,
             style: Style::default(),
         }]);

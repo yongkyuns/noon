@@ -1052,6 +1052,7 @@ mod tests {
 
     fn semantic_object(id: u64, content: ObjectContentRef) -> FrameObjectState {
         FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

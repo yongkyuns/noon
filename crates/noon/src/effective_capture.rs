@@ -88,9 +88,13 @@ pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
     effective: Style,
 ) -> Result<SemanticStyle, AuthoringError> {
-    if matches!(authored.fill.as_ref(), Some(SemanticPaint::Resource(_)))
-        || matches!(authored.stroke.as_ref(), Some(SemanticPaint::Resource(_)))
-    {
+    if matches!(
+        authored.fill.as_ref(),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_))
+    ) || matches!(
+        authored.stroke.as_ref(),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_))
+    ) {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));

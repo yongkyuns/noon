@@ -126,6 +126,66 @@ cross-host binding execution or physical-performance result follows from declara
 The separate leaf-adapter section records implemented binding source and its
 validation boundary without reclassifying the future-feature review programs.
 
+## Linear-gradient values and reference boundary
+
+The first paint prerequisite for #1897 defines checked inert Rust `GradientStop`
+and `LinearGradient` values in `noon-core::object_state`. The integration now
+carries these immutable definitions through semantic fill, checked planar
+lowering, compiled/effective rows, atomic style publication, the genuine worker
+codec, and retained analytic/path draws. No placeholder Scene setter or Python
+class is exported. This remains **an integration prerequisite, not a supported
+cross-language paint/animation feature or M3 completion**.
+
+The finite GPU definition admits at most 16 stops, distinct endpoints after f32
+conversion, and no distinct stop positions that collapse to one GPU position.
+Text, images and spatial paint are rejected by semantic lowering. Gradient source
+capture with glow and transient derived-display packing are explicitly rejected
+until their shared integration is implemented. Ordinary gradient animation,
+effective target capture, paired public authoring, actual browser execution and
+the broader coverage/quality/performance gates remain outstanding.
+
+The native `continuous_gradient_pixels_match_literal_encoded_ldr_reference`
+test checks analytic circles/rectangles, convex paths and tessellated concave
+paths against literal encoded-LDR interior references. Its eight profiles cover
+solid baseline, local paint edits, transparent-stop premultiplication,
+right-continuous coincident stops, diagonal axes, separate fill/object opacity
+and affine transforms. It requests a real adapter and fails if none is available;
+it is not a software/noop pixel test. Retained structural tests check no paint
+program on an ordinary frame, one reused uniform per changed paint, zero clean
+uploads, unchanged path meshes and bounded painter-chunk rebuilding. A 100,000
+object runtime test checks atomic, sparse paint-only publication and idempotence.
+These component tests do not qualify coverage edges, temporal paint interpolation,
+export equivalence, physical-device performance or browser/backend parity.
+
+For the first encoded-LDR profile:
+
+- Endpoints are distinct finite points in the normalized local geometry box.
+  `(0, 0)` is its lower-left corner and `(1, 1)` its upper-right. Motion, camera
+  zoom and object scale do not rewrite the paint definition.
+- At least two stops are explicitly ordered by finite positions in `[0, 1]`.
+  Repeated positions are hard edges; the last coincident stop wins exactly at
+  the edge. Positions are not silently sorted or deduplicated. Before the first
+  stop, pad uses the first color; after the last, it uses the last color. In
+  particular, sampling before a repeated stop at zero differs from sampling
+  exactly at zero. Do not clamp the projected coordinate before stop selection.
+- Sample by projecting the local point onto the endpoint axis. Interpolate
+  **premultiplied encoded-sRGB RGBA**, preventing invisible RGB from leaking into
+  partially transparent samples. This profile introduces no linear-light/HDR
+  transfer. Coverage, fill opacity and final object opacity multiply the result
+  once each at their existing owners; they are not baked into stop colors.
+- Definition clones share immutable stop storage. Invalid values fail before a
+  definition exists. A valid short axis must not divide by an underflowed squared
+  length; renderer lowering must separately qualify representable GPU inputs.
+
+`reference.linear_gradient_pixel` uses exact rational arithmetic from decimal
+input spellings, independent of Rust's rescaled f64 projection and binary stop
+lookup. Both implementations check the 25 specification-derived samples in
+`linear-gradient-vectors.txt`; the Python oracle independently recomputes their
+expected values. Literal vectors and seeded defects cover projection, units, hard edges,
+transparent color, and double-applied opacity. The existing `test_reference.py`
+entrypoint includes these tests. These component tests do not establish geometry
+rasterization, GPU pixels, temporal behavior, cross-host parity or performance.
+
 ## Implemented shared Rust boundary
 
 `crates/noon-core/src/object_state/glow.rs` contains production, renderer-independent

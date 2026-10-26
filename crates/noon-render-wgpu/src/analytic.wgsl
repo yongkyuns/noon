@@ -413,8 +413,7 @@ fn capsule_signed_distance(position: vec2<f32>, half_length: f32, radius: f32) -
     return length(offset) - radius;
 }
 
-@fragment
-fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
+fn circle_color(input: VertexOutput) -> vec4<f32> {
     let radius = max(abs(input.geometry.x), 0.000001);
     let reveal = clamp(input.geometry.y, 0.0, 1.0);
     let signed_distance = length(input.local) - radius;
@@ -499,8 +498,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     return stroke_layer + fill_layer * (1.0 - stroke_layer.a);
 }
 
-@fragment
-fn fs_rectangle(input: RectangleVertexOutput) -> @location(0) vec4<f32> {
+fn rectangle_color(input: RectangleVertexOutput) -> vec4<f32> {
     let half_size = max(abs(input.geometry) * 0.5, vec2<f32>(0.000001));
     let signed_distance = rectangle_signed_distance(input.local, half_size);
     let fill_coverage = rectangle_fill_coverage(input);
@@ -557,4 +555,14 @@ fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
     let coverage = select(sdf_coverage, butt_coverage, use_box_coverage);
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
     return styled_line_color(input, coverage) * visible;
+}
+
+@fragment
+fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
+    return circle_color(input);
+}
+
+@fragment
+fn fs_rectangle(input: RectangleVertexOutput) -> @location(0) vec4<f32> {
+    return rectangle_color(input);
 }
