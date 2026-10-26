@@ -90,7 +90,7 @@ import json
 import _manim_scene as operations
 import _manim_semantic_handles as handles
 from js import noonForeignGeometryFactory
-from noon import Scene, Square, Transform
+from noon import NoonError, Scene, Square, Transform
 ordinary_factory = handles._create_geometry_handle
 try:
     handles._create_geometry_handle = noonForeignGeometryFactory
@@ -116,7 +116,7 @@ operations._begin_async_continuation_construct(rejected_scene)
 try:
     try:
         rejected_scene.play(Transform(rejected_source, foreign_target), run_time=1)
-    except ValueError as error:
+    except NoonError as error:
         assert "another authoring store" in str(error), str(error)
     else:
         raise AssertionError("foreign composition target was accepted")
@@ -211,6 +211,63 @@ _font_result_json = json.dumps({"family": face.family, "faceIndex": face.face_in
     "width": explicit.width, "liveObjectCount": len(font_scene.mobjects)})
 `);
   report.nativeFontInput = JSON.parse(pyodide.globals.get("_font_result_json"));
+  // Retained text uses the same edge/mask placement as other Mobjects. Exercise
+  // actual measured text bounds, running publication, and a detached animate
+  // target; forwarding-only fixtures cannot establish these shared semantics.
+  pyodide.runPython(`
+from noon import LEFT, RIGHT, UP, Square, VGroup, linear
+import _manim_scene
+_text_placement_rows = []
+for text_type in (Text, MarkupText):
+    edge = UP + LEFT
+    label = text_type("ABg", font_size=24)
+    assert label.move_to((2.0, 1.0, 0.0), aligned_edge=edge) is label
+    assert abs(label.get_left()[0] - 2.0) < 1e-6
+    assert abs(label.get_top()[1] - 1.0) < 1e-6
+    anchor = VGroup(Square(1).shift(LEFT), Square(1).shift(RIGHT))
+    before_y = label.get_center()[1]
+    label.move_to(anchor, edge, (1, 0, 0))
+    assert abs(label.get_left()[0] - anchor.get_left()[0]) < 1e-6
+    assert abs(label.get_center()[1] - before_y) < 1e-6
+
+    placement_scene = Scene()
+    placement_token = _manim_reactive._enter_authoring_scene(placement_scene)
+    try:
+        region = Square(2).shift(RIGHT)
+        moving = text_type("ABg", font_size=24)
+        placement_scene.add(region, moving)
+        context = _manim_scene.execution_context(placement_scene)
+        context.ordinaryWait(0.1)
+        # The target has moved after runtime startup; placement must read its
+        # current shared bounds and preserve the masked coordinate.
+        region.shift(UP + RIGHT)
+        before_y = moving.get_center()[1]
+        moving.move_to(region, aligned_edge=edge, coor_mask=(1, 0, 0))
+        assert abs(moving.get_left()[0] - region.get_left()[0]) < 1e-6
+        assert abs(moving.get_center()[1] - before_y) < 1e-6
+        before_x = moving.get_center()[0]
+        moving.move_to((3, -1, 0), edge, (0, 1, 0))
+        assert abs(moving.get_top()[1] + 1) < 1e-6
+        assert abs(moving.get_center()[0] - before_x) < 1e-6
+        before = tuple(moving.get_center())
+        animation = moving.animate.move_to(region, aligned_edge=edge)
+        assert tuple(moving.get_center()) == before
+        assert abs(animation.target.get_top()[1] - region.get_top()[1]) < 1e-6
+        candidate, *_ = _manim_scene._build_canonical_composition_candidate(
+            placement_scene, "parallel", (animation,), None,
+            {"run_time": 1, "rate_func": linear})
+        endpoint = context.beginOrdinaryComposition(candidate)
+        context.liveAdvanceSegmentTo(endpoint)
+        context.liveCompleteSegment()
+        assert abs(moving.get_left()[0] - region.get_left()[0]) < 1e-6
+        assert abs(moving.get_top()[1] - region.get_top()[1]) < 1e-6
+        _text_placement_rows.append({"type": text_type.__name__,
+            "left": moving.get_left()[0], "top": moving.get_top()[1]})
+    finally:
+        _manim_reactive._leave_authoring_scene(placement_token)
+_text_placement_result_json = json.dumps(_text_placement_rows)
+`);
+  report.textPlacement = JSON.parse(pyodide.globals.get("_text_placement_result_json"));
   // A long text leaf must receive the flat play override just like its moving
   // sibling. Otherwise root rescaling accelerates the sibling to finish early.
   // Exercise the production Python route and generated bindings, without a GPU.
@@ -294,7 +351,7 @@ _result_json = json.dumps({"object_count": len(scene.mobjects), "time": scene.ti
   assert.equal(report.observed.object_count, 1);
   assert.ok(Math.abs(report.observed.time - 0.1) < 1e-9);
   assert.equal(report.observed.ownership, "active");
-  assert.deepEqual(report.observed.center, [0, 0]);
+  assert.deepEqual(report.observed.center, [0, 0, 0]);
   report.result = "PASS";
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {
