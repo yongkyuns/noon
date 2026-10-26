@@ -122,12 +122,14 @@ impl Host {
         }
     }
     fn send(&mut self, kind: BrowserPointerKind, source: u64) -> Result<bool, String> {
-        self.presentation.submit(
-            &mut self.reader,
-            &mut self.binding,
-            &mut self.sequence,
-            wire(kind, source),
-        )
+        self.presentation
+            .submit(
+                &mut self.reader,
+                &mut self.binding,
+                &mut self.sequence,
+                wire(kind, source),
+            )
+            .map(|publication| publication.is_some())
     }
     fn click(&mut self, source: u64) {
         assert!(self.send(BrowserPointerKind::Press, source).unwrap());
