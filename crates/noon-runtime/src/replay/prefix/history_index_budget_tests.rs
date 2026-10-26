@@ -136,7 +136,12 @@ fn history_index_budget_rejects_nonempty_history_without_sealing_or_losing_it() 
     source.seal_replay().unwrap();
     source.seek(0.5).unwrap();
     assert_eq!(
-        source.frame().presences.iter().filter(|&&live| live).count(),
+        source
+            .frame()
+            .presences
+            .iter()
+            .filter(|&&live| live)
+            .count(),
         1
     );
 }
@@ -181,7 +186,12 @@ fn history_index_budget_stays_reserved_through_delivery_rewind_and_completion() 
         receiver.prepare_seek(&mut runtime, time).unwrap();
         runtime.seek(time).unwrap();
         assert_eq!(
-            runtime.frame().presences.iter().filter(|&&live| live).count(),
+            runtime
+                .frame()
+                .presences
+                .iter()
+                .filter(|&&live| live)
+                .count(),
             count
         );
         let history = runtime.replay_history.as_ref().unwrap();
@@ -195,7 +205,12 @@ fn history_index_budget_allows_zero_capacity_quiet_history_and_terminal_marker()
     let mut source = source(0);
     let (mut publisher, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
     assert_eq!(
-        runtime.replay_history.as_ref().unwrap().revisions.capacity(),
+        runtime
+            .replay_history
+            .as_ref()
+            .unwrap()
+            .revisions
+            .capacity(),
         0
     );
     source.seal_replay().unwrap();
@@ -207,7 +222,12 @@ fn history_index_budget_allows_zero_capacity_quiet_history_and_terminal_marker()
     assert_eq!(receiver.end_time(), Some(1.0));
     assert_eq!(runtime.frame().time, 1.0);
     assert_eq!(
-        runtime.replay_history.as_ref().unwrap().revisions.capacity(),
+        runtime
+            .replay_history
+            .as_ref()
+            .unwrap()
+            .revisions
+            .capacity(),
         0
     );
 }

@@ -13,9 +13,8 @@ fn object(id: u64) -> CompiledObject {
 }
 
 fn source() -> SceneInstance {
-    let mut source = SceneInstance::new(
-        CompiledScene::compile_objects(vec![object(0)], &[]).unwrap(),
-    );
+    let mut source =
+        SceneInstance::new(CompiledScene::compile_objects(vec![object(0)], &[]).unwrap());
     source
         .begin_replay_retention(ReplayLimits {
             revisions: 16,
@@ -160,7 +159,10 @@ fn object_vector_bootstrap_rejection_preserves_source_history_and_readiness() {
     assert!(matches!(bootstrap(&source, 0), Err(PrefixError::NotReady)));
     for (time, count) in [(0.5, 1), (1.5, 2)] {
         source.seek(time).unwrap();
-        assert_eq!(source.frame().presences.iter().filter(|&&p| p).count(), count);
+        assert_eq!(
+            source.frame().presences.iter().filter(|&&p| p).count(),
+            count
+        );
     }
 }
 
@@ -184,7 +186,10 @@ fn object_vector_bootstrap_reserves_inactive_rows_for_historical_order() {
     for (time, count) in [(1.5, 2), (2.5, 1), (0.5, 1), (1.5, 2)] {
         receiver.prepare_seek(&mut runtime, time).unwrap();
         runtime.seek(time).unwrap();
-        assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), count);
+        assert_eq!(
+            runtime.frame().presences.iter().filter(|&&p| p).count(),
+            count
+        );
         assert_eq!(object_budget::reserved_bytes(&runtime, 0), Some(bytes));
         assert_eq!(runtime.frame.objects.as_ptr(), pointer);
     }
@@ -271,7 +276,10 @@ fn object_vector_receiver_rejects_before_requesting_growth_and_preserves_pending
         for (time, count) in [(1.5, 2), (0.5, 1), (1.5, 2)] {
             receiver.prepare_seek(&mut runtime, time).unwrap();
             runtime.seek(time).unwrap();
-            assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), count);
+            assert_eq!(
+                runtime.frame().presences.iter().filter(|&&p| p).count(),
+                count
+            );
             assert_eq!(object_budget::reserved_bytes(&runtime, 0), retained);
         }
     }
@@ -420,7 +428,10 @@ fn object_vector_noop_reservation_rechecks_capacity_left_by_partial_growth() {
         for (time, count) in [(1.5, 2), (0.5, 1)] {
             receiver.prepare_seek(&mut runtime, time).unwrap();
             runtime.seek(time).unwrap();
-            assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), count);
+            assert_eq!(
+                runtime.frame().presences.iter().filter(|&&p| p).count(),
+                count
+            );
         }
     }
 }

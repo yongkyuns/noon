@@ -77,7 +77,10 @@ fn history_payload_budget_exact_limit_and_rejected_preflight_are_atomic() {
     assert_eq!(full.bytes(), 7);
     assert_eq!(full.with_additional(0).unwrap(), full);
     assert_eq!(
-        HistoryPayloadBudget::new(0).with_additional(0).unwrap().bytes(),
+        HistoryPayloadBudget::new(0)
+            .with_additional(0)
+            .unwrap()
+            .bytes(),
         0
     );
 }
@@ -130,7 +133,10 @@ fn history_payload_bootstrap_rejection_preserves_source_and_ordinary_replay() {
     source.seal_replay().unwrap();
     for (time, live) in [(0.5, 1), (1.5, 2), (0.5, 1)] {
         source.seek(time).unwrap();
-        assert_eq!(source.frame().presences.iter().filter(|&&p| p).count(), live);
+        assert_eq!(
+            source.frame().presences.iter().filter(|&&p| p).count(),
+            live
+        );
     }
 }
 
@@ -268,7 +274,10 @@ fn history_payload_receiver_rejects_before_capacity_and_can_adopt_the_same_batch
         for (time, live) in [(1.5, 2), (0.5, 1), (1.5, 2)] {
             receiver.prepare_seek(&mut runtime, time).unwrap();
             runtime.seek(time).unwrap();
-            assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), live);
+            assert_eq!(
+                runtime.frame().presences.iter().filter(|&&p| p).count(),
+                live
+            );
             assert_eq!(receiver.retained_history_payload_bytes(), bytes);
             assert_eq!(retained_bytes(&runtime), bytes);
         }
@@ -308,9 +317,8 @@ fn history_payload_exact_limit_keeps_rewind_and_empty_terminal_delivery_availabl
 #[test]
 fn history_payload_zero_budget_admits_quiet_history_and_terminal_endpoint() {
     let mut source = source();
-    let (mut publisher, mut runtime, mut receiver) = source
-        .create_prefix_projection_with_budgets(0, 0)
-        .unwrap();
+    let (mut publisher, mut runtime, mut receiver) =
+        source.create_prefix_projection_with_budgets(0, 0).unwrap();
     source.seal_replay().unwrap();
     let terminal = source.prepare_prefix_finish(&mut publisher).unwrap();
     assert_eq!(terminal.history_payload_bytes(), 0);
@@ -356,7 +364,10 @@ fn history_payload_receiver_accumulates_bootstrap_and_suffix_bytes() {
     for (time, live) in [(2.5, 3), (0.5, 1), (1.5, 2)] {
         receiver.prepare_seek(&mut runtime, time).unwrap();
         runtime.seek(time).unwrap();
-        assert_eq!(runtime.frame().presences.iter().filter(|&&p| p).count(), live);
+        assert_eq!(
+            runtime.frame().presences.iter().filter(|&&p| p).count(),
+            live
+        );
         assert_eq!(
             receiver.retained_history_payload_bytes(),
             initial + additional
