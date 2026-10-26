@@ -66,6 +66,10 @@ mod authoring_plot_presentation;
 mod authoring_plotting;
 #[cfg(target_arch = "wasm32")]
 mod authoring_polar_plane;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_presentation;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_presentation::*;
 #[cfg(target_arch = "wasm32")]
 mod authoring_sample_space;
 #[cfg(target_arch = "wasm32")]

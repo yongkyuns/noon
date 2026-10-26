@@ -48,6 +48,11 @@ const expectedJavascriptSurface = [
   "export class WasmGlow {",
   "export class WasmGlowUpdate {",
   "export class WasmEffectHandle {",
+  "export class WasmTheme {",
+  "export class WasmPresentationTextStyle {",
+  "textStyle(role)",
+  "categorical(index)",
+  "get categoricalCount()",
   "authoredDefinition()",
   "setGlow(",
   "getEffect(",
@@ -298,6 +303,17 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "export class WasmTheme",
+  "constructor(preset: string)",
+  "color(role: string): WasmManimColor",
+  "spacing(role: string): number",
+  "categorical(index: number): WasmManimColor",
+  "readonly categoricalCount: number",
+  "textStyle(role: string): WasmPresentationTextStyle",
+  "export class WasmPresentationTextStyle",
+  "readonly fontFamily: string",
+  "readonly fontSize: number",
+  "readonly lineSpacing: number",
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
@@ -621,6 +637,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "export function createDirectPresentationPresetsSmokeRenderer(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectTypstCanvasRenderer(",
@@ -705,6 +722,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "export function createDirectPresentationPresetsSmokeRenderer(",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

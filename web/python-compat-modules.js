@@ -12,6 +12,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/_noon_diagnostics.py", runtimePath: "/tmp/_noon_diagnostics.py", label: "Noon Python source diagnostics" },
   { sourcePath: "python/_noon_effects.py", runtimePath: "/tmp/_noon_effects.py", label: "Noon effect declaration adapter" },
+  { sourcePath: "python/_noon_presentation.py", runtimePath: "/tmp/_noon_presentation.py", label: "Noon shared presentation adapter" },
   { sourcePath: "python/_noon_audio.py", runtimePath: "/tmp/_noon_audio.py", label: "Noon finite audio authoring" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
   { sourcePath: "python/_manim_unit.py", runtimePath: "/tmp/_manim_unit.py", label: "Noon configuration-independent unit values" },

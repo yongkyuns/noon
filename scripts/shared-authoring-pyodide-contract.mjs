@@ -67,6 +67,7 @@ try {
     noonCreateAuthoringMarkupTextHandle: (...args) => authoringStore.createManimMarkupText(...args),
     noonGlowUpdate: (...args) => new wasm.WasmGlowUpdate(...args),
     noonGlow: (update) => new wasm.WasmGlow(update),
+    noonTheme: preset => new wasm.WasmTheme(preset),
     noonResolveAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args),
     noonResolveCreateAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveCreateAnimationOptions, ...args),
     noonResolveGlowPulseAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveGlowPulseAnimationOptions, ...args),
@@ -90,7 +91,7 @@ import json
 import _manim_scene as operations
 import _manim_semantic_handles as handles
 from js import noonForeignGeometryFactory
-from noon import Scene, Square, Transform
+from noon import NoonError, Scene, Square, Transform
 ordinary_factory = handles._create_geometry_handle
 try:
     handles._create_geometry_handle = noonForeignGeometryFactory
@@ -116,7 +117,7 @@ operations._begin_async_continuation_construct(rejected_scene)
 try:
     try:
         rejected_scene.play(Transform(rejected_source, foreign_target), run_time=1)
-    except ValueError as error:
+    except NoonError as error:
         assert "another authoring store" in str(error), str(error)
     else:
         raise AssertionError("foreign composition target was accepted")
@@ -294,7 +295,38 @@ _result_json = json.dumps({"object_count": len(scene.mobjects), "time": scene.ti
   assert.equal(report.observed.object_count, 1);
   assert.ok(Math.abs(report.observed.time - 0.1) < 1e-9);
   assert.equal(report.observed.ownership, "active");
-  assert.deepEqual(report.observed.center, [0, 0]);
+  assert.deepEqual(report.observed.center, [0, 0, 0]);
+  const theme = new wasm.WasmTheme("dark");
+  try {
+    for (const index of [-1, 0.5, 2 ** 32, NaN, Infinity]) {
+      assert.throws(() => theme.categorical(index), error =>
+        error.category === "invalid_input" && error.code === "presentation.invalid_category_index");
+    }
+  } finally {
+    theme.free();
+  }
+  const presentationContract = fs.readFileSync(path.join(root, "scripts/presentation-presets-contract.py"), "utf8");
+  const presentationExample = fs.readFileSync(path.join(root, "web/python/examples/presentation_presets.py"), "utf8");
+  pyodide.runPython(presentationContract);
+  report.presentation = {
+    contractSha256: hash(presentationContract), exampleSha256: hash(presentationExample),
+    values: JSON.parse(pyodide.globals.get("_presentation_values_json")),
+  };
+  pyodide.runPython(presentationExample + `
+scene = PresentationPresets()
+token = _manim_reactive._enter_authoring_scene(scene)
+try:
+    scene.construct()
+finally:
+    _manim_reactive._leave_authoring_scene(token)
+_presentation_example_json = json.dumps({"families": len(scene.mobjects), "time": scene.time,
+    "ownership": str(_manim_scene.execution_context(scene).liveExecutionOwnership())})
+`);
+  report.presentation.example = JSON.parse(pyodide.globals.get("_presentation_example_json"));
+  assert.equal(report.presentation.example.families, 4);
+  assert.equal(report.presentation.example.time, 0);
+  assert.equal(report.presentation.example.ownership, "none",
+    "static authoring must not invent a live continuation");
   report.result = "PASS";
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {

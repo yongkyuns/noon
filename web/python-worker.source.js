@@ -5,6 +5,7 @@ import initNoonWeb, {
   WasmAuthoringFamilyHandle,
   WasmGlow,
   WasmGlowUpdate,
+  WasmTheme,
   WasmAuthoringVectorPath,
   WasmCoordinateOptions,
   WasmBarChartOptions,
@@ -373,6 +374,7 @@ async function initializePyodide() {
     return entries;
   };
   self.noonTableOptions = (...args) => new WasmTableOptions(...args);
+  self.noonTheme = (preset) => new WasmTheme(preset);
   self.noonCodeOptions = (...args) => new WasmCodeOptions(...args);
   self.noonCodeFromFamily = (family) => family.asCode();
   self.noonCodeStylesList = () => noonCodeStylesList();

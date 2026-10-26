@@ -70,6 +70,61 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
+### Presentation presets
+
+Use an explicit `Theme` to share semantic colors, typography and spacing across
+scene objects. The dark and light presets are immutable Rust values. Python's
+`theme.text` creates an ordinary `Text`; explicit keyword arguments override the
+selected role for that object.
+
+```python
+from noon import *
+
+class PresentationExample(Scene):
+    def construct(self):
+        theme = Theme.dark()
+        title = theme.text("Meaning before styling", role="title")
+        caption = theme.text("Shared typography and measured spacing", role="caption")
+        VGroup(title, caption).arrange(DOWN, buff=theme.spacing("large"))
+        self.play(Write(title), FadeIn(caption))
+        self.wait(1)
+```
+
+Native Rust selects the same roles and receives the normal `Text` builder:
+
+```rust
+use noon::{ColorRole, Scene, TextRole, Theme};
+
+let theme = Theme::dark();
+let mut scene = Scene::new();
+let title = scene.text(
+    theme.text("Meaning before styling", TextRole::Title)
+        .with_font_size(32.0)
+        .color(theme.color(ColorRole::Accent)),
+)?;
+scene.add(&title)?;
+```
+
+Text roles are `title`, `subtitle`, `body` (the default), `caption`, `label` and
+`code`. Color roles are `background`, `surface`, `raised_surface`, `foreground`,
+`muted`, `outline`, `accent`, `positive`, `warning` and `negative`. Spacing roles
+are `page`, `panel`, `small`, `normal` and `large`, measured in scene units.
+`theme.categorical(index)` selects one of `theme.categorical_count` category
+colors and rejects an exhausted palette; the scene assigns domain meaning to
+each category. Rust uses `ColorRole`, `TextRole` and `SpacingRole` enums.
+
+Theme selection is local to the authoring code, and ordinary `Text(...)` keeps
+its existing defaults. Apply background colors to ordinary scene geometry and
+place objects with the shared layout operations. The `code` text role selects
+plain-text typography; syntax-highlighted listings use the separate `Code`
+component below. Automatic scene-wide theme selection, content regions and Code
+focus are tracked in [#2302](https://github.com/yongkyuns/noon/issues/2302).
+
+The paired [Python scene](web/python/examples/presentation_presets.py) and
+[native Rust example](crates/noon-native/examples/presentation_presets.rs) show
+both presets together, an explicit per-object override and standard family
+arrangement.
+
 ### Code blocks
 
 `Code` displays source with native syntax highlighting and preserved indentation.

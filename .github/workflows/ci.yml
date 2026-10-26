@@ -26,6 +26,7 @@ on:
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/presentation-*"
       - "scripts/table-*"
       - "scripts/manim-table-*"
       - "fixtures/manim-v0.21/table-*"
@@ -47,6 +48,9 @@ on:
       - "crates/noon-web/src/semantic_execution_player*"
       - "crates/noon-web/src/semantic_execution_player/**"
       - "crates/noon-web/src/direct_execution_smoke.rs"
+      - "crates/noon-web/src/authoring_presentation.rs"
+      - "crates/noon/src/presentation*"
+      - "crates/noon/src/presentation/**"
       - "scripts/spatial-surface-light-qualification.mjs"
       - "scripts/special-camera-qualification.mjs"
       - "web/python/examples/noon_spatial_surface_lighting.py"
@@ -449,6 +453,10 @@ jobs:
         run: |
           node scripts/special-camera-qualification.mjs
           NOON_CAMERA_NO_JSPI=1 NOON_PAIRED_CASES=following_graph_camera-1.5,moving_zoomed_scene_around-9.5 node scripts/special-camera-qualification.mjs
+      - name: Qualify shared presentation presets through Rust and Python
+        env:
+          NOON_PRESENTATION_ARTIFACTS: browser-smoke-artifacts/presentation
+        run: node scripts/presentation-qualification.mjs
       - name: Test WebGPU camera backing-density invariance
         env:
           NOON_BROWSER_SMOKE_BACKEND: webgpu

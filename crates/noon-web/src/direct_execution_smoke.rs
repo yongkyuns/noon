@@ -1117,6 +1117,16 @@ pub async fn create_direct_style_operations_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// The same typed presentation example used by the native executable and Python
+/// paired-authoring qualification, without an in-process serialization boundary.
+#[wasm_bindgen(js_name = createDirectPresentationPresetsSmokeRenderer)]
+pub async fn create_direct_presentation_presets_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::presentation_presets::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Public ordinary-object edits/copies use the same native scene and renderer.
 #[wasm_bindgen(js_name = createDirectObjectMembershipQueriesRenderer)]
 pub async fn create_direct_object_membership_queries_renderer(
