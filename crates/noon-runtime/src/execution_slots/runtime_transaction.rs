@@ -979,6 +979,7 @@ mod tests {
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 object,
+                fill_gradient: None,
                 style: Style {
                     opacity: 0.5,
                     ..Style::default()
@@ -1019,6 +1020,7 @@ mod tests {
         };
         let style = ExecutionPatch::SetStyle {
             object,
+            fill_gradient: None,
             style: Style {
                 opacity: 0.25,
                 ..Style::default()
