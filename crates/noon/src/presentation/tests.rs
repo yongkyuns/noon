@@ -105,14 +105,14 @@ fn themed_text_uses_ordinary_admission_and_explicit_overrides() {
     let overridden = dark
         .text("A title", TextRole::Title)
         .with_font_size(31.0)
-        .with_line_spacing(0.25)
+        .with_line_spacing(0.0)
         .color(override_color);
     assert_eq!(
         original.font_size(),
         dark.text_style(TextRole::Title).font_size()
     );
     assert_eq!(overridden.font_size(), 31.0);
-    assert_eq!(overridden.line_spacing(), 0.25);
+    assert_eq!(overridden.line_spacing(), 0.0);
 
     let mut scene = Scene::new();
     let title = scene.text(original).unwrap();

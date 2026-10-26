@@ -140,11 +140,11 @@ class PresentationFacadeTests(unittest.TestCase):
         colors = {"meaning": noon.RED}
         with patch.object(noon, "Text") as constructor:
             theme.text("meaning", font=face, font_size=19, color=noon.RED,
-                       t2c=colors, opacity=0.4)
+                       line_spacing=0, t2c=colors, opacity=0)
         self.definition.textStyle.assert_called_once_with("body")
         constructor.assert_called_once_with(
-            "meaning", font=face, font_size=19, line_spacing=0.375,
-            color=noon.RED, t2c=colors, opacity=0.4,
+            "meaning", font=face, font_size=19, line_spacing=0,
+            color=noon.RED, t2c=colors, opacity=0,
         )
         style.free.assert_called_once_with()
         style.color.free.assert_called_once_with()
