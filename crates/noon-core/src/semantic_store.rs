@@ -62,6 +62,8 @@ mod semantic_graph;
 pub use semantic_graph::*;
 mod semantic_table_layout;
 pub use semantic_table_layout::*;
+mod semantic_code_layout;
+pub use semantic_code_layout::*;
 
 mod semantic_animations;
 pub use semantic_animations::*;
@@ -851,6 +853,7 @@ pub struct SemanticStore {
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
     table_layouts: HashMap<SemanticNodeId, SemanticTableLayout>,
+    code_layouts: HashMap<SemanticNodeId, SemanticCodeLayout>,
     /// Derived index of authored inset display roles. The role on each ordinary
     /// display object remains authoritative; this bounds view discovery by active
     /// inset count rather than total semantic slots.
@@ -969,6 +972,15 @@ impl Clone for SemanticStore {
             source_nodes: self.source_nodes.clone(),
             incoming_references: self.incoming_references.clone(),
             table_layouts: self.table_layouts.clone(),
+            code_layouts: self
+                .code_layouts
+                .iter()
+                .map(|(&node, layout)| {
+                    let mut layout = layout.clone();
+                    layout.remap_resource_namespace(namespace);
+                    (node, layout)
+                })
+                .collect(),
             inset_2d_displays: self.inset_2d_displays.clone(),
             last_mutation: self.last_mutation,
             scene_revision: self.scene_revision,
@@ -1344,6 +1356,36 @@ impl SemanticStore {
         }
         self.unregister_semantic_references_for_owner(scope);
         self.table_layouts.insert(scope, layout);
+        self.register_semantic_references_for_owner(scope);
+        Ok(())
+    }
+
+    pub fn semantic_code_layout(
+        &self,
+        scope: SemanticNodeId,
+    ) -> Result<Option<SemanticCodeLayout>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        Ok(self.code_layouts.get(&scope).cloned())
+    }
+
+    pub(crate) fn replace_semantic_code_layout(
+        &mut self,
+        scope: SemanticNodeId,
+        layout: SemanticCodeLayout,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        self.unregister_semantic_references_for_owner(scope);
+        self.code_layouts.insert(scope, layout);
         self.register_semantic_references_for_owner(scope);
         Ok(())
     }
@@ -1936,6 +1978,7 @@ impl SemanticStore {
         self.inset_2d_displays.remove(&id);
         self.incoming_references.remove(&id);
         self.table_layouts.remove(&id);
+        self.code_layouts.remove(&id);
 
         if let Some(state) = node.semantic_object_state() {
             self.release_semantic_object_resources(state);

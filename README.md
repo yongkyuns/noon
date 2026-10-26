@@ -139,6 +139,44 @@ This frame is captured from the native retained renderer by
 `crates/noon/tests/code_block_raster.rs`; the paired browser checks render the
 same scene through direct Rust/WASM and the production Python worker.
 
+#### Highlight source rows
+
+`Code` also supplies the geometry for focusing a source row or contiguous range:
+
+```python
+focus = listing.highlight_lines(0)
+target = listing.get_highlighted_lines(1, 3)
+self.play(Transform(focus, target))
+```
+
+Rows are zero-based, independent of the displayed line numbers. The stop index is
+exclusive; omitting it selects one row. Ranges must be nonempty and within the
+listing's source rows. Highlights cover the listing's full code
+width, including blank, indented, whitespace-only, and final empty rows. Use
+`include_line_numbers=True` to extend the band across the gutter. Shared defaults
+provide a yellow fill at 0.2 opacity and 0.05 padding in the Code's local frame;
+`color`, `fill_opacity`, and `padding` are optional overrides.
+
+`highlight_lines` attaches an ordinary rectangle to `listing.highlights`, between
+the opaque background and the text. `get_highlighted_lines` creates a detached
+rectangle, suitable as an ordinary `Transform` target. A detached target is not
+automatically added to the scene. Rust exposes the same methods with a
+`Range<usize>` and `CodeHighlightOptions`, plus `_in_live_session` counterparts.
+
+These regions describe the source rows allocated when the listing was created.
+Moving an individual text row does not reflow those slots. Whole-listing
+translation, rotation, reflection, representable planar scaling, and copying
+preserve the frame. Live creation samples the panel's current effective pose and
+priority and follows the ordinary publication gates. Replaced or baked panel
+geometry, temporary effective-content replacements, and unsupported spatial or
+reveal/morph overrides produce an explicit error when a new region is requested.
+Source replacement and reflow are separate work tracked by
+[#2302](https://github.com/yongkyuns/noon/issues/2302).
+
+The paired [Rust](crates/noon-native/examples/code_line_highlight.rs) and
+[Python](web/python/examples/code_line_highlight.py) examples highlight a blank
+row and a range with line numbers after scaling and rotating the listing.
+
 ### Source-declared click indication
 
 An authored primary click can run a restoring `Indicate` without a Python callback or per-frame Python work. The current action supports filled analytic `Circle` and `Rectangle` targets, and the `Indicate` must name the same target:

@@ -442,3 +442,568 @@ fn zero_buff_panel_contains_custom_font_ink_overhang() {
     assert!(panel.min_y <= ink.min_y + 1.0e-6);
     assert!(panel.max_y >= ink.max_y - 1.0e-6);
 }
+
+fn unpadded_highlight() -> CodeHighlightOptions {
+    CodeHighlightOptions {
+        padding: 0.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn logical_regions_cover_indentation_whitespace_blank_and_trailing_rows() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "\n    abc  \n  \n", plain()).unwrap();
+    let before = counts(&scene);
+    let regions: Vec<_> = (0..4)
+        .map(|index| {
+            code.get_highlighted_lines(index..index + 1, unpadded_highlight())
+                .unwrap()
+                .layout_bounds()
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let baseline_step = baseline(&code.line(0).unwrap()) - baseline(&code.line(1).unwrap());
+    assert!(regions[0].width() > 0.0 && regions[0].height() > 0.0);
+    for pair in regions.windows(2) {
+        close(pair[0].min_x, pair[1].min_x);
+        close(pair[0].max_x, pair[1].max_x);
+        close(pair[0].height(), pair[1].height());
+        close(pair[0].max_y - pair[1].max_y, baseline_step);
+    }
+    let indented = code.line(1).unwrap();
+    let ink = indented.layout_bounds().unwrap().unwrap();
+    assert!(regions[1].min_x < ink.min_x);
+    assert!(regions[1].max_x >= logical_right(&indented) - 1.0e-6);
+    let range = code
+        .get_highlighted_lines(0..4, unpadded_highlight())
+        .unwrap()
+        .layout_bounds()
+        .unwrap()
+        .unwrap();
+    close(range.max_y, regions[0].max_y);
+    close(range.min_y, regions[3].min_y);
+    let numbered = code
+        .get_highlighted_lines(
+            1..2,
+            CodeHighlightOptions {
+                include_line_numbers: true,
+                ..unpadded_highlight()
+            },
+        )
+        .unwrap()
+        .layout_bounds()
+        .unwrap()
+        .unwrap();
+    let number_ink = members(code.line_numbers().unwrap())[1]
+        .layout_bounds()
+        .unwrap()
+        .unwrap();
+    assert!(numbered.min_x <= number_ink.min_x + 1.0e-6);
+    assert!(numbered.min_x < regions[1].min_x);
+    close(numbered.max_x, regions[1].max_x);
+    close(numbered.min_y, regions[1].min_y);
+    assert_eq!(sources(&code), ["", "    abc  ", "  ", ""]);
+    let after = counts(&scene);
+    assert_eq!((before.1, before.2, before.3), (after.1, after.2, after.3));
+    assert!(members(code.highlights()).is_empty());
+}
+
+#[test]
+fn unnumbered_empty_code_has_a_real_row_without_synthetic_ink() {
+    let mut scene = Scene::new();
+    let code = Code::new(
+        &mut scene,
+        "",
+        CodeOptions {
+            add_line_numbers: false,
+            ..plain()
+        },
+    )
+    .unwrap();
+    let body = code
+        .get_highlighted_lines(0..1, unpadded_highlight())
+        .unwrap();
+    let numbered = code
+        .get_highlighted_lines(
+            0..1,
+            CodeHighlightOptions {
+                include_line_numbers: true,
+                ..unpadded_highlight()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        body.state().unwrap().content,
+        numbered.state().unwrap().content
+    );
+    assert_eq!(
+        body.state().unwrap().transform,
+        numbered.state().unwrap().transform
+    );
+    let bounds = body.layout_bounds().unwrap().unwrap();
+    close(bounds.width(), 0.0);
+    assert!(bounds.height() > 0.0);
+    assert_eq!(resource(&code.line(0).unwrap()).1.glyph_count(), 0);
+}
+
+#[test]
+fn invalid_regions_leave_nodes_resources_membership_and_revision_unchanged() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one\ntwo", plain()).unwrap();
+    let before = counts(&scene);
+    let revision = scene.revision();
+    for (start, end) in [(0, 0), (2, 1), (0, 3), (usize::MAX, usize::MAX)] {
+        assert!(matches!(
+            code.highlight_lines(start..end, CodeHighlightOptions::default()),
+            Err(CodeAuthoringError::InvalidLineRange { .. })
+        ));
+    }
+    for options in [
+        CodeHighlightOptions {
+            padding: -0.1,
+            ..Default::default()
+        },
+        CodeHighlightOptions {
+            padding: f64::NAN,
+            ..Default::default()
+        },
+        CodeHighlightOptions {
+            padding: f64::MAX,
+            ..Default::default()
+        },
+        CodeHighlightOptions {
+            fill_opacity: f64::INFINITY,
+            ..Default::default()
+        },
+        CodeHighlightOptions {
+            fill_opacity: 1.01,
+            ..Default::default()
+        },
+        CodeHighlightOptions {
+            color: Color {
+                red: f32::NAN,
+                ..Color::YELLOW
+            },
+            ..Default::default()
+        },
+    ] {
+        assert!(code.highlight_lines(0..1, options).is_err());
+    }
+    assert_eq!(counts(&scene), before);
+    assert_eq!(scene.revision(), revision);
+    assert!(members(code.highlights()).is_empty());
+}
+
+#[test]
+fn attached_regions_use_ordinary_painter_order_and_family_opacity() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one\n\ntwo", plain()).unwrap();
+    let options = CodeHighlightOptions::default();
+    let detached = code.get_highlighted_lines(1..2, options).unwrap();
+    let attached = code.highlight_lines(1..2, options).unwrap();
+    assert_eq!(
+        detached.state().unwrap().style,
+        attached.state().unwrap().style
+    );
+    let order = scene
+        .integration_store()
+        .borrow()
+        .ordered_leaf_nodes(code.family().node_id())
+        .unwrap();
+    let position = |node| {
+        order
+            .iter()
+            .position(|candidate| *candidate == node)
+            .unwrap()
+    };
+    let panel = code.layout().unwrap().nodes().panel;
+    assert!(position(panel) < position(attached.node_id()));
+    for line in members(code.code_lines())
+        .into_iter()
+        .chain(members(code.line_numbers().unwrap()))
+    {
+        assert!(position(attached.node_id()) < position(line.node_id()));
+    }
+    assert!(!order.contains(&detached.node_id()));
+    scene.add_many(&[code.family().into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    live.set_family_opacity(code.family(), 0.0).unwrap();
+    assert_eq!(live.effective(&attached).unwrap().fill_opacity(), 0.0);
+    // New members retain their requested style, just like other ordinary
+    // family additions. There is no inherited Code opacity controller.
+    let later = code
+        .highlight_lines_in_live_session(&mut live, 0..1, options)
+        .unwrap();
+    close(live.effective(&later).unwrap().fill_opacity(), 0.2);
+    live.set_family_opacity(code.family(), 1.0).unwrap();
+    assert_eq!(live.effective(&attached).unwrap().fill_opacity(), 1.0);
+    assert_eq!(live.effective(&later).unwrap().fill_opacity(), 1.0);
+    close(detached.fill_opacity().unwrap(), 0.2);
+}
+
+#[test]
+fn regions_follow_panel_affines_and_copies_without_rebuilding_text() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "first\n    second\n", plain()).unwrap();
+    let original = code
+        .highlighted_state(None, 1..3, unpadded_highlight())
+        .unwrap();
+    let line_content = code.line(1).unwrap().state().unwrap().content;
+    let before = counts(&scene);
+    code.family().scale(-1.5, 0.75).unwrap();
+    code.family()
+        .rotate(0.4, crate::ManimRotationPivot::Point(0.0, 0.0))
+        .unwrap();
+    code.family().shift(1.25, -0.5).unwrap();
+    let current = code.highlight_lines(1..3, unpadded_highlight()).unwrap();
+    let layout = code.layout().unwrap();
+    let panel =
+        Mobject::from_node(Rc::clone(scene.integration_store()), layout.nodes().panel).unwrap();
+    let pose = panel.state().unwrap().transform.as_planar().unwrap();
+    let expected = pose.transform_xy(
+        original.transform.translation.x,
+        original.transform.translation.y,
+    );
+    let current_state = current.state().unwrap();
+    close(current_state.transform.translation.x, expected.0);
+    close(current_state.transform.translation.y, expected.1);
+    assert_eq!(current_state.content, original.content);
+    close(
+        current_state.transform.scale.x,
+        pose.scale.x * original.transform.scale.x,
+    );
+    close(
+        current_state.transform.scale.y,
+        pose.scale.y * original.transform.scale.y,
+    );
+    close(current_state.transform.scale.z, pose.scale.z);
+    close(
+        current_state.transform.planar_rotation().unwrap(),
+        pose.rotation_z,
+    );
+    assert_eq!(code.line(1).unwrap().state().unwrap().content, line_content);
+    let after = counts(&scene);
+    assert_eq!((before.1, before.2, before.3), (after.1, after.2, after.3));
+
+    let copied = Code::from_family(code.family().copy_family().unwrap().root().clone()).unwrap();
+    let copied_layout = copied.layout().unwrap();
+    assert_eq!(copied_layout.metrics(), layout.metrics());
+    assert_eq!(copied_layout.panel_geometry(), layout.panel_geometry());
+    assert_ne!(copied_layout.nodes().panel, layout.nodes().panel);
+    assert_ne!(copied.highlights().node_id(), code.highlights().node_id());
+    let source_pose = current.state().unwrap().transform;
+    copied.family().shift(3.0, 0.0).unwrap();
+    let next = copied.highlight_lines(1..3, unpadded_highlight()).unwrap();
+    close(
+        next.state().unwrap().transform.translation.x,
+        source_pose.translation.x + 3.0,
+    );
+    assert_eq!(current.state().unwrap().transform, source_pose);
+    assert_eq!(members(code.highlights()).len(), 1);
+    assert_eq!(members(copied.highlights()).len(), 2);
+}
+
+#[test]
+fn row_edits_do_not_reflow_slots_and_replaced_panels_stay_invalid_after_copy() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one\ntwo", plain()).unwrap();
+    let expected = code
+        .highlighted_state(None, 0..1, unpadded_highlight())
+        .unwrap();
+    code.line(0).unwrap().shift(4.0, 2.0).unwrap();
+    assert_eq!(
+        code.highlighted_state(None, 0..1, unpadded_highlight())
+            .unwrap(),
+        expected
+    );
+    let panel = code.layout().unwrap().nodes().panel;
+    let mut panel = Mobject::from_node(Rc::clone(scene.integration_store()), panel).unwrap();
+    let mut replacement = panel.state().unwrap();
+    replacement.content = StoredGeometry::Rectangle {
+        size: noon_core::Vec2::new(5.0, 2.0),
+    }
+    .into();
+    panel.commit_state(replacement).unwrap();
+    let before = counts(&scene);
+    assert!(matches!(
+        code.highlight_lines(0..1, unpadded_highlight()),
+        Err(CodeAuthoringError::UnsupportedLineRegion(_))
+    ));
+    assert_eq!(counts(&scene), before);
+    let copied = Code::from_family(code.family().copy_family().unwrap().root().clone()).unwrap();
+    assert!(matches!(
+        copied.highlight_lines(0..1, unpadded_highlight()),
+        Err(CodeAuthoringError::UnsupportedLineRegion(_))
+    ));
+}
+
+#[test]
+fn baked_panel_deformation_invalidates_regions_and_copied_guards() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one\ntwo", plain()).unwrap();
+    let original_layout = code.layout().unwrap();
+    code.background()
+        .rotate(0.4, crate::ManimRotationPivot::Center)
+        .unwrap();
+    code.background().scale(2.0, 1.0).unwrap();
+    let panel = Mobject::from_node(
+        Rc::clone(scene.integration_store()),
+        original_layout.nodes().panel,
+    )
+    .unwrap();
+    assert_ne!(
+        panel.state().unwrap().content.geometry(),
+        Some(StoredGeometry::Resource(original_layout.panel_geometry()))
+    );
+    assert_eq!(
+        code.layout().unwrap().panel_geometry(),
+        original_layout.panel_geometry()
+    );
+    let before = counts(&scene);
+    assert!(matches!(
+        code.get_highlighted_lines(0..1, unpadded_highlight()),
+        Err(CodeAuthoringError::UnsupportedLineRegion(_))
+    ));
+    assert_eq!(counts(&scene), before);
+    let copy = Code::from_family(code.family().copy_family().unwrap().root().clone()).unwrap();
+    assert_eq!(
+        copy.layout().unwrap().panel_geometry(),
+        original_layout.panel_geometry()
+    );
+    assert!(matches!(
+        copy.get_highlighted_lines(0..1, unpadded_highlight()),
+        Err(CodeAuthoringError::UnsupportedLineRegion(_))
+    ));
+}
+
+#[test]
+fn live_regions_observe_unfinished_affines_and_preserve_publication_gates() {
+    use noon_core::{AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one\ntwo", plain()).unwrap();
+    let local = code
+        .highlighted_state(None, 0..1, unpadded_highlight())
+        .unwrap();
+    let panel = Mobject::from_node(
+        Rc::clone(scene.integration_store()),
+        code.layout().unwrap().nodes().panel,
+    )
+    .unwrap();
+    let mut target = panel.target_editor().unwrap();
+    target.set_translation(4.0, -2.0).unwrap();
+    target.set_scale(2.0, 0.5).unwrap();
+    target.set_rotation(std::f64::consts::FRAC_PI_2).unwrap();
+    scene.add_many(&[code.family().into()]).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &panel,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let segment = live.play_animation(&animation).unwrap();
+    live.advance_segment_to(segment, 1.0).unwrap();
+    let (pose, _) = live.effective_content_placement(&panel).unwrap();
+    close(pose.translation.x, 2.0);
+    close(pose.translation.y, -1.0);
+    close(pose.scale.x, 1.5);
+    close(pose.scale.y, 0.75);
+    close(pose.rotation_z, std::f64::consts::FRAC_PI_4);
+    let state = code
+        .highlighted_state(Some(&live), 0..1, unpadded_highlight())
+        .unwrap();
+    let expected = pose.transform_xy(local.transform.translation.x, local.transform.translation.y);
+    close(state.transform.translation.x, expected.0);
+    close(state.transform.translation.y, expected.1);
+    close(
+        state.transform.scale.x,
+        pose.scale.x * local.transform.scale.x,
+    );
+    close(
+        state.transform.scale.y,
+        pose.scale.y * local.transform.scale.y,
+    );
+    close(state.transform.scale.z, pose.scale.z);
+    assert_ne!(state.transform, local.transform);
+    let before = counts(&scene);
+    assert!(matches!(
+        code.get_highlighted_lines_in_live_session(&mut live, 0..1, unpadded_highlight()),
+        Err(CodeAuthoringError::LiveSession(
+            LiveSessionError::Publication(
+                crate::ExecutionSessionPublicationError::SegmentCompletionPending
+            )
+        ))
+    ));
+    assert_eq!(counts(&scene), before);
+    live.advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    live.complete_segment(segment).unwrap();
+    let highlight = code
+        .highlight_lines_in_live_session(&mut live, 0..1, unpadded_highlight())
+        .unwrap();
+    assert_eq!(
+        live.effective(&highlight).unwrap().transform.rotation,
+        std::f32::consts::FRAC_PI_2
+    );
+}
+
+#[test]
+fn live_regions_reject_effective_content_overrides_and_stale_publications() {
+    use noon_core::{AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one", plain()).unwrap();
+    let panel = Mobject::from_node(
+        Rc::clone(scene.integration_store()),
+        code.layout().unwrap().nodes().panel,
+    )
+    .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    {
+        let mut live = scene.live(&mut session);
+        live.declare_and_activate_create(
+            &panel,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+        let before = counts(&scene);
+        assert!(matches!(
+            code.get_highlighted_lines_in_live_session(&mut live, 0..1, unpadded_highlight()),
+            Err(CodeAuthoringError::UnsupportedLineRegion(_))
+        ));
+        assert_eq!(counts(&scene), before);
+    }
+    let mut current = scene.execution_session().unwrap();
+    code.family().shift(1.0, 0.0).unwrap();
+    let before = counts(&scene);
+    assert!(matches!(
+        code.get_highlighted_lines_in_live_session(
+            &mut scene.live(&mut current),
+            0..1,
+            unpadded_highlight()
+        ),
+        Err(CodeAuthoringError::LiveSession(
+            LiveSessionError::Publication(_)
+        ))
+    ));
+    assert_eq!(counts(&scene), before);
+}
+
+#[test]
+fn live_regions_reject_temporary_content_leases_without_authored_replacement() {
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one", plain()).unwrap();
+    let layout = code.layout().unwrap();
+    let panel =
+        Mobject::from_node(Rc::clone(scene.integration_store()), layout.nodes().panel).unwrap();
+    scene.add_many(&[code.family().into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let prepared = session
+        .prepare_effective_content_replacement(
+            panel.node_id(),
+            noon_core::ObjectContentRef::Geometry(noon_core::GeometryRef::circle(3.0)),
+            None,
+            None,
+        )
+        .unwrap();
+    let lease = session
+        .commit_effective_content_replacement(prepared)
+        .unwrap();
+    assert_eq!(
+        panel.state().unwrap().content.geometry(),
+        Some(StoredGeometry::Resource(layout.panel_geometry()))
+    );
+    let before = counts(&scene);
+    let revision = scene.revision();
+    assert!(matches!(
+        code.highlight_lines_in_live_session(
+            &mut scene.live(&mut session),
+            0..1,
+            unpadded_highlight(),
+        ),
+        Err(CodeAuthoringError::UnsupportedLineRegion(_))
+    ));
+    assert_eq!(counts(&scene), before);
+    assert_eq!(scene.revision(), revision);
+    assert!(members(code.highlights()).is_empty());
+    session.release_effective_content(lease).unwrap();
+    code.highlight_lines_in_live_session(&mut scene.live(&mut session), 0..1, unpadded_highlight())
+        .unwrap();
+}
+
+#[test]
+fn live_regions_follow_effective_panel_priority_during_replay() {
+    use crate::{AnimationCompositionRequest as Request, TransformToRequest};
+    use noon_core::{AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let code = Code::new(&mut scene, "one\ntwo", plain()).unwrap();
+    code.family().set_z_index(2.0, true).unwrap();
+    let panel = Mobject::from_node(
+        Rc::clone(scene.integration_store()),
+        code.layout().unwrap().nodes().panel,
+    )
+    .unwrap();
+    let target = panel.target_editor().unwrap();
+    target.set_z_index(-1.0).unwrap();
+    scene.add_many(&[code.family().into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    {
+        let mut live = scene.live(&mut session);
+        let request = Request::TransformTo(
+            TransformToRequest::new(
+                &panel,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .method_target(),
+        );
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    assert_eq!(panel.z_index().unwrap(), -1.0);
+    session.seek(0.5).unwrap();
+    let highlight = {
+        let mut live = scene.live(&mut session);
+        assert_eq!(live.effective(&panel).unwrap().z_index, 2.0);
+        let highlight = code
+            .highlight_lines_in_live_session(&mut live, 0..1, unpadded_highlight())
+            .unwrap();
+        assert_eq!(live.effective(&highlight).unwrap().z_index, 2.0);
+        highlight
+    };
+    let painter_position = |object: &Mobject| {
+        let id = session.execution_object_id(object.node_id()).unwrap();
+        let slot = session
+            .frame()
+            .objects
+            .iter()
+            .position(|row| row.id == id)
+            .unwrap();
+        session
+            .painter_order()
+            .iter()
+            .position(|index| *index as usize == slot)
+            .unwrap()
+    };
+    assert!(painter_position(&panel) < painter_position(&highlight));
+    for line in members(code.code_lines())
+        .into_iter()
+        .chain(members(code.line_numbers().unwrap()))
+    {
+        assert!(painter_position(&highlight) < painter_position(&line));
+    }
+}

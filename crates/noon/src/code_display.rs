@@ -6,6 +6,7 @@
 
 mod admission;
 mod highlight;
+mod regions;
 #[cfg(all(test, feature = "bundled-fonts"))]
 mod tests;
 
@@ -101,12 +102,46 @@ impl Default for CodeOptions {
     }
 }
 
+/// Presentation of an ordinary rectangle over allocated source-row slots.
+///
+/// Padding is measured in the listing's local scene units, before its current
+/// panel transform. These options do not change the Code layout or its text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CodeHighlightOptions {
+    pub include_line_numbers: bool,
+    pub padding: f64,
+    pub color: Color,
+    pub fill_opacity: f64,
+}
+impl Default for CodeHighlightOptions {
+    fn default() -> Self {
+        Self {
+            include_line_numbers: false,
+            padding: 0.05,
+            color: Color::YELLOW,
+            fill_opacity: 0.2,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CodeAuthoringError {
-    InvalidOption { name: &'static str, value: String },
+    InvalidOption {
+        name: &'static str,
+        value: String,
+    },
     Highlight(String),
     InvalidStructure,
-    LineOutOfRange { index: usize, count: usize },
+    LineOutOfRange {
+        index: usize,
+        count: usize,
+    },
+    InvalidLineRange {
+        start: usize,
+        end: usize,
+        count: usize,
+    },
+    UnsupportedLineRegion(&'static str),
     Text(TextAuthoringError),
     TextPart(TextPartAuthoringError),
     Semantic(AuthoringError),
@@ -124,6 +159,13 @@ impl std::fmt::Display for CodeAuthoringError {
                     f,
                     "Code line index {index} is out of range for {count} lines"
                 )
+            }
+            Self::InvalidLineRange { start, end, count } => write!(
+                f,
+                "Code line range {start}..{end} must be nonempty and within 0..{count}"
+            ),
+            Self::UnsupportedLineRegion(reason) => {
+                write!(f, "Code line region is unavailable: {reason}")
             }
             Self::Text(error) => error.fmt(f),
             Self::TextPart(error) => error.fmt(f),
@@ -155,6 +197,7 @@ impl From<TextPartAuthoringError> for CodeAuthoringError {
 pub struct Code {
     family: MobjectFamily,
     background: MobjectFamily,
+    highlights: MobjectFamily,
     code_lines: MobjectFamily,
     line_numbers: Option<MobjectFamily>,
 }
@@ -199,18 +242,22 @@ impl Code {
     pub fn from_family(family: MobjectFamily) -> Result<Self, CodeAuthoringError> {
         family.validate()?;
         let store = Rc::clone(family.integration_store());
-        let members = store
+        let layout = store
             .borrow()
-            .semantic_family_members_checked(family.node_id())
-            .map_err(AuthoringError::from)?;
-        let (background, numbers, lines) = match members.as_slice() {
-            [background, lines] => (*background, None, *lines),
-            [background, numbers, lines] => (*background, Some(*numbers), *lines),
-            _ => return Err(CodeAuthoringError::InvalidStructure),
-        };
+            .semantic_code_layout(family.node_id())
+            .map_err(AuthoringError::from)?
+            .ok_or(CodeAuthoringError::InvalidStructure)?;
+        let nodes = layout.nodes();
+        let (background, highlights, numbers, lines) = (
+            nodes.background,
+            nodes.highlights,
+            nodes.line_numbers,
+            nodes.code_lines,
+        );
         let listing = Self {
             family,
             background: MobjectFamily::from_node(Rc::clone(&store), background)?,
+            highlights: MobjectFamily::from_node(Rc::clone(&store), highlights)?,
             code_lines: MobjectFamily::from_node(Rc::clone(&store), lines)?,
             line_numbers: numbers
                 .map(|node| MobjectFamily::from_node(Rc::clone(&store), node))
@@ -219,6 +266,7 @@ impl Code {
         let semantic = store.borrow();
         let line_count = validate_text_family(&semantic, lines)?;
         if line_count == 0
+            || line_count != layout.metrics().line_count
             || numbers
                 .map(|node| validate_text_family(&semantic, node))
                 .transpose()?
@@ -244,6 +292,7 @@ impl Code {
             }
         }
         drop(semantic);
+        listing.layout()?;
         Ok(listing)
     }
 
@@ -258,6 +307,10 @@ impl Code {
     }
     pub fn background(&self) -> &MobjectFamily {
         &self.background
+    }
+    /// Ordinary highlight geometry, painted after the panel and before text.
+    pub fn highlights(&self) -> &MobjectFamily {
+        &self.highlights
     }
 
     /// Select one line through the store's rank lookup, without copying its siblings.

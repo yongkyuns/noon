@@ -2,7 +2,7 @@
 //! Noon's implemented profile; it is not a pinned Manim raster oracle.
 #![cfg(all(feature = "code", feature = "bundled-fonts", feature = "image-decode"))]
 
-use noon::{Code, CodeBackground, CodeOptions, CodeParagraphConfig, Scene};
+use noon::{Code, CodeBackground, CodeHighlightOptions, CodeOptions, CodeParagraphConfig, Scene};
 
 mod raster_support;
 use raster_support::{Raster, SIZE, WORLD_SIZE};
@@ -64,7 +64,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
     scene.add(&marker).unwrap();
     let code = Code::new(
         &mut scene,
-        "def twice(x):\n    return x * 2",
+        "def twice(x):\n\n    return x * 2",
         CodeOptions {
             language: Some("python".into()),
             formatter_style: "monokai".into(),
@@ -77,7 +77,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         },
     )
     .unwrap();
-    let line_handles: Vec<_> = (0..2)
+    let line_handles: Vec<_> = (0..3)
         .map(|index| code.line(index).unwrap().state().unwrap().content)
         .collect();
     let marker_state = marker.state().unwrap();
@@ -129,6 +129,52 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
     assert_eq!(raster.last_scene_repacked, 0);
     retain("code-original", &original, SIZE, SIZE);
 
+    let focus = code
+        .highlight_lines_in_live_session(
+            &mut scene.live(&mut session),
+            1..2,
+            CodeHighlightOptions::default(),
+        )
+        .unwrap();
+    let focused = raster.capture(&session.take_renderer_publication());
+    let upper = code.line(0).unwrap().layout_bounds().unwrap().unwrap();
+    let lower = code.line(2).unwrap().layout_bounds().unwrap().unwrap();
+    let mut blank_row_pixels = 0;
+    for (index, (before, after)) in original
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(focused.as_chunks::<4>().0)
+        .enumerate()
+    {
+        if before == after {
+            continue;
+        }
+        let y = f64::from(WORLD_SIZE) * 0.5
+            - (index / SIZE as usize) as f64 / f64::from(SIZE) * f64::from(WORLD_SIZE);
+        assert!(
+            y < upper.min_y && y > lower.max_y,
+            "blank-row highlight must stay between the neighboring text rows"
+        );
+        blank_row_pixels += 1;
+    }
+    assert!(
+        blank_row_pixels > 100,
+        "an empty text row must have a visible band"
+    );
+    assert_same_marker_region(&original, &focused, SIZE);
+    retain("code-blank-row-highlight", &focused, SIZE, SIZE);
+    scene
+        .live(&mut session)
+        .remove_family_members(code.highlights(), &[(&focus).into()])
+        .unwrap();
+    assert_pixels_equal(
+        &raster.capture(&session.take_renderer_publication()),
+        &original,
+        "removing one highlight must restore the original listing exactly",
+    );
+    assert_eq!(code.line_sources().unwrap().len(), 3);
+
     scene
         .live(&mut session)
         .shift_family(code.family(), 0.5, -0.5)
@@ -174,6 +220,90 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
     );
     assert_eq!(raster.last_scene_upload_bytes, 0);
     eprintln!("Code retained raster: syntax_pixels={colorful:?}, size={SIZE}x{SIZE}, static_uploads=0, family_hide_restore=exact");
+}
+
+#[test]
+#[ignore = "requires software Vulkan; run with --ignored --nocapture"]
+fn logical_row_example_preserves_glyphs_above_rotated_scaled_highlights() {
+    let mut control = noon::example_scenes::code_line_highlight::session(false).unwrap();
+    let mut highlighted = noon::example_scenes::code_line_highlight::session(true).unwrap();
+    // A retained renderer belongs to one execution publication stream. Render
+    // the independent control in its own context, just like the browser pair.
+    let before = {
+        let mut control_raster = pollster::block_on(Raster::with_dimensions(960, 540));
+        control_raster.capture(&control.take_renderer_publication())
+    };
+    let mut raster = pollster::block_on(Raster::with_dimensions(960, 540));
+    let after = raster.capture(&highlighted.take_renderer_publication());
+    retain("code-line-control-native", &before, 960, 540);
+    retain("code-line-highlights-native", &after, 960, 540);
+    let before_pixels = before.as_chunks::<4>().0;
+    let after_pixels = after.as_chunks::<4>().0;
+    let mut colors = std::collections::HashMap::new();
+    for pixel in before_pixels.iter().filter(|pixel| pixel[..3] != [0, 0, 0]) {
+        *colors.entry(*pixel).or_insert(0usize) += 1;
+    }
+    let (panel, panel_pixels) = colors.into_iter().max_by_key(|(_, count)| *count).unwrap();
+    assert!(panel_pixels > 2_000 && panel[..3].iter().all(|value| *value < 128));
+    let background_blue_gain = before_pixels
+        .iter()
+        .zip(after_pixels)
+        .filter(|(before, _)| **before == panel)
+        .map(|(_, after)| after[2].saturating_sub(panel[2]))
+        .max()
+        .unwrap();
+    assert!(
+        background_blue_gain > 0,
+        "yellow bands must alter the panel background"
+    );
+    let mut changed = 0;
+    let mut glyph_pixels_above_band = 0;
+    for (index, (before, after)) in before_pixels.iter().zip(after_pixels).enumerate() {
+        changed += usize::from(before != after);
+        let minimum = *before[..3].iter().min().unwrap();
+        let maximum = *before[..3].iter().max().unwrap();
+        if minimum < 150 || maximum - minimum > 16 {
+            continue;
+        }
+        let (x, y) = ((index % 960) as i32, (index / 960) as i32);
+        let near_band = (-2..=2).any(|dy| {
+            (-2..=2).any(|dx| {
+                let (nx, ny) = (x + dx, y + dy);
+                if !(0..960).contains(&nx) || !(0..540).contains(&ny) {
+                    return false;
+                }
+                let neighbor = ny as usize * 960 + nx as usize;
+                before_pixels[neighbor] == panel && after_pixels[neighbor][2] > panel[2]
+            })
+        });
+        if near_band {
+            // SDF glyphs need not contain any fully opaque pixel at this size.
+            // The default yellow's blue lies between the dark panel and these
+            // bright glyphs. An underlay only increases background blue; an
+            // overlay would decrease glyph blue instead.
+            assert!(
+                before[2].saturating_sub(after[2]) <= 2,
+                "a highlight must remain below antialiased source glyphs"
+            );
+            glyph_pixels_above_band += 1;
+        }
+    }
+    assert!(
+        changed > 2_000,
+        "both highlights must render over the opaque panel"
+    );
+    assert!(
+        glyph_pixels_above_band > 20,
+        "glyphs within the highlighted area must be sampled"
+    );
+    assert_pixels_equal(
+        &raster.capture(&highlighted.take_renderer_publication()),
+        &after,
+        "the highlighted scene must settle",
+    );
+    assert_eq!(raster.last_scene_upload_bytes, 0);
+    assert_eq!(raster.last_scene_repacked, 0);
+    eprintln!("Code logical-row raster: changed={changed}, glyphs_above_band={glyph_pixels_above_band}, background_blue_gain={background_blue_gain}, static_uploads=0");
 }
 
 #[test]

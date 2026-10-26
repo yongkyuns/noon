@@ -1,7 +1,8 @@
 use super::*;
 use noon_core::{
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole, SemanticObjectState,
-    SemanticPaint, SemanticStyle, SemanticTransform2_5D, StoredGeometry, StrokeCap, StrokeJoin,
+    SemanticCodeLayoutMetrics, SemanticCodeLayoutNodes, SemanticMutationTransaction,
+    SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStyle,
+    SemanticTransactionCodeLayout, SemanticTransform2_5D, StoredGeometry, StrokeCap, StrokeJoin,
     StrokeWidthMode, TextResource, TextSourceFill, VectorPath,
 };
 
@@ -18,11 +19,29 @@ pub(super) enum Publisher<'a, 'session> {
     Live(&'a mut LiveSession<'session>),
 }
 impl Publisher<'_, '_> {
-    fn store(&self) -> Rc<RefCell<SemanticStore>> {
+    pub(super) fn store(&self) -> Rc<RefCell<SemanticStore>> {
         match self {
             Self::Store(store) => Rc::clone(store),
             Self::Scene(scene) => Rc::clone(scene.integration_store()),
             Self::Live(live) => Rc::clone(live.integration_store()),
+        }
+    }
+
+    pub(super) fn publish_transaction(
+        self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, CodeAuthoringError> {
+        match self {
+            Self::Store(store) => transaction
+                .apply(&mut store.borrow_mut())
+                .map_err(AuthoringError::from)
+                .map_err(Into::into),
+            Self::Scene(scene) => scene
+                .apply_semantic_transaction(transaction)
+                .map_err(Into::into),
+            Self::Live(live) => live
+                .apply(transaction)
+                .map_err(CodeAuthoringError::LiveSession),
         }
     }
 
@@ -152,6 +171,7 @@ struct PreparedCode {
     panel: VectorPath,
     panel_style: SemanticStyle,
     buttons: Vec<SemanticObjectState>,
+    layout_metrics: SemanticCodeLayoutMetrics,
 }
 impl PreparedCode {
     fn new(source: &str, options: CodeOptions) -> Result<Self, CodeAuthoringError> {
@@ -226,14 +246,20 @@ impl PreparedCode {
         let window = options.background == CodeBackground::Window;
         let mut min_x: f64 = if window { -0.1 } else { 0.0 };
         let mut max_x = body_width.max(if window { 0.7 } else { 0.0 });
+        let mut body_left = 0.0f64;
+        let mut body_right = 0.0f64;
         for line in &lines {
             let (left, right) = line.ink_horizontal_bounds();
+            body_left = body_left.min(left);
+            body_right = body_right.max(right);
             min_x = min_x.min(gutter + left);
             max_x = max_x.max(gutter + right);
         }
+        let mut gutter_left = 0.0f64;
         for number in numbers.iter().flatten() {
             let x = number_width - number.width();
             let (left, right) = number.ink_horizontal_bounds();
+            gutter_left = gutter_left.min(x + left);
             min_x = min_x.min(x + left);
             max_x = max_x.max(x + right);
         }
@@ -241,6 +267,20 @@ impl PreparedCode {
         let max_y = row_top + if window { 0.3 } else { 0.0 };
         let center_x = (min_x + max_x) * 0.5;
         let center_y = (min_y + max_y) * 0.5;
+        let layout_metrics = SemanticCodeLayoutMetrics {
+            line_count: lines.len(),
+            first_baseline: -center_y,
+            baseline_step: step,
+            row_bottom,
+            row_top,
+            body_left: gutter + body_left - center_x,
+            body_right: gutter + body_right - center_x,
+            gutter_left: if numbers.is_some() {
+                gutter_left.min(gutter + body_left) - center_x
+            } else {
+                body_left - center_x
+            },
+        };
         for (index, line) in lines.iter_mut().enumerate() {
             line.position(gutter - center_x, -(index as f64) * step - center_y);
         }
@@ -295,6 +335,7 @@ impl PreparedCode {
             panel,
             panel_style,
             buttons,
+            layout_metrics,
         })
     }
 
@@ -332,11 +373,11 @@ impl PreparedCode {
             |store, handles| {
                 let mut tx = SemanticMutationTransaction::new();
                 let background = tx.create_node(SemanticNodeCreation::family());
-                let panel = tx
+                let panel_geometry = tx
                     .stage_geometry_path(self.panel)
                     .map_err(|error| TextAuthoringError::Semantic(error.into()))?;
                 let panel = tx.create_node(SemanticNodeCreation::pending_path_object(
-                    panel,
+                    panel_geometry,
                     SemanticTransform2_5D::default(),
                     self.panel_style,
                     0.0,
@@ -347,6 +388,7 @@ impl PreparedCode {
                     let button = tx.create_node(SemanticNodeCreation::object(button));
                     tx.add_member(background, button);
                 }
+                let highlights = tx.create_node(SemanticNodeCreation::family());
                 let code_lines = stage_lines(&mut tx, &self.lines, &handles[..self.lines.len()]);
                 let line_numbers = self
                     .numbers
@@ -354,10 +396,25 @@ impl PreparedCode {
                     .map(|numbers| stage_lines(&mut tx, numbers, &handles[self.lines.len()..]));
                 let root = tx.create_node(SemanticNodeCreation::family());
                 tx.add_member(root, background);
+                tx.add_member(root, highlights);
                 if let Some(numbers) = line_numbers {
                     tx.add_member(root, numbers);
                 }
                 tx.add_member(root, code_lines);
+                tx.set_code_layout(
+                    root,
+                    SemanticTransactionCodeLayout::new(
+                        SemanticCodeLayoutNodes {
+                            panel: panel.into(),
+                            background: background.into(),
+                            highlights: highlights.into(),
+                            code_lines: code_lines.into(),
+                            line_numbers: line_numbers.map(Into::into),
+                        },
+                        self.layout_metrics,
+                        panel_geometry,
+                    ),
+                );
                 let result = publish(store, tx).map_err(TextAuthoringError::Semantic)?;
                 result.resolve(root).ok_or(TextAuthoringError::Semantic(
                     AuthoringError::UnresolvedCreatedNode(root),

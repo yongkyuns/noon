@@ -27,6 +27,26 @@ try {
     assert.throws(() => new wasm.WasmCodeOptions("python", undefined, "vim", 4, true, index, "rectangle"),
       error => error.category === "invalid_input" && error.code === "code.invalid_option");
   }
+  const boundaryStore = new wasm.WasmAuthoringStore();
+  const boundaryCode = boundaryStore.createCode("x\n\nz", new wasm.WasmCodeOptions(
+    "python", undefined, "vim", 4, true, 9, "rectangle"));
+  const invalidIndices = [true, false, "1", 1n, -1, 0.5, 2 ** 32, NaN, Infinity];
+  for (const index of [...invalidIndices, null, undefined]) {
+    assert.throws(() => boundaryCode.getHighlightedLines(index, undefined, new wasm.WasmCodeHighlightOptions(false)),
+      error => error.category === "invalid_input" && error.code === "code.invalid_option");
+  }
+  for (const index of invalidIndices) {
+    assert.throws(() => boundaryCode.highlightLines(0, index, new wasm.WasmCodeHighlightOptions(false)),
+      error => error.category === "invalid_input" && error.code === "code.invalid_option");
+  }
+  for (const [start, stop] of [[0, 0], [2, 1], [0, 4]]) {
+    assert.throws(() => boundaryCode.highlightLines(start, stop, new wasm.WasmCodeHighlightOptions(false)),
+      error => error.category === "invalid_input" && error.code === "code.invalid_line_range");
+  }
+  assert.equal(boundaryCode.highlights().memberKeys().length, 0);
+  boundaryCode.highlightLines(1, undefined, new wasm.WasmCodeHighlightOptions(false));
+  assert.equal(boundaryCode.highlights().memberKeys().length, 1);
+  report.lineRegionBoundaryChecks = "typed indices, atomic range rejection, cold attachment";
   const { loadPyodide } = await import(pathToFileURL(path.resolve(runtimeRoot, "pyodide.mjs")));
   const pyodide = await loadPyodide({ indexURL: path.resolve(runtimeRoot) + path.sep });
   assert.equal(pyodide.version, pinnedVersion);
@@ -51,11 +71,18 @@ try {
     noonResolveGlowPulseAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveGlowPulseAnimationOptions, ...args),
     noonResolveTransformAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveTransformAnimationOptions, ...args),
     noonCodeOptions: (...args) => new wasm.WasmCodeOptions(...args),
+    noonCodeHighlightOptions: (...args) => new wasm.WasmCodeHighlightOptions(...args),
     noonCodeStylesList: () => wasm.noonCodeStylesList(),
     noonCodeLanguagesList: () => wasm.noonCodeLanguagesList(),
     noonCodeFromFamily: family => family.asCode(),
     noonCreateAuthoringCodeHandle: (source, options, context) => context == null
       ? authoringStore.createCode(source, options) : context.liveCreateCode(source, options),
+    noonGetHighlightedCodeLines: (context, code, start, stop, options) => context == null
+      ? code.getHighlightedLines(start, stop, options)
+      : context.liveGetHighlightedCodeLines(code, start, stop, options),
+    noonHighlightCodeLines: (context, code, start, stop, options) => context == null
+      ? code.highlightLines(start, stop, options)
+      : context.liveHighlightCodeLines(code, start, stop, options),
   });
   for (const descriptor of PYTHON_COMPAT_MODULES) {
     pyodide.FS.writeFile(descriptor.runtimePath,

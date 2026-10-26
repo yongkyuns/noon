@@ -62,6 +62,14 @@ const expectedJavascriptSurface = [
   "export class WasmAuthoringStore",
   "createManimCircle(",
   "createManimText(",
+  "export class WasmCodeOptions",
+  "export class WasmCodeHighlightOptions",
+  "export class WasmCodeHandle",
+  "getHighlightedLines(",
+  "highlightLines(",
+  "highlights()",
+  "liveGetHighlightedCodeLines(",
+  "liveHighlightCodeLines(",
   "export class WasmNativeFontFace",
   "static bundled(family)",
   "cloneFace()",
@@ -318,6 +326,12 @@ const expectedTypeSurface = [
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number, colors?: WasmTextColorBatch | null, font_face?: WasmNativeFontFace | null): WasmAuthoringMobjectHandle",
+  "export class WasmCodeHighlightOptions",
+  "getHighlightedLines(start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
+  "highlightLines(start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
+  "highlights(): WasmAuthoringFamilyHandle",
+  "liveGetHighlightedCodeLines(code: WasmCodeHandle, start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
+  "liveHighlightCodeLines(code: WasmCodeHandle, start: any, stop: any, options: WasmCodeHighlightOptions): WasmAuthoringMobjectHandle",
   "export class WasmNativeFontFace",
   "constructor(family: string, data: Uint8Array, face_index: number)",
   "static bundled(family: string): WasmNativeFontFace",
@@ -632,6 +646,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "export function createCodeLineHighlightRenderer(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectTypstCanvasRenderer(",
@@ -718,6 +733,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "export function createCodeLineHighlightRenderer(canvas: OffscreenCanvas, highlighted: boolean): Promise<ExecutionCanvasRenderer>",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
