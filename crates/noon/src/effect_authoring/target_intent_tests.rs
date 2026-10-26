@@ -4,7 +4,7 @@ use crate::{
     AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction,
     TransformToRequest,
 };
-use noon_core::{GlowParameter, Pixels, SemanticAnimationCompositionKind};
+use noon_core::{EffectParameter, Pixels, SemanticAnimationCompositionKind};
 
 fn fixture() -> (Scene, Mobject) {
     let mut scene = Scene::new();
@@ -12,7 +12,7 @@ fn fixture() -> (Scene, Mobject) {
     source.disable_stroke().unwrap();
     source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
     source
-        .set_glow(GlowUpdate::default().radius(Pixels(3.25)).intensity(0.4))
+        .set_glow(EffectUpdate::default().radius(Pixels(3.25)).intensity(0.4))
         .unwrap();
     scene.add(&source).unwrap();
     (scene, source)
@@ -48,7 +48,7 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
 
     scene
         .live(&mut session)
-        .set_glow(&target, GlowUpdate::default().intensity(0.4))
+        .set_glow(&target, EffectUpdate::default().intensity(0.4))
         .unwrap();
     assert_eq!(
         scene.revision(),
@@ -68,19 +68,19 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
         .copy_provenance()
         .unwrap();
     assert_eq!(copy.source_attachment(), source_effect);
-    assert!(copy.writes_parameter(GlowParameter::Intensity));
-    assert!(!copy.writes_parameter(GlowParameter::Radius));
+    assert!(copy.writes_parameter(EffectParameter::Intensity));
+    assert!(!copy.writes_parameter(EffectParameter::Radius));
 
     let committed = session.publication_context();
     scene
         .live(&mut session)
-        .set_glow(&target, GlowUpdate::default().intensity(0.4))
+        .set_glow(&target, EffectUpdate::default().intensity(0.4))
         .unwrap();
     assert_eq!(session.publication_context(), committed);
 
     let mut invalid = SemanticMutationTransaction::new();
-    invalid.update_effect(target_effect, GlowUpdate::default().radius(Pixels(3.25)));
-    invalid.update_effect(source_effect, GlowUpdate::default().intensity(-1.0));
+    invalid.update_effect(target_effect, EffectUpdate::default().radius(Pixels(3.25)));
+    invalid.update_effect(source_effect, EffectUpdate::default().intensity(-1.0));
     assert!(scene.live(&mut session).apply(invalid).is_err());
     assert_eq!(session.publication_context(), committed);
     assert_eq!(session.frame().objects, objects);
@@ -103,11 +103,11 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
         let mut target = source.target_editor().unwrap();
         target.shift(2.0, 0.0).unwrap();
         target
-            .set_glow(GlowUpdate::default().radius(Pixels(6.5)))
+            .set_glow(EffectUpdate::default().radius(Pixels(6.5)))
             .unwrap();
         let mut raised = source.target_editor().unwrap();
         raised
-            .set_glow(GlowUpdate::default().intensity(1.2))
+            .set_glow(EffectUpdate::default().intensity(1.2))
             .unwrap();
         let raise = scene
             .declare_transform_to(&source, &raised, options(1.0))
@@ -174,8 +174,22 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
             .advance_segment_to(segment, segment.end_time() - 0.3)
             .unwrap();
         let middle = row(&session, &source);
-        assert!((middle.glow.as_ref().unwrap().definition.intensity() - 2.0).abs() < 1e-12);
-        assert!((middle.glow.as_ref().unwrap().definition.radius().value() - 4.875).abs() < 1e-12);
+        assert!(
+            (middle
+                .effect
+                .as_ref()
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .intensity()
+                - 2.0)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (middle.effect.as_ref().unwrap().definition.radius().value() - 4.875).abs() < 1e-12
+        );
         assert!((middle.transform.translation.x - 1.0).abs() < 1e-6);
         scene
             .live(&mut session)
@@ -183,9 +197,19 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
             .unwrap();
         scene.live(&mut session).complete_segment(segment).unwrap();
         let final_row = row(&session, &source);
-        assert_eq!(final_row.glow.as_ref().unwrap().definition.intensity(), 1.2);
         assert_eq!(
-            final_row.glow.as_ref().unwrap().definition.radius(),
+            final_row
+                .effect
+                .as_ref()
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .intensity(),
+            1.2
+        );
+        assert_eq!(
+            final_row.effect.as_ref().unwrap().definition.radius(),
             Pixels(6.5).into()
         );
         assert_eq!(final_row.transform.translation.x, 2.0);
@@ -198,7 +222,7 @@ fn explicit_same_valued_copied_intensity_still_conflicts_with_pulse_atomically()
         let (scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
-            .set_glow(GlowUpdate::default().intensity(0.4))
+            .set_glow(EffectUpdate::default().intensity(0.4))
             .unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();

@@ -9,72 +9,75 @@ fn close(actual: f64, expected: f64) {
 
 #[test]
 fn definition_defaults_and_empty_patch_are_different() {
-    let glow = Glow::default();
-    assert_eq!(glow.color(), Color::WHITE);
-    assert_eq!(glow.radius(), GlowRadius::Scene(0.15));
-    assert_eq!(glow.intensity(), 0.35);
-    assert_eq!(glow.source(), GlowSource::Painted);
-    assert!(!glow.is_neutral());
-    let empty = GlowUpdate::default();
-    assert_eq!(empty.apply_to(glow).unwrap(), glow);
+    let effect = Glow::default();
+    assert_eq!(effect.color(), Color::WHITE);
+    assert_eq!(effect.radius(), EffectRadius::Scene(0.15));
+    assert_eq!(effect.intensity(), 0.35);
+    assert_eq!(effect.source(), GlowSource::Painted);
+    assert!(!effect.is_neutral());
+    let empty = EffectUpdate::default();
+    assert_eq!(empty.apply_to(effect).unwrap(), effect);
     for parameter in [
-        GlowParameter::Color,
-        GlowParameter::Radius,
-        GlowParameter::Intensity,
-        GlowParameter::Source,
+        EffectParameter::Color,
+        EffectParameter::Radius,
+        EffectParameter::Intensity,
+        EffectParameter::Source,
     ] {
         assert!(!empty.writes(parameter));
-        assert!(!empty.prepare(glow).unwrap().writes(parameter));
+        assert!(!empty.prepare(effect).unwrap().writes(parameter));
     }
 }
 
 #[test]
 fn partial_updates_preserve_every_omitted_parameter() {
-    let glow = Glow::new(
-        GlowUpdate::default()
+    let effect = Glow::new(
+        EffectUpdate::default()
             .color(Color::rgba(0.1, 0.2, 0.3, 0.4))
             .radius(Pixels(12.0))
             .source(GlowSource::Silhouette),
     )
     .unwrap();
-    let changed = GlowUpdate::default().intensity(1.5).apply_to(glow).unwrap();
-    assert_eq!(changed.color(), glow.color());
-    assert_eq!(changed.radius(), glow.radius());
-    assert_eq!(changed.source(), glow.source());
+    let changed = EffectUpdate::default()
+        .intensity(1.5)
+        .apply_to(effect)
+        .unwrap();
+    assert_eq!(changed.color(), effect.color());
+    assert_eq!(changed.radius(), effect.radius());
+    assert_eq!(changed.source(), effect.source());
     assert_eq!(changed.intensity(), 1.5);
-    assert_eq!(glow.intensity(), 0.35);
+    assert_eq!(effect.intensity(), 0.35);
 }
 
 #[test]
 fn invalid_multi_parameter_request_returns_no_replacement() {
-    let glow = Glow::default();
-    let invalid = GlowUpdate::default().color(Color::RED).intensity(-1.0);
+    let effect = Glow::default();
+    let invalid = EffectUpdate::default().color(Color::RED).intensity(-1.0);
     assert_eq!(
-        invalid.apply_to(glow),
-        Err(GlowParameterError::InvalidIntensity)
+        invalid.apply_to(effect),
+        Err(EffectParameterError::InvalidIntensity)
     );
-    assert_eq!(glow, Glow::default());
-    assert!(invalid.prepare(glow).is_err());
+    assert_eq!(effect, Glow::default());
+    assert!(invalid.prepare(effect).is_err());
 }
 
 #[test]
 fn invalid_numeric_inputs_fail_in_shared_rust() {
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
         assert_eq!(
-            Glow::new(GlowUpdate::default().radius(value)),
-            Err(GlowParameterError::InvalidRadius)
+            Glow::new(EffectUpdate::default().radius(value)),
+            Err(EffectParameterError::InvalidRadius)
         );
         assert_eq!(
-            Glow::new(GlowUpdate::default().radius(Pixels(value))),
-            Err(GlowParameterError::InvalidRadius)
+            Glow::new(EffectUpdate::default().radius(Pixels(value))),
+            Err(EffectParameterError::InvalidRadius)
         );
         assert_eq!(
-            Glow::new(GlowUpdate::default().intensity(value)),
-            Err(GlowParameterError::InvalidIntensity)
+            Glow::new(EffectUpdate::default().intensity(value)),
+            Err(EffectParameterError::InvalidIntensity)
         );
     }
-    assert!(Glow::new(GlowUpdate::default().intensity(8.0)).is_ok());
-    assert!(Glow::new(GlowUpdate::default().intensity(8.0001)).is_err());
+    assert!(Glow::new(EffectUpdate::default().intensity(8.0)).is_ok());
+    assert!(Glow::new(EffectUpdate::default().intensity(8.0001)).is_err());
 }
 
 #[test]
@@ -85,8 +88,8 @@ fn all_four_color_channels_are_checked() {
             rgba[channel] = value;
             let color = Color::rgba(rgba[0], rgba[1], rgba[2], rgba[3]);
             assert_eq!(
-                Glow::new(GlowUpdate::default().color(color)),
-                Err(GlowParameterError::InvalidColor)
+                Glow::new(EffectUpdate::default().color(color)),
+                Err(EffectParameterError::InvalidColor)
             );
         }
     }
@@ -95,25 +98,25 @@ fn all_four_color_channels_are_checked() {
 #[test]
 fn neutral_is_not_attachment_removal() {
     for update in [
-        GlowUpdate::default().intensity(0.0),
-        GlowUpdate::default().radius(0.0),
-        GlowUpdate::default().color(Color::rgba(1.0, 0.5, 0.0, 0.0)),
+        EffectUpdate::default().intensity(0.0),
+        EffectUpdate::default().radius(0.0),
+        EffectUpdate::default().color(Color::rgba(1.0, 0.5, 0.0, 0.0)),
     ] {
         let neutral = Glow::new(update).unwrap();
         assert!(neutral.is_neutral());
-        assert_eq!(GlowUpdate::default().apply_to(neutral).unwrap(), neutral);
+        assert_eq!(EffectUpdate::default().apply_to(neutral).unwrap(), neutral);
     }
 }
 
 #[test]
 fn scene_and_output_pixels_have_different_view_dependencies() {
-    let scene = GlowRadius::Scene(0.15);
+    let scene = EffectRadius::Scene(0.15);
     close(scene.to_output_pixels(600, 6.0).unwrap(), 15.0);
     close(scene.to_output_pixels(1200, 6.0).unwrap(), 30.0);
     close(scene.to_output_pixels(600, 3.0).unwrap(), 30.0);
     for (height, view) in [(600, 6.0), (1200, 6.0), (600, 3.0)] {
         assert_eq!(
-            GlowRadius::Pixels(12.0)
+            EffectRadius::Pixels(12.0)
                 .to_output_pixels(height, view)
                 .unwrap(),
             12.0
@@ -123,48 +126,48 @@ fn scene_and_output_pixels_have_different_view_dependencies() {
 
 #[test]
 fn invalid_view_and_unrepresentable_projection_fail_closed() {
-    for radius in [GlowRadius::Scene(0.15), GlowRadius::Pixels(12.0)] {
+    for radius in [EffectRadius::Scene(0.15), EffectRadius::Pixels(12.0)] {
         assert_eq!(
             radius.to_output_pixels(0, 6.0),
-            Err(GlowParameterError::InvalidView)
+            Err(EffectParameterError::InvalidView)
         );
         for view in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             assert_eq!(
                 radius.to_output_pixels(600, view),
-                Err(GlowParameterError::InvalidView)
+                Err(EffectParameterError::InvalidView)
             );
         }
     }
     assert_eq!(
-        GlowRadius::Scene(f64::MAX).to_output_pixels(600, 1.0),
-        Err(GlowParameterError::InvalidRadius)
+        EffectRadius::Scene(f64::MAX).to_output_pixels(600, 1.0),
+        Err(EffectParameterError::InvalidRadius)
     );
 }
 
 #[test]
 fn static_discrete_edits_are_allowed_but_interpolation_is_not() {
-    let glow = Glow::new(GlowUpdate::default().intensity(0.0)).unwrap();
+    let effect = Glow::new(EffectUpdate::default().intensity(0.0)).unwrap();
     for (update, parameter) in [
         (
-            GlowUpdate::default().radius(Pixels(12.0)),
-            GlowParameter::Radius,
+            EffectUpdate::default().radius(Pixels(12.0)),
+            EffectParameter::Radius,
         ),
         (
-            GlowUpdate::default().source(GlowSource::Silhouette),
-            GlowParameter::Source,
+            EffectUpdate::default().source(GlowSource::Silhouette),
+            EffectParameter::Source,
         ),
     ] {
-        assert!(update.apply_to(glow).is_ok());
+        assert!(update.apply_to(effect).is_ok());
         assert_eq!(
-            update.prepare(glow),
-            Err(GlowParameterError::DiscreteTransition(parameter))
+            update.prepare(effect),
+            Err(EffectParameterError::DiscreteTransition(parameter))
         );
     }
 }
 
 #[test]
 fn literal_linear_vectors_and_exact_endpoints() {
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(1.2)
         .prepare(Glow::default())
         .unwrap();
@@ -177,8 +180,8 @@ fn literal_linear_vectors_and_exact_endpoints() {
 
 #[test]
 fn capture_is_explicit_not_taken_when_request_is_constructed() {
-    let request = GlowUpdate::default().intensity(1.2);
-    let edited = Glow::new(GlowUpdate::default().intensity(0.9)).unwrap();
+    let request = EffectUpdate::default().intensity(1.2);
+    let edited = Glow::new(EffectUpdate::default().intensity(0.9)).unwrap();
     let prepared = request.prepare(edited).unwrap();
     assert_eq!(prepared.sample(0.0).unwrap().intensity, Some(0.9));
     close(prepared.sample(0.5).unwrap().intensity.unwrap(), 1.05);
@@ -187,11 +190,11 @@ fn capture_is_explicit_not_taken_when_request_is_constructed() {
 #[test]
 fn samples_are_partial_writes_not_stale_whole_appearance_snapshots() {
     let captured = Glow::default();
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(1.2)
         .prepare(captured)
         .unwrap();
-    let current = GlowUpdate::default()
+    let current = EffectUpdate::default()
         .radius(Pixels(40.0))
         .color(Color::RED)
         .source(GlowSource::Silhouette)
@@ -202,7 +205,7 @@ fn samples_are_partial_writes_not_stale_whole_appearance_snapshots() {
     assert_eq!(sampled.color, None);
     assert_eq!(sampled.source, None);
     let current = sampled.apply_to(current).unwrap();
-    assert_eq!(current.radius(), GlowRadius::Pixels(40.0));
+    assert_eq!(current.radius(), EffectRadius::Pixels(40.0));
     assert_eq!(current.color(), Color::RED);
     assert_eq!(current.source(), GlowSource::Silhouette);
     close(current.intensity(), 0.775);
@@ -210,46 +213,46 @@ fn samples_are_partial_writes_not_stale_whole_appearance_snapshots() {
 
 #[test]
 fn explicitly_requested_equal_value_still_has_a_write_channel() {
-    let update = GlowUpdate::default().intensity(0.35);
+    let update = EffectUpdate::default().intensity(0.35);
     let prepared = update.prepare(Glow::default()).unwrap();
-    assert!(prepared.writes(GlowParameter::Intensity));
-    assert!(!prepared.writes(GlowParameter::Radius));
+    assert!(prepared.writes(EffectParameter::Intensity));
+    assert!(!prepared.writes(EffectParameter::Radius));
     assert_eq!(prepared.sample(0.5).unwrap().intensity, Some(0.35));
 }
 
 #[test]
 fn color_and_radius_interpolate_with_their_declared_units() {
     let captured = Glow::new(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .radius(Pixels(4.0))
             .color(Color::rgba(0.0, 0.5, 1.0, 0.0)),
     )
     .unwrap();
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .radius(Pixels(12.0))
         .color(Color::rgba(1.0, 0.0, 0.5, 1.0))
         .prepare(captured)
         .unwrap();
     let middle = prepared.sample(0.5).unwrap();
-    assert_eq!(middle.radius, Some(GlowRadius::Pixels(8.0)));
+    assert_eq!(middle.radius, Some(EffectRadius::Pixels(8.0)));
     assert_eq!(middle.color, Some(Color::rgba(0.5, 0.25, 0.75, 0.5)));
     assert_eq!(middle.intensity, None);
 }
 
 #[test]
 fn invalid_progress_is_never_silently_clamped_or_published() {
-    let prepared = GlowUpdate::default().prepare(Glow::default()).unwrap();
+    let prepared = EffectUpdate::default().prepare(Glow::default()).unwrap();
     for alpha in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
         assert_eq!(
             prepared.sample(alpha),
-            Err(GlowParameterError::InvalidProgress)
+            Err(EffectParameterError::InvalidProgress)
         );
     }
 }
 
 #[test]
 fn shared_there_and_back_matches_independent_literal_pulse_vectors() {
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(2.0)
         .prepare(Glow::default())
         .unwrap();
@@ -279,7 +282,7 @@ fn existing_lag_and_duration_rescaling_feed_parameter_sampling() {
     )]);
     map.validate().unwrap();
     assert!(!map.evaluate_f64(0.1).begun);
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(1.2)
         .prepare(Glow::default())
         .unwrap();
@@ -301,7 +304,7 @@ fn nested_shared_time_maps_and_nonmonotone_rate_need_no_effect_clock() {
     ]);
     map.validate().unwrap();
     assert!(!map.evaluate_f64(0.49).begun);
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(2.0)
         .prepare(Glow::default())
         .unwrap();
@@ -324,7 +327,7 @@ fn existing_succession_rescaling_keeps_exact_child_boundaries() {
 
 #[test]
 fn parameter_samples_do_not_depend_on_call_order() {
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(2.0)
         .prepare(Glow::default())
         .unwrap();
@@ -342,16 +345,16 @@ fn parameter_samples_do_not_depend_on_call_order() {
 
 #[test]
 fn partial_request_enumerates_only_explicit_channels_in_schema_order() {
-    assert_eq!(GlowUpdate::default().parameters().count(), 0);
+    assert_eq!(EffectUpdate::default().parameters().count(), 0);
     assert_eq!(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .intensity(0.35)
             .parameters()
             .collect::<Vec<_>>(),
-        vec![GlowParameter::Intensity],
+        vec![EffectParameter::Intensity],
     );
     assert_eq!(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .source(GlowSource::Painted)
             .intensity(0.35)
             .radius(0.15)
@@ -359,10 +362,11 @@ fn partial_request_enumerates_only_explicit_channels_in_schema_order() {
             .parameters()
             .collect::<Vec<_>>(),
         vec![
-            GlowParameter::Color,
-            GlowParameter::Radius,
-            GlowParameter::Intensity,
-            GlowParameter::Source
+            EffectParameter::Color,
+            EffectParameter::Radius,
+            EffectParameter::Intensity,
+            EffectParameter::Source
         ],
     );
 }
+use crate::Pixels;

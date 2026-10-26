@@ -20,10 +20,10 @@ enum PreparedAuthoredValueWrite {
         compiled_spatial: Option<Box<noon_compile::CompiledSpatialState>>,
         changes_execution: bool,
     },
-    Glow {
+    Effect {
         object_index: usize,
-        glow: std::sync::Arc<noon_compile::CompiledGlow>,
-        effective: std::sync::Arc<noon_compile::CompiledGlow>,
+        effect: std::sync::Arc<noon_compile::CompiledEffect>,
+        effective: std::sync::Arc<noon_compile::CompiledEffect>,
         changes_execution: bool,
     },
     Style {
@@ -40,7 +40,7 @@ impl PreparedAuthoredValueWrite {
             Self::Transform { object_index, .. }
             | Self::SemanticTransform { object_index, .. }
             | Self::Style { object_index, .. }
-            | Self::Glow { object_index, .. } => *object_index,
+            | Self::Effect { object_index, .. } => *object_index,
         }
     }
 
@@ -55,7 +55,7 @@ impl PreparedAuthoredValueWrite {
             | Self::SemanticTransform {
                 changes_execution, ..
             }
-            | Self::Glow {
+            | Self::Effect {
                 changes_execution, ..
             } => *changes_execution,
         }
@@ -101,7 +101,7 @@ impl SceneInstance {
                     | ExecutionPatch::SetSemanticTransform { .. }
                     | ExecutionPatch::SetSpatialState { .. }
                     | ExecutionPatch::SetStyle { .. }
-                    | ExecutionPatch::SetGlow { .. }
+                    | ExecutionPatch::SetEffect { .. }
             )
         }) {
             return Ok(None);
@@ -133,7 +133,7 @@ impl SceneInstance {
                 ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetSpatialState { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
-                ExecutionPatch::SetGlow { object, .. } => (*object, 3_u8),
+                ExecutionPatch::SetEffect { object, .. } => (*object, 3_u8),
                 _ => return Ok(None),
             };
             let object_index = self
@@ -195,12 +195,14 @@ impl SceneInstance {
                     spatial: spatial.clone().map(Box::new),
                     changes_execution,
                 },
-                (3, ExecutionPatch::SetGlow { glow, .. }) => PreparedAuthoredValueWrite::Glow {
-                    object_index,
-                    glow: std::sync::Arc::clone(glow),
-                    effective: self.prepare_effective_glow_value(object_index, glow),
-                    changes_execution,
-                },
+                (3, ExecutionPatch::SetEffect { effect, .. }) => {
+                    PreparedAuthoredValueWrite::Effect {
+                        object_index,
+                        effect: std::sync::Arc::clone(effect),
+                        effective: self.prepare_effective_attachment_value(object_index, effect),
+                        changes_execution,
+                    }
+                }
                 _ => unreachable!("ordinary value publication classified above"),
             });
         }
@@ -249,16 +251,16 @@ impl SceneInstance {
                 continue;
             }
             let object_index = write.object_index();
-            // Glow has no geometry/layout dependencies. Its active channel values
+            // Effect has no geometry/layout dependencies. Its active channel values
             // and any Arc copy-on-write were already prepared before semantic commit.
-            if let PreparedAuthoredValueWrite::Glow {
-                glow, effective, ..
+            if let PreparedAuthoredValueWrite::Effect {
+                effect, effective, ..
             } = write
             {
                 self.compiled
-                    .commit_prepared_glow_value(object_index as u32, glow);
-                if self.frame.objects[object_index].glow.as_deref() != Some(effective.as_ref()) {
-                    self.frame.objects[object_index].glow = Some(effective);
+                    .commit_prepared_effect_value(object_index as u32, effect);
+                if self.frame.objects[object_index].effect.as_deref() != Some(effective.as_ref()) {
+                    self.frame.objects[object_index].effect = Some(effective);
                     self.changes.insert(object_index);
                 }
                 continue;
@@ -274,7 +276,7 @@ impl SceneInstance {
                 }
             }
             match write {
-                PreparedAuthoredValueWrite::Glow { .. } => {
+                PreparedAuthoredValueWrite::Effect { .. } => {
                     unreachable!("glow values were committed without spatial invalidation above")
                 }
                 PreparedAuthoredValueWrite::Transform {
@@ -382,16 +384,16 @@ impl SceneInstance {
 }
 
 impl SceneInstance {
-    fn prepare_effective_glow_value(
+    fn prepare_effective_attachment_value(
         &self,
         object_index: usize,
-        base: &std::sync::Arc<noon_compile::CompiledGlow>,
-    ) -> std::sync::Arc<noon_compile::CompiledGlow> {
+        base: &std::sync::Arc<noon_compile::CompiledEffect>,
+    ) -> std::sync::Arc<noon_compile::CompiledEffect> {
         let mut effective = Some(std::sync::Arc::clone(base));
         for property in [
-            Property::GlowColor,
-            Property::GlowRadius,
-            Property::GlowIntensity,
+            Property::EffectColor,
+            Property::EffectRadius,
+            Property::EffectIntensity,
         ] {
             let channel = noon_compile::CompiledChannelKey::new(object_index as u32, property);
             let Some(mut group) = self.groups.get(&channel).cloned() else {
@@ -399,7 +401,7 @@ impl SceneInstance {
             };
             let tracks = self.compiled.channel_tracks(channel);
             group.cursor = crate::upper_bound_start(tracks, self.frame.time, &mut 0);
-            crate::apply_glow_channel(
+            crate::apply_effect_channel(
                 Some(base.as_ref()),
                 &mut effective,
                 tracks,

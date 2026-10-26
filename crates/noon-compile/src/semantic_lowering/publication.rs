@@ -1,5 +1,5 @@
 //! Local lowering for an exclusively prepared authored transaction.
-mod glow;
+mod effect;
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
@@ -1324,7 +1324,7 @@ fn lower_prepared_entry(
         lowered.base_transform,
         lowered.base_style,
     );
-    compiled.glow = glow::lower_prepared_attachment(prepared, object)?;
+    compiled.effect = effect::lower_prepared_attachment(prepared, object)?;
     compiled.fill_gradient = lowered.fill_gradient;
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
@@ -1485,7 +1485,7 @@ fn lower_semantic_publication(
         };
         // A style/content/domain edit must not leave an installed or newly staged
         // glow outside the same finite profile accepted at initial lowering.
-        glow::lower_prepared_attachment(prepared, node.into())?;
+        effect::lower_prepared_attachment(prepared, node.into())?;
         super::paint::lower_fill(node, &state, prepared.store())?;
         // Object-owned interaction/metadata declarations have no render-value patch.
         let Some(flags) = domains.get(&node) else {
@@ -1576,7 +1576,7 @@ fn lower_semantic_publication(
             });
         }
     }
-    glow::lower_changes(prepared, index, reachability, &mut mutations)?;
+    effect::lower_changes(prepared, index, reachability, &mut mutations)?;
     Ok((
         ExecutionMutationTransaction::from_mutations(mutations),
         resource_additions,

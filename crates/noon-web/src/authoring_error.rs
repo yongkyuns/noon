@@ -172,7 +172,7 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::AudioClip(_) => {
                 Self::new("invalid_input", "authoring.audio_clip", message)
             }
-            AuthoringError::GlowParameter(_) => {
+            AuthoringError::EffectParameter(_) => {
                 Self::new("invalid_input", "effect.invalid_parameter", message)
             }
             AuthoringError::EffectNotFound { .. } => {
@@ -870,7 +870,7 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
-            E::Value(noon_compile::SemanticLoweringError::UnsupportedGlowProfile { .. }) => {
+            E::Value(noon_compile::SemanticLoweringError::UnsupportedEffectProfile { .. }) => {
                 "effect.unsupported_source_profile"
             }
             // Other lowering producer domains are consumed by later R2 slices.
@@ -1219,7 +1219,7 @@ mod tests {
             AuthoringFailure::from(SemanticMutationTransactionError::DuplicateEffectParameter {
                 index: 2,
                 effect,
-                parameter: noon_core::GlowParameter::Intensity,
+                parameter: noon_core::EffectParameter::Intensity,
             });
         assert_eq!(error.category, "invalid_input");
         assert_eq!(error.code, "transaction.duplicate_effect_parameter");
@@ -1491,12 +1491,12 @@ mod tests {
     }
     #[test]
     fn effect_errors_project_shared_causes_without_text_matching() {
-        use noon::effects::{Glow, GlowUpdate};
+        use noon::effects::{EffectUpdate, Glow};
         let mut scene = noon::Scene::new();
         let object = scene.circle(0.08).unwrap();
-        scene.set_glow(&object, GlowUpdate::default()).unwrap();
+        scene.set_glow(&object, EffectUpdate::default()).unwrap();
         let invalid = scene
-            .set_glow(&object, GlowUpdate::default().intensity(-1.0))
+            .set_glow(&object, EffectUpdate::default().intensity(-1.0))
             .unwrap_err();
         let projected = AuthoringFailure::from(invalid);
         assert_eq!(projected.category, "invalid_input");

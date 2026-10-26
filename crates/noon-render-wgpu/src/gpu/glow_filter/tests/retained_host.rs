@@ -4,19 +4,19 @@ use super::analytic_scene::{expected, frame, semantic_runtime, target, SIGMA, VI
 use super::pixels::{device, readback};
 use crate::text::TextDeviceMetrics;
 use crate::{
-    Camera2D, GpuRenderer, RetainedFramePreparer, RetainedGlowStats, RetainedTextGpuState,
+    Camera2D, GpuRenderer, RetainedEffectStats, RetainedFramePreparer, RetainedTextGpuState,
 };
 use noon_compile::{
-    CompiledGlow, CompiledObject, CompiledResources, CompiledScene, ExecutionPatch,
+    CompiledEffect, CompiledObject, CompiledResources, CompiledScene, ExecutionPatch,
 };
 use noon_core::{
-    Color, GeometryResourceArena, Glow, GlowSource, GlowUpdate, ObjectContentRef, ObjectId, Pixels,
-    SemanticNodeId, Style, TextResourceArena, Transform2D, Vec2,
+    Color, EffectUpdate, GeometryResourceArena, Glow, GlowSource, ObjectContentRef, ObjectId,
+    Pixels, SemanticNodeId, Style, TextResourceArena, Transform2D, Vec2,
 };
 use noon_runtime::{FrameState, SceneInstance};
 use std::sync::Arc;
 
-fn text_objects(source: Option<&FrameState>, glow: Option<Glow>) -> SceneInstance {
+fn text_objects(source: Option<&FrameState>, effect: Option<Glow>) -> SceneInstance {
     let mut objects = source.map_or_else(Vec::new, |frame| {
         frame
             .objects
@@ -27,10 +27,10 @@ fn text_objects(source: Option<&FrameState>, glow: Option<Glow>) -> SceneInstanc
                 let mut object =
                     CompiledObject::new(row.id, row.content.clone(), row.transform, row.style);
                 if i == 1 {
-                    object.glow = glow.map(|definition| {
-                        Arc::new(CompiledGlow {
+                    object.effect = effect.map(|definition| {
+                        Arc::new(CompiledEffect {
                             attachment: SemanticNodeId::new(900, 1),
-                            definition,
+                            definition: definition.into(),
                         })
                     });
                 }
@@ -69,7 +69,7 @@ fn text_objects(source: Option<&FrameState>, glow: Option<Glow>) -> SceneInstanc
     let mut compiled = CompiledScene::compile_objects(objects, &[]).unwrap();
     compiled.merge_prepared_resources(resources);
     let mut runtime = SceneInstance::new(compiled);
-    if glow.is_some() {
+    if effect.is_some() {
         // Mixed geometry/text must use real dirty motion publications too.
         let row = &runtime.frame().objects[1];
         runtime
@@ -117,7 +117,7 @@ impl Host {
         queue: &wgpu::Queue,
         runtime: &mut SceneInstance,
         omit_source: bool,
-    ) -> (Vec<u8>, RetainedGlowStats) {
+    ) -> (Vec<u8>, RetainedEffectStats) {
         let publication = runtime.take_renderer_publication();
         let visible = publication
             .painter_order()
@@ -127,7 +127,7 @@ impl Host {
             .collect::<Vec<_>>();
         let expanded = self
             .renderer
-            .glow_source_visibility(&publication, &visible)
+            .effect_source_visibility(&publication, &visible)
             .unwrap();
         let metrics = TextDeviceMetrics::uniform(10.0)
             .unwrap()
@@ -142,7 +142,7 @@ impl Host {
         let mut encoder = device.create_command_encoder(&Default::default());
         let stats = self
             .renderer
-            .prepare_retained_analytic_glows(
+            .prepare_retained_effects(
                 device,
                 queue,
                 &mut encoder,
@@ -184,15 +184,15 @@ fn composite(dst: &mut [u8], src: &[u8]) {
 }
 fn edit_intensity(runtime: &mut SceneInstance, intensity: f64) {
     let row = &runtime.frame().objects[1];
-    let mut glow = **row.glow.as_ref().unwrap();
-    glow.definition = GlowUpdate::default()
+    let mut effect = **row.effect.as_ref().unwrap();
+    effect.definition = EffectUpdate::default()
         .intensity(intensity)
-        .apply_to(glow.definition)
+        .apply_to(effect.definition)
         .unwrap();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetGlow {
+        .apply_execution_patch(&ExecutionPatch::SetEffect {
             object: row.id,
-            glow: Arc::new(glow),
+            effect: Arc::new(effect),
         })
         .unwrap();
 }
@@ -212,7 +212,7 @@ fn automatic_retained_host_glow_pixels() {
         ] {
             let source = frame(rectangle, offscreen, transparent);
             let definition = Glow::new(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .radius(Pixels(SIGMA))
                     .intensity(2.4)
                     .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
@@ -274,9 +274,17 @@ fn automatic_retained_host_glow_pixels() {
             }
             edit_intensity(&mut runtime, 0.5);
             let (edited_image, edit) = host.render(&device, &queue, &mut runtime, offscreen);
-            let edited_definition = runtime.frame().objects[1].glow.as_ref().unwrap().definition;
-            let mut edited_reference =
-                expected(&device, &queue, runtime.frame(), edited_definition);
+            let edited_definition = runtime.frame().objects[1]
+                .effect
+                .as_ref()
+                .unwrap()
+                .definition;
+            let mut edited_reference = expected(
+                &device,
+                &queue,
+                runtime.frame(),
+                (edited_definition).as_glow().unwrap(),
+            );
             if let Some(overlay) = &overlay {
                 composite(&mut edited_reference, overlay);
             }

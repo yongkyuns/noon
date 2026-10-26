@@ -3,12 +3,12 @@
 //! They do not enable or stand in for public Scene/Python activation.
 use std::sync::Arc;
 
-use noon_compile::{CompiledGlow, CompiledObject, CompiledScene, ExecutionPatch};
+use noon_compile::{CompiledEffect, CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
-    Camera2DState, Color, FontResourceArena, FrameEpoch, GeometryRef, GeometryResourceArena, Glow,
-    GlowSource, GlowUpdate, ObjectId, Pixels, Property, PublicationContext, RateFunction,
-    SemanticNodeId, StrokeWidthMode, Style, TextResourceArena, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+    Camera2DState, Color, EffectUpdate, FontResourceArena, FrameEpoch, GeometryRef,
+    GeometryResourceArena, Glow, GlowSource, ObjectId, Pixels, Property, PublicationContext,
+    RateFunction, SemanticNodeId, StrokeWidthMode, Style, TextResourceArena, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_runtime::{FrameState, SceneInstance};
 use serde::Serialize;
@@ -145,10 +145,10 @@ fn runtime(
         },
         source_style,
     );
-    let glow = CompiledGlow {
+    let effect = CompiledEffect {
         attachment: SemanticNodeId::new(900, u32::MAX),
-        definition: Glow::new(
-            GlowUpdate::default()
+        definition: (Glow::new(
+            EffectUpdate::default()
                 .radius(Pixels(3.25))
                 .intensity(2.4)
                 .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
@@ -158,9 +158,10 @@ fn runtime(
                     GlowSource::Painted
                 }),
         )
-        .unwrap(),
+        .unwrap())
+        .into(),
     };
-    source.glow = Some(Arc::new(glow));
+    source.effect = Some(Arc::new(effect));
     let objects = vec![
         CompiledObject::new(
             ObjectId::new(1),
@@ -200,14 +201,14 @@ fn runtime(
             .unwrap();
     }
     let update = if intensity_only {
-        GlowUpdate::default().intensity(0.0)
+        EffectUpdate::default().intensity(0.0)
     } else {
-        GlowUpdate::default()
+        EffectUpdate::default()
             .radius(Pixels(4.75))
             .intensity(0.7)
             .color(Color::rgba(0.15, 0.85, 0.25, 0.5))
     };
-    for (i, (property, values)) in glow
+    for (i, (property, values)) in effect
         .parameter_channels(update)
         .unwrap()
         .into_iter()
@@ -257,14 +258,21 @@ fn reference(frame: &FrameState, stage: usize) -> FrameState {
     };
     value.presences[index] = true;
     for row in &mut value.objects {
-        row.glow = None;
+        row.effect = None;
     }
     if index == 1 {
         value.objects[1].style.opacity = 1.0;
     }
     if matches!(stage, 2 | 3 | 5) {
         let silhouette = stage == 3
-            && frame.objects[1].glow.as_ref().unwrap().definition.source()
+            && frame.objects[1]
+                .effect
+                .as_ref()
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .source()
                 == GlowSource::Silhouette;
         let white_with_alpha = |paint: Option<Color>| {
             paint
@@ -388,8 +396,8 @@ fn fixture() -> Fixture {
                     .unwrap()
                     .unwrap()
             };
-            let glow = frame.objects[1].glow.as_ref().unwrap().definition;
-            let color = glow.color();
+            let effect = frame.objects[1].effect.as_ref().unwrap().definition;
+            let color = effect.as_glow().unwrap().color();
             let references = (0..6)
                 .map(|stage| {
                     reference_epoch += 1;
@@ -406,8 +414,8 @@ fn fixture() -> Fixture {
             frames.push(Sample {
                 delta,
                 references,
-                sigma: glow.radius().value(),
-                intensity: glow.intensity(),
+                sigma: effect.radius().value(),
+                intensity: effect.as_glow().unwrap().intensity(),
                 tint: [color.red, color.green, color.blue, color.alpha],
                 opacity: frame.objects[1].style.opacity,
                 offscreen,
@@ -424,15 +432,15 @@ fn fixture() -> Fixture {
                 .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(id)))
                 .unwrap();
         }
-        let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
-        glow.definition = GlowUpdate::default()
+        let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+        effect.definition = EffectUpdate::default()
             .intensity(0.0)
-            .apply_to(glow.definition)
+            .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetGlow {
+            .apply_execution_patch(&ExecutionPatch::SetEffect {
                 object: ObjectId::new(2),
-                glow: Arc::new(glow),
+                effect: Arc::new(effect),
             })
             .unwrap();
         let publication = runtime.take_renderer_publication();
@@ -448,7 +456,7 @@ fn fixture() -> Fixture {
             .unwrap();
         let mut ordinary_frame = publication.frame().clone();
         for row in &mut ordinary_frame.objects {
-            row.glow = None;
+            row.effect = None;
         }
         let ordinary = RetainedExecutionDeltaEncoder::new(900 + i as u32)
             .encode_snapshot_with_context(&ordinary_frame, camera(false), publication.context())
@@ -531,8 +539,17 @@ mod tests {
                     .iter()
                     .find(|row| row.order == 1)
                     .expect("animated source row is transported");
-                assert_eq!(wire_row.glow.unwrap().attachment.generation(), u32::MAX);
-                assert_eq!(wire_row.glow.unwrap().intensity, sample.intensity);
+                assert_eq!(wire_row.effect.unwrap().attachment.generation(), u32::MAX);
+                assert_eq!(
+                    match wire_row.effect.unwrap().definition {
+                        crate::retained_execution_transport::TransportEffectDefinition::Glow {
+                            intensity,
+                            ..
+                        } => intensity,
+                        _ => panic!("expected Glow"),
+                    },
+                    sample.intensity
+                );
                 if case.name.ends_with("-reveal") {
                     let expected_reveal =
                         0.15 + 0.85 * [0.0, 0.37, 0.8, 1.0, 0.0][sample_index] as f32;
@@ -549,7 +566,7 @@ mod tests {
                 if case.name == "cubic-path-reveal" && sample_index == 1 {
                     assert!((row.transform.translation.x - 0.173 - 0.037).abs() < 1e-6);
                     assert!((frame.reveal(1) - (0.15 + 0.85 * 0.37)).abs() < 1e-6);
-                    assert!((wire_row.glow.unwrap().intensity - 1.771).abs() < 1e-6);
+                    assert!((match wire_row.effect.unwrap().definition { crate::retained_execution_transport::TransportEffectDefinition::Glow { intensity, .. } => intensity, _ => panic!("expected Glow") } - 1.771).abs() < 1e-6);
                 }
             }
             if case.name == "outlined-circle-reveal" {
@@ -576,7 +593,7 @@ mod tests {
                 serde_json::from_value(serde_json::to_value(&case.neutral).unwrap()).unwrap();
             installed.apply(neutral).unwrap();
             assert!(installed.frame().unwrap().objects[1]
-                .glow
+                .effect
                 .as_ref()
                 .unwrap()
                 .definition

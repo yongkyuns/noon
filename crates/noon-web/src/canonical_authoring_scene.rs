@@ -3137,7 +3137,7 @@ impl CanonicalAuthoringScene {
                     intensity,
                     options,
                 } => {
-                    noon_core::GlowUpdate::default()
+                    noon_core::EffectUpdate::default()
                         .intensity(*intensity)
                         .prepare(noon_core::Glow::default())
                         .map_err(|error| error.to_string())?;
@@ -14598,7 +14598,7 @@ mod tests {
         let mut persistent = context.scene.circle(0.4).unwrap();
         persistent.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
         persistent
-            .set_glow(noon_core::GlowUpdate::default().intensity(1.2))
+            .set_glow(noon_core::EffectUpdate::default().intensity(1.2))
             .unwrap();
         let mut temporary = context.scene.circle(0.4).unwrap();
         temporary.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
@@ -14676,9 +14676,9 @@ mod tests {
                 .iter()
                 .find(|row| row.id == id)
                 .unwrap()
-                .glow
+                .effect
                 .as_ref()
-                .map(|glow| glow.definition.intensity())
+                .map(|effect| effect.definition.as_glow().unwrap().intensity())
         };
         for (time, expected) in [(0.125, 1.5), (0.375, 0.5), (0.5, 0.0)] {
             context

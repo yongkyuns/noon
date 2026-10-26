@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Color, GlowUpdate, Pixels, SemanticMutationImpact, SemanticMutationTransaction,
+    Color, EffectUpdate, Pixels, SemanticMutationImpact, SemanticMutationTransaction,
     SemanticMutationTransactionError, SemanticNodeCreation, SemanticObjectProperty,
     SemanticObjectState, SemanticVec3, StoredGeometry,
 };
@@ -17,9 +17,14 @@ fn attach(store: &mut SemanticStore, owner: SemanticNodeId, name: &str) -> Seman
     let token = tx.create_effect(owner, name, Glow::default());
     tx.apply(store).unwrap().resolve(token).unwrap()
 }
-fn glow(store: &SemanticStore, id: SemanticNodeId) -> Glow {
-    let EffectDefinition::Glow(glow) = store.semantic_effect_state(id).unwrap().definition();
-    glow
+fn effect(store: &SemanticStore, id: SemanticNodeId) -> Glow {
+    let effect = store
+        .semantic_effect_state(id)
+        .unwrap()
+        .definition()
+        .as_glow()
+        .unwrap();
+    effect
 }
 
 #[test]
@@ -103,23 +108,23 @@ fn parameter_mutation_touches_one_slot_and_preserves_other_parameters() {
     let halo = attach(&mut store, owner, "glow");
     let other = attach(&mut store, other_owner, "glow");
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
+    tx.update_effect(halo, EffectUpdate::default().intensity(1.4));
     let result = tx.apply(&mut store).unwrap();
     assert_eq!(
         result.impacts(),
         &[SemanticMutationImpact::EffectParameter {
             owner,
             effect: halo,
-            parameter: crate::GlowParameter::Intensity,
+            parameter: crate::EffectParameter::Intensity,
         }]
     );
     assert_eq!(store.last_mutation_stats().slots_written, 1);
-    assert_eq!(glow(&store, halo).intensity(), 1.4);
-    assert_eq!(glow(&store, halo).radius(), Glow::default().radius());
-    assert_eq!(glow(&store, other), Glow::default());
+    assert_eq!(effect(&store, halo).intensity(), 1.4);
+    assert_eq!(effect(&store, halo).radius(), Glow::default().radius());
+    assert_eq!(effect(&store, other), Glow::default());
     let before = store.scene_revision();
     let mut empty = SemanticMutationTransaction::new();
-    empty.update_effect(halo, GlowUpdate::default());
+    empty.update_effect(halo, EffectUpdate::default());
     assert!(empty.apply(&mut store).unwrap().impacts().is_empty());
     assert_eq!(store.scene_revision(), before);
 }
@@ -141,7 +146,7 @@ fn failed_parameter_update_rolls_back_other_ordinary_edits() {
     );
     tx.update_effect(
         halo,
-        GlowUpdate::default().color(Color::RED).intensity(-1.0),
+        EffectUpdate::default().color(Color::RED).intensity(-1.0),
     );
     assert!(matches!(
         tx.apply(&mut store),
@@ -152,7 +157,7 @@ fn failed_parameter_update_rolls_back_other_ordinary_edits() {
         store.semantic_object_state_checked(owner).unwrap(),
         &before.1
     );
-    assert_eq!(glow(&store, halo), Glow::default());
+    assert_eq!(effect(&store, halo), Glow::default());
 }
 
 #[test]
@@ -161,18 +166,18 @@ fn overlapping_parameter_writes_reject_without_panicking() {
     let owner = object(&mut store);
     let halo = attach(&mut store, owner, "glow");
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(halo, GlowUpdate::default().intensity(0.5));
+    tx.update_effect(halo, EffectUpdate::default().intensity(0.5));
     tx.update_effect(
         halo,
-        GlowUpdate::default().radius(Pixels(10.0)).intensity(0.5),
+        EffectUpdate::default().radius(Pixels(10.0)).intensity(0.5),
     );
     assert!(matches!(
         tx.apply(&mut store),
         Err(SemanticMutationTransactionError::DuplicateEffectParameter {
-            effect, parameter: crate::GlowParameter::Intensity, ..
+            effect, parameter: crate::EffectParameter::Intensity, ..
         }) if effect == halo
     ));
-    assert_eq!(glow(&store, halo), Glow::default());
+    assert_eq!(effect(&store, halo), Glow::default());
 }
 
 #[test]
@@ -189,9 +194,9 @@ fn remove_readd_same_name_reuses_only_a_new_generation() {
     assert_eq!(replacement.slot(), halo.slot());
     assert_ne!(replacement.generation(), halo.generation());
     let mut stale = SemanticMutationTransaction::new();
-    stale.update_effect(halo, GlowUpdate::default().intensity(4.0));
+    stale.update_effect(halo, EffectUpdate::default().intensity(4.0));
     assert!(stale.apply(&mut store).is_err());
-    assert_eq!(glow(&store, replacement), Glow::default());
+    assert_eq!(effect(&store, replacement), Glow::default());
 }
 
 #[test]
@@ -280,7 +285,7 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
         let copy = snapshot.copy_provenance.unwrap();
         assert_eq!(copy.source_attachment(), source);
         assert_eq!(copy.copied_definition(), snapshot.definition);
-        assert!(!copy.writes_parameter(GlowParameter::Intensity));
+        assert!(!copy.writes_parameter(EffectParameter::Intensity));
     }
     let result = prepared.commit();
     let copied = result.resolve(copied).unwrap();
@@ -293,10 +298,10 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
         "accent"
     );
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(copy_ids[0], GlowUpdate::default().intensity(2.0));
+    tx.update_effect(copy_ids[0], EffectUpdate::default().intensity(2.0));
     tx.apply(&mut store).unwrap();
-    assert_eq!(glow(&store, first).intensity(), 0.35);
-    assert_eq!(glow(&store, copy_ids[0]).intensity(), 2.0);
+    assert_eq!(effect(&store, first).intensity(), 0.35);
+    assert_eq!(effect(&store, copy_ids[0]).intensity(), 2.0);
 
     let mut tx = SemanticMutationTransaction::new();
     let frozen = tx.create_node(SemanticNodeCreation::object(
@@ -315,11 +320,11 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
     let frozen_effects = prepared.animation_effect_snapshot(frozen).unwrap();
     let frozen_intent = frozen_effects[0].copy_provenance.unwrap();
     assert_eq!(frozen_intent.source_attachment(), first);
-    assert!(frozen_intent.writes_parameter(GlowParameter::Intensity));
+    assert!(frozen_intent.writes_parameter(EffectParameter::Intensity));
     let independent_effects = prepared.animation_effect_snapshot(independent).unwrap();
     let independent_intent = independent_effects[0].copy_provenance.unwrap();
     assert_eq!(independent_intent.source_attachment(), copy_ids[0]);
-    assert!(!independent_intent.writes_parameter(GlowParameter::Intensity));
+    assert!(!independent_intent.writes_parameter(EffectParameter::Intensity));
     assert_eq!(
         independent_effects[0].definition,
         frozen_effects[0].definition
@@ -335,7 +340,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     let copied_effect = store.effect_by_name(copied, "glow").unwrap().unwrap();
     let original_state = store.semantic_effect_state(copied_effect).unwrap().clone();
     let revision = store.scene_revision();
-    let update = GlowUpdate::default().intensity(Glow::default().intensity());
+    let update = EffectUpdate::default().intensity(Glow::default().intensity());
 
     let mut staged = SemanticMutationTransaction::new();
     staged.update_effect(copied_effect, update);
@@ -357,7 +362,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     assert!(staged_snapshot[0]
         .copy_provenance
         .unwrap()
-        .writes_parameter(GlowParameter::Intensity));
+        .writes_parameter(EffectParameter::Intensity));
     drop(prepared);
     assert_eq!(store.scene_revision(), revision);
     assert_eq!(
@@ -367,7 +372,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
 
     let mut invalid = SemanticMutationTransaction::new();
     invalid.update_effect(copied_effect, update);
-    invalid.update_effect(copied_effect, GlowUpdate::default().radius(-1.0));
+    invalid.update_effect(copied_effect, EffectUpdate::default().radius(-1.0));
     assert!(invalid.apply(&mut store).is_err());
     assert_eq!(store.scene_revision(), revision);
     assert_eq!(
@@ -384,15 +389,15 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     );
     assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
     assert_eq!(store.last_mutation_stats().slots_written, 1);
-    assert_eq!(glow(&store, copied_effect), Glow::default());
+    assert_eq!(effect(&store, copied_effect), Glow::default());
     let copy = store
         .semantic_effect_state(copied_effect)
         .unwrap()
         .copy_provenance()
         .unwrap();
     assert_eq!(copy.source_attachment(), original_effect);
-    assert!(copy.writes_parameter(GlowParameter::Intensity));
-    assert!(!copy.writes_parameter(GlowParameter::Radius));
+    assert!(copy.writes_parameter(EffectParameter::Intensity));
+    assert!(!copy.writes_parameter(EffectParameter::Radius));
 
     let committed_revision = store.scene_revision();
     let mut repeated = SemanticMutationTransaction::new();
@@ -408,7 +413,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
         .is_none());
 
     store.remove_node(original).unwrap();
-    assert_eq!(glow(&store, copied_effect), Glow::default());
+    assert_eq!(effect(&store, copied_effect), Glow::default());
     assert_eq!(
         store
             .semantic_effect_state(copied_effect)
@@ -466,11 +471,14 @@ fn independent_parameter_updates_compose_in_one_ordinary_transaction() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(2.0, 0.0, 0.0),
     );
-    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
-    tx.update_effect(halo, GlowUpdate::default().radius(Pixels(12.0)));
+    tx.update_effect(halo, EffectUpdate::default().intensity(1.4));
+    tx.update_effect(halo, EffectUpdate::default().radius(Pixels(12.0)));
     tx.apply(&mut store).unwrap();
-    assert_eq!(glow(&store, halo).intensity(), 1.4);
-    assert_eq!(glow(&store, halo).radius(), crate::GlowRadius::Pixels(12.0));
+    assert_eq!(effect(&store, halo).intensity(), 1.4);
+    assert_eq!(
+        effect(&store, halo).radius(),
+        crate::EffectRadius::Pixels(12.0)
+    );
     assert_eq!(
         store
             .semantic_object_state_checked(owner)
@@ -491,16 +499,16 @@ fn dirty_parameter_impacts_exclude_explicit_unchanged_channels() {
     let mut tx = SemanticMutationTransaction::new();
     tx.update_effect(
         halo,
-        GlowUpdate::default().intensity(0.35).radius(Pixels(12.0)),
+        EffectUpdate::default().intensity(0.35).radius(Pixels(12.0)),
     );
-    tx.update_effect(halo, GlowUpdate::default().color(Color::WHITE));
+    tx.update_effect(halo, EffectUpdate::default().color(Color::WHITE));
     let result = tx.apply(&mut store).unwrap();
     assert_eq!(
         result.impacts(),
         &[SemanticMutationImpact::EffectParameter {
             owner,
             effect: halo,
-            parameter: crate::GlowParameter::Radius,
+            parameter: crate::EffectParameter::Radius,
         }]
     );
     assert_eq!(store.last_mutation_stats().slots_written, 1);
@@ -513,14 +521,14 @@ fn unchanged_explicit_write_still_conflicts_with_another_writer() {
     let halo = attach(&mut store, owner, "glow");
     let revision = store.scene_revision();
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(halo, GlowUpdate::default().intensity(0.35));
-    tx.update_effect(halo, GlowUpdate::default().intensity(0.35));
+    tx.update_effect(halo, EffectUpdate::default().intensity(0.35));
+    tx.update_effect(halo, EffectUpdate::default().intensity(0.35));
     assert!(matches!(tx.apply(&mut store), Err(
         SemanticMutationTransactionError::DuplicateEffectParameter {
-            index: 1, effect, parameter: crate::GlowParameter::Intensity,
+            index: 1, effect, parameter: crate::EffectParameter::Intensity,
         }) if effect == halo));
     assert_eq!(store.scene_revision(), revision);
-    assert_eq!(glow(&store, halo), Glow::default());
+    assert_eq!(effect(&store, halo), Glow::default());
 }
 
 #[test]
@@ -530,19 +538,19 @@ fn empty_requests_own_no_channels_but_still_validate_identity() {
     let halo = attach(&mut store, owner, "glow");
     let revision = store.scene_revision();
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(halo, GlowUpdate::default());
-    tx.update_effect(halo, GlowUpdate::default());
+    tx.update_effect(halo, EffectUpdate::default());
+    tx.update_effect(halo, EffectUpdate::default());
     assert!(tx.apply(&mut store).unwrap().impacts().is_empty());
     assert_eq!(store.scene_revision(), revision);
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(halo, GlowUpdate::default());
-    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
-    tx.update_effect(halo, GlowUpdate::default());
+    tx.update_effect(halo, EffectUpdate::default());
+    tx.update_effect(halo, EffectUpdate::default().intensity(1.4));
+    tx.update_effect(halo, EffectUpdate::default());
     tx.apply(&mut store).unwrap();
-    assert_eq!(glow(&store, halo).intensity(), 1.4);
+    assert_eq!(effect(&store, halo).intensity(), 1.4);
     store.remove_node(halo).unwrap();
     let mut stale = SemanticMutationTransaction::new();
-    stale.update_effect(halo, GlowUpdate::default());
+    stale.update_effect(halo, EffectUpdate::default());
     assert!(stale.apply(&mut store).is_err());
 }
 
@@ -559,34 +567,34 @@ fn later_invalid_disjoint_parameter_rolls_back_the_complete_transaction() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(2.0, 0.0, 0.0),
     );
-    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
-    tx.update_effect(halo, GlowUpdate::default().radius(-1.0));
+    tx.update_effect(halo, EffectUpdate::default().intensity(1.4));
+    tx.update_effect(halo, EffectUpdate::default().radius(-1.0));
     assert!(matches!(tx.apply(&mut store), Err(
         SemanticMutationTransactionError::EffectParameter {
-            index: 2, effect, error: crate::GlowParameterError::InvalidRadius,
+            index: 2, effect, error: crate::EffectParameterError::InvalidRadius,
         }) if effect == halo));
     assert_eq!(store.scene_revision(), revision);
     assert_eq!(
         store.semantic_object_state_checked(owner).unwrap(),
         &original
     );
-    assert_eq!(glow(&store, halo), Glow::default());
+    assert_eq!(effect(&store, halo), Glow::default());
 }
 
 #[test]
 fn every_disjoint_parameter_order_preserves_earlier_updates() {
-    use crate::{GlowParameter, GlowRadius, GlowSource};
+    use crate::{EffectParameter, EffectRadius, GlowSource};
     let updates = [
-        GlowUpdate::default().color(Color::RED),
-        GlowUpdate::default().radius(Pixels(12.0)),
-        GlowUpdate::default().intensity(1.4),
-        GlowUpdate::default().source(GlowSource::Silhouette),
+        EffectUpdate::default().color(Color::RED),
+        EffectUpdate::default().radius(Pixels(12.0)),
+        EffectUpdate::default().intensity(1.4),
+        EffectUpdate::default().source(GlowSource::Silhouette),
     ];
     let parameters = [
-        GlowParameter::Color,
-        GlowParameter::Radius,
-        GlowParameter::Intensity,
-        GlowParameter::Source,
+        EffectParameter::Color,
+        EffectParameter::Radius,
+        EffectParameter::Intensity,
+        EffectParameter::Source,
     ];
     let mut cases = 0;
     for a in 0..4 {
@@ -618,9 +626,9 @@ fn every_disjoint_parameter_order_preserves_earlier_updates() {
                         })
                         .collect();
                     assert_eq!(result.impacts(), expected);
-                    let value = glow(&store, halo);
+                    let value = effect(&store, halo);
                     assert_eq!(value.color(), Color::RED);
-                    assert_eq!(value.radius(), GlowRadius::Pixels(12.0));
+                    assert_eq!(value.radius(), EffectRadius::Pixels(12.0));
                     assert_eq!(value.intensity(), 1.4);
                     assert_eq!(value.source(), GlowSource::Silhouette);
                     assert_eq!(store.last_mutation_stats().slots_written, 1);
@@ -639,11 +647,11 @@ fn identical_parameter_names_on_different_attachments_do_not_conflict() {
     let first = attach(&mut store, owner, "glow");
     let second = attach(&mut store, owner, "accent");
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(first, GlowUpdate::default().intensity(1.4));
-    tx.update_effect(second, GlowUpdate::default().intensity(0.1));
+    tx.update_effect(first, EffectUpdate::default().intensity(1.4));
+    tx.update_effect(second, EffectUpdate::default().intensity(0.1));
     tx.apply(&mut store).unwrap();
-    assert_eq!(glow(&store, first).intensity(), 1.4);
-    assert_eq!(glow(&store, second).intensity(), 0.1);
+    assert_eq!(effect(&store, first).intensity(), 1.4);
+    assert_eq!(effect(&store, second).intensity(), 0.1);
     assert_eq!(store.node(owner).unwrap().effect_ids(), &[first, second]);
     assert_eq!(store.last_mutation_stats().slots_written, 2);
 }

@@ -24,7 +24,7 @@ fn fixture() -> (Scene, Mobject) {
     scene
         .set_glow(
             &source,
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .radius(Pixels(3.25))
                 .color(Color::RED)
                 .intensity(0.4000000000000123),
@@ -51,7 +51,7 @@ fn effective(runtime: &SceneInstance, object: ObjectId) -> EffectiveAnimationPro
     let index = runtime.frame_index_for_object(object).unwrap();
     let row = &frame.objects[index];
     EffectiveAnimationProperties {
-        glow: row.glow.as_deref().copied(),
+        effect: row.effect.as_deref().copied(),
         z_index: row.z_index,
         transform: row.transform,
         style: row.style,
@@ -81,8 +81,10 @@ fn lower(
     .unwrap();
     lower_semantic_affine_animation_tracks(&store, &schedule, |id| Some(effective(runtime, id)))
 }
-fn glow(runtime: &SceneInstance, object: ObjectId) -> Glow {
-    effective(runtime, object).glow.unwrap().definition
+fn effective_glow(runtime: &SceneInstance, object: ObjectId) -> Glow {
+    (effective(runtime, object).effect.unwrap().definition)
+        .as_glow()
+        .unwrap()
 }
 
 #[test]
@@ -93,9 +95,9 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
         .unwrap();
     let (mut runtime, index) = runtime(&scene);
     let object = index.execution_object_id(source.node_id()).unwrap();
-    let base = effective(&runtime, object).glow.unwrap();
+    let base = effective(&runtime, object).effect.unwrap();
     let [(property, values)] = base
-        .parameter_channels(GlowUpdate::default().intensity(1.2))
+        .parameter_channels(EffectUpdate::default().intensity(1.2))
         .unwrap()
         .try_into()
         .unwrap();
@@ -116,23 +118,23 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
     let [track] = projection.tracks() else {
         panic!("pulse owns exactly one channel");
     };
-    assert_eq!(track.property, Property::GlowIntensity);
+    assert_eq!(track.property, Property::EffectIntensity);
     assert_eq!(track.timing.duration, 1.0);
     assert_eq!(track.timing.easing, RateFunction::ThereAndBack);
     assert!(matches!(
         track.values,
-        TrackValues::Glow {
-            from: noon_core::GlowTrackValue::Intensity(1.2),
-            to: noon_core::GlowTrackValue::Intensity(2.0),
-            end_behavior: noon_core::GlowTrackEndBehavior::RestoreSource,
+        TrackValues::Effect {
+            from: noon_core::EffectTrackValue::Intensity(1.2),
+            to: noon_core::EffectTrackValue::Intensity(2.0),
+            end_behavior: noon_core::EffectTrackEndBehavior::RestoreSource,
             ..
         }
     ));
     assert_eq!(
         track.completion,
-        SemanticAnimationCompletion::Glow {
+        SemanticAnimationCompletion::Effect {
             attachment: base.attachment,
-            value: noon_core::GlowTrackValue::Intensity(1.2),
+            value: noon_core::EffectTrackValue::Intensity(1.2),
         }
     );
     runtime
@@ -141,11 +143,17 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
         ]))
         .unwrap();
     runtime.evaluate(1.5).unwrap();
-    assert_eq!(glow(&runtime, object).intensity(), 2.0);
-    assert_eq!(glow(&runtime, object).radius(), base.definition.radius());
-    assert_eq!(glow(&runtime, object).color(), base.definition.color());
+    assert_eq!(effective_glow(&runtime, object).intensity(), 2.0);
+    assert_eq!(
+        effective_glow(&runtime, object).radius(),
+        base.definition.radius()
+    );
+    assert_eq!(
+        effective_glow(&runtime, object).color(),
+        base.definition.as_glow().unwrap().color()
+    );
     runtime.evaluate(2.0).unwrap();
-    assert_eq!(glow(&runtime, object).intensity(), 1.2);
+    assert_eq!(effective_glow(&runtime, object).intensity(), 1.2);
 }
 
 #[test]
@@ -156,7 +164,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
     target.shift(2.0, 0.0).unwrap();
     target
         .set_glow(
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .intensity(1.4)
                 .radius(Pixels(6.5))
                 .color(Color::BLUE),
@@ -175,7 +183,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            if let TrackValues::Glow { attachment, .. } = t.values {
+            if let TrackValues::Effect { attachment, .. } = t.values {
                 assert_eq!(attachment, original);
             }
             ExecutionPatch::AddTrack(t.with_track_id(TrackId::new(i as u64 + 1)).unwrap())
@@ -185,7 +193,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
         .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations(patches))
         .unwrap();
     runtime.evaluate(0.5).unwrap();
-    let actual = glow(&runtime, object);
+    let actual = effective_glow(&runtime, object);
     assert_eq!(
         actual.intensity(),
         0.4000000000000123 + (1.4 - 0.4000000000000123) * 0.5
@@ -194,7 +202,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
     assert_eq!(effective(&runtime, object).transform.translation.x, 1.0);
     let midpoint = effective(&runtime, object);
     runtime.seek(1.0).unwrap();
-    assert_eq!(glow(&runtime, object).intensity(), 1.4);
+    assert_eq!(effective_glow(&runtime, object).intensity(), 1.4);
     runtime.seek(0.5).unwrap();
     assert_eq!(effective(&runtime, object), midpoint);
     assert_eq!(scene.revision(), before);
@@ -206,11 +214,11 @@ fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_r
     let (scene, source) = fixture();
     let mut intensity = source.target_editor().unwrap();
     intensity
-        .set_glow(GlowUpdate::default().intensity(1.4))
+        .set_glow(EffectUpdate::default().intensity(1.4))
         .unwrap();
     let mut color = source.target_editor().unwrap();
     color
-        .set_glow(GlowUpdate::default().color(Color::BLUE))
+        .set_glow(EffectUpdate::default().color(Color::BLUE))
         .unwrap();
     let a = scene
         .declare_transform_to(&source, &intensity, options())
@@ -235,7 +243,7 @@ fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_r
             .iter()
             .map(|t| t.property)
             .collect::<Vec<_>>(),
-        [Property::GlowIntensity, Property::GlowColor]
+        [Property::EffectIntensity, Property::EffectColor]
     );
     let duplicate = scene
         .declare_transform_to(&source, &intensity, options())
@@ -254,7 +262,7 @@ fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_r
         lower(&scene, &runtime, &index, &conflict),
         Err(
             noon_compile::SemanticAffineAnimationTrackError::GlowDriverConflict {
-                property: Property::GlowIntensity,
+                property: Property::EffectIntensity,
                 ..
             }
         )
@@ -268,7 +276,7 @@ fn stale_source_or_target_generation_never_rebinds_by_name() {
         let (scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
-            .set_glow(GlowUpdate::default().intensity(1.4))
+            .set_glow(EffectUpdate::default().intensity(1.4))
             .unwrap();
         let declaration = scene
             .declare_transform_to(&source, &target, options())
@@ -281,15 +289,15 @@ fn stale_source_or_target_generation_never_rebinds_by_name() {
         let old = receiver.get_effect("glow").unwrap().node_id();
         receiver.remove_glow().unwrap();
         receiver
-            .set_glow(GlowUpdate::default().intensity(1.4))
+            .set_glow(EffectUpdate::default().intensity(1.4))
             .unwrap();
         assert_ne!(old, receiver.get_effect("glow").unwrap().node_id());
         let (runtime, index) = runtime(&scene);
         assert!(matches!(
             lower(&scene, &runtime, &index, &declaration),
             Err(
-                noon_compile::SemanticAffineAnimationTrackError::GlowTarget {
-                    error: noon_compile::GlowTargetLoweringError::StaleAttachment,
+                noon_compile::SemanticAffineAnimationTrackError::EffectTarget {
+                    error: noon_compile::EffectTargetLoweringError::StaleAttachment,
                     ..
                 }
             )
@@ -302,7 +310,7 @@ fn prepared_sequence_captures_prior_parameter_endpoint_and_can_return_to_origina
     let (scene, source) = fixture();
     let mut first = source.target_editor().unwrap();
     first
-        .set_glow(GlowUpdate::default().intensity(1.4))
+        .set_glow(EffectUpdate::default().intensity(1.4))
         .unwrap();
     let original = source.target_editor().unwrap();
     let a = scene
@@ -337,8 +345,8 @@ fn prepared_sequence_captures_prior_parameter_endpoint_and_can_return_to_origina
     )
     .unwrap();
     assert_eq!(plan.tracks().len(), 2);
-    assert!(matches!(plan.tracks()[1].values,TrackValues::Glow{
-        from:noon_core::GlowTrackValue::Intensity(1.4),to:noon_core::GlowTrackValue::Intensity(v),..
+    assert!(matches!(plan.tracks()[1].values,TrackValues::Effect{
+        from:noon_core::EffectTrackValue::Intensity(1.4),to:noon_core::EffectTrackValue::Intensity(v),..
     } if v == 0.4000000000000123));
     let definitions = plan
         .tracks()
@@ -355,7 +363,7 @@ fn prepared_sequence_captures_prior_parameter_endpoint_and_can_return_to_origina
         .unwrap();
     runtime.seek(1.5).unwrap();
     assert_eq!(
-        glow(&runtime, object).intensity(),
+        effective_glow(&runtime, object).intensity(),
         1.4 + (0.4000000000000123 - 1.4) * 0.5
     );
 }
@@ -370,7 +378,7 @@ fn returning_and_reversed_completion_persist_the_actual_f64_endpoint() {
         let (scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
-            .set_glow(GlowUpdate::default().intensity(1.4))
+            .set_glow(EffectUpdate::default().intensity(1.4))
             .unwrap();
         let opts = options().rate_func(rate).reverse_rate_function(reverse);
         let declaration = scene.declare_transform_to(&source, &target, opts).unwrap();
@@ -378,8 +386,8 @@ fn returning_and_reversed_completion_persist_the_actual_f64_endpoint() {
         let plan = lower(&scene, &runtime, &index, &declaration).unwrap();
         assert_eq!(plan.tracks().len(), 1);
         assert!(
-            matches!(plan.tracks()[0].completion,SemanticAnimationCompletion::Glow {
-            value:noon_core::GlowTrackValue::Intensity(v),..
+            matches!(plan.tracks()[0].completion,SemanticAnimationCompletion::Effect {
+            value:noon_core::EffectTrackValue::Intensity(v),..
         } if v==expected)
         );
     }
@@ -406,7 +414,7 @@ fn pending_effect_target_is_inert_and_prepared_identity_matches_its_commit() {
         target,
         "glow",
         Glow::new(
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .radius(Pixels(3.25))
                 .color(Color::RED)
                 .intensity(1.4),
@@ -453,7 +461,7 @@ fn pending_effect_target_is_inert_and_prepared_identity_matches_its_commit() {
         [planned_effect]
     );
     assert_eq!(
-        glow(
+        effective_glow(
             &runtime,
             index.execution_object_id(source.node_id()).unwrap()
         )
@@ -469,9 +477,11 @@ fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
         let mut target = source.target_editor().unwrap();
         match discrete {
             0 => target
-                .set_glow(GlowUpdate::default().source(noon_core::GlowSource::Silhouette))
+                .set_glow(EffectUpdate::default().source(noon_core::GlowSource::Silhouette))
                 .unwrap(),
-            1 => target.set_glow(GlowUpdate::default().radius(0.2)).unwrap(),
+            1 => target
+                .set_glow(EffectUpdate::default().radius(0.2))
+                .unwrap(),
             _ => target
                 .add_effect(Glow::default(), "second")
                 .map(|_| ())
@@ -508,7 +518,7 @@ fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
         panic!("one inert prepared entry with its reserved attachment")
     };
     assert_eq!(
-        Some(object.glow.as_ref().unwrap().attachment),
+        Some(object.effect.as_ref().unwrap().attachment),
         prepared.planned_node_id(attachment)
     );
     drop(prepared);

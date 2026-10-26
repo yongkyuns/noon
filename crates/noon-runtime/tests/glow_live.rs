@@ -1,11 +1,11 @@
 //! Existing-attachment base edits use the same authored value/publication lane
 //! as ordinary transforms and styles. Full Scene activation is still guarded.
 use noon_compile::{
-    CompilePatchError, CompiledGlow, CompiledObject, CompiledScene, ExecutionMutationTransaction,
+    CompilePatchError, CompiledEffect, CompiledObject, CompiledScene, ExecutionMutationTransaction,
     ExecutionPatch,
 };
 use noon_core::{
-    Color, GeometryRef, Glow, GlowSource, GlowUpdate, ObjectId, Pixels, RateFunction,
+    Color, EffectUpdate, GeometryRef, Glow, GlowSource, ObjectId, Pixels, RateFunction,
     SemanticNodeId, Style, TrackDefinition, TrackId, TrackTiming, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, SceneInstance};
@@ -18,27 +18,34 @@ fn object() -> CompiledObject {
         Transform2D::IDENTITY,
         Style::default(),
     );
-    object.glow = Some(Arc::new(CompiledGlow {
+    object.effect = Some(Arc::new(CompiledEffect {
         attachment: SemanticNodeId::new(7, 3),
-        definition: Glow::new(
-            GlowUpdate::default()
+        definition: (Glow::new(
+            EffectUpdate::default()
                 .radius(Pixels(3.25))
                 .color(Color::RED)
                 .intensity(0.4),
         )
-        .unwrap(),
+        .unwrap())
+        .into(),
     }));
     object
 }
-fn update(object: &CompiledObject, patch: GlowUpdate) -> Arc<CompiledGlow> {
-    let original = object.glow.as_ref().unwrap();
-    Arc::new(CompiledGlow {
+fn update(object: &CompiledObject, patch: EffectUpdate) -> Arc<CompiledEffect> {
+    let original = object.effect.as_ref().unwrap();
+    Arc::new(CompiledEffect {
         attachment: original.attachment,
         definition: patch.apply_to(original.definition).unwrap(),
     })
 }
 fn value(runtime: &SceneInstance) -> Glow {
-    runtime.frame().objects[0].glow.as_ref().unwrap().definition
+    (runtime.frame().objects[0]
+        .effect
+        .as_ref()
+        .unwrap()
+        .definition)
+        .as_glow()
+        .unwrap()
 }
 fn tx(patches: Vec<ExecutionPatch>) -> ExecutionMutationTransaction {
     ExecutionMutationTransaction::from_mutations(patches)
@@ -60,10 +67,10 @@ fn runtime(object: CompiledObject) -> SceneInstance {
 }
 fn intensity_track(object: &CompiledObject) -> TrackDefinition {
     let (property, values) = object
-        .glow
+        .effect
         .as_ref()
         .unwrap()
-        .parameter_channels(GlowUpdate::default().intensity(2.0))
+        .parameter_channels(EffectUpdate::default().intensity(2.0))
         .unwrap()
         .pop()
         .unwrap();
@@ -80,10 +87,10 @@ fn intensity_track(object: &CompiledObject) -> TrackDefinition {
 #[test]
 fn prepared_glow_is_atomic_sparse_and_does_not_dirty_geometry() {
     let object = object();
-    let original = object.glow.clone().unwrap();
+    let original = object.effect.clone().unwrap();
     let changed = update(
         &object,
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::BLUE)
             .radius(Pixels(4.1234567890123))
             .intensity(1.4),
@@ -93,9 +100,9 @@ fn prepared_glow_is_atomic_sparse_and_does_not_dirty_geometry() {
     runtime.take_spatial_changes();
     let before = runtime.frame().clone();
     let context = runtime.publication_context();
-    let transaction = tx(vec![ExecutionPatch::SetGlow {
+    let transaction = tx(vec![ExecutionPatch::SetEffect {
         object: ObjectId::new(1),
-        glow: changed.clone(),
+        effect: changed.clone(),
     }]);
     let prepared = runtime
         .prepare_authored_value_publication(
@@ -110,8 +117,8 @@ fn prepared_glow_is_atomic_sparse_and_does_not_dirty_geometry() {
     drop(prepared);
     assert!(runtime.frame_changes().is_empty());
     publish(&mut runtime, &transaction);
-    assert_eq!(value(&runtime), changed.definition);
-    assert_eq!(original.definition.intensity(), 0.4);
+    assert_eq!(value(&runtime), (changed.definition).as_glow().unwrap());
+    assert_eq!(original.definition.as_glow().unwrap().intensity(), 0.4);
     assert_eq!(runtime.frame_changes(), &FrameChanges::objects(vec![0]));
     assert!(runtime.take_spatial_changes().is_empty());
     assert_eq!(
@@ -128,7 +135,7 @@ fn prepared_glow_is_atomic_sparse_and_does_not_dirty_geometry() {
         context.execution_revision().checked_next().unwrap()
     );
     assert!(Arc::ptr_eq(
-        runtime.frame().objects[0].glow.as_ref().unwrap(),
+        runtime.frame().objects[0].effect.as_ref().unwrap(),
         &changed
     ));
 }
@@ -136,10 +143,10 @@ fn prepared_glow_is_atomic_sparse_and_does_not_dirty_geometry() {
 #[test]
 fn final_glow_base_coalesces_independently_of_style_and_transform() {
     let object = object();
-    let first = update(&object, GlowUpdate::default().intensity(1.0));
+    let first = update(&object, EffectUpdate::default().intensity(1.0));
     let last = update(
         &object,
-        GlowUpdate::default().intensity(1.7).color(Color::BLUE),
+        EffectUpdate::default().intensity(1.7).color(Color::BLUE),
     );
     let mut runtime = runtime(object);
     let style = Style {
@@ -153,18 +160,18 @@ fn final_glow_base_coalesces_independently_of_style_and_transform() {
     publish(
         &mut runtime,
         &tx(vec![
-            ExecutionPatch::SetGlow {
+            ExecutionPatch::SetEffect {
                 object: ObjectId::new(1),
-                glow: first,
+                effect: first,
             },
             ExecutionPatch::SetStyle {
                 fill_gradient: None,
                 object: ObjectId::new(1),
                 style,
             },
-            ExecutionPatch::SetGlow {
+            ExecutionPatch::SetEffect {
                 object: ObjectId::new(1),
-                glow: last.clone(),
+                effect: last.clone(),
             },
             ExecutionPatch::SetTransform {
                 object: ObjectId::new(1),
@@ -172,7 +179,7 @@ fn final_glow_base_coalesces_independently_of_style_and_transform() {
             },
         ]),
     );
-    assert_eq!(value(&runtime), last.definition);
+    assert_eq!(value(&runtime), (last.definition).as_glow().unwrap());
     assert_eq!(runtime.frame().objects[0].style, style);
     assert_eq!(runtime.frame().objects[0].transform, transform);
 }
@@ -180,7 +187,7 @@ fn final_glow_base_coalesces_independently_of_style_and_transform() {
 #[test]
 fn rejected_rebinding_and_discrete_changes_cannot_commit_a_prefix_or_hide_as_superseded() {
     let object = object();
-    let good = update(&object, GlowUpdate::default().intensity(2.0));
+    let good = update(&object, EffectUpdate::default().intensity(2.0));
     let mut rebound = *good;
     rebound.attachment = SemanticNodeId::new(7, 4);
     let mut runtime = runtime(object.clone());
@@ -191,9 +198,9 @@ fn rejected_rebinding_and_discrete_changes_cannot_commit_a_prefix_or_hide_as_sup
         Arc::new(rebound),
         update(
             &object,
-            GlowUpdate::default().source(GlowSource::Silhouette),
+            EffectUpdate::default().source(GlowSource::Silhouette),
         ),
-        update(&object, GlowUpdate::default().radius(0.3)),
+        update(&object, EffectUpdate::default().radius(0.3)),
     ] {
         let transaction = tx(vec![
             ExecutionPatch::SetTransform {
@@ -203,13 +210,13 @@ fn rejected_rebinding_and_discrete_changes_cannot_commit_a_prefix_or_hide_as_sup
                     ..Transform2D::IDENTITY
                 },
             },
-            ExecutionPatch::SetGlow {
+            ExecutionPatch::SetEffect {
                 object: object.id,
-                glow: bad,
+                effect: bad,
             },
-            ExecutionPatch::SetGlow {
+            ExecutionPatch::SetEffect {
                 object: object.id,
-                glow: good.clone(),
+                effect: good.clone(),
             },
         ]);
         assert!(runtime
@@ -225,16 +232,16 @@ fn rejected_rebinding_and_discrete_changes_cannot_commit_a_prefix_or_hide_as_sup
         assert!(runtime.frame_changes().is_empty());
     }
     let mut plain = object.clone();
-    plain.glow = None;
+    plain.effect = None;
     let mut empty = self::runtime(plain);
     assert_eq!(
         empty
-            .apply_execution_patch(&ExecutionPatch::SetGlow {
+            .apply_execution_patch(&ExecutionPatch::SetEffect {
                 object: object.id,
-                glow: good
+                effect: good
             })
             .unwrap_err(),
-        CompilePatchError::InvalidGlowUpdate { object: object.id }
+        CompilePatchError::InvalidEffectUpdate { object: object.id }
     );
 }
 
@@ -249,14 +256,14 @@ fn active_channel_keeps_its_value_and_removal_reveals_updated_base() {
     prepared.advance_to(0.4).unwrap();
     let changed = update(
         &object,
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::BLUE)
             .radius(Pixels(6.125))
             .intensity(0.15),
     );
-    let patch = ExecutionPatch::SetGlow {
+    let patch = ExecutionPatch::SetEffect {
         object: object.id,
-        glow: changed.clone(),
+        effect: changed.clone(),
     };
     direct.apply_execution_patch(&patch).unwrap();
     publish(&mut prepared, &tx(vec![patch]));
@@ -273,7 +280,7 @@ fn active_channel_keeps_its_value_and_removal_reveals_updated_base() {
     prepared
         .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(1)))
         .unwrap();
-    assert_eq!(value(&prepared), changed.definition);
+    assert_eq!(value(&prepared), (changed.definition).as_glow().unwrap());
 }
 
 #[test]
@@ -283,10 +290,10 @@ fn exact_noop_and_stale_context_preserve_shared_values_and_versions() {
     runtime.take_frame_changes();
     runtime.take_spatial_changes();
     let context = runtime.publication_context();
-    let retained = runtime.frame().objects[0].glow.clone().unwrap();
-    let transaction = tx(vec![ExecutionPatch::SetGlow {
+    let retained = runtime.frame().objects[0].effect.clone().unwrap();
+    let transaction = tx(vec![ExecutionPatch::SetEffect {
         object: object.id,
-        glow: object.glow.clone().unwrap(),
+        effect: object.effect.clone().unwrap(),
     }]);
     let prepared = runtime
         .prepare_authored_value_publication(&transaction, context, context.scene_revision())
@@ -298,7 +305,7 @@ fn exact_noop_and_stale_context_preserve_shared_values_and_versions() {
     assert!(runtime.take_spatial_changes().is_empty());
     assert!(Arc::ptr_eq(
         &retained,
-        runtime.frame().objects[0].glow.as_ref().unwrap()
+        runtime.frame().objects[0].effect.as_ref().unwrap()
     ));
     runtime.advance_to(0.1).unwrap();
     assert!(runtime
@@ -322,12 +329,12 @@ fn one_live_glow_preserves_4096_unrelated_rows_and_resource_identities() {
     runtime.take_frame_changes();
     runtime.take_spatial_changes();
     let tail = runtime.frame().objects[1..].to_vec();
-    let changed = update(&object, GlowUpdate::default().intensity(1.8));
+    let changed = update(&object, EffectUpdate::default().intensity(1.8));
     publish(
         &mut runtime,
-        &tx(vec![ExecutionPatch::SetGlow {
+        &tx(vec![ExecutionPatch::SetEffect {
             object: object.id,
-            glow: changed,
+            effect: changed,
         }]),
     );
     assert_eq!(runtime.frame_changes(), &FrameChanges::objects(vec![0]));
@@ -343,9 +350,9 @@ fn direct_value_publication_marks_only_render_changes() {
     runtime.take_frame_changes();
     runtime.take_spatial_changes();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetGlow {
+        .apply_execution_patch(&ExecutionPatch::SetEffect {
             object: object.id,
-            glow: update(&object, GlowUpdate::default().intensity(1.8)),
+            effect: update(&object, EffectUpdate::default().intensity(1.8)),
         })
         .unwrap();
     assert_eq!(runtime.frame_changes(), &FrameChanges::objects(vec![0]));
@@ -368,19 +375,19 @@ fn reconciled_endpoint_uses_the_prepared_new_base_not_the_previous_compiled_valu
             end_time: 1.0,
         })
         .unwrap();
-    let changed = update(&object, GlowUpdate::default().intensity(0.72));
+    let changed = update(&object, EffectUpdate::default().intensity(0.72));
     publish(
         &mut runtime,
-        &tx(vec![ExecutionPatch::SetGlow {
+        &tx(vec![ExecutionPatch::SetEffect {
             object: object.id,
-            glow: changed.clone(),
+            effect: changed.clone(),
         }]),
     );
-    assert_eq!(value(&runtime), changed.definition);
+    assert_eq!(value(&runtime), (changed.definition).as_glow().unwrap());
     runtime.seek(0.5).unwrap();
     assert!((value(&runtime).intensity() - 1.2).abs() < 1e-12);
     runtime.seek(1.0).unwrap();
-    assert_eq!(value(&runtime), changed.definition);
+    assert_eq!(value(&runtime), (changed.definition).as_glow().unwrap());
 }
 
 #[test]
@@ -392,7 +399,7 @@ fn glow_completion_preflight_keeps_generation_overlap_and_exact_endpoint_checks(
         .preflight_reconcilable_track_additions(std::slice::from_ref(&valid))
         .unwrap();
     let mut invalid = valid.clone();
-    if let noon_core::TrackValues::Glow {
+    if let noon_core::TrackValues::Effect {
         ref mut attachment, ..
     } = invalid.values
     {
@@ -411,9 +418,9 @@ fn glow_completion_preflight_keeps_generation_overlap_and_exact_endpoint_checks(
     );
     let before = runtime.frame().clone();
     let transaction = tx(vec![
-        ExecutionPatch::SetGlow {
+        ExecutionPatch::SetEffect {
             object: object.id,
-            glow: update(&object, GlowUpdate::default().intensity(0.7)),
+            effect: update(&object, EffectUpdate::default().intensity(0.7)),
         },
         ExecutionPatch::ReconcileTrack {
             track: valid.id,

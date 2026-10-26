@@ -230,7 +230,7 @@ impl std::error::Error for DerivedDisplayEvaluationError {}
 fn row_from_derived(base: &DerivedDisplayObjectState) -> FrameRowState {
     FrameRowState {
         fill_gradient: base.fill_gradient.clone(),
-        glow: None,
+        effect: None,
         z_index: base.z_index,
         transform: base.transform,
         spatial: None,
@@ -316,9 +316,9 @@ fn apply_derived_track(
             );
             Ok(())
         }
-        Property::GlowColor
-        | Property::GlowRadius
-        | Property::GlowIntensity
+        Property::EffectColor
+        | Property::EffectRadius
+        | Property::EffectIntensity
         | Property::Presence
         | Property::ZIndex
         | Property::Transform

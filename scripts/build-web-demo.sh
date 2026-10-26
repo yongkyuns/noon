@@ -120,6 +120,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/cubic-bezier-qualification.mjs
   node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs
+  node --check scripts/blur-qualification.mjs
   node --check scripts/playground-gallery-runtime-smoke.mjs
   node --check scripts/retained-dynamic-stress-perf.mjs
   node --check scripts/native-input-smoke.mjs

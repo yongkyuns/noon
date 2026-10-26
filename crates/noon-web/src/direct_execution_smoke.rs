@@ -780,6 +780,15 @@ pub async fn create_direct_mixed_scalar_composition_smoke_renderer(
 }
 
 /// Direct host for shared authored glow pulses, motion and endpoint restoration.
+#[wasm_bindgen(js_name = createDirectBlurSmokeRenderer)]
+pub async fn create_direct_blur_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::blur::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Direct host for shared authored glow pulses, motion and endpoint restoration.
 #[wasm_bindgen(js_name = createDirectGlowPulseSmokeRenderer)]
 pub async fn create_direct_glow_pulse_smoke_renderer(
     canvas: OffscreenCanvas,

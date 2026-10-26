@@ -107,7 +107,7 @@ fn primitive_capture(
         objects: vec![FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,
@@ -354,7 +354,7 @@ fn native_gaussian_pixels_and_retained_updates() {
         };
         let mut scope = GlowScope::default();
         let mut params = parameters(sigma);
-        params.definition = GlowUpdate::default()
+        params.definition = EffectUpdate::default()
             .source(mode)
             .intensity(8.0)
             .color(Color::rgba(0.8, 0.2, 0.7, 0.65))
@@ -381,7 +381,7 @@ fn native_gaussian_pixels_and_retained_updates() {
             params,
         );
         let output = scope.output().unwrap().clone();
-        params.definition = GlowUpdate::default()
+        params.definition = EffectUpdate::default()
             .intensity(0.4)
             .apply_to(params.definition)
             .unwrap();

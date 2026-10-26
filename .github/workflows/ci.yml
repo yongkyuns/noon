@@ -61,6 +61,7 @@ on:
       - "crates/noon-render-wgpu/src/gpu/gaussian_blur*"
       - "crates/noon-render-wgpu/src/gpu/gaussian_blur/**"
       - "scripts/gaussian-blur-*.mjs"
+      - "scripts/blur-qualification.mjs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*"
@@ -226,6 +227,7 @@ jobs:
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -463,6 +465,8 @@ jobs:
         run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs scripts/glow-worker-transport.test.mjs
       - name: Qualify reusable RGBA Gaussian raster on WebGPU and WebGL2
         run: node scripts/gaussian-blur-qualification.mjs
+      - name: Qualify paired Rust and Python Blur authoring on WebGPU and WebGL2
+        run: node scripts/blur-qualification.mjs
       - name: Qualify retained worker glow images and recovery
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker

@@ -697,7 +697,7 @@ impl NativeApp {
             // ordinary painter slot in the retained GPU preparation.
             let glow_visible = gpu
                 .renderer
-                .glow_source_visibility(&publication, visibility.object_indices())
+                .effect_source_visibility(&publication, visibility.object_indices())
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             let prepared = gpu
                 .preparer
@@ -740,14 +740,14 @@ impl NativeApp {
             // Endpoint drains above retain the same surface and renderer; only
             // the final bounded pass may create a glow capture/blur workload.
             gpu.renderer
-                .prepare_retained_analytic_glows(
+                .prepare_retained_effects(
                     &gpu.device,
                     &gpu.queue,
                     &mut encoder,
                     &prepared,
                     &gpu.text_state,
                     &publication,
-                    noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                    noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                 )
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             let _draw = gpu
@@ -765,7 +765,7 @@ impl NativeApp {
                     None,
                 )
                 .map_err(|error| {
-                    gpu.renderer.invalidate_analytic_glows();
+                    gpu.renderer.invalidate_effect_captures();
                     NativeHostError::Gpu(error.to_string())
                 })?;
             #[cfg(test)]

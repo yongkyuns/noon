@@ -733,7 +733,7 @@ mod draw_border_tests {
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
@@ -755,7 +755,7 @@ mod draw_border_tests {
             objects: vec![FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),

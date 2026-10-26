@@ -1266,7 +1266,7 @@ mod tests {
             objects: vec![FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(1),
@@ -1294,7 +1294,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
@@ -1307,7 +1307,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),

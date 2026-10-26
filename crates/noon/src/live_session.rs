@@ -6184,7 +6184,7 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn reveal_and_effect_edit_share_one_admission_in_either_order() {
-        use crate::effects::{EffectDefinition, GlowUpdate};
+        use crate::effects::EffectUpdate;
         for mode in 0..3 {
             for reverse in [false, true] {
                 for attached in [false, true] {
@@ -6198,12 +6198,12 @@ mod recursive_composition_tests {
                     };
                     if attached {
                         source
-                            .set_glow(GlowUpdate::default().intensity(initial))
+                            .set_glow(EffectUpdate::default().intensity(initial))
                             .unwrap();
                     }
                     let mut target = source.target_editor().unwrap();
                     target
-                        .set_glow(GlowUpdate::default().intensity(1.5))
+                        .set_glow(EffectUpdate::default().intensity(1.5))
                         .unwrap();
                     let mut session = scene.execution_session().unwrap();
                     let reveal = match mode {
@@ -6245,29 +6245,35 @@ mod recursive_composition_tests {
                     assert_eq!(live.session.frame().objects.len(), 1);
                     assert_eq!(
                         live.session.frame().objects[0]
-                            .glow
+                            .effect
                             .as_ref()
                             .unwrap()
                             .definition
+                            .as_glow()
+                            .unwrap()
                             .intensity(),
                         midpoint
                     );
                     live.advance_segment_to(segment, 1.0).unwrap();
                     live.complete_segment(segment).unwrap();
-                    let EffectDefinition::Glow(glow) = source
+                    let effect = (source
                         .get_effect("glow")
                         .unwrap()
                         .authored_definition()
-                        .unwrap();
-                    assert_eq!(glow.intensity(), 1.5);
+                        .unwrap())
+                    .as_glow()
+                    .unwrap();
+                    assert_eq!(effect.intensity(), 1.5);
                     let rewind = live.session.seek(0.5).unwrap();
                     assert_eq!(rewind.objects.len(), 1);
                     assert_eq!(
                         rewind.objects[0]
-                            .glow
+                            .effect
                             .as_ref()
                             .unwrap()
                             .definition
+                            .as_glow()
+                            .unwrap()
                             .intensity(),
                         midpoint
                     );
@@ -6322,16 +6328,16 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn reveal_with_competing_introductions_or_combined_pose_edit_is_atomic() {
-        use crate::effects::GlowUpdate;
+        use crate::effects::EffectUpdate;
         for duplicate in [false, true] {
             let mut scene = Scene::new();
             let mut source = scene.text(crate::Text::new("Write")).unwrap();
             source
-                .set_glow(GlowUpdate::default().intensity(0.5))
+                .set_glow(EffectUpdate::default().intensity(0.5))
                 .unwrap();
             let mut target = source.target_editor().unwrap();
             target
-                .set_glow(GlowUpdate::default().intensity(1.5))
+                .set_glow(EffectUpdate::default().intensity(1.5))
                 .unwrap();
             if !duplicate {
                 target.shift(1.0, 0.0).unwrap();

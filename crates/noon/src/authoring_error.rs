@@ -136,7 +136,7 @@ pub enum AuthoringError {
     /// A finite authored clip has invalid timing, trim, gain, or fades.
     AudioClip(noon_core::AudioClipError),
     EffectStateReplacementUnavailable,
-    GlowParameter(noon_core::GlowParameterError),
+    EffectParameter(noon_core::EffectParameterError),
     EffectNotFound {
         owner: noon_core::SemanticNodeId,
         name: String,
@@ -334,7 +334,7 @@ impl std::fmt::Display for AuthoringError {
         match self {
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
-            Self::GlowParameter(error) => error.fmt(f),
+            Self::EffectParameter(error) => error.fmt(f),
             Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
             Self::EffectOwnerMismatch { effect, owner } => write!(f, "effect {effect:?} does not belong to object {owner:?}"),
@@ -486,7 +486,7 @@ impl std::error::Error for AuthoringError {
             Self::ImageDecode(error) => Some(error),
             Self::AudioResource(error) => Some(error),
             Self::AudioClip(error) => Some(error),
-            Self::GlowParameter(error) => Some(error),
+            Self::EffectParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
             Self::Semantic(error) => Some(error),
@@ -633,8 +633,8 @@ impl From<noon_core::SemanticFamilyPairingError> for AuthoringError {
     }
 }
 
-impl From<noon_core::GlowParameterError> for AuthoringError {
-    fn from(error: noon_core::GlowParameterError) -> Self {
-        Self::GlowParameter(error)
+impl From<noon_core::EffectParameterError> for AuthoringError {
+    fn from(error: noon_core::EffectParameterError) -> Self {
+        Self::EffectParameter(error)
     }
 }

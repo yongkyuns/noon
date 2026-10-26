@@ -10,11 +10,11 @@ pub use audio::{
 mod compaction;
 mod derived_display_evaluation;
 pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};
+mod effect_attachment;
 mod effective_content;
 mod effective_write;
 mod execution_slots;
 mod frame;
-mod glow_attachment;
 mod graph_endpoints;
 mod numeric_text;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
@@ -345,7 +345,7 @@ impl SceneInstance {
     pub fn preflight_reconcilable_track_additions_with_staged_glow(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledGlow>,
+        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledEffect>,
     ) -> Result<(), CompilePatchError> {
         self.compiled
             .preflight_reconcilable_track_additions_with_staged_glow(tracks, staged_glow)
@@ -865,13 +865,13 @@ impl SceneInstance {
                 | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetDrawEnabled { .. }
                 | ExecutionPatch::SetStyle { .. }
-                | ExecutionPatch::SetGlow { .. }
+                | ExecutionPatch::SetEffect { .. }
         ) {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
         }
-        if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
-            self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
+        if let ExecutionPatch::SetEffectAttachment { object, effect, .. } = patch {
+            self.apply_effect_attachment_patch(patch, *object, effect.clone())?;
             return Ok(&self.frame);
         }
         if let ExecutionPatch::SetInset2DView { object, .. } = patch {
@@ -1125,7 +1125,7 @@ impl SceneInstance {
             };
             if matches!(
                 channel.property,
-                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+                Property::EffectColor | Property::EffectRadius | Property::EffectIntensity
             ) {
                 self.changes.insert(channel.object_index as usize);
             } else {
@@ -1229,7 +1229,7 @@ impl SceneInstance {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetGlow { object, .. } => *object,
+            | ExecutionPatch::SetEffect { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -1299,14 +1299,14 @@ impl SceneInstance {
                 self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
                 self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
             }
-            ExecutionPatch::SetGlow { glow, .. } => {
-                self.frame.objects[index].glow = Some(std::sync::Arc::clone(glow));
+            ExecutionPatch::SetEffect { effect, .. } => {
+                self.frame.objects[index].effect = Some(std::sync::Arc::clone(effect));
                 self.reapply_properties(
                     index,
                     &[
-                        Property::GlowColor,
-                        Property::GlowRadius,
-                        Property::GlowIntensity,
+                        Property::EffectColor,
+                        Property::EffectRadius,
+                        Property::EffectIntensity,
                     ],
                 );
             }
@@ -1335,7 +1335,7 @@ impl SceneInstance {
         }
         if matches!(
             patch,
-            ExecutionPatch::SetGlow { .. } | ExecutionPatch::SetDrawEnabled { .. }
+            ExecutionPatch::SetEffect { .. } | ExecutionPatch::SetDrawEnabled { .. }
         ) {
             if self.frame.objects[index] != before {
                 self.changes.insert(index);
@@ -1409,13 +1409,13 @@ impl SceneInstance {
         for channel in relevant() {
             let object = &self.compiled.objects()[object_index];
             match channel.property {
-                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
+                Property::EffectColor | Property::EffectRadius | Property::EffectIntensity => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
                     if let (Some(base), Some(current)) =
-                        (&object.glow, &mut self.frame.objects[object_index].glow)
+                        (&object.effect, &mut self.frame.objects[object_index].effect)
                     {
-                        let next = noon_core::GlowTrackValue::from_definition(
+                        let next = noon_core::EffectTrackValue::from_definition(
                             channel.property,
                             base.definition,
                         )
@@ -1833,7 +1833,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .map(|(index, object)| FrameObjectState {
             fill_gradient: object.fill_gradient.clone(),
             draw_enabled: object.draw_enabled,
-            glow: object.glow.clone(),
+            effect: object.effect.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
@@ -1931,9 +1931,9 @@ const PROPERTY_ORDER: [Property; 18] = [
     Property::Appearance,
     Property::Reveal,
     Property::Morph,
-    Property::GlowColor,
-    Property::GlowRadius,
-    Property::GlowIntensity,
+    Property::EffectColor,
+    Property::EffectRadius,
+    Property::EffectIntensity,
 ];
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
@@ -2004,7 +2004,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     frame.objects.push(FrameObjectState {
         fill_gradient: object.fill_gradient.clone(),
         draw_enabled: object.draw_enabled,
-        glow: object.glow.clone(),
+        effect: object.effect.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2048,7 +2048,7 @@ fn reset_object_frame(
     frame.objects[object_index] = FrameObjectState {
         fill_gradient: object.fill_gradient.clone(),
         draw_enabled: object.draw_enabled,
-        glow: object.glow.clone(),
+        effect: object.effect.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2346,13 +2346,13 @@ fn apply_group_to_row(
 ) -> bool {
     if matches!(
         group.channel.property,
-        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+        Property::EffectColor | Property::EffectRadius | Property::EffectIntensity
     ) {
-        return apply_glow_channel(
+        return apply_effect_channel(
             compiled.objects()[group.channel.object_index as usize]
-                .glow
+                .effect
                 .as_deref(),
-            row.glow,
+            row.effect,
             tracks,
             group,
             time,
@@ -2586,9 +2586,9 @@ fn apply_group_to_row(
                     camera: profile.camera(near, far)?,
                 })
             }),
-            Property::GlowColor
-            | Property::GlowRadius
-            | Property::GlowIntensity
+            Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
             | Property::Presence
             | Property::ZIndex
             | Property::Transform => None,
@@ -2831,9 +2831,9 @@ fn apply_prepared_morph_values(
     Some(changed)
 }
 
-fn apply_glow_channel(
-    base: Option<&noon_compile::CompiledGlow>,
-    glow: &mut Option<Arc<noon_compile::CompiledGlow>>,
+fn apply_effect_channel(
+    base: Option<&noon_compile::CompiledEffect>,
+    effect: &mut Option<Arc<noon_compile::CompiledEffect>>,
     tracks: &[CompiledTrack],
     group: &TrackGroup,
     time: f64,
@@ -2858,7 +2858,7 @@ fn apply_glow_channel(
             (track, 0.0, true)
         }
     };
-    let TrackValues::Glow {
+    let TrackValues::Effect {
         attachment,
         from,
         to,
@@ -2867,7 +2867,10 @@ fn apply_glow_channel(
     else {
         unreachable!("validated glow channel");
     };
-    let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
+    let Some(current) = effect
+        .as_ref()
+        .filter(|effect| effect.attachment == attachment)
+    else {
         return false; // an old generation can never control a replacement
     };
     let patch = if restore_base
@@ -2878,16 +2881,9 @@ fn apply_glow_channel(
         let Some(base) = base.filter(|base| base.attachment == attachment) else {
             return false;
         };
-        match track.property {
-            Property::GlowColor => noon_core::GlowUpdate::default().color(base.definition.color()),
-            Property::GlowRadius => {
-                noon_core::GlowUpdate::default().radius(base.definition.radius())
-            }
-            Property::GlowIntensity => {
-                noon_core::GlowUpdate::default().intensity(base.definition.intensity())
-            }
-            _ => unreachable!(),
-        }
+        noon_core::EffectTrackValue::from_definition(track.property, base.definition)
+            .expect("validated effect channel")
+            .update()
     } else {
         from.sample(to, alpha)
             .expect("validated glow endpoints and normalized timing")
@@ -2898,7 +2894,7 @@ fn apply_glow_channel(
     if current.definition == next {
         return false;
     }
-    Arc::make_mut(glow.as_mut().expect("checked attachment")).definition = next;
+    Arc::make_mut(effect.as_mut().expect("checked attachment")).definition = next;
     true
 }
 
@@ -3338,8 +3334,8 @@ fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
 fn glow_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
     let progress = if matches!(
         track.values,
-        TrackValues::Glow {
-            end_behavior: noon_core::GlowTrackEndBehavior::RestoreSource,
+        TrackValues::Effect {
+            end_behavior: noon_core::EffectTrackEndBehavior::RestoreSource,
             ..
         }
     ) {
@@ -3429,7 +3425,7 @@ fn interpolate_track_values_with_path_plan(
                 sample_camera_profile(*from, *to, *near, *far, f64::from(progress))?;
             Some(EvaluatedValue::CameraProfile { profile, camera })
         }
-        TrackValues::Glow { .. }
+        TrackValues::Effect { .. }
         | TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }

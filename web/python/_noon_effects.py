@@ -46,11 +46,11 @@ def _update(*, color=None, radius=None, intensity=None, source=None):
     if source is not None and not isinstance(source, str):
         raise TypeError("glow source must be a string")
     try:
-        from js import noonGlowUpdate
+        from js import noonEffectUpdate
         from pyodide.ffi import to_js
     except ImportError as error:
         raise RuntimeError("effects require the shared Rust authoring host") from error
-    request = engine_call(noonGlowUpdate, to_js(components), radius, pixels, intensity, source)
+    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source)
     try:
         yield request
     finally:
@@ -102,6 +102,38 @@ class Glow:
         return str(self._definition.source)
 
 
+class Blur:
+    """Immutable Gaussian blur of the painted source; radius is standard deviation.
+
+    A plain radius uses scene units; Pixels uses physical output pixels.
+    Attach with add_effect and animate the same radius with set_effect.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, radius=None):
+        with _update(radius=radius) as update:
+            from js import noonBlur
+            self._definition = engine_call(noonBlur, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def radius(self):
+        value = float(self._definition.radius)
+        return Pixels(value) if bool(self._definition.pixels) else value
+
+
 class GlowPulse:
     """Temporarily animate one leaf's canonical glow intensity in shared Rust.
 
@@ -149,7 +181,8 @@ class EffectHandle:
     @property
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
-        return Glow._from_definition(engine_call(self._handle.authoredDefinition))
+        definition = engine_call(self._handle.authoredDefinition)
+        return {"glow": Glow, "blur": Blur}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -187,8 +220,8 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, Glow):
-        raise TypeError("this effect profile supports Glow definitions only")
+    if not isinstance(definition, (Glow, Blur)):
+        raise TypeError("this effect profile supports Glow and Blur definitions")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)

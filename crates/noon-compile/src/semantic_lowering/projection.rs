@@ -337,7 +337,7 @@ impl SemanticExecutionIndex {
                 // not the shared value-lowering helper. Prepared transactions also
                 // lower provisional IDs which intentionally do not exist in the
                 // committed store yet.
-                lowered.glow = lower_glow_attachment(semantic_id, state, store)?;
+                lowered.effect = lower_glow_attachment(semantic_id, state, store)?;
                 pending.push((semantic_id, lowered));
             }
         }
@@ -357,7 +357,7 @@ impl SemanticExecutionIndex {
             .map(|(semantic_id, state)| SemanticExecutionObject {
                 fill_gradient: state.fill_gradient,
                 semantic_id,
-                glow: state.glow,
+                effect: state.effect,
                 execution_id: self.ensure_object(semantic_id),
                 content: state.content,
                 base_transform: state.base_transform,
@@ -457,7 +457,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 pub struct SemanticExecutionObject {
     pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
     /// Same immutable definition and generational attachment as the compiled row.
-    pub glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    pub effect: Option<std::sync::Arc<crate::CompiledEffect>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
@@ -530,7 +530,7 @@ pub enum SemanticLoweringError {
     AudioOutputUnavailable {
         clip: SemanticNodeId,
     },
-    UnsupportedGlowProfile {
+    UnsupportedEffectProfile {
         owner: SemanticNodeId,
     },
     UnsupportedPaintProfile {
@@ -604,9 +604,9 @@ impl std::fmt::Display for SemanticLoweringError {
                 clip.slot(),
                 clip.generation()
             ),
-            Self::UnsupportedGlowProfile { owner } => write!(
+            Self::UnsupportedEffectProfile { owner } => write!(
                 formatter,
-                "glow on {}:{} requires one attachment on ordinary planar 2D content",
+                "effect on {}:{} requires one attachment on ordinary planar 2D content",
                 owner.slot(),
                 owner.generation()
             ),
@@ -889,7 +889,7 @@ fn lower_graph_dependencies(
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
     pub(super) fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
-    pub(super) glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    pub(super) effect: Option<std::sync::Arc<crate::CompiledEffect>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
     pub(super) base_style: Style,
@@ -930,7 +930,7 @@ fn lower_glow_attachment(
     owner: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,
-) -> Result<Option<std::sync::Arc<crate::CompiledGlow>>, SemanticLoweringError> {
+) -> Result<Option<std::sync::Arc<crate::CompiledEffect>>, SemanticLoweringError> {
     let effects = store
         .node(owner)
         .ok_or(SemanticStoreError::UnknownNode(owner))?
@@ -938,28 +938,28 @@ fn lower_glow_attachment(
     if effects.is_empty() {
         return Ok(None);
     }
-    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner };
     let [attachment] = effects else {
         return Err(unsupported());
     };
-    validate_glow_source_profile(owner, state, store)?;
+    validate_effect_source_profile(owner, state, store)?;
     let effect = store.semantic_effect_state(*attachment)?;
     if effect.owner() != owner {
         return Err(unsupported());
     }
-    let noon_core::EffectDefinition::Glow(definition) = effect.definition();
-    Ok(Some(std::sync::Arc::new(crate::CompiledGlow {
+    let definition = effect.definition();
+    Ok(Some(std::sync::Arc::new(crate::CompiledEffect {
         attachment: *attachment,
         definition,
     })))
 }
 
-pub(super) fn validate_glow_source_profile(
+pub(super) fn validate_effect_source_profile(
     owner: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,
 ) -> Result<(), SemanticLoweringError> {
-    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner };
     let geometry_supported = match state.content {
         SemanticObjectContent::Geometry(noon_core::StoredGeometry::Circle { radius }) => {
             radius.is_finite() && radius > 0.0
@@ -1104,7 +1104,7 @@ pub(super) fn lower_object_state(
     };
     Ok(LoweredObjectState {
         fill_gradient: super::paint::lower_fill(semantic_id, state, store)?,
-        glow: None,
+        effect: None,
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
@@ -1497,7 +1497,7 @@ mod tests {
         path_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
         path_state.style.fill = None;
         let path_id = store.insert_semantic_object(path_state.clone());
-        validate_glow_source_profile(path_id, &path_state, &store).unwrap();
+        validate_effect_source_profile(path_id, &path_state, &store).unwrap();
 
         // Grid membership is retained metadata; these same ordinary lines
         // supported glow before the membership marker was introduced.
@@ -1509,7 +1509,7 @@ mod tests {
             grid.style = path_state.style.clone();
             grid.set_role(SemanticObjectRole::NumberPlaneGridLine { horizontal });
             let id = store.insert_semantic_object(grid.clone());
-            validate_glow_source_profile(id, &grid, &store).unwrap();
+            validate_effect_source_profile(id, &grid, &store).unwrap();
         }
 
         let text = store
@@ -1533,13 +1533,13 @@ mod tests {
         text_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
         text_state.style.fill = None;
         let text_id = store.insert_semantic_object(text_state.clone());
-        validate_glow_source_profile(text_id, &text_state, &store).unwrap();
+        validate_effect_source_profile(text_id, &text_state, &store).unwrap();
     }
 
     #[test]
     fn image_glow_lowers_shared_resource_and_preserves_source_and_sampling() {
         use noon_core::{
-            Glow, GlowSource, GlowUpdate, RasterImageResourceError, RasterImageSampling,
+            EffectUpdate, Glow, GlowSource, RasterImageResourceError, RasterImageSampling,
             SemanticImageContent, SemanticMutationTransaction,
         };
 
@@ -1567,7 +1567,7 @@ mod tests {
                             transaction.create_effect(
                                 owner,
                                 "glow",
-                                Glow::new(GlowUpdate::default().source(source)).unwrap(),
+                                Glow::new(EffectUpdate::default().source(source)).unwrap(),
                             );
                             transaction.apply(store).unwrap();
                             Ok::<_, RasterImageResourceError>(owner)
@@ -1586,7 +1586,16 @@ mod tests {
                     .raster_image_resources()
                     .get(image.resource())
                     .is_some());
-                assert_eq!(row.glow.as_ref().unwrap().definition.source(), source);
+                assert_eq!(
+                    row.effect
+                        .as_ref()
+                        .unwrap()
+                        .definition
+                        .as_glow()
+                        .unwrap()
+                        .source(),
+                    source
+                );
                 assert!((row.base_style.fill.unwrap().alpha - 0.4).abs() < 1e-6);
                 assert!((row.base_style.opacity - 0.7).abs() < 1e-6);
                 assert_eq!(store.raster_image_resources().len(), 1);
@@ -1607,7 +1616,7 @@ mod tests {
             })
             .unwrap();
         let original = store.semantic_object_state_checked(owner).unwrap().clone();
-        validate_glow_source_profile(owner, &original, &store).unwrap();
+        validate_effect_source_profile(owner, &original, &store).unwrap();
         let mut missing = original.clone();
         let mut handle = missing.content.image().unwrap().resource();
         handle.version += 1;
@@ -1620,8 +1629,8 @@ mod tests {
         spatial.transform = noon_core::SemanticWorldTransform3D::IDENTITY.into();
         for unsupported in [missing, recolored, stroked, spatial] {
             assert!(matches!(
-                validate_glow_source_profile(owner, &unsupported, &store),
-                Err(SemanticLoweringError::UnsupportedGlowProfile { owner: rejected })
+                validate_effect_source_profile(owner, &unsupported, &store),
+                Err(SemanticLoweringError::UnsupportedEffectProfile { owner: rejected })
                     if rejected == owner
             ));
         }

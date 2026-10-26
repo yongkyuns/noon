@@ -3,8 +3,8 @@ import initNoonWeb, {
   WasmAudioSource,
   WasmAudioClipOptions,
   WasmAuthoringFamilyHandle,
-  WasmGlow,
-  WasmGlowUpdate,
+  WasmEffectDefinition,
+  WasmEffectUpdate,
   WasmAuthoringVectorPath,
   WasmCoordinateOptions,
   WasmBarChartOptions,
@@ -198,8 +198,9 @@ async function initializePyodide() {
       throw new Error("semantic continuation is not active for this Python source run");
     }
   };
-  self.noonGlowUpdate = (...args) => new WasmGlowUpdate(...args);
-  self.noonGlow = (update) => new WasmGlow(update);
+  self.noonEffectUpdate = (...args) => new WasmEffectUpdate(...args);
+  self.noonGlow = (update) => WasmEffectDefinition.glow(update);
+  self.noonBlur = (update) => WasmEffectDefinition.blur(update);
   self.noonAuthoringImageOptions = WasmImageMobjectOptions;
   self.noonCreateAuthoringImageHandle = (options) => authoringStore.createImage(options);
   self.noonAuthoringMeshOptions = WasmMeshOptions;

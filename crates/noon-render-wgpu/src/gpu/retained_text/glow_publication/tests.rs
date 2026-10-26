@@ -1,6 +1,6 @@
 use super::*;
-use noon_compile::{CompiledGlow, CompiledObject, CompiledScene, ExecutionPatch};
-use noon_core::{Glow, GlowUpdate, Pixels, SemanticNodeId};
+use noon_compile::{CompiledEffect, CompiledObject, CompiledScene, ExecutionPatch};
+use noon_core::{EffectUpdate, Glow, Pixels, SemanticNodeId};
 use noon_runtime::SceneInstance;
 
 fn runtime(count: usize, glowing: bool, mixed: bool) -> SceneInstance {
@@ -31,9 +31,9 @@ fn runtime_profile(
         })
         .collect::<Vec<_>>();
     if glowing {
-        objects[1].glow = Some(Arc::new(CompiledGlow {
+        objects[1].effect = Some(Arc::new(CompiledEffect {
             attachment: SemanticNodeId::new(31, 5),
-            definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0))).unwrap(),
+            definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0))).unwrap()).into(),
         }));
     }
     let mut resources = noon_compile::CompiledResources::default();
@@ -75,10 +75,11 @@ fn runtime_profile(
             alpha: 0.43,
             ..Color::WHITE
         });
-        objects[1].glow = Some(Arc::new(CompiledGlow {
+        objects[1].effect = Some(Arc::new(CompiledEffect {
             attachment: SemanticNodeId::new(31, 5),
-            definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0)).source(source))
-                .unwrap(),
+            definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0)).source(source))
+                .unwrap())
+            .into(),
         }));
     }
     // Painter order differs from source index order: a visibility union must NOT
@@ -118,7 +119,7 @@ impl Fixture {
         }
     }
 
-    fn prepare(&mut self, runtime: &mut SceneInstance, submit: bool) -> RetainedGlowStats {
+    fn prepare(&mut self, runtime: &mut SceneInstance, submit: bool) -> RetainedEffectStats {
         let publication = runtime.take_renderer_publication();
         let mut visible = publication
             .painter_order()
@@ -128,9 +129,9 @@ impl Fixture {
             .collect::<Vec<_>>();
         let expanded = self
             .renderer
-            .glow_source_visibility(&publication, &visible)
+            .effect_source_visibility(&publication, &visible)
             .unwrap();
-        if publication.frame().objects[1].glow.is_some() && publication.frame().is_present(1) {
+        if publication.frame().objects[1].effect.is_some() && publication.frame().is_present(1) {
             assert_eq!(
                 expanded,
                 publication
@@ -152,7 +153,7 @@ impl Fixture {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let result = self
             .renderer
-            .prepare_retained_analytic_glows(
+            .prepare_retained_effects(
                 &self.device,
                 &self.queue,
                 &mut encoder,
@@ -166,7 +167,7 @@ impl Fixture {
             self.queue.submit([encoder.finish()]);
         } else {
             drop(encoder);
-            self.renderer.invalidate_analytic_glows();
+            self.renderer.invalidate_effect_captures();
         }
         visible.clear();
         result
@@ -206,15 +207,15 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         assert_eq!(fixture.last_image_upload, RasterImageUploadStats::default());
 
         let object = runtime.frame().objects[1].id;
-        let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
-        glow.definition = GlowUpdate::default()
+        let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+        effect.definition = EffectUpdate::default()
             .intensity(0.8)
-            .apply_to(glow.definition)
+            .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetGlow {
+            .apply_execution_patch(&ExecutionPatch::SetEffect {
                 object,
-                glow: Arc::new(glow),
+                effect: Arc::new(effect),
             })
             .unwrap();
         let edited = fixture.prepare(&mut runtime, true);
@@ -265,7 +266,7 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         assert_eq!(retired.retained_texture_bytes, 0);
         assert_eq!(fixture.last_image_upload.textures_retired, 1);
         assert_eq!(fixture.renderer.image_residency_stats().textures, 0);
-        assert!(!fixture.renderer.has_draw_source_glow(object));
+        assert!(!fixture.renderer.has_draw_source_effect(object));
     }
 }
 
@@ -277,16 +278,16 @@ fn no_effect_visibility_is_borrowed_and_clean_glow_path_is_zero_work() {
     let visible = [2, 0];
     let actual = fixture
         .renderer
-        .glow_source_visibility(&publication, &visible)
+        .effect_source_visibility(&publication, &visible)
         .unwrap();
     assert_eq!(actual.as_ptr(), visible.as_ptr());
-    assert!(fixture.renderer.retained_glow.sources.is_empty());
+    assert!(fixture.renderer.retained_effects.sources.is_empty());
     drop(publication);
     fixture.prepare(&mut runtime, true);
     let clean = fixture.prepare(&mut runtime, true);
-    assert_eq!(clean, RetainedGlowStats::default());
-    assert!(fixture.renderer.analytic_glows.is_none());
-    assert_eq!(fixture.renderer.retained_glow.visible.capacity(), 0);
+    assert_eq!(clean, RetainedEffectStats::default());
+    assert!(fixture.renderer.effect_captures.is_none());
+    assert_eq!(fixture.renderer.retained_effects.visible.capacity(), 0);
 }
 
 #[test]
@@ -307,21 +308,21 @@ fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
         let clean = fixture.prepare(&mut runtime, true);
         assert_eq!(
             clean,
-            RetainedGlowStats {
+            RetainedEffectStats {
                 retained_texture_bytes: first.retained_texture_bytes,
                 ..Default::default()
             }
         );
         let row = &runtime.frame().objects[1];
-        let mut glow = **row.glow.as_ref().unwrap();
-        glow.definition = GlowUpdate::default()
+        let mut effect = **row.effect.as_ref().unwrap();
+        effect.definition = EffectUpdate::default()
             .intensity(0.3)
-            .apply_to(glow.definition)
+            .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetGlow {
+            .apply_execution_patch(&ExecutionPatch::SetEffect {
                 object: row.id,
-                glow: Arc::new(glow),
+                effect: Arc::new(effect),
             })
             .unwrap();
         let edited = fixture.prepare(&mut runtime, true);
@@ -341,7 +342,7 @@ fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
             .unwrap();
         let retired = fixture.prepare(&mut runtime, true);
         assert_eq!(retired.retained_texture_bytes, 0);
-        assert!(fixture.renderer.retained_glow.packed.is_empty());
+        assert!(fixture.renderer.retained_effects.packed.is_empty());
     }
 }
 
@@ -353,18 +354,19 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
     let temporary = runtime.frame().objects[2].id;
     let temporary_attachment = SemanticNodeId::new(32, 5);
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
             object: temporary,
             expected: None,
-            glow: Some(Arc::new(CompiledGlow {
+            effect: Some(Arc::new(CompiledEffect {
                 attachment: temporary_attachment,
-                definition: Glow::new(GlowUpdate::default().radius(Pixels(3.0))).unwrap(),
+                definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0))).unwrap())
+                    .into(),
             })),
         })
         .unwrap();
     let warm = fixture.prepare(&mut runtime, true);
     assert_eq!((warm.sources_prepared, warm.source_passes), (2, 2));
-    assert_eq!(fixture.renderer.retained_glow.packed.len(), 2);
+    assert_eq!(fixture.renderer.retained_effects.packed.len(), 2);
 
     let mut transform = runtime.frame().objects[1].transform;
     transform.translation = Vec2::new(-4.1, 0.4);
@@ -374,22 +376,22 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
             transform,
         })
         .unwrap();
-    let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
-    glow.definition = GlowUpdate::default()
+    let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+    effect.definition = EffectUpdate::default()
         .radius(Pixels(4.0))
-        .apply_to(glow.definition)
+        .apply_to(effect.definition)
         .unwrap();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetGlow {
+        .apply_execution_patch(&ExecutionPatch::SetEffect {
             object: persistent,
-            glow: Arc::new(glow),
+            effect: Arc::new(effect),
         })
         .unwrap();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
             object: temporary,
             expected: Some(temporary_attachment),
-            glow: None,
+            effect: None,
         })
         .unwrap();
 
@@ -409,7 +411,7 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
             .collect::<Vec<_>>();
         let expanded = fixture
             .renderer
-            .glow_source_visibility(&publication, &visible)
+            .effect_source_visibility(&publication, &visible)
             .unwrap();
         let prepared = fixture
             .preparer
@@ -426,19 +428,22 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
             &prepared,
             &mut fixture.text,
         );
-        assert_eq!(fixture.renderer.retained_glow.dirty, BTreeSet::from([1, 2]));
-        assert_eq!(fixture.renderer.retained_glow.sources.len(), 1);
+        assert_eq!(
+            fixture.renderer.retained_effects.dirty,
+            BTreeSet::from([1, 2])
+        );
+        assert_eq!(fixture.renderer.retained_effects.sources.len(), 1);
         if step < 2 {
             // Endpoint drains retain publication dirtiness and ordinary GPU
             // geometry without recording an obsolete capture/filter workload.
-            assert_eq!(fixture.renderer.retained_glow.packed.len(), 2);
+            assert_eq!(fixture.renderer.retained_effects.packed.len(), 2);
             continue;
         }
 
         let mut encoder = fixture.device.create_command_encoder(&Default::default());
         let presented = fixture
             .renderer
-            .prepare_retained_analytic_glows(
+            .prepare_retained_effects(
                 &fixture.device,
                 &fixture.queue,
                 &mut encoder,
@@ -490,15 +495,15 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
             )
             .unwrap();
         fixture.queue.submit([encoder.finish()]);
-        assert_eq!(fixture.renderer.retained_glow.packed.len(), 1);
-        assert!(fixture.renderer.retained_glow.packed.contains_key(&1));
-        assert!(fixture.renderer.retained_glow.dirty.is_empty());
+        assert_eq!(fixture.renderer.retained_effects.packed.len(), 1);
+        assert!(fixture.renderer.retained_effects.packed.contains_key(&1));
+        assert!(fixture.renderer.retained_effects.dirty.is_empty());
     }
     // Retiring the only remaining binding must release every scope: the
     // temporary attachment removed during the endpoint drain cannot leak.
-    let packed = fixture.renderer.retained_glow.packed[&1].1;
-    fixture.renderer.remove_analytic_glow(packed);
-    assert_eq!(fixture.renderer.analytic_glow_texture_bytes(), 0);
+    let packed = fixture.renderer.retained_effects.packed[&1].1;
+    fixture.renderer.remove_effect_capture(packed);
+    assert_eq!(fixture.renderer.effect_capture_texture_bytes(), 0);
 }
 
 #[test]
@@ -508,7 +513,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
     let publication = runtime.take_renderer_publication();
     fixture
         .renderer
-        .glow_source_visibility(&publication, &[2, 0])
+        .effect_source_visibility(&publication, &[2, 0])
         .unwrap();
     // Deliberately violate the visibility contract: the populated source map is
     // not sufficient evidence that this *prepared* draw retained its source.
@@ -529,7 +534,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
     );
     let mut encoder = fixture.device.create_command_encoder(&Default::default());
     assert_eq!(
-        fixture.renderer.prepare_retained_analytic_glows(
+        fixture.renderer.prepare_retained_effects(
             &fixture.device,
             &fixture.queue,
             &mut encoder,
@@ -538,7 +543,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
             &publication,
             1_000_000
         ),
-        Err(GlowPrepareError::PublicationMismatch)
+        Err(EffectPrepareError::PublicationMismatch)
     );
     drop((encoder, prepared, publication));
     let abandoned = fixture.prepare(&mut runtime, false);
@@ -569,13 +574,13 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
     let publication = runtime.take_renderer_publication();
     for bad in [&[0, 0][..], &[3][..]] {
         assert_eq!(
-            fixture.renderer.glow_source_visibility(&publication, bad),
-            Err(GlowPrepareError::PublicationMismatch)
+            fixture.renderer.effect_source_visibility(&publication, bad),
+            Err(EffectPrepareError::PublicationMismatch)
         );
     }
     let expanded = fixture
         .renderer
-        .glow_source_visibility(&publication, &[2, 0])
+        .effect_source_visibility(&publication, &[2, 0])
         .unwrap();
     let prepared = fixture
         .preparer
@@ -594,7 +599,7 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
     );
     let mut encoder = fixture.device.create_command_encoder(&Default::default());
     assert_eq!(
-        fixture.renderer.prepare_retained_analytic_glows(
+        fixture.renderer.prepare_retained_effects(
             &fixture.device,
             &fixture.queue,
             &mut encoder,
@@ -603,10 +608,10 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
             &publication,
             first.retained_texture_bytes - 1
         ),
-        Err(GlowPrepareError::ScratchBudgetExceeded)
+        Err(EffectPrepareError::ScratchBudgetExceeded)
     );
     assert_eq!(
-        fixture.renderer.analytic_glow_texture_bytes(),
+        fixture.renderer.effect_capture_texture_bytes(),
         first.retained_texture_bytes
     );
     drop((encoder, prepared, publication));
@@ -639,18 +644,18 @@ fn order_only_publication_reuses_glow_pixels_and_stale_publication_is_rejected()
         changed.source_passes + changed.blur_passes + changed.texture_allocations,
         0
     );
-    let context = fixture.renderer.retained_glow.context;
-    let bytes = fixture.renderer.analytic_glow_texture_bytes();
+    let context = fixture.renderer.retained_effects.context;
+    let bytes = fixture.renderer.effect_capture_texture_bytes();
     let mut old = runtime(3, true, true);
     let old_publication = old.take_renderer_publication();
     assert_eq!(
         fixture
             .renderer
-            .glow_source_visibility(&old_publication, &[2, 0]),
-        Err(GlowPrepareError::PublicationMismatch)
+            .effect_source_visibility(&old_publication, &[2, 0]),
+        Err(EffectPrepareError::PublicationMismatch)
     );
-    assert_eq!(fixture.renderer.retained_glow.context, context);
-    assert_eq!(fixture.renderer.analytic_glow_texture_bytes(), bytes);
+    assert_eq!(fixture.renderer.retained_effects.context, context);
+    assert_eq!(fixture.renderer.effect_capture_texture_bytes(), bytes);
 }
 
 #[test]
@@ -665,7 +670,7 @@ fn already_visible_glow_borrows_candidates_and_keeps_ordinary_validation() {
         .collect::<Vec<_>>();
     let expanded = fixture
         .renderer
-        .glow_source_visibility(&publication, &visible)
+        .effect_source_visibility(&publication, &visible)
         .unwrap();
     assert_eq!(expanded.as_ptr(), visible.as_ptr());
     assert_eq!(expanded.len(), visible.len());
@@ -678,13 +683,13 @@ fn already_visible_glow_borrows_candidates_and_keeps_ordinary_validation() {
             TextDeviceMetrics::uniform(10.0).unwrap(),
         )
         .unwrap();
-    assert_eq!(fixture.renderer.retained_glow.visible.capacity(), 0);
+    assert_eq!(fixture.renderer.retained_effects.visible.capacity(), 0);
     // Even on the borrowed fast path, the existing retained owner rejects a bad
     // candidate list; expansion must never turn duplicate source input valid.
     let duplicate = [1, 1];
     let expanded = fixture
         .renderer
-        .glow_source_visibility(&publication, &duplicate)
+        .effect_source_visibility(&publication, &duplicate)
         .unwrap();
     assert!(fixture
         .preparer
@@ -748,21 +753,21 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
             first.texture_allocations, 5,
             "source, MSAA, and three filter images"
         );
-        assert!(fixture.renderer.has_draw_source_glow(object));
+        assert!(fixture.renderer.has_draw_source_effect(object));
         let clean = fixture.prepare(&mut runtime, true);
         assert_eq!(
             clean.bytes_uploaded + clean.source_passes + clean.blur_passes + clean.composite_passes,
             0
         );
-        let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
-        glow.definition = GlowUpdate::default()
+        let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+        effect.definition = EffectUpdate::default()
             .intensity(0.4)
-            .apply_to(glow.definition)
+            .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetGlow {
+            .apply_execution_patch(&ExecutionPatch::SetEffect {
                 object,
-                glow: Arc::new(glow),
+                effect: Arc::new(effect),
             })
             .unwrap();
         let edited = fixture.prepare(&mut runtime, true);
@@ -806,6 +811,6 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
             fixture.prepare(&mut runtime, true).retained_texture_bytes,
             0
         );
-        assert!(!fixture.renderer.has_draw_source_glow(object));
+        assert!(!fixture.renderer.has_draw_source_effect(object));
     }
 }

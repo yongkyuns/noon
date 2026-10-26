@@ -1,17 +1,17 @@
 //! Attachment lifetime on the existing execution publication and scheduler.
 use std::sync::Arc;
 
-use noon_compile::{CompilePatchError, CompiledChannelKey, CompiledGlow, ExecutionPatch};
+use noon_compile::{CompilePatchError, CompiledChannelKey, CompiledEffect, ExecutionPatch};
 use noon_core::ObjectId;
 
 use crate::{EvaluationStats, RuntimePatchStats, SceneInstance};
 
 impl SceneInstance {
-    pub(crate) fn apply_glow_attachment_patch(
+    pub(crate) fn apply_effect_attachment_patch(
         &mut self,
         patch: &ExecutionPatch,
         object: ObjectId,
-        next: Option<Arc<CompiledGlow>>,
+        next: Option<Arc<CompiledEffect>>,
     ) -> Result<(), CompilePatchError> {
         let index = self
             .compiled
@@ -23,7 +23,7 @@ impl SceneInstance {
             track_locators_removed: compiled.track_locators_removed,
             ..RuntimePatchStats::default()
         };
-        for property in CompiledGlow::PARAMETER_PROPERTIES {
+        for property in CompiledEffect::PARAMETER_PROPERTIES {
             let channel = CompiledChannelKey::new(index, property);
             if self.groups.remove(&channel).is_some() {
                 let retired = self.timeline_scheduler.relower_channel(channel, &[]);
@@ -33,7 +33,7 @@ impl SceneInstance {
             }
         }
         let index = index as usize;
-        self.frame.objects[index].glow = next;
+        self.frame.objects[index].effect = next;
         // Halo coverage is renderer-derived. Semantic geometry, spatial queries,
         // object motion, painter order and all unrelated rows stay untouched.
         self.changes.insert(index);

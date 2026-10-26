@@ -1,4 +1,4 @@
-use noon::{effects::GlowUpdate, ManimBecomeOptions, Scene};
+use noon::{effects::EffectUpdate, ManimBecomeOptions, Scene};
 
 fn assert_same_visual(actual: &noon::SemanticObjectState, target: &noon::SemanticObjectState) {
     assert_eq!(actual.content, target.content);
@@ -11,7 +11,7 @@ fn unrelated_glow_does_not_block_plain_state_replacement() {
     let mut scene = Scene::new();
     let mut remote = scene.circle(0.2).unwrap();
     remote
-        .set_glow(GlowUpdate::default().intensity(0.8))
+        .set_glow(EffectUpdate::default().intensity(0.8))
         .unwrap();
     let generation = remote.get_effect("glow").unwrap().node_id();
     let mut receiver = scene.square(1.0).unwrap();
@@ -33,7 +33,7 @@ fn local_effect_on_either_operand_still_rejects_and_rolls_back() {
     let mut receiver = scene.square(1.0).unwrap();
     let mut donor = scene.circle(0.25).unwrap();
     donor
-        .set_glow(GlowUpdate::default().intensity(0.8))
+        .set_glow(EffectUpdate::default().intensity(0.8))
         .unwrap();
 
     let before_state = receiver.state().unwrap();
@@ -48,7 +48,7 @@ fn local_effect_on_either_operand_still_rejects_and_rolls_back() {
     // would let a broken receiver-side guard pass this second assertion.
     donor.remove_glow().unwrap();
     assert!(donor.get_effect("glow").is_err());
-    receiver.set_glow(GlowUpdate::default()).unwrap();
+    receiver.set_glow(EffectUpdate::default()).unwrap();
     let generation = receiver.get_effect("glow").unwrap().node_id();
     let before_state = receiver.state().unwrap();
     let before_revision = scene.revision();
@@ -65,7 +65,7 @@ fn unrelated_glow_does_not_block_family_replacement_but_local_glow_does() {
     let mut scene = Scene::new();
     let mut remote = scene.circle(0.4).unwrap();
     remote
-        .set_glow(GlowUpdate::default().intensity(1.2))
+        .set_glow(EffectUpdate::default().intensity(1.2))
         .unwrap();
     let generation = remote.get_effect("glow").unwrap().node_id();
 
@@ -87,7 +87,7 @@ fn unrelated_glow_does_not_block_family_replacement_but_local_glow_does() {
     assert_same_visual(&second.state().unwrap(), &target_b.state().unwrap());
     assert_eq!(remote.get_effect("glow").unwrap().node_id(), generation);
 
-    target_a.set_glow(GlowUpdate::default()).unwrap();
+    target_a.set_glow(EffectUpdate::default()).unwrap();
     let before = [first.state().unwrap(), second.state().unwrap()];
     let revision = scene.revision();
     assert!(source.become_family(&target, Default::default()).is_err());
@@ -99,7 +99,7 @@ fn unrelated_glow_does_not_block_family_replacement_but_local_glow_does() {
 fn live_become_ignores_glow_on_unrelated_detached_source() {
     let mut scene = Scene::new();
     let mut remote = scene.circle(0.4).unwrap();
-    remote.set_glow(GlowUpdate::default()).unwrap();
+    remote.set_glow(EffectUpdate::default()).unwrap();
     let source = scene.rectangle(1.0, 1.0).unwrap();
     let donor = scene.square(2.0).unwrap();
     scene.add(&source).unwrap();

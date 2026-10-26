@@ -16,13 +16,15 @@ class EffectFacadeTests(unittest.TestCase):
     def setUp(self):
         self.request = Mock()
         self.definition = types.SimpleNamespace(
-            radius=12.0, pixels=True, intensity=0.25, source="painted",
+            kind="glow", radius=12.0, pixels=True, intensity=0.25, source="painted",
             red=0.25, green=0.5, blue=1.0, alpha=1.0,
         )
         self.make_update = Mock(return_value=self.request)
         self.make_glow = Mock(return_value=self.definition)
         js = types.ModuleType("js")
-        js.noonGlowUpdate, js.noonGlow = self.make_update, self.make_glow
+        js.noonEffectUpdate, js.noonGlow = self.make_update, self.make_glow
+        self.make_blur = Mock(return_value=types.SimpleNamespace(kind="blur", radius=4.5, pixels=True))
+        js.noonBlur = self.make_blur
         ffi = types.ModuleType("pyodide.ffi")
         ffi.to_js = tuple
         self.enter(patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}))
@@ -52,6 +54,20 @@ class EffectFacadeTests(unittest.TestCase):
         self.assertIs(copy.deepcopy(glow), glow)
         with self.assertRaises(AttributeError):
             glow.intensity = 1.0
+
+    def test_blur_uses_the_same_rust_definition_attachment_and_update_handles(self):
+        blur = noon.Blur(radius=noon.Pixels(4.5))
+        self.make_update.assert_called_once_with((), 4.5, True, None, None)
+        self.make_blur.assert_called_once_with(self.request)
+        self.assertEqual(blur.radius, noon.Pixels(4.5))
+        self.assertIs(copy.copy(blur), blur)
+        self.assertIs(copy.deepcopy(blur), blur)
+        self.assertIs(self.object.add_effect(blur, name="soften"), self.object)
+        self.handle.addEffect.assert_called_once_with(blur._definition, "soften")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = blur._definition
+        self.assertIsInstance(self.object.get_effect("soften").authored_definition, noon.Blur)
+        self.assertIs(self.object.set_effect("soften", radius=noon.Pixels(0)), self.object)
+        self.handle.setEffect.assert_called_once_with("soften", self.request)
 
     def test_pulse_constructor_is_inert_and_carries_only_intensity_and_timing(self):
         pulse = noon.GlowPulse(self.object, intensity=2)

@@ -3988,10 +3988,13 @@ impl ExecutionSession {
         ) {
             (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
                 match target_effects.as_slice() {
-                    [effect] if effect.name.as_ref() == "glow" => {
-                        let noon_core::EffectDefinition::Glow(destination) = effect.definition;
+                    [effect]
+                        if effect.name.as_ref() == "glow"
+                            && effect.definition.as_glow().is_some() =>
+                    {
+                        let destination = effect.definition;
                         Some(
-                            noon_core::GlowUpdate::default()
+                            noon_core::EffectUpdate::default()
                                 .intensity(0.0)
                                 .apply_to(destination)
                                 .map_err(|error| {
@@ -4204,7 +4207,7 @@ impl ExecutionSession {
         let mut temporary_glow = std::collections::BTreeSet::new();
         if !missing_glow.is_empty() {
             let mut declaration = prepared.into_transaction();
-            let neutral = noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+            let neutral = noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
                 .expect("zero intensity is a valid neutral glow");
             let attachments = missing_glow
                 .into_iter()
@@ -4242,7 +4245,7 @@ impl ExecutionSession {
             let frame = self.runtime.frame();
             let row = frame.objects.get(index)?;
             Some(EffectiveAnimationProperties {
-                glow: row.glow.as_deref().copied(),
+                effect: row.effect.as_deref().copied(),
                 z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,
@@ -4297,7 +4300,7 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
-                                glow: row.glow.as_deref().copied(),
+                                effect: row.effect.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4343,7 +4346,7 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
-                                glow: row.glow.as_deref().copied(),
+                                effect: row.effect.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4565,9 +4568,7 @@ impl ExecutionSession {
                 token,
                 creation:
                     SemanticNodeCreation::Effect {
-                        owner,
-                        definition: noon_core::EffectDefinition::Glow(definition),
-                        ..
+                        owner, definition, ..
                     },
             } = mutation
             else {
@@ -4579,7 +4580,7 @@ impl ExecutionSession {
                 if let Some(object) = self.execution_index.execution_object_id(owner) {
                     staged_glow.insert(
                         object,
-                        noon_compile::CompiledGlow {
+                        noon_compile::CompiledEffect {
                             attachment,
                             definition: *definition,
                         },

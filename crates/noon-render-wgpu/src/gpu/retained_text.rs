@@ -1,5 +1,5 @@
 pub(super) mod glow_publication;
-pub use glow_publication::{RetainedGlowStats, DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET};
+pub use glow_publication::{RetainedEffectStats, DEFAULT_EFFECT_TEXTURE_BUDGET};
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -2648,7 +2648,7 @@ fn validate_visible_object_indices(
 }
 
 fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
-    object.glow.is_some()
+    object.effect.is_some()
         && !(matches!(
             object.geometry(),
             Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
@@ -2819,7 +2819,7 @@ impl RetainedFramePreparer {
         self.scratch.objects.push(FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: scratch_id,
@@ -3500,7 +3500,7 @@ impl GpuRenderer {
         text_state: &mut RetainedTextGpuState,
         states: &[noon_core::Inset2DViewState],
     ) -> Result<(), Inset2DRenderError> {
-        if !states.is_empty() && self.has_analytic_glows() {
+        if !states.is_empty() && self.has_effect_captures() {
             return Err(Inset2DRenderError::GlowCaptureUnsupported);
         }
         let mut views = Vec::with_capacity(states.len());
@@ -4009,7 +4009,7 @@ impl GpuRenderer {
             {
                 let (_, image) = images.next().expect("peeked image draw item");
                 if !excluded.contains(&image.object_id())
-                    && self.draw_source_glow(pass, image.object_id(), sample_count == 1)
+                    && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
                 {
                     binding = None;
                     stats.geometry.draw_calls += 1;
@@ -4036,7 +4036,7 @@ impl GpuRenderer {
             if excluded.contains(&item.object_id()) {
                 continue;
             }
-            if self.draw_source_glow(pass, item.object_id(), sample_count == 1) {
+            if self.draw_source_effect(pass, item.object_id(), sample_count == 1) {
                 binding = None;
                 stats.geometry.draw_calls += 1;
                 stats.geometry.instances_drawn += 1;
@@ -4076,7 +4076,7 @@ impl GpuRenderer {
                         &prepared.geometry,
                         pixel,
                         batch_paths,
-                        |object| self.has_draw_source_glow(object),
+                        |object| self.has_draw_source_effect(object),
                     );
                     for batch in groups.batches() {
                         let mega = match batch.primitive {
@@ -4119,7 +4119,7 @@ impl GpuRenderer {
         }
         for (_, image) in images {
             if !excluded.contains(&image.object_id())
-                && self.draw_source_glow(pass, image.object_id(), sample_count == 1)
+                && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
             {
                 stats.geometry.draw_calls += 1;
                 stats.geometry.instances_drawn += 1;
@@ -4599,7 +4599,7 @@ mod tests {
                     FrameObjectState {
                         fill_gradient: None,
                         draw_enabled: true,
-                        glow: None,
+                        effect: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4612,7 +4612,7 @@ mod tests {
                     FrameObjectState {
                         fill_gradient: None,
                         draw_enabled: true,
-                        glow: None,
+                        effect: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4655,7 +4655,7 @@ mod tests {
                     FrameObjectState {
                         fill_gradient: None,
                         draw_enabled: true,
-                        glow: None,
+                        effect: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4668,7 +4668,7 @@ mod tests {
                     FrameObjectState {
                         fill_gradient: None,
                         draw_enabled: true,
-                        glow: None,
+                        effect: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4982,7 +4982,7 @@ mod tests {
             FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(id),
@@ -5662,7 +5662,7 @@ mod tests {
         frame.objects.push(FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(3),

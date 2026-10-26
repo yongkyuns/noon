@@ -3,14 +3,14 @@
 //! separate effect scheduler, runtime state, or completion policy.
 use super::affine::{driver_key, transform_driver_conflict, SemanticAnimationCompletion};
 use noon_core::{
-    EffectDefinition, GlowParameterError, GlowTrackValue, GlowUpdate, ObjectId, Property,
+    EffectDefinition, EffectParameterError, EffectTrackValue, EffectUpdate, ObjectId, Property,
     SemanticAnimationEffectSnapshot, SemanticNodeId, SemanticStore, SemanticTransactionReadError,
     SemanticTransformEffectSnapshot, TimelineError, TrackTiming, TrackValues,
 };
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum GlowTargetLoweringError {
+pub enum EffectTargetLoweringError {
     Read(SemanticTransactionReadError),
     Store(noon_core::SemanticStoreError),
     Profile(super::super::projection::SemanticLoweringError),
@@ -19,36 +19,38 @@ pub enum GlowTargetLoweringError {
     MissingEffectiveValue,
     UnsupportedContentChange,
     UnsupportedPulseOptions,
-    Parameter(GlowParameterError),
+    Parameter(EffectParameterError),
     Timeline(TimelineError),
 }
-impl std::fmt::Display for GlowTargetLoweringError {
+impl std::fmt::Display for EffectTargetLoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnsupportedPulseOptions => f.write_str(
                 "GlowPulse does not support introducer/remover flags, nonzero lag, or path arcs",
             ),
-            _ => write!(f, "glow animation activation rejected: {self:?}"),
+            _ => write!(f, "effect animation activation rejected: {self:?}"),
         }
     }
 }
-impl std::error::Error for GlowTargetLoweringError {}
+impl std::error::Error for EffectTargetLoweringError {}
 
 pub(super) fn channels(
     snapshot: Option<&SemanticTransformEffectSnapshot>,
     source: &[SemanticAnimationEffectSnapshot],
     target: &[SemanticAnimationEffectSnapshot],
-    effective: Option<crate::CompiledGlow>,
+    effective: Option<crate::CompiledEffect>,
     method_target: bool,
     temporary_attachments: &HashSet<SemanticNodeId>,
-) -> Result<Vec<(Property, TrackValues)>, GlowTargetLoweringError> {
+) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
     // A motion/style target captured before an absent pulse has no authored
     // effect destination. Only the activation owner's exact candidate-created
     // generation may account for that additional source attachment.
     if let [temporary] = source {
-        let EffectDefinition::Glow(definition) = temporary.definition;
+        let definition = temporary.definition;
         if target.is_empty()
-            && definition.intensity() == 0.0
+            && definition
+                .as_glow()
+                .is_some_and(|effect| effect.intensity() == 0.0)
             && temporary_attachments.contains(&temporary.attachment)
             && effective.is_some_and(|value| value.attachment == temporary.attachment)
             && snapshot.is_none_or(|snapshot| {
@@ -63,72 +65,74 @@ pub(super) fn channels(
         return if source.is_empty() && target.is_empty() && effective.is_none() {
             Ok(Vec::new())
         } else {
-            Err(GlowTargetLoweringError::StaleAttachment)
+            Err(EffectTargetLoweringError::StaleAttachment)
         };
     };
     if !same_identity(&snapshot.source, source) || !same_identity(&snapshot.target, target) {
-        return Err(GlowTargetLoweringError::StaleAttachment);
+        return Err(EffectTargetLoweringError::StaleAttachment);
     }
     let ([initial], [destination]) = (source, target) else {
-        return Err(GlowTargetLoweringError::UnsupportedTopology);
+        return Err(EffectTargetLoweringError::UnsupportedTopology);
     };
     if initial.name != destination.name {
-        return Err(GlowTargetLoweringError::UnsupportedTopology);
+        return Err(EffectTargetLoweringError::UnsupportedTopology);
     }
-    let effective = effective.ok_or(GlowTargetLoweringError::MissingEffectiveValue)?;
+    let effective = effective.ok_or(EffectTargetLoweringError::MissingEffectiveValue)?;
     if effective.attachment != initial.attachment {
-        return Err(GlowTargetLoweringError::StaleAttachment);
+        return Err(EffectTargetLoweringError::StaleAttachment);
     }
-    let EffectDefinition::Glow(authored_source) = initial.definition;
+    let authored_source = initial.definition;
     let copy_intent = destination
         .copy_provenance
         .filter(|copy| copy.source_attachment() == initial.attachment);
     let initial = effective.definition;
-    let EffectDefinition::Glow(destination) = destination.definition;
-    // Validate discrete source/radius schema even if only another scalar changes.
-    GlowUpdate::default()
-        .source(destination.source())
-        .radius(destination.radius())
-        .prepare(effective.definition)
-        .map_err(GlowTargetLoweringError::Parameter)?;
-    GlowUpdate::default()
-        .source(destination.source())
-        .radius(destination.radius())
-        .prepare(authored_source)
-        .map_err(GlowTargetLoweringError::Parameter)?;
-    let mut update = GlowUpdate::default();
+    let destination = destination.definition;
+    // The attachment kind and discrete parameters cannot change in-place.
+    use noon_core::EffectValue;
+    effective
+        .definition
+        .validate_effect_transition(destination)
+        .map_err(EffectTargetLoweringError::Parameter)?;
+    authored_source
+        .validate_effect_transition(destination)
+        .map_err(EffectTargetLoweringError::Parameter)?;
+    let mut update = EffectUpdate::default();
     // A copied method target describes edits relative to its captured baseline.
     // Current effective differences can come from another driver and must not
     // become additional target writes. The explicit mask also retains writes
     // whose authored value happens to equal their copied or effective value.
     let (baseline, writes_color, writes_radius, writes_intensity) = match copy_intent {
         Some(copy) => {
-            let EffectDefinition::Glow(copied_baseline) = copy.copied_definition();
+            let copied_baseline = copy.copied_definition();
             (
                 if method_target {
                     copied_baseline
                 } else {
                     initial
                 },
-                copy.writes_parameter(noon_core::GlowParameter::Color),
-                copy.writes_parameter(noon_core::GlowParameter::Radius),
-                copy.writes_parameter(noon_core::GlowParameter::Intensity),
+                copy.writes_parameter(noon_core::EffectParameter::Color),
+                copy.writes_parameter(noon_core::EffectParameter::Radius),
+                copy.writes_parameter(noon_core::EffectParameter::Intensity),
             )
         }
         None => (initial, false, false, false),
     };
-    if writes_color || baseline.color() != destination.color() {
-        update.color = Some(destination.color());
+    if let (EffectDefinition::Glow(baseline), EffectDefinition::Glow(destination)) =
+        (baseline, destination)
+    {
+        if writes_color || baseline.color() != destination.color() {
+            update.color = Some(destination.color());
+        }
+        if writes_intensity || baseline.intensity() != destination.intensity() {
+            update.intensity = Some(destination.intensity());
+        }
     }
     if writes_radius || baseline.radius() != destination.radius() {
         update.radius = Some(destination.radius());
     }
-    if writes_intensity || baseline.intensity() != destination.intensity() {
-        update.intensity = Some(destination.intensity());
-    }
     effective
         .parameter_channels(update)
-        .map_err(GlowTargetLoweringError::Parameter)
+        .map_err(EffectTargetLoweringError::Parameter)
 }
 
 fn same_identity(a: &[SemanticNodeId], b: &[SemanticAnimationEffectSnapshot]) -> bool {
@@ -141,13 +145,13 @@ pub(super) fn validate_sources(
     source: &noon_core::SemanticObjectState,
     target_id: SemanticNodeId,
     target: &noon_core::SemanticObjectState,
-) -> Result<(), GlowTargetLoweringError> {
+) -> Result<(), EffectTargetLoweringError> {
     for (id, state) in [(source_id, source), (target_id, target)] {
-        super::super::projection::validate_glow_source_profile(id, state, store)
-            .map_err(GlowTargetLoweringError::Profile)?;
+        super::super::projection::validate_effect_source_profile(id, state, store)
+            .map_err(EffectTargetLoweringError::Profile)?;
     }
     if source.content != target.content {
-        return Err(GlowTargetLoweringError::UnsupportedContentChange);
+        return Err(EffectTargetLoweringError::UnsupportedContentChange);
     }
     Ok(())
 }
@@ -172,8 +176,8 @@ pub(super) fn reserve<T: Copy + PartialEq>(
 pub(super) fn completion(
     values: &TrackValues,
     timing: TrackTiming,
-) -> Result<SemanticAnimationCompletion, GlowTargetLoweringError> {
-    let TrackValues::Glow {
+) -> Result<SemanticAnimationCompletion, EffectTargetLoweringError> {
+    let TrackValues::Effect {
         attachment,
         from,
         to,
@@ -184,13 +188,13 @@ pub(super) fn completion(
     };
     let update = from
         .sample(*to, values.terminal_progress_f64(timing))
-        .map_err(GlowTargetLoweringError::Timeline)?;
+        .map_err(EffectTargetLoweringError::Timeline)?;
     let endpoint = update
         .apply_to(noon_core::Glow::default())
-        .map_err(GlowTargetLoweringError::Parameter)?;
-    Ok(SemanticAnimationCompletion::Glow {
+        .map_err(EffectTargetLoweringError::Parameter)?;
+    Ok(SemanticAnimationCompletion::Effect {
         attachment: *attachment,
-        value: GlowTrackValue::from_definition(from.property(), endpoint).expect("same property"),
+        value: EffectTrackValue::from_definition(from.property(), endpoint).expect("same property"),
     })
 }
 
@@ -201,16 +205,16 @@ mod tests {
     #[test]
     fn empty_target_requires_the_exact_candidate_temporary_generation() {
         let attachment = SemanticNodeId::new(3, 7);
-        let definition = noon_core::Glow::new(GlowUpdate::default().intensity(0.0)).unwrap();
+        let definition = noon_core::Glow::new(EffectUpdate::default().intensity(0.0)).unwrap();
         let source = [SemanticAnimationEffectSnapshot {
             attachment,
             name: "glow".into(),
             definition: EffectDefinition::Glow(definition),
             copy_provenance: None,
         }];
-        let effective = Some(crate::CompiledGlow {
+        let effective = Some(crate::CompiledEffect {
             attachment,
-            definition,
+            definition: definition.into(),
         });
         let proof = HashSet::from([attachment]);
         let current = SemanticTransformEffectSnapshot {
@@ -235,9 +239,9 @@ mod tests {
             None,
             &source,
             &[],
-            Some(crate::CompiledGlow {
+            Some(crate::CompiledEffect {
                 attachment: SemanticNodeId::new(3, 6),
-                definition,
+                definition: definition.into(),
             }),
             false,
             &proof,
@@ -253,10 +257,10 @@ mod tests {
     #[test]
     fn glow_driver_ownership_is_parameter_local_and_symmetric_with_umbrella_tracks() {
         let object = ObjectId::new(17);
-        for glow in [
-            Property::GlowColor,
-            Property::GlowRadius,
-            Property::GlowIntensity,
+        for effect in [
+            Property::EffectColor,
+            Property::EffectRadius,
+            Property::EffectIntensity,
         ] {
             for umbrella in [
                 Property::Transform,
@@ -265,33 +269,33 @@ mod tests {
                 Property::CameraProfile,
             ] {
                 let mut driven = HashMap::new();
-                reserve(&mut driven, object, glow, 1_u32).unwrap();
+                reserve(&mut driven, object, effect, 1_u32).unwrap();
                 assert_eq!(
                     transform_driver_conflict(&driven, object, umbrella, 2),
                     Some(1)
                 );
                 driven.clear();
                 driven.insert(driver_key(object, umbrella), 1);
-                assert_eq!(reserve(&mut driven, object, glow, 2), Err(1));
-                assert!(!driven.contains_key(&driver_key(object, glow)));
+                assert_eq!(reserve(&mut driven, object, effect, 2), Err(1));
+                assert!(!driven.contains_key(&driver_key(object, effect)));
             }
         }
         let mut driven = HashMap::new();
         driven.insert(driver_key(object, Property::Position), 1_u32);
-        for (owner, glow) in [
-            (2, Property::GlowIntensity),
-            (3, Property::GlowColor),
-            (4, Property::GlowRadius),
+        for (owner, effect) in [
+            (2, Property::EffectIntensity),
+            (3, Property::EffectColor),
+            (4, Property::EffectRadius),
         ] {
-            reserve(&mut driven, object, glow, owner).unwrap();
+            reserve(&mut driven, object, effect, owner).unwrap();
         }
         assert_eq!(driven.len(), 4);
         assert_eq!(
-            reserve(&mut driven, object, Property::GlowIntensity, 5),
+            reserve(&mut driven, object, Property::EffectIntensity, 5),
             Err(2)
         );
         assert_eq!(
-            reserve(&mut driven, ObjectId::new(18), Property::GlowIntensity, 5),
+            reserve(&mut driven, ObjectId::new(18), Property::EffectIntensity, 5),
             Ok(())
         );
     }
@@ -304,12 +308,12 @@ mod tests {
             (driver_key(object, Property::WorldTransform), 2_u32),
         ]);
         assert_eq!(
-            transform_driver_conflict(&driven, object, Property::GlowIntensity, 1),
+            transform_driver_conflict(&driven, object, Property::EffectIntensity, 1),
             Some(2)
         );
         let driven = HashMap::from([
             (driver_key(object, Property::Position), 1_u32),
-            (driver_key(object, Property::GlowIntensity), 2_u32),
+            (driver_key(object, Property::EffectIntensity), 2_u32),
         ]);
         assert_eq!(
             transform_driver_conflict(&driven, object, Property::WorldTransform, 1),
