@@ -1863,6 +1863,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .expect("preflighted table layout scope remains a family");
                     written_slots.insert(scope);
                 }
+                SemanticMutation::SetCodeLayout { scope, layout } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let layout = layout.resolve(|node| resolve_node_ref(node, &committed_nodes));
+                    store
+                        .replace_semantic_code_layout(scope, layout)
+                        .expect("preflighted Code layout scope remains a family");
+                    written_slots.insert(scope);
+                }
                 SemanticMutation::ScopeSignal { scope, signal } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
                     let signal = resolve_node_ref(signal, &committed_nodes);

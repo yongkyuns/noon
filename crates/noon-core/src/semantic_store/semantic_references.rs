@@ -28,6 +28,8 @@ pub(crate) enum SemanticReferenceKind {
     GraphDependency,
     /// Retained table query identity outside ordinary painter membership.
     TableDependency,
+    /// Required ordinary node in one allocated Code layout declaration.
+    CodeDependency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,6 +286,13 @@ impl SemanticStore {
                     .map(|node| (node, SemanticReferenceKind::TableDependency)),
             );
         }
+        if let Some(layout) = self.code_layouts.get(&owner) {
+            references.extend(
+                layout
+                    .referenced_nodes()
+                    .map(|node| (node, SemanticReferenceKind::CodeDependency)),
+            );
+        }
         references
     }
 
@@ -327,7 +336,8 @@ impl SemanticStore {
                     | SemanticReferenceKind::AnimationTargetState
                     | SemanticReferenceKind::AnimationChild
                     | SemanticReferenceKind::GraphDependency
-                    | SemanticReferenceKind::TableDependency => stack.push(reference.owner),
+                    | SemanticReferenceKind::TableDependency
+                    | SemanticReferenceKind::CodeDependency => stack.push(reference.owner),
                 }
             }
         }
@@ -496,7 +506,8 @@ impl SemanticStore {
                 | SemanticReferenceKind::AnimationTargetState
                 | SemanticReferenceKind::AnimationChild
                 | SemanticReferenceKind::GraphDependency
-                | SemanticReferenceKind::TableDependency => {
+                | SemanticReferenceKind::TableDependency
+                | SemanticReferenceKind::CodeDependency => {
                     self.remove_node_with_reverse_cleanup_inner(
                         reference.owner,
                         outcome,
@@ -555,6 +566,10 @@ impl SemanticStore {
                 .is_some_and(|graph| graph.references_node(target)),
             SemanticReferenceKind::TableDependency => self
                 .table_layouts
+                .get(&owner)
+                .is_some_and(|layout| layout.referenced_nodes().any(|node| node == target)),
+            SemanticReferenceKind::CodeDependency => self
+                .code_layouts
                 .get(&owner)
                 .is_some_and(|layout| layout.referenced_nodes().any(|node| node == target)),
             _ => outgoing_references(node)

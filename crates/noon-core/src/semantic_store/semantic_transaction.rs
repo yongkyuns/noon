@@ -10,15 +10,16 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, ManimCamera3DProfile, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticBarMetadata, SemanticClickAction, SemanticClickIndicate, SemanticDecimalNumber,
-    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
-    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
-    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
-    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
-    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
-    SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticStore, SemanticStoreError,
-    SemanticStyle, SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticBarMetadata, SemanticClickAction, SemanticClickIndicate, SemanticCodePanelGeometry,
+    SemanticDecimalNumber, SemanticFadeDirection, SemanticFadeEndpoint,
+    SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry,
+    SemanticScalarSignalTrack, SemanticScalarSignalTrackError, SemanticSceneOperationError,
+    SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
+    SemanticSignalValueKind, SemanticSpatialCompositionDomain, SemanticSpatialMaterial,
+    SemanticStore, SemanticStoreError, SemanticStyle, SemanticTransactionCodeLayout,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
     SemanticTransactionTableLayout, SemanticTransform, SemanticTransformInterpolation,
     SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
     TextPresentationBaseline, VectorPath,
@@ -234,6 +235,10 @@ pub enum SemanticMutation {
         scope: SemanticTransactionNodeRef,
         layout: SemanticTransactionTableLayout,
     },
+    SetCodeLayout {
+        scope: SemanticTransactionNodeRef,
+        layout: SemanticTransactionCodeLayout,
+    },
     /// Replace the observable direct-member list while retaining family identity.
     /// Pair with ordinary edge mutations in this same transaction. In-place
     /// removal/insertion/reorder does not replace a captured list.
@@ -319,6 +324,9 @@ impl SemanticMutation {
             Self::SetTableLayout { scope, layout } => std::iter::once(*scope)
                 .chain(layout.node_references())
                 .collect(),
+            Self::SetCodeLayout { scope, layout } => std::iter::once(*scope)
+                .chain(layout.node_references())
+                .collect(),
             Self::ReplaceMemberContainer { family } => vec![*family],
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
@@ -397,6 +405,7 @@ impl SemanticMutation {
             | Self::SetForegroundMembers { scope, .. }
             | Self::SetGraphDeclaration { scope, .. } => scope.existing(),
             Self::SetTableLayout { scope, .. } => scope.existing(),
+            Self::SetCodeLayout { scope, .. } => scope.existing(),
             Self::ReplaceMemberContainer { family }
             | Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
@@ -471,6 +480,7 @@ impl SemanticMutation {
             | Self::ReplaceMemberContainer { .. }
             | Self::SetGraphDeclaration { .. } => None,
             Self::SetTableLayout { .. } => None,
+            Self::SetCodeLayout { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -1428,6 +1438,20 @@ impl SemanticMutationTransaction {
         layout: impl Into<SemanticTransactionTableLayout>,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::SetTableLayout {
+            scope: scope.into(),
+            layout: layout.into(),
+        });
+        self
+    }
+
+    /// Retain allocated Code slots and their ordinary named dependencies.
+    /// Pending panel guards resolve in the same resource scope as the panel.
+    pub fn set_code_layout(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        layout: impl Into<SemanticTransactionCodeLayout>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetCodeLayout {
             scope: scope.into(),
             layout: layout.into(),
         });
@@ -2401,6 +2425,7 @@ impl SemanticMutationTransaction {
         let mut staged_signal_scope_membership = HashSet::new();
         let mut staged_foreground = HashMap::new();
         let mut staged_table_layouts = HashMap::new();
+        let mut staged_code_layouts = HashMap::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -3550,6 +3575,84 @@ impl SemanticMutationTransaction {
                     changed.push(previous != Some(layout.clone()));
                     staged_table_layouts.insert(*scope, layout.clone());
                 }
+                SemanticMutation::SetCodeLayout { scope, layout } => {
+                    catalog.ensure_family(*scope, index)?;
+                    catalog.ensure_object(layout.nodes().panel, index)?;
+                    for family in layout.family_references() {
+                        catalog.ensure_family(family, index)?;
+                    }
+                    let invalid = |reason| SemanticMutationTransactionError::InvalidCodeLayout {
+                        index,
+                        scope: *scope,
+                        reason,
+                    };
+                    if !layout.is_valid() {
+                        return Err(invalid("allocated row metrics are invalid"));
+                    }
+                    if layout.node_references().any(|node| match node {
+                        SemanticTransactionNodeRef::Existing(node) => removed_nodes.contains(&node),
+                        SemanticTransactionNodeRef::Pending(token) => {
+                            removed_pending.contains(&token)
+                        }
+                    }) {
+                        return Err(invalid(
+                            "a required layout node is removed by this transaction",
+                        ));
+                    }
+                    match layout.panel_geometry() {
+                        SemanticCodePanelGeometry::Existing(handle) => {
+                            // The original path may have retired after a panel edit.
+                            // A copied guard must remain invalid rather than silently
+                            // acquiring the replacement panel's geometry identity.
+                            if handle.arena != store.geometry_resources().namespace() {
+                                return Err(invalid(
+                                    "panel geometry guard belongs to another store",
+                                ));
+                            }
+                        }
+                        SemanticCodePanelGeometry::Pending(resource) => {
+                            if !resource.belongs_to(self.id)
+                                || self.pending_geometry_path(resource).is_none()
+                            {
+                                return Err(SemanticMutationTransactionError::UnknownPendingGeometryResource {
+                                    index,
+                                    resource,
+                                });
+                            }
+                            let panel_resource = match layout.nodes().panel {
+                                SemanticTransactionNodeRef::Pending(panel) => pending_creations
+                                    .get(&panel)
+                                    .and_then(|creation| match creation {
+                                        SemanticNodeCreation::PendingPathObject {
+                                            state, ..
+                                        } => Some(state.resource()),
+                                        _ => None,
+                                    }),
+                                SemanticTransactionNodeRef::Existing(_) => None,
+                            };
+                            if panel_resource != Some(resource) {
+                                return Err(invalid(
+                                    "pending geometry guard does not name the panel path",
+                                ));
+                            }
+                        }
+                    }
+                    let previous = match staged_code_layouts.get(scope).cloned() {
+                        Some(previous) => Some(previous),
+                        None => match scope {
+                            SemanticTransactionNodeRef::Existing(scope) => store
+                                .semantic_code_layout(*scope)
+                                .map_err(|error| SemanticMutationTransactionError::Node {
+                                    index,
+                                    error,
+                                })?
+                                .map(SemanticTransactionCodeLayout::from),
+                            SemanticTransactionNodeRef::Pending(_) => None,
+                        },
+                    };
+                    changed.push(previous != Some(layout.clone()));
+                    staged_code_layouts.insert(*scope, layout.clone());
+                }
                 SemanticMutation::ReplaceMemberContainer { family } => {
                     catalog.ensure_membership_owner(*family, index)?;
                     changed.push(
@@ -4480,6 +4583,11 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         scope: SemanticTransactionNodeRef,
     },
+    InvalidCodeLayout {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+        reason: &'static str,
+    },
     DuplicateForegroundScope {
         index: usize,
         scope: SemanticTransactionNodeRef,
@@ -4900,6 +5008,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidTableLayout { index, scope } => write!(
                 formatter,
                 "semantic transaction mutation {index} has invalid Table layout for {scope:?}"
+            ),
+            Self::InvalidCodeLayout { index, scope, reason } => write!(
+                formatter,
+                "semantic transaction mutation {index} has invalid Code layout for {scope:?}: {reason}"
             ),
             Self::DuplicateGraphDeclaration { index, scope } => write!(
                 formatter,

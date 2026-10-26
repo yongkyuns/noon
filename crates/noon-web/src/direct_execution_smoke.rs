@@ -11,6 +11,17 @@ use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
 
+/// Source-row bands use the same Rust Code layout on native and direct WASM.
+#[wasm_bindgen(js_name = createCodeLineHighlightRenderer)]
+pub async fn create_code_line_highlight_renderer(
+    canvas: OffscreenCanvas,
+    highlighted: bool,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::code_line_highlight::session(highlighted).map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct Rust/WASM first-presented-frame proof shared with native semantics:
 /// thirty-two individually admitted, 1/16-second animated endpoints.
 struct OverdueShortAnimation {

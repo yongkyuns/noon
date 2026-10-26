@@ -37,8 +37,9 @@ impl SemanticMutationTransaction {
     ///
     /// The returned token is not a geometry handle and cannot be rendered or
     /// queried through a store. It can be consumed only by the transaction-only
-    /// `SemanticNodeCreation::PendingPathObject` declaration; the prepared
-    /// resource publication scope resolves that declaration atomically at commit.
+    /// `SemanticNodeCreation::PendingPathObject` declaration and its Code layout
+    /// identity guard; the prepared resource publication scope resolves both
+    /// atomically at commit.
     pub fn stage_geometry_path(
         &mut self,
         path: VectorPath,
@@ -130,6 +131,10 @@ impl SemanticMutationTransaction {
         final_states: &HashMap<SemanticLocalNodeToken, SemanticPendingPathObject>,
     ) {
         for mutation in &mut self.mutations {
+            if let SemanticMutation::SetCodeLayout { layout, .. } = mutation {
+                layout.materialize_panel_geometry(|token| handles[&token]);
+                continue;
+            }
             let SemanticMutation::AddNode { token, creation } = mutation else {
                 continue;
             };

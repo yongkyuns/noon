@@ -120,6 +120,10 @@ impl Default for GeometryResourceArena {
 }
 
 impl GeometryResourceArena {
+    pub(crate) const fn namespace(&self) -> u64 {
+        self.namespace
+    }
+
     pub(crate) fn fork_namespace(&mut self) -> u64 {
         self.namespace = next_geometry_arena();
         self.namespace

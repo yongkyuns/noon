@@ -215,8 +215,8 @@ pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
 pub use camera_authoring::CameraAutoFrame;
 #[cfg(feature = "code")]
 pub use code_display::{
-    Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,
-    CodeParagraphConfig,
+    Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeHighlightOptions,
+    CodeOptions, CodeParagraphConfig,
 };
 pub use composite_entry::CompositeEntryHandle;
 #[cfg(all(feature = "native-text", feature = "latex"))]
@@ -412,8 +412,8 @@ pub mod prelude {
     };
     #[cfg(feature = "code")]
     pub use crate::{
-        Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,
-        CodeParagraphConfig,
+        Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeHighlightOptions,
+        CodeOptions, CodeParagraphConfig,
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,

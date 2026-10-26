@@ -28,10 +28,11 @@ class CodeHandle:
     def __init__(self, numbers=True):
         self.lines = Family(2, [types.SimpleNamespace(_semantic_handle=Handle(10 + i)) for i in range(3)])
         self.panel = Family(3)
+        self.regions = Family(5)
         self.numbers = Family(4, [types.SimpleNamespace(_semantic_handle=Handle(20 + i)) for i in range(3)]) if numbers else None
         self.root = Handle(1)
         self.root.members = {code._handle_key(family): family
-                            for family in (self.panel, self.lines, self.numbers) if family is not None}
+                            for family in (self.panel, self.regions, self.lines, self.numbers) if family is not None}
         self.source_reads, self.number_reads = 0, 0
 
     def family(self):
@@ -42,6 +43,9 @@ class CodeHandle:
 
     def background(self):
         return self.panel
+
+    def highlights(self):
+        return self.regions
 
     def lineNumbers(self):
         return self.numbers
@@ -76,6 +80,8 @@ class CodeFacadeTests(unittest.TestCase):
         self.handle = CodeHandle()
         self.context = object()
         self.options = []
+        self.highlight_options = []
+        self.region_handles = []
 
         def options(*args):
             result = Options(*args)
@@ -87,6 +93,16 @@ class CodeFacadeTests(unittest.TestCase):
             wrapper._semantic_member_wrappers = handle.members
             wrapper._canonical_live_target_context = context
 
+        def highlight_options(*args):
+            result = Options(*args)
+            self.highlight_options.append(result)
+            return result
+
+        def region(*_args):
+            result = Handle(100 + len(self.region_handles))
+            self.region_handles.append(result)
+            return result
+
         self.patches = [
             patch.object(code, "_new_code_options", side_effect=options),
             patch.object(code, "_create_code", side_effect=lambda *_: self.handle),
@@ -95,6 +111,9 @@ class CodeFacadeTests(unittest.TestCase):
             patch.object(code, "_attach_shared_family", side_effect=attach),
             patch.object(code, "_code_styles_list", return_value=["vim", "monokai"]),
             patch.object(code, "_code_languages_list", return_value=["Python", "Rust"]),
+            patch.object(code, "_new_highlight_options", side_effect=highlight_options),
+            patch.object(code, "_get_highlighted_lines", side_effect=region),
+            patch.object(code, "_highlight_lines", side_effect=region),
         ]
         for patcher in self.patches:
             patcher.start()
@@ -111,6 +130,7 @@ class CodeFacadeTests(unittest.TestCase):
         self.assertFalse(self.options[0].freed)
         self.assertIs(value.code_lines, self.handle.lines)
         self.assertIs(value.background, self.handle.panel)
+        self.assertIs(value.highlights, self.handle.regions)
         self.assertTrue(all(isinstance(line, code.Text) for line in value.code_lines.submobjects))
         self.assertEqual([line.text for line in value.code_lines.submobjects], self.handle.lineSources())
         self.assertEqual(value.line_numbers.submobjects[1].text, "10")
@@ -176,6 +196,75 @@ class CodeFacadeTests(unittest.TestCase):
         self.assertEqual(code.Code.get_languages_list(), ["Python", "Rust"])
         with self.assertRaisesRegex(NotImplementedError, "native named themes"):
             code.Code.get_pygments_style("vim")
+
+    def test_line_regions_forward_native_defaults_and_preserve_attached_alias(self):
+        value = code.Code(code_string="x")
+        detached = value.get_highlighted_lines(2)
+        self.assertIsInstance(detached, code._compat.Rectangle)
+        self.assertIs(detached._canonical_live_target_context, self.context)
+        self.assertEqual(self.highlight_options[0].args, (False,))
+        self.assertEqual(self.highlight_options[0].calls, {})
+        code._get_highlighted_lines.assert_called_once_with(
+            self.context, self.handle, 2.0, None, self.highlight_options[0])
+        self.assertEqual(value.highlights.submobjects, [])
+
+        attached = value.highlight_lines(0, 2, include_line_numbers=True,
+                                         padding=0.08, color=noon.BLUE, fill_opacity=0.35)
+        self.assertIs(value.highlights.submobjects[0], attached)
+        self.assertEqual(self.highlight_options[1].args, (True,))
+        self.assertEqual(self.highlight_options[1].calls, {
+            "setPadding": (0.08,), "setFillOpacity": (0.35,),
+            "setColor": (noon.BLUE.red, noon.BLUE.green, noon.BLUE.blue, noon.BLUE.alpha),
+        })
+        code._highlight_lines.assert_called_once_with(
+            self.context, self.handle, 0.0, 2.0, self.highlight_options[1])
+        attached.annotation = "retained ordinary rectangle"
+        value._rehydrate_semantic_family_handle()
+        self.assertIs(value.highlights.submobjects[0], attached)
+        self.assertEqual(attached.annotation, "retained ordinary rectangle")
+
+    def test_line_region_argument_shapes_fail_before_native_admission(self):
+        value = code.Code(code_string="x")
+        cases = [
+            ((True,), {}, TypeError), ((1.5,), {}, TypeError), (("1",), {}, TypeError),
+            ((0, False), {}, TypeError), ((0, 2.5), {}, TypeError),
+            ((0,), {"include_line_numbers": 1}, TypeError),
+            ((0,), {"padding": True}, TypeError),
+            ((0,), {"fill_opacity": "0.2"}, TypeError),
+            ((10 ** 1000,), {}, ValueError), ((0, 10 ** 1000), {}, ValueError),
+            ((0,), {"padding": 10 ** 1000}, ValueError),
+        ]
+        for args, kwargs, expected in cases:
+            with self.subTest(args=args, kwargs=kwargs), self.assertRaises(expected):
+                value.highlight_lines(*args, **kwargs)
+        code._highlight_lines.assert_not_called()
+        code._new_highlight_options.assert_not_called()
+
+    def test_line_region_bounds_and_style_validation_remain_native(self):
+        value = code.Code(code_string="x")
+        value.get_highlighted_lines(-1, 2 ** 32, padding=-1, fill_opacity=float("inf"))
+        self.assertEqual(code._get_highlighted_lines.call_args.args[2:4], (-1.0, float(2 ** 32)))
+        self.assertEqual(self.highlight_options[0].calls["setPadding"], (-1.0,))
+        self.assertEqual(self.highlight_options[0].calls["setFillOpacity"], (float("inf"),))
+
+    def test_region_configuration_frees_only_unconsumed_options(self):
+        value = code.Code(code_string="x")
+        rejected = Options()
+
+        def reject_color(*_args):
+            raise ValueError("invalid native color")
+
+        rejected.setColor = reject_color
+        with patch.object(code, "_new_highlight_options", return_value=rejected), \
+                self.assertRaisesRegex(ValueError, "invalid native color"):
+            value.highlight_lines(0, color=noon.BLUE)
+        self.assertTrue(rejected.freed)
+        code._highlight_lines.assert_not_called()
+        with patch.object(code, "_highlight_lines", side_effect=ValueError("invalid native range")), \
+                self.assertRaisesRegex(ValueError, "invalid native range"):
+            value.highlight_lines(0)
+        self.assertFalse(self.highlight_options[0].freed)
+        self.assertEqual(value.highlights.submobjects, [])
 
 
 if __name__ == "__main__":

@@ -5,6 +5,10 @@ import { PNG } from "pngjs";
 import { qualifyPairedAuthoring, qualifyPythonPlayback } from "./paired-authoring-qualification.mjs";
 
 const artifactDirectory = process.env.NOON_CODE_ARTIFACTS ?? "code-artifacts";
+const rowExample = await readFile(new URL("../web/python/examples/code_line_highlight.py", import.meta.url), "utf8");
+const rowControl = rowExample.replace(/^        code\.highlight_lines\(.*\)\n/gm, "");
+assert.notEqual(rowControl, rowExample, "row control must remove the two decorations");
+const rowControls = new Map();
 
 async function qualifyOpacity(context, baseUrl, expectedBackend) {
   const page = await context.newPage();
@@ -13,6 +17,7 @@ class CodeOpacity(Scene):
     def construct(self):
         block = Code(code_string='return 42\\n\\tprint("ready")', language="python",
                      formatter_style="friendly", background="window")
+        block.highlight_lines(0, fill_opacity=1)
         self.add(block)
         self.wait(0.05)
         block.set_opacity(0)
@@ -45,7 +50,7 @@ class CodeOpacity(Scene):
       return pixels;
     };
     assert.ok(foreground(frames[0]) > 1000, "opacity test must begin with rendered Code");
-    assert.equal(foreground(frames[1]), 0, "opacity zero must hide text, numbers, panel and window controls");
+    assert.equal(foreground(frames[1]), 0, "opacity zero must hide text, numbers, panel, window controls and row highlights");
     assert.ok(frames[0].data.equals(frames[2].data), "restoring opacity must recover identical highlighted pixels");
     return { hiddenForegroundPixels: 0, restoredPixelsIdentical: true };
   } finally {
@@ -57,10 +62,43 @@ class CodeOpacity(Scene):
 // Python worker. They do not claim Pygments or Manim raster-oracle equivalence.
 await qualifyPairedAuthoring({
   artifactDirectory,
-  cases: [{
-    id: "code-block", file: "code_block.py", scene: "CodeBlocks",
-    factory: "createCodeRenderer", objectCount: 24,
-  }],
+  cases: [
+    {
+      id: "code-block", file: "code_block.py", scene: "CodeBlocks",
+      factory: "createCodeRenderer", objectCount: 24,
+    },
+    {
+      id: "code-row-control", source: rowControl, scene: "CodeLineHighlights",
+      factory: "createCodeLineHighlightRenderer", factoryArgs: [false], objectCount: 14,
+    },
+    {
+      id: "code-row-highlights", source: rowExample, scene: "CodeLineHighlights",
+      factory: "createCodeLineHighlightRenderer", factoryArgs: [true], objectCount: 16,
+    },
+  ],
+  async qualifyPixels({ fixture, backend, rust }) {
+    if (fixture.id === "code-row-control") rowControls.set(backend, rust);
+    if (fixture.id !== "code-row-highlights") return {};
+    const control = rowControls.get(backend);
+    assert.ok(control, "row highlights must be qualified with their undecorated control");
+    let changed = 0;
+    let opaqueGlyphPixels = 0;
+    for (let offset = 0; offset < rust.data.length; offset += 4) {
+      const before = control.data.subarray(offset, offset + 4);
+      const after = rust.data.subarray(offset, offset + 4);
+      if (!before.equals(after)) changed++;
+      // Full-coverage monokai foreground is an independent painter-order check:
+      // a band drawn over glyphs would tint these pixels, even if both frontends
+      // agreed on the incorrect image. Antialiased edges may legitimately blend.
+      if (before[0] === 248 && before[1] === 248 && before[2] === 242) {
+        assert.ok(before.equals(after), "source glyph interiors must remain above the bands");
+        opaqueGlyphPixels++;
+      }
+    }
+    assert.ok(changed > 2_000, "row bands must be visible over the opaque panel");
+    assert.ok(opaqueGlyphPixels > 50, "painter-order check must sample rendered source glyphs");
+    return { changedPixelsFromControl: changed, unchangedOpaqueGlyphPixels: opaqueGlyphPixels };
+  },
   async prepareContext(context) {
     if (!process.env.NOON_PYODIDE_ROOT) return;
     const worker = await readFile(new URL("../web/python-worker.source.js", import.meta.url), "utf8");

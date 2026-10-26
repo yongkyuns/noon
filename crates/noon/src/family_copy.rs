@@ -218,6 +218,7 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
     let mut edges = Vec::new();
     let mut graph_declarations = Vec::new();
     let mut table_layouts = Vec::new();
+    let mut code_layouts = Vec::new();
     let mut inset_views = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
     for target in references {
@@ -305,6 +306,14 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             {
                 queue.extend(layout.referenced_nodes());
                 table_layouts.push((id, layout));
+            }
+            if let Some(layout) = store
+                .borrow()
+                .semantic_code_layout(id)
+                .map_err(AuthoringError::from)?
+            {
+                queue.extend(layout.referenced_nodes());
+                code_layouts.push((id, layout));
             }
         }
         queue.extend(members.iter().rev().copied());
@@ -419,6 +428,14 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             }),
         );
     }
+    for (source_family, layout) in code_layouts {
+        transaction.set_code_layout(
+            copied[&source_family],
+            noon_core::SemanticTransactionCodeLayout::map_existing(layout, |node| {
+                copied[&node].into()
+            }),
+        );
+    }
     Ok((
         transaction,
         PendingSemanticCopy {
@@ -462,6 +479,12 @@ fn graph_dependency_copy_rows<E: From<AuthoringError>>(
         if matches!(node.kind(), SemanticNodeKind::Family(_)) {
             if let Some(layout) = store
                 .semantic_table_layout(node_id)
+                .map_err(AuthoringError::from)?
+            {
+                stack.extend(layout.referenced_nodes());
+            }
+            if let Some(layout) = store
+                .semantic_code_layout(node_id)
                 .map_err(AuthoringError::from)?
             {
                 stack.extend(layout.referenced_nodes());

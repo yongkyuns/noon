@@ -1564,6 +1564,53 @@ impl<'a> LiveSession<'a> {
         self.layout_at_transform(mobject, transform, publication)
     }
 
+    /// Observe the planar pose and priority usable with authored local content.
+    /// Detached content keeps its authored pose; reachable content uses the
+    /// current publication. This does not capture paint or persistent drivers.
+    #[cfg(feature = "code")]
+    pub(crate) fn effective_content_placement(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<(noon_core::SemanticTransform2_5D, f64), LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let store = self.store.borrow();
+        self.session.require_published_store(&store)?;
+        let state = store
+            .semantic_object_state_checked(mobject.node_id())
+            .map_err(crate::AuthoringError::from)?;
+        let authored = state
+            .transform
+            .as_planar()
+            .ok_or(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+            ))?;
+        if !self.session.semantic_object_is_reachable(mobject.node_id()) {
+            return Ok((authored, state.z_index()));
+        }
+        let observed = self
+            .session
+            .effective_semantic_object(&store, mobject.node_id())?;
+        if !observed.authored_content_layout_applicable()
+            || observed.object.spatial.is_some()
+            || self
+                .session
+                .effective_content_lease(mobject.node_id())
+                .is_some()
+        {
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+            )
+            .into());
+        }
+        Ok((
+            crate::semantic_mobject::semantic_transform_with_effective_affine(
+                authored,
+                observed.object.transform,
+            ),
+            observed.object.z_index,
+        ))
+    }
+
     fn validate_manim_rotation_pivot(
         &self,
         target: &Mobject,

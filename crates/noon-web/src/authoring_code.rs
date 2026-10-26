@@ -4,6 +4,7 @@ use crate::authoring_error::{js_error, AuthoringFailure};
 use crate::{
     WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore, WasmNativeFontFace,
 };
+use std::ops::Range;
 use wasm_bindgen::prelude::*;
 
 fn invalid_option(name: &'static str, value: f64) -> JsValue {
@@ -32,6 +33,75 @@ fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<noon::Color, JsV
         blue as f32,
         alpha as f32,
     ))
+}
+
+fn line_index(name: &'static str, value: &JsValue) -> Result<usize, JsValue> {
+    let value = value.as_f64().ok_or_else(|| {
+        js_error(noon::CodeAuthoringError::InvalidOption {
+            name,
+            value: "expected a nonnegative integer".into(),
+        })
+    })?;
+    // Keep the language-boundary value until checked. A usize parameter would
+    // silently truncate fractions, wrap large integers, and coerce booleans.
+    if !value.is_finite() || value.fract() != 0.0 || !(0.0..=f64::from(u32::MAX)).contains(&value) {
+        return Err(invalid_option(name, value));
+    }
+    Ok(value as usize)
+}
+
+pub(crate) fn line_range(start: &JsValue, stop: &JsValue) -> Result<Range<usize>, JsValue> {
+    let start = line_index("start", start)?;
+    let stop = if stop.is_null() || stop.is_undefined() {
+        (start as u32)
+            .checked_add(1)
+            .map(|stop| stop as usize)
+            .ok_or_else(|| invalid_option("stop", start as f64 + 1.0))?
+    } else {
+        line_index("stop", stop)?
+    };
+    Ok(start..stop)
+}
+
+/// Optional language arguments over the shared native line-region defaults.
+#[wasm_bindgen]
+pub struct WasmCodeHighlightOptions {
+    pub(crate) options: noon::CodeHighlightOptions,
+}
+
+#[wasm_bindgen]
+impl WasmCodeHighlightOptions {
+    #[wasm_bindgen(constructor)]
+    pub fn new(include_line_numbers: bool) -> Self {
+        Self {
+            options: noon::CodeHighlightOptions {
+                include_line_numbers,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[wasm_bindgen(js_name = setPadding)]
+    pub fn set_padding(&mut self, padding: f64) {
+        self.options.padding = padding;
+    }
+
+    #[wasm_bindgen(js_name = setFillOpacity)]
+    pub fn set_fill_opacity(&mut self, opacity: f64) {
+        self.options.fill_opacity = opacity;
+    }
+
+    #[wasm_bindgen(js_name = setColor)]
+    pub fn set_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options.color = color(red, green, blue, alpha)?;
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
@@ -153,7 +223,7 @@ impl WasmCodeOptions {
 
 #[wasm_bindgen]
 pub struct WasmCodeHandle {
-    code: noon::Code,
+    pub(crate) code: noon::Code,
 }
 
 impl WasmCodeHandle {
@@ -207,6 +277,36 @@ impl WasmCodeHandle {
 
     pub fn background(&self) -> WasmAuthoringFamilyHandle {
         WasmAuthoringFamilyHandle::from_semantic_family(self.code.background().clone())
+    }
+
+    pub fn highlights(&self) -> WasmAuthoringFamilyHandle {
+        WasmAuthoringFamilyHandle::from_semantic_family(self.code.highlights().clone())
+    }
+
+    #[wasm_bindgen(js_name = getHighlightedLines)]
+    pub fn get_highlighted_lines(
+        &self,
+        start: JsValue,
+        stop: JsValue,
+        options: WasmCodeHighlightOptions,
+    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+        self.code
+            .get_highlighted_lines(line_range(&start, &stop)?, options.options)
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = highlightLines)]
+    pub fn highlight_lines(
+        &self,
+        start: JsValue,
+        stop: JsValue,
+        options: WasmCodeHighlightOptions,
+    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+        self.code
+            .highlight_lines(line_range(&start, &stop)?, options.options)
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = lineAt)]

@@ -10,6 +10,7 @@ const self = {};
 vm.runInNewContext(bindings, {
   self,
   WasmCodeOptions: class { constructor(...args) { this.args = args; } },
+  WasmCodeHighlightOptions: class { constructor(...args) { this.args = args; } },
   noonCodeStylesList: () => ["vim"],
   noonCodeLanguagesList: () => ["Python"],
   authoringStore: { createCode: (...args) => calls.push(["store", ...args]) },
@@ -25,4 +26,22 @@ const family = { asCode: () => "retained code handle" };
 assert.equal(self.noonCodeFromFamily(family), "retained code handle");
 assert.deepEqual(self.noonCodeStylesList(), ["vim"]);
 assert.deepEqual(self.noonCodeLanguagesList(), ["Python"]);
-console.log("✓ Code worker forwards typed construction and retained family queries");
+const regionOptions = self.noonCodeHighlightOptions(true);
+assert.deepEqual(Array.from(regionOptions.args), [true]);
+const code = {
+  getHighlightedLines: (...args) => calls.push(["detached", ...args]),
+  highlightLines: (...args) => calls.push(["attached", ...args]),
+};
+context.liveGetHighlightedCodeLines = (...args) => calls.push(["live detached", ...args]);
+context.liveHighlightCodeLines = (...args) => calls.push(["live attached", ...args]);
+self.noonGetHighlightedCodeLines(null, code, 1, undefined, regionOptions);
+self.noonHighlightCodeLines(null, code, 1, 3, regionOptions);
+self.noonGetHighlightedCodeLines(context, code, 1, undefined, regionOptions);
+self.noonHighlightCodeLines(context, code, 1, 3, regionOptions);
+assert.deepEqual(calls.slice(2), [
+  ["detached", 1, undefined, regionOptions],
+  ["attached", 1, 3, regionOptions],
+  ["live detached", code, 1, undefined, regionOptions],
+  ["live attached", code, 1, 3, regionOptions],
+]);
+console.log("✓ Code worker forwards construction, retained queries and cold/live line regions");

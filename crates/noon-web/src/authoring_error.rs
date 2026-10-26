@@ -108,6 +108,12 @@ impl From<noon::CodeAuthoringError> for AuthoringFailure {
             Highlight(_) => Self::new("unsupported_operation", "code.highlight", error),
             InvalidStructure => Self::new("invalid_input", "code.invalid_structure", error),
             LineOutOfRange { .. } => Self::new("invalid_input", "code.line_out_of_range", error),
+            InvalidLineRange { .. } => Self::new("invalid_input", "code.invalid_line_range", error),
+            UnsupportedLineRegion(_) => Self::new(
+                "unsupported_operation",
+                "code.unsupported_line_region",
+                error,
+            ),
             Text(error) => error.into(),
             TextPart(error) => error.into(),
             Semantic(error) => error.into(),

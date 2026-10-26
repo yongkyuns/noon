@@ -554,6 +554,7 @@ fn validate_mutations(
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
                 | SemanticMutation::SetTableLayout { .. }
+                | SemanticMutation::SetCodeLayout { .. }
                 | SemanticMutation::AddMember { .. }
                 | SemanticMutation::RemoveMember { .. }
                 | SemanticMutation::ReorderMember { .. }
@@ -1461,6 +1462,7 @@ fn lower_semantic_publication(
             | SemanticMutation::SetForegroundMembers { .. }
             | SemanticMutation::SetGraphDeclaration { .. }
             | SemanticMutation::SetTableLayout { .. }
+            | SemanticMutation::SetCodeLayout { .. }
             | SemanticMutation::SetInset2DView { .. }
             | SemanticMutation::AddUpdater { .. }
             | SemanticMutation::RemoveUpdater { .. }

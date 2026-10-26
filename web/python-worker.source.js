@@ -26,6 +26,7 @@ import initNoonWeb, {
   WasmCompositeRows,
   WasmTableOptions,
   WasmCodeOptions,
+  WasmCodeHighlightOptions,
   noonCodeStylesList,
   noonCodeLanguagesList,
   noonLinearTransformationPathArc,
@@ -374,12 +375,19 @@ async function initializePyodide() {
   };
   self.noonTableOptions = (...args) => new WasmTableOptions(...args);
   self.noonCodeOptions = (...args) => new WasmCodeOptions(...args);
+  self.noonCodeHighlightOptions = (...args) => new WasmCodeHighlightOptions(...args);
   self.noonCodeFromFamily = (family) => family.asCode();
   self.noonCodeStylesList = () => noonCodeStylesList();
   self.noonCodeLanguagesList = () => noonCodeLanguagesList();
   self.noonCreateAuthoringCodeHandle = (source, options, context) =>
     context == null ? authoringStore.createCode(source, options)
       : context.liveCreateCode(source, options);
+  self.noonGetHighlightedCodeLines = (context, code, start, stop, options) =>
+    context == null ? code.getHighlightedLines(start, stop, options)
+      : context.liveGetHighlightedCodeLines(code, start, stop, options);
+  self.noonHighlightCodeLines = (context, code, start, stop, options) =>
+    context == null ? code.highlightLines(start, stop, options)
+      : context.liveHighlightCodeLines(code, start, stop, options);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)

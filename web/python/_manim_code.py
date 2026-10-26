@@ -1,12 +1,13 @@
 """Manim-shaped Code authoring over Noon’s shared Rust code and text pipeline."""
 from collections.abc import Mapping
+from numbers import Real
 from operator import index as _index
 from pathlib import Path
 
 from _noon_errors import engine_call
 import noon as _base
 import _manim_compat as _compat
-from _manim_semantic_handles import _attach_shared_family, _live_constructor_context
+from _manim_semantic_handles import _attach_shared_family, _attach_shared_handle, _live_constructor_context
 from _manim_typst import NativeFontFace, Text
 
 try:
@@ -15,9 +16,13 @@ try:
     from js import noonCodeFromFamily as _code_from_family
     from js import noonCodeStylesList as _code_styles_list
     from js import noonCodeLanguagesList as _code_languages_list
+    from js import noonCodeHighlightOptions as _new_highlight_options
+    from js import noonGetHighlightedCodeLines as _get_highlighted_lines
+    from js import noonHighlightCodeLines as _highlight_lines
 except ImportError:
     _new_code_options = _create_code = _code_from_family = None
     _code_styles_list = _code_languages_list = None
+    _new_highlight_options = _get_highlighted_lines = _highlight_lines = None
 
 
 def _integer(name, value):
@@ -27,6 +32,15 @@ def _integer(name, value):
         return _index(value)
     except TypeError as error:
         raise TypeError(f"{name} must be an integer") from error
+
+
+def _number(name, value):
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a number")
+    try:
+        return float(value)
+    except OverflowError as error:
+        raise ValueError(f"{name} is outside the host numeric range") from error
 
 
 def _config(name, defaults, supplied, allowed):
@@ -138,6 +152,7 @@ class Code(_compat.VGroup):
         _attach_shared_family(self, engine_call(handle.family), context)
         known = self._semantic_member_wrappers
         self.background = known[_handle_key(engine_call(handle.background))]
+        self.highlights = known[_handle_key(engine_call(handle.highlights))]
         self.code_lines = known[_handle_key(engine_call(handle.codeLines))]
         numbers = engine_call(handle.lineNumbers)
         if numbers is not None:
@@ -176,6 +191,72 @@ class Code(_compat.VGroup):
     def code_string(self):
         """The current normalized source as observed from retained Rust rows."""
         return "\n".join(str(source) for source in engine_call(self._code_handle.lineSources))
+
+    def get_highlighted_lines(
+        self, start, stop=None, *, include_line_numbers=False, padding=None,
+        color=None, fill_opacity=None,
+    ):
+        """Return a detached Rectangle for allocated source rows ``[start, stop)``.
+
+        Indices are zero-based, independent of displayed line numbers; omitted
+        ``stop`` selects one row. Blank rows retain their native layout slots.
+        ``padding`` is in the Code's local units. Omitted styling uses Rust's
+        defaults. Use this ordinary rectangle as a ``Transform`` target.
+        """
+        return self._line_region(start, stop, include_line_numbers, padding,
+                                 color, fill_opacity, attached=False)
+
+    def highlight_lines(
+        self, start, stop=None, *, include_line_numbers=False, padding=None,
+        color=None, fill_opacity=None,
+    ):
+        """Attach and return a native row-region Rectangle beneath the glyphs.
+
+        The region lives in ``highlights``, above the panel and below the source
+        and numbers. It follows ordinary Code transforms, copying and opacity.
+        Family opacity writes update the region's fill opacity.
+        Rows and options have the same meaning as ``get_highlighted_lines``;
+        moving individual glyphs does not change their allocated row slots.
+        """
+        return self._line_region(start, stop, include_line_numbers, padding,
+                                 color, fill_opacity, attached=True)
+
+    def _line_region(self, start, stop, include_line_numbers, padding,
+                     color, fill_opacity, *, attached):
+        operation = "Code.highlight_lines" if attached else "Code.get_highlighted_lines"
+        factory = _highlight_lines if attached else _get_highlighted_lines
+        if factory is None or _new_highlight_options is None:
+            raise RuntimeError("Code line regions require Noon’s shared Rust authoring runtime")
+        start = _number("start", _integer("start", start))
+        stop = None if stop is None else _number("stop", _integer("stop", stop))
+        if not isinstance(include_line_numbers, bool):
+            raise TypeError("include_line_numbers must be a bool")
+        padding = None if padding is None else _number("padding", padding)
+        fill_opacity = None if fill_opacity is None else _number("fill_opacity", fill_opacity)
+        color = None if color is None else _compat._as_color("color", color)
+        context = _live_constructor_context(operation, allow_unstarted=True)
+        options = engine_call(_new_highlight_options, include_line_numbers)
+        try:
+            if padding is not None:
+                engine_call(options.setPadding, padding)
+            if fill_opacity is not None:
+                engine_call(options.setFillOpacity, fill_opacity)
+            if color is not None:
+                engine_call(options.setColor, color.red, color.green, color.blue, color.alpha)
+        except BaseException:
+            options.free()
+            raise
+        # The shared operation consumes options, including rejected admissions.
+        handle = engine_call(factory, context, self._code_handle, start, stop, options)
+        region = object.__new__(_compat.Rectangle)
+        _attach_shared_handle(region, handle)
+        context = context if context is not None else getattr(self, "_canonical_live_target_context", None)
+        if context is not None:
+            region._canonical_live_target_context = context
+        if attached:
+            # This registry preserves Python aliases; Rust owns membership/order.
+            self.highlights._semantic_member_wrappers[_handle_key(handle)] = region
+        return region
 
     @staticmethod
     def get_styles_list():
