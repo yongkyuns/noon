@@ -1,6 +1,6 @@
 //! Shared native/direct-WASM counterpart of the Python pointer selection fixture.
 //! Selection is an explicit host/session policy, never an authored color mutation.
-use crate::{AnimationOptions, ExecutionSession, Mobject, RateFunction, Scene, BLUE, GREEN};
+use crate::{AnimationOptions, Mobject, RateFunction, Scene, BLUE, GREEN};
 
 pub fn scene() -> Result<Scene, String> {
     build(false).map(|(scene, _)| scene)
@@ -12,16 +12,16 @@ pub fn click_indicate_scene() -> Result<Scene, String> {
 }
 
 /// A moving version of the same fixture for paired displayed-state selection.
-pub fn moving_selection_session() -> Result<ExecutionSession, String> {
+pub fn moving_selection_session() -> Result<crate::SceneExecution, String> {
     moving_session(false)
 }
 
 /// Moving counterpart with source-authored click-to-Indicate declarations.
-pub fn moving_click_indicate_session() -> Result<ExecutionSession, String> {
+pub fn moving_click_indicate_session() -> Result<crate::SceneExecution, String> {
     moving_session(true)
 }
 
-fn moving_session(animated: bool) -> Result<ExecutionSession, String> {
+fn moving_session(animated: bool) -> Result<crate::SceneExecution, String> {
     let (scene, circle) = build(animated)?;
     let mut target = circle.target_editor().map_err(|error| error.to_string())?;
     target.shift(1.8, 0.0).map_err(|error| error.to_string())?;
@@ -39,7 +39,9 @@ fn moving_session(animated: bool) -> Result<ExecutionSession, String> {
         .live(&mut session)
         .play_animation(&animation)
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 fn build(animated: bool) -> Result<(Scene, Mobject), String> {
@@ -85,8 +87,8 @@ fn build(animated: bool) -> Result<(Scene, Mobject), String> {
     build().map_err(|e| e.to_string())
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
-    scene()?.execution_session().map_err(|e| e.to_string())
+pub fn session() -> Result<crate::SceneExecution, String> {
+    scene()?.into_execution().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -94,12 +96,12 @@ mod tests {
     #[test]
     fn moving_fixture_exposes_the_effective_midpoint_for_selection() {
         let mut session = super::moving_selection_session().unwrap();
-        let start = session.frame().objects[0].transform.translation.x;
+        let start = session.session().frame().objects[0].transform.translation.x;
         session.seek(1.0).unwrap();
-        let middle = session.frame().objects[0].transform.translation.x;
+        let middle = session.session().frame().objects[0].transform.translation.x;
         assert!((middle - start - 0.9).abs() < 1e-5);
         session.seek(1.5).unwrap();
-        let later = session.frame().objects[0].transform.translation.x;
+        let later = session.session().frame().objects[0].transform.translation.x;
         assert!((later - start - 1.35).abs() < 1e-5);
     }
 }

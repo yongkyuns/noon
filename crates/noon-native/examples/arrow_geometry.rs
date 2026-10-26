@@ -33,6 +33,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         short.family().into(),
         double.family().into(),
     ])?;
-    noon_native::run(scene.execution_session()?)?;
+    noon_native::run(scene.into_execution()?)?;
     Ok(())
 }

@@ -2,15 +2,15 @@
 
 use crate::plot_presentation::NumberLabelOptions;
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, Color, ExecutionSession,
-    LinearTransformationOptions, ManimNumberPlaneOptions, MobjectTarget, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, Color, LinearTransformationOptions,
+    ManimNumberPlaneOptions, MobjectTarget, RateFunction, Scene,
 };
 
 const SWAP_AXES: [f64; 4] = [0.0, 1.0, 1.0, 0.0];
 const STRETCH_X: [f64; 4] = [2.0, 0.0, 0.0, 1.0];
 const STRETCH_AFTER_SWAP: [f64; 4] = [0.0, 2.0, 1.0, 0.0];
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     build(|plane, options| {
         plane
             .add_coordinates(None, None, options, options)
@@ -22,7 +22,9 @@ pub fn session() -> Result<ExecutionSession, String> {
 /// The pinned Manim case uses DecimalNumber coordinates. The caller prepares
 /// its real TeX backend before construction; the runtime retains only glyphs.
 #[cfg(feature = "latex")]
-pub fn decimal_session(backend: &mut impl crate::LatexBackend) -> Result<ExecutionSession, String> {
+pub fn decimal_session(
+    backend: &mut impl crate::LatexBackend,
+) -> Result<crate::SceneExecution, String> {
     build(|plane, options| {
         let options = NumberLabelOptions {
             decimal_places: 1,
@@ -37,7 +39,7 @@ pub fn decimal_session(backend: &mut impl crate::LatexBackend) -> Result<Executi
 
 fn build(
     add_coordinates: impl FnOnce(&crate::ManimNumberPlane, &NumberLabelOptions) -> Result<(), String>,
-) -> Result<ExecutionSession, String> {
+) -> Result<crate::SceneExecution, String> {
     let plane = ManimNumberPlaneOptions {
         x_range: [-1.0, 1.0, 1.0],
         y_range: [-1.0, 1.0, 1.0],
@@ -173,7 +175,9 @@ fn build(
         .map_err(|error| error.to_string())?;
     }
     session.seek(0.0).map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 fn matrix_step<'a>(
@@ -229,8 +233,8 @@ mod tests {
     #[test]
     fn vector_ghosts_enter_at_their_authored_boundaries_and_seek_matches_forward_playback() {
         let mut forward = session().unwrap();
-        assert_eq!(forward.frame().objects.len(), 15);
-        let initial = forward.frame().clone();
+        assert_eq!(forward.session().frame().objects.len(), 15);
+        let initial = forward.session().frame().clone();
         let initial_count = present_count(&initial);
         let (square_index, _) = initial
             .objects
@@ -268,20 +272,20 @@ mod tests {
             "the initial vector must precede the axis swap"
         );
 
-        forward.advance_to(0.25).unwrap();
-        let after_first_ghost = forward.frame().clone();
+        forward.session_mut().advance_to(0.25).unwrap();
+        let after_first_ghost = forward.session().frame().clone();
         assert_eq!(present_count(&after_first_ghost), initial_count + 2);
-        forward.advance_to(0.75).unwrap();
-        let after_first_transform = forward.frame().clone();
+        forward.session_mut().advance_to(0.75).unwrap();
+        let after_first_transform = forward.session().frame().clone();
         assert_eq!(present_count(&after_first_transform), initial_count + 2);
-        forward.advance_to(1.0).unwrap();
-        let after_second_ghost = forward.frame().clone();
+        forward.session_mut().advance_to(1.0).unwrap();
+        let after_second_ghost = forward.session().frame().clone();
         assert_eq!(present_count(&after_second_ghost), initial_count + 4);
-        forward.advance_to(1.5).unwrap();
-        let endpoint = forward.frame().clone();
+        forward.session_mut().advance_to(1.5).unwrap();
+        let endpoint = forward.session().frame().clone();
         assert_eq!(present_count(&endpoint), initial_count + 4);
         assert_eq!(
-            forward.wake_state().timeline(),
+            forward.session().wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
 
@@ -297,11 +301,14 @@ mod tests {
         ] {
             sought.seek(time).unwrap();
             assert_eq!(
-                sought.frame(),
+                sought.session().frame(),
                 &expected,
                 "frame differs at authored time {time}"
             );
         }
-        assert_eq!(sought.wake_state().timeline(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            sought.session().wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
     }
 }

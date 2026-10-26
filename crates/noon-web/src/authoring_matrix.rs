@@ -149,5 +149,5 @@ pub async fn create_matrix_renderer(
     compiler: &mut crate::WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::matrix::session(compiler).map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

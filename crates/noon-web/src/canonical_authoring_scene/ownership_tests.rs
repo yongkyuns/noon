@@ -8,6 +8,172 @@ fn scene_with_circle() -> (CanonicalAuthoringScene, noon::Mobject) {
     (scene, circle)
 }
 
+fn clicked_glow_source() -> (
+    CanonicalAuthoringScene,
+    noon::Mobject,
+    crate::SemanticExecutionPlayer,
+) {
+    use noon_core::{
+        NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
+        NativePointerPosition,
+    };
+    let (mut context, mut circle) = scene_with_circle();
+    circle.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    circle.disable_stroke().unwrap();
+    context
+        .bind_click_glow_pulse(&circle, 2.0, noon_core::AnimationOptions::new())
+        .unwrap();
+    let mut player = context.take_execution_player(1.0, 41).unwrap();
+    player
+        .session_mut_for_test()
+        .configure_native_pointer_input(
+            NativePointerId {
+                source: 17,
+                pointer: 0,
+            },
+            1,
+        )
+        .unwrap();
+    let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(300.0, 150.0)).unwrap();
+    for (sequence, kind) in [
+        (
+            1,
+            NativePointerInputKind::Press {
+                position,
+                button: 0,
+            },
+        ),
+        (
+            2,
+            NativePointerInputKind::Release {
+                position,
+                button: 0,
+            },
+        ),
+    ] {
+        let session = player.session_mut_for_test();
+        let token = session.native_pointer_input_token().unwrap();
+        session
+            .submit_native_pointer_input(
+                &mut context.scene.integration_store().borrow_mut(),
+                &token,
+                NativePointerInput::new(
+                    sequence,
+                    token.pointer(),
+                    token.context(),
+                    NativeInputModifiers::default(),
+                    kind,
+                ),
+            )
+            .unwrap();
+    }
+    player.advance_interactions_delta_json(1_000.0).unwrap();
+    player.advance_interactions_delta_json(1_500.0).unwrap();
+    (context, circle, player)
+}
+
+#[test]
+fn source_release_retires_retained_handle_while_recovery_preserves_the_invocation() {
+    let (mut context, circle, player) = clicked_glow_source();
+    let attachment = circle.get_effect("glow").unwrap();
+    let identity = player.ownership_identity();
+    let frame = player.debug_frame_json();
+    context.return_execution_player(player).unwrap();
+
+    assert!(context.take_execution_player(f64::NAN, 42).is_err());
+    assert_eq!(context.live_execution_ownership(), "returned");
+    let recovered = context.take_execution_player(1.0, 41).unwrap();
+    assert_eq!(recovered.ownership_identity(), identity);
+    assert_eq!(recovered.debug_frame_json(), frame);
+    assert!(recovered.interactions_active_wasm());
+    assert_eq!(
+        circle.get_effect("glow").unwrap().node_id(),
+        attachment.node_id()
+    );
+    context.return_execution_player(recovered).unwrap();
+
+    context.retire_execution_source().unwrap();
+    let retained = context.active_live_player().unwrap();
+    assert_eq!(retained.ownership_identity(), identity);
+    assert_eq!(retained.time(), 0.0);
+    assert!(!retained.interactions_active_wasm());
+    assert!(circle.get_effect("glow").is_err());
+    assert!(attachment.authored_definition().is_err());
+    circle.state().unwrap();
+    context.retire_execution_source().unwrap();
+}
+
+#[test]
+fn stale_returned_source_cannot_discard_an_active_temporary_attachment() {
+    let (mut context, mut circle, player) = clicked_glow_source();
+    let attachment = circle.get_effect("glow").unwrap();
+    let identity = player.ownership_identity();
+    let frame = player.debug_frame_json();
+    context.return_execution_player(player).unwrap();
+    circle.shift(1.0, 0.0).unwrap();
+    let revision = context.scene.integration_store().borrow().scene_revision();
+
+    assert!(context.retire_execution_source().is_err());
+    assert!(context.prepare_execution_run().is_err());
+    assert!(context.take_execution_player(1.0, 42).is_err());
+    assert_eq!(context.live_execution_ownership(), "returned");
+    let retained = context.active_live_player().unwrap();
+    assert_eq!(retained.ownership_identity(), identity);
+    assert_eq!(retained.debug_frame_json(), frame);
+    assert!(retained.interactions_active_wasm());
+    assert_eq!(
+        context.scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(
+        circle.get_effect("glow").unwrap().node_id(),
+        attachment.node_id()
+    );
+    attachment.authored_definition().unwrap();
+}
+
+#[test]
+fn incomplete_source_discard_retires_its_exact_attachment_before_releasing_the_lease() {
+    let (mut context, circle, player) = clicked_glow_source();
+    let attachment = circle.get_effect("glow").unwrap();
+    let identity = player.ownership_identity();
+    context.discard_execution_player(player).unwrap();
+    assert!(context.player_ownership.is_unstarted());
+    assert!(circle.get_effect("glow").is_err());
+    assert!(attachment.authored_definition().is_err());
+    let rebuilt = context.take_execution_player(1.0, 42).unwrap();
+    assert_ne!(rebuilt.ownership_identity(), identity);
+    assert!(!rebuilt.interactions_active_wasm());
+    context.return_execution_player(rebuilt).unwrap();
+}
+
+#[test]
+fn failed_incomplete_source_discard_returns_the_same_runtime_and_preserves_its_lease() {
+    let (mut context, mut circle, player) = clicked_glow_source();
+    let attachment = circle.get_effect("glow").unwrap();
+    let identity = player.ownership_identity();
+    let frame = player.debug_frame_json();
+    circle.shift(1.0, 0.0).unwrap();
+    let revision = context.scene.integration_store().borrow().scene_revision();
+    let rejected = context.discard_execution_player(player).unwrap_err();
+    let player = *rejected.player;
+    assert!(context.player_ownership.is_transferred());
+    assert_eq!(player.ownership_identity(), identity);
+    assert_eq!(player.debug_frame_json(), frame);
+    assert!(player.interactions_active_wasm());
+    assert_eq!(
+        context.scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(
+        circle.get_effect("glow").unwrap().node_id(),
+        attachment.node_id()
+    );
+    attachment.authored_definition().unwrap();
+    context.return_execution_player(player).unwrap();
+    assert_eq!(context.live_execution_ownership(), "returned");
+}
+
 #[test]
 fn ownership_observations_and_continuation_follow_one_runtime() {
     let (mut scene, circle) = scene_with_circle();
@@ -119,11 +285,14 @@ fn different_root_in_the_same_store_is_not_the_leased_scene() {
 }
 
 #[test]
-fn noncanonical_player_cannot_be_installed_as_a_returned_player() {
+fn foreign_static_scene_player_cannot_be_installed_as_a_returned_player() {
     let (mut scene, _) = scene_with_circle();
-    let candidate =
-        crate::SemanticExecutionPlayer::from_session(scene.lower_execution().unwrap(), 1.0, 41)
-            .unwrap();
+    let candidate = crate::SemanticExecutionPlayer::from_scene_execution(
+        noon::Scene::new().into_execution().unwrap(),
+        1.0,
+        41,
+    )
+    .unwrap();
     let expected = scene.take_execution_player(1.0, 41).unwrap();
     assert_eq!(
         scene

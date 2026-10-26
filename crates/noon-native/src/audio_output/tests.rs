@@ -13,15 +13,15 @@ fn pcm(rate: u32, channels: u16, samples: &[f32]) -> AudioResource {
     AudioResource::from_interleaved(rate, channels, samples.to_vec(), samples.len() * 4).unwrap()
 }
 
-fn session(clips: Vec<(AudioResource, AudioClipOptions)>) -> ExecutionSession {
+fn session(clips: Vec<(AudioResource, AudioClipOptions)>) -> noon::SceneExecution {
     let mut scene = Scene::new();
     for (resource, options) in clips {
         scene.audio(resource, options).unwrap();
     }
-    scene.execution_session().unwrap()
+    scene.into_execution().unwrap()
 }
 
-fn constant_session() -> ExecutionSession {
+fn constant_session() -> noon::SceneExecution {
     session(vec![(
         pcm(48_000, 1, &[0.25]),
         AudioClipOptions {
@@ -74,7 +74,13 @@ fn apply_start_attack(samples: &mut [f32], format: AudioMixFormat, first_frame: 
 fn preparation_and_empty_callbacks_are_silent_without_a_clock_anchor() {
     let epoch = Instant::now();
     let source = constant_session();
-    let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 64);
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.0,
+        AudioMixFormat::STEREO_48_KHZ,
+        64,
+    );
     for milliseconds in [0, 15, 95, 250] {
         let elapsed = Duration::from_millis(milliseconds);
         let mut samples = [0.75_f32; 128];
@@ -96,15 +102,21 @@ fn preparation_and_empty_callbacks_are_silent_without_a_clock_anchor() {
         steady_timestamp(Duration::from_millis(260), Duration::ZERO),
     );
     assert!(output.state.clock().is_none());
-    assert_eq!(source.frame().time, 0.0);
+    assert_eq!(source.session().frame().time, 0.0);
 }
 
 #[test]
 fn first_audible_buffer_anchors_existing_clock_at_predicted_playback() {
     let epoch = Instant::now();
     let source = constant_session();
-    let publication = source.publication_context();
-    let mut output = callback(&source, epoch, 0.375, AudioMixFormat::STEREO_48_KHZ, 64);
+    let publication = source.session().publication_context();
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.375,
+        AudioMixFormat::STEREO_48_KHZ,
+        64,
+    );
     output.state.admitted.store(true, Ordering::Release);
     let now = epoch + Duration::from_millis(75);
     let mut samples = [0.0_f32; 128];
@@ -125,8 +137,8 @@ fn first_audible_buffer_anchors_existing_clock_at_predicted_playback() {
         0.5
     );
     assert_eq!(output.next_frame, 64);
-    assert_eq!(source.frame().time, 0.0);
-    assert_eq!(source.publication_context(), publication);
+    assert_eq!(source.session().frame().time, 0.0);
+    assert_eq!(source.session().publication_context(), publication);
 }
 
 #[test]
@@ -142,7 +154,13 @@ fn variable_device_buffers_and_callback_jitter_preserve_one_contiguous_pcm_grid(
         },
     )]);
     let epoch = Instant::now();
-    let mut output = callback(&source, epoch, 0.0075, AudioMixFormat::STEREO_48_KHZ, 128);
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.0075,
+        AudioMixFormat::STEREO_48_KHZ,
+        128,
+    );
     output.state.admitted.store(true, Ordering::Release);
     let storage = (output.samples.as_ptr(), output.samples.capacity());
     let mut joined = Vec::new();
@@ -171,6 +189,7 @@ fn variable_device_buffers_and_callback_jitter_preserve_one_contiguous_pcm_grid(
     }
     let mut expected = vec![0.0; joined.len()];
     source
+        .session()
         .mix_audio_block(0.0075, 0, AudioMixFormat::STEREO_48_KHZ, &mut expected)
         .unwrap();
     apply_start_attack(&mut expected, AudioMixFormat::STEREO_48_KHZ, 0);
@@ -210,7 +229,7 @@ fn cropped_native_start_uses_shared_trim_loop_fade_and_silent_gap_semantics() {
     let epoch = Instant::now();
     let format = AudioMixFormat::new(RATE * 2, 1).unwrap();
     let origin = 2.5 / f64::from(RATE);
-    let mut output = callback(&source, epoch, origin, format, 3);
+    let mut output = callback(source.session(), epoch, origin, format, 3);
     output.state.admitted.store(true, Ordering::Release);
     let mut samples = [0.875; 26];
     output.render(
@@ -220,6 +239,7 @@ fn cropped_native_start_uses_shared_trim_loop_fade_and_silent_gap_semantics() {
     );
     let mut expected = [0.0; 26];
     source
+        .session()
         .mix_audio_block(origin, 0, format, &mut expected)
         .unwrap();
     assert_eq!(expected[0], 0.0625);
@@ -238,7 +258,13 @@ fn device_discontinuity_policy_accepts_fifty_milliseconds_and_rejects_more() {
     ] {
         let source = constant_session();
         let epoch = Instant::now();
-        let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 480);
+        let mut output = callback(
+            source.session(),
+            epoch,
+            0.0,
+            AudioMixFormat::STEREO_48_KHZ,
+            480,
+        );
         output.state.admitted.store(true, Ordering::Release);
         let mut samples = [0.0; 960];
         let latency = Duration::from_millis(20);
@@ -275,7 +301,13 @@ fn backward_playback_timestamps_and_wall_observations_stop_output() {
     for backward_device in [true, false] {
         let source = constant_session();
         let epoch = Instant::now();
-        let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 480);
+        let mut output = callback(
+            source.session(),
+            epoch,
+            0.0,
+            AudioMixFormat::STEREO_48_KHZ,
+            480,
+        );
         output.state.admitted.store(true, Ordering::Release);
         let mut samples = [0.0; 960];
         output.render(
@@ -305,7 +337,13 @@ fn invalid_or_excess_latency_cannot_publish_a_playback_anchor() {
         timestamp(Duration::from_secs(10), Duration::from_millis(9_999)),
         steady_timestamp(Duration::ZERO, MAX_OUTPUT_LATENCY + Duration::from_nanos(1)),
     ] {
-        let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 4);
+        let mut output = callback(
+            source.session(),
+            epoch,
+            0.0,
+            AudioMixFormat::STEREO_48_KHZ,
+            4,
+        );
         output.state.admitted.store(true, Ordering::Release);
         let mut samples = [0.75; 8];
         output.render(&mut samples, epoch, stamp);
@@ -323,7 +361,13 @@ fn device_buffer_guards_reject_incomplete_and_oversized_blocks_silently() {
     let source = constant_session();
     let epoch = Instant::now();
     for sample_count in [3, (MAX_AUDIO_MIX_BLOCK_FRAMES + 1) * 2] {
-        let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 8);
+        let mut output = callback(
+            source.session(),
+            epoch,
+            0.0,
+            AudioMixFormat::STEREO_48_KHZ,
+            8,
+        );
         output.state.admitted.store(true, Ordering::Release);
         let mut samples = vec![0.75; sample_count];
         output.render(
@@ -338,7 +382,13 @@ fn device_buffer_guards_reject_incomplete_and_oversized_blocks_silently() {
             AudioFault::Buffer as u8
         );
     }
-    let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 8);
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.0,
+        AudioMixFormat::STEREO_48_KHZ,
+        8,
+    );
     output.state.admitted.store(true, Ordering::Release);
     let mut maximum = vec![0.0; MAX_AUDIO_MIX_BLOCK_FRAMES * 2];
     output.render(
@@ -360,7 +410,7 @@ fn a_later_mix_chunk_failure_erases_the_entire_device_buffer() {
     )]);
     let epoch = Instant::now();
     let mut output = callback(
-        &source,
+        source.session(),
         epoch,
         0.0,
         AudioMixFormat::new(48_000, 1).unwrap(),
@@ -391,7 +441,7 @@ fn integer_pcm_uses_unsigned_equilibrium_and_never_wraps_positive_full_scale() {
     )]);
     let epoch = Instant::now();
     let format = AudioMixFormat::new(48_000, 1).unwrap();
-    let mut unsigned = callback(&source, epoch, 0.0, format, 3);
+    let mut unsigned = callback(source.session(), epoch, 0.0, format, 3);
     let mut samples = vec![0_u16; 1_923];
     unsigned.render(
         &mut samples,
@@ -415,7 +465,7 @@ fn integer_pcm_uses_unsigned_equilibrium_and_never_wraps_positive_full_scale() {
     );
     assert!(samples.iter().all(|sample| *sample == 32_768));
 
-    let mut signed = callback(&source, epoch, 0.0, format, 3);
+    let mut signed = callback(source.session(), epoch, 0.0, format, 3);
     signed.state.admitted.store(true, Ordering::Release);
     let mut samples = vec![0_i16; 1_923];
     signed.render(
@@ -432,7 +482,13 @@ fn retirement_and_device_faults_prevent_stale_output_and_preserve_first_fault() 
     for fault in [None, Some(AudioFault::Device), Some(AudioFault::Underrun)] {
         let source = constant_session();
         let epoch = Instant::now();
-        let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 64);
+        let mut output = callback(
+            source.session(),
+            epoch,
+            0.0,
+            AudioMixFormat::STEREO_48_KHZ,
+            64,
+        );
         output.state.admitted.store(true, Ordering::Release);
         let mut samples = [0.0; 128];
         output.render(
@@ -468,7 +524,13 @@ fn retirement_and_device_faults_prevent_stale_output_and_preserve_first_fault() 
 fn a_replacement_stream_has_fresh_admission_and_anchor_state() {
     let source = constant_session();
     let epoch = Instant::now();
-    let mut old = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 4);
+    let mut old = callback(
+        source.session(),
+        epoch,
+        0.0,
+        AudioMixFormat::STEREO_48_KHZ,
+        4,
+    );
     old.state.admitted.store(true, Ordering::Release);
     let mut samples = [0.0; 8];
     old.render(
@@ -479,7 +541,7 @@ fn a_replacement_stream_has_fresh_admission_and_anchor_state() {
     old.state.retired.store(true, Ordering::Release);
     let replacement_epoch = epoch + Duration::from_secs(1);
     let mut replacement = callback(
-        &source,
+        source.session(),
         replacement_epoch,
         0.625,
         AudioMixFormat::STEREO_48_KHZ,
@@ -586,8 +648,8 @@ fn required_callbacks_and_unfinished_sources_reject_before_device_access() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
-    assert!(session.has_required_callbacks());
+    let session = scene.into_execution().unwrap();
+    assert!(session.session().has_required_callbacks());
     assert!(
         matches!(crate::run_with_config(session, NativeViewportConfig { width: 0, ..Default::default() }), Err(NativeHostError::Audio(message)) if message.contains("required callbacks"))
     );
@@ -614,7 +676,7 @@ fn required_callbacks_and_unfinished_sources_reject_before_device_access() {
 }
 
 #[cfg(target_os = "linux")]
-fn device_fixture() -> ExecutionSession {
+fn device_fixture() -> noon::SceneExecution {
     use noon_core::{
         AnimationOptions, CompositionTimeMap, RateFunction, SemanticAnimationCompositionKind,
         SemanticAnimationIntent, SemanticMutationTransaction, SemanticObjectTrackProperty,
@@ -670,7 +732,7 @@ fn device_fixture() -> ExecutionSession {
         )
         .unwrap();
     scene
-        .execution_session_with_animation_root(&animation)
+        .into_execution_with_animation_root(&animation)
         .unwrap()
 }
 
@@ -901,7 +963,7 @@ fn native_audio_device_smoke() {
 
     let directory = proof_directory();
     let session = device_fixture();
-    assert_eq!(session.finite_timeline_end_time(), Some(1.0));
+    assert_eq!(session.session().finite_timeline_end_time(), Some(1.0));
     let mut expected =
         std::io::BufWriter::new(std::fs::File::create(directory.join("expected.f32")).unwrap());
     let mut block = [0.0_f32; 1_024 * 2];
@@ -910,6 +972,7 @@ fn native_audio_device_smoke() {
         let frames = (48_000 - first_frame).min(1_024) as usize;
         let samples = &mut block[..frames * 2];
         session
+            .session()
             .mix_audio_block(0.0, first_frame, AudioMixFormat::STEREO_48_KHZ, samples)
             .unwrap();
         for sample in samples {
@@ -1071,7 +1134,7 @@ fn native_audio_device_loss_smoke() {
             ..Default::default()
         },
     )]);
-    let output = NativeAudioOutput::prepare(&source, 1.0).unwrap();
+    let output = NativeAudioOutput::prepare(source.session(), 1.0).unwrap();
     let state = output.state.clone();
     output.admit();
     let startup = Instant::now();

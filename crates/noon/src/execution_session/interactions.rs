@@ -33,6 +33,10 @@ impl InteractionBindings {
 
 pub(super) enum PreparedClickAction {
     Animation(PreparedTransientAnimation),
+    GlowPulse {
+        target: SemanticNodeId,
+        binding: noon_core::SemanticClickGlowPulse,
+    },
     Playback(PlaybackControl),
 }
 
@@ -50,11 +54,167 @@ impl ExecutionSession {
     /// Advance only input-triggered effective animation using platform monotonic seconds.
     pub fn advance_interactions(
         &mut self,
+        store: &mut SemanticStore,
         wall_time_seconds: f64,
     ) -> Result<(), ExecutionSessionInputError> {
+        let prepared = self
+            .runtime
+            .prepare_interactions(wall_time_seconds)
+            .map_err(ExecutionSessionInputError::Interaction)?;
+        self.publish_interaction_advance(store, prepared)
+    }
+
+    pub(super) fn retire_interactions(
+        &mut self,
+        store: &mut SemanticStore,
+    ) -> Result<(), ExecutionSessionInputError> {
+        let prepared = self
+            .runtime
+            .prepare_interaction_retirement()
+            .map_err(ExecutionSessionInputError::Interaction)?;
+        self.publish_interaction_advance(store, prepared)
+    }
+
+    /// Retire input-owned state before a platform replaces this source owner.
+    /// This does not advance authored time or cancel authored animations. A
+    /// recovery handoff that retains this same execution must not call it.
+    pub fn retire_interactions_for_source_replacement(
+        &mut self,
+        store: &mut SemanticStore,
+    ) -> Result<(), ExecutionSessionInputError> {
+        if store.identity() != self.store_identity {
+            return Err(super::ExecutionSessionPublicationError::ForeignSemanticStore.into());
+        }
+        if self.pending_callback_token().is_some() {
+            return Err(ExecutionSessionInputError::RequiredCallbackPending);
+        }
+        // A dormant source has no input-owned semantic state to retire. Direct
+        // authoring may already have made that returned execution obsolete.
+        if !self.interactions_active() {
+            return Ok(());
+        }
+        self.retire_interactions(store)
+    }
+
+    fn publish_interaction_advance(
+        &mut self,
+        store: &mut SemanticStore,
+        prepared: noon_runtime::PreparedInteractionAdvance,
+    ) -> Result<(), ExecutionSessionInputError> {
+        self.require_published_store(store)?;
+        if self.interactions_active() && self.pending_callback_token().is_some() {
+            return Err(ExecutionSessionInputError::RequiredCallbackPending);
+        }
         self.runtime
-            .advance_interactions(wall_time_seconds)
-            .map_err(ExecutionSessionInputError::Interaction)
+            .preflight_interaction_advance(&prepared)
+            .map_err(ExecutionSessionInputError::Interaction)?;
+        if prepared.retirements().is_empty() {
+            return self
+                .runtime
+                .commit_prepared_interactions(prepared)
+                .map_err(ExecutionSessionInputError::Interaction);
+        }
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        for retirement in prepared.retirements() {
+            // Deletion or replacement wins. Never resolve by name and remove a
+            // newer generation that inherited the same canonical name.
+            let Ok(effect) = store.semantic_effect_state(retirement.attachment) else {
+                continue;
+            };
+            if self.execution_object_id(effect.owner()) == Some(retirement.object)
+                && effect.name() == "glow"
+                && store.effect_by_name(effect.owner(), "glow").ok().flatten()
+                    == Some(retirement.attachment)
+            {
+                transaction.remove_node(retirement.attachment);
+            }
+        }
+        let semantic = transaction
+            .prepare(store)
+            .map_err(super::ExecutionSessionPublicationError::Semantic)?;
+        let (effective, metadata) = prepared.into_publication_parts();
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            semantic,
+            Vec::new(),
+            Some(effective).into(),
+            super::publication::SemanticPublicationPurpose::TransientGlowLifecycle,
+            None,
+            None,
+        )?;
+        if let Some(pending) = self.pending_segment_completion.as_mut() {
+            pending.activation_scene_revision = store.scene_revision();
+        }
+        self.runtime
+            .finish_interaction_advance_after_publication(metadata);
+        Ok(())
+    }
+
+    /// Prove the semantic half of the narrow lifecycle publication. The existing
+    /// compiler and Runtime separately validate the resulting execution patches.
+    pub(super) fn validate_transient_glow_lifecycle(
+        &self,
+        prepared: &noon_core::PreparedSemanticMutationTransaction<'_>,
+    ) -> Result<(), super::ExecutionSessionPublicationError> {
+        use noon_core::{EffectDefinition, SemanticMutation, SemanticNodeCreation};
+        let neutral = noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+            .expect("neutral glow is valid");
+        for mutation in prepared.mutations() {
+            let valid = match mutation {
+                SemanticMutation::AddNode {
+                    creation:
+                        SemanticNodeCreation::Effect {
+                            owner,
+                            name,
+                            definition,
+                            copy_provenance,
+                        },
+                    ..
+                } => {
+                    let owner = owner.existing();
+                    name.as_ref() == "glow"
+                        && *definition == EffectDefinition::Glow(neutral)
+                        && copy_provenance.is_none()
+                        && owner.is_some_and(|owner| {
+                            prepared.store().effect_by_name(owner, "glow").ok() == Some(None)
+                                && self.execution_object_id(owner).is_some_and(|object| {
+                                    self.runtime.can_prepare_click_glow_pulse(object)
+                                })
+                        })
+                        && self
+                            .pending_segment_completion
+                            .as_ref()
+                            .is_none_or(|pending| {
+                                pending.kind.lifecycle_root.is_none()
+                                    && pending.kind.lifecycle_removals.is_empty()
+                                    && pending.kind.family_transform.is_none()
+                            })
+                }
+                SemanticMutation::RemoveNode { node } => {
+                    node.existing().is_some_and(|attachment| {
+                        prepared
+                            .store()
+                            .semantic_effect_state(attachment)
+                            .ok()
+                            .is_some_and(|effect| {
+                                effect.name() == "glow"
+                                    && self.execution_object_id(effect.owner()).is_some_and(
+                                        |object| {
+                                            self.runtime.transient_glow_attachment(object)
+                                                == Some((attachment, true))
+                                        },
+                                    )
+                            })
+                    })
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(super::ExecutionSessionPublicationError::Interaction(
+                    "input glow lifecycle requires an exact neutral enrollment or owned temporary retirement".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn initialize_interaction_bindings(&mut self, store: &SemanticStore) {
@@ -144,6 +304,15 @@ impl ExecutionSession {
                 .prepare_click_indicate(object, indication)
                 .map(|animation| animation.map(PreparedClickAction::Animation))
                 .map_err(ExecutionSessionInputError::Interaction),
+            SemanticClickAction::GlowPulse(binding) => {
+                if !self.runtime.can_prepare_click_glow_pulse(object) {
+                    return Ok(None);
+                }
+                Ok(Some(PreparedClickAction::GlowPulse {
+                    target: node,
+                    binding,
+                }))
+            }
             SemanticClickAction::Playback(control) => {
                 Ok(Some(PreparedClickAction::Playback(control)))
             }
@@ -151,6 +320,8 @@ impl ExecutionSession {
     }
 }
 
+#[cfg(test)]
+mod glow_pulse_tests;
 #[cfg(test)]
 mod playback_tests;
 #[cfg(test)]

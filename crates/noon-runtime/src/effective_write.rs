@@ -63,6 +63,13 @@ pub enum EffectivePropertyWrite<I = ObjectId> {
         object: I,
         opacity: f32,
     },
+    /// One exact attachment's intensity. Other glow parameters remain owned by
+    /// their ordinary authored/timeline drivers.
+    GlowIntensity {
+        object: I,
+        attachment: noon_core::SemanticNodeId,
+        intensity: f64,
+    },
 }
 
 impl<I: Copy> EffectivePropertyWrite<I> {
@@ -78,7 +85,8 @@ impl<I: Copy> EffectivePropertyWrite<I> {
             | Self::Fill { object, .. }
             | Self::Stroke { object, .. }
             | Self::StrokeWidth { object, .. }
-            | Self::Opacity { object, .. } => object,
+            | Self::Opacity { object, .. }
+            | Self::GlowIntensity { object, .. } => object,
         }
     }
 
@@ -112,6 +120,15 @@ impl<I: Copy> EffectivePropertyWrite<I> {
                 stroke_width,
             },
             Self::Opacity { opacity, .. } => EffectivePropertyWrite::Opacity { object, opacity },
+            Self::GlowIntensity {
+                attachment,
+                intensity,
+                ..
+            } => EffectivePropertyWrite::GlowIntensity {
+                object,
+                attachment,
+                intensity,
+            },
         }
     }
 }
@@ -120,8 +137,28 @@ impl EffectivePropertyWrite {
     /// Reuse the compiler's existing identity/numeric validators. Defaults fill
     /// only the irrelevant validation fields; these patches are never committed
     /// to the execution plan or used to assign a whole effective row.
-    pub(crate) fn as_execution_patch(self) -> ExecutionPatch {
-        match self {
+    pub(crate) fn as_execution_patch(
+        self,
+        glow: Option<noon_compile::CompiledGlow>,
+    ) -> Result<ExecutionPatch, noon_compile::CompilePatchError> {
+        Ok(match self {
+            Self::GlowIntensity {
+                object,
+                attachment,
+                intensity,
+            } => {
+                let mut glow = glow
+                    .filter(|glow| glow.attachment == attachment)
+                    .ok_or(noon_compile::CompilePatchError::InvalidGlowUpdate { object })?;
+                glow.definition = noon_core::GlowUpdate::default()
+                    .intensity(intensity)
+                    .apply_to(glow.definition)
+                    .map_err(|_| noon_compile::CompilePatchError::InvalidGlowUpdate { object })?;
+                ExecutionPatch::SetGlow {
+                    object,
+                    glow: std::sync::Arc::new(glow),
+                }
+            }
             Self::Presence { object, .. } => ExecutionPatch::SetStyle {
                 object,
                 style: Style::default(),
@@ -193,7 +230,7 @@ impl EffectivePropertyWrite {
                     ..Style::default()
                 },
             },
-        }
+        })
     }
 }
 
@@ -202,6 +239,29 @@ pub(crate) fn apply_effective_property_to_row(
     write: EffectivePropertyWrite,
 ) {
     let (property, value) = match write {
+        EffectivePropertyWrite::GlowIntensity {
+            attachment,
+            intensity,
+            ..
+        } => {
+            let Some(glow) = row
+                .glow
+                .as_mut()
+                .filter(|glow| glow.attachment == attachment)
+            else {
+                // A concurrently prepared structural retirement wins; never
+                // recreate an attachment or transfer a write to its replacement.
+                return;
+            };
+            let next = noon_core::GlowUpdate::default()
+                .intensity(intensity)
+                .apply_to(glow.definition)
+                .expect("preflighted glow intensity");
+            if next != glow.definition {
+                std::sync::Arc::make_mut(glow).definition = next;
+            }
+            return;
+        }
         EffectivePropertyWrite::Presence { presence, .. } => {
             *row.presence = presence;
             return;

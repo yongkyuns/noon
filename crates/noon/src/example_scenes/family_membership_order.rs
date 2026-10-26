@@ -1,8 +1,8 @@
 //! Paired with ordinary_family_membership_order.py on native and direct WASM.
-use crate::{ExecutionSession, MobjectTarget, Scene};
+use crate::{MobjectTarget, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
-    let build = || -> Result<ExecutionSession, Box<dyn std::error::Error>> {
+pub fn session() -> Result<crate::SceneExecution, String> {
+    let build = || -> Result<crate::SceneExecution, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut a = scene.square(2.0)?;
         let mut b = scene.square(2.0)?;
@@ -40,7 +40,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             MobjectTarget::from(&family).family_nodes()?,
             [family.node_id(), b.node_id(), a.node_id()]
         );
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

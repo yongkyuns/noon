@@ -43,7 +43,7 @@ function fixture(
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0, canUndoDrag = false;
-  let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
+  let created = 0, resumed = 0, discarded = 0, completedSegments = 0, drained = 0, committedPhases = 0;
   let leased = false;
   let initialSnapshots = 0, resourceBundles = 0;
   const callbackReads = [];
@@ -127,12 +127,13 @@ function fixture(
     createExecutionPlayer: () => { leased = true; created += 1; return player; },
     resumeExecutionPlayer: () => { leased = true; resumed += 1; return player; },
     returnExecutionPlayer: (value) => { leased = false; returned += 1; returnedPlayer = value; },
+    discardExecutionPlayer: (value) => { assert.equal(value, player); leased = false; discarded += 1; },
     liveHandoffDuration: () => leased ? undefined : Math.max(time, 1),
     liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
   };
   return { control, render, player, context, stats: () => ({
-    returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
+    returned, returnedPlayer, stopped, nativeInputs, created, resumed, discarded, completedSegments,
     initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
     authoredSampleTimes,
     drained, committedPhases,
@@ -141,7 +142,7 @@ function fixture(
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode, ...requestOptions,
-    }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation,
+    }, () => { stopped += 1; callbackHooks.onStop?.(); }, runRequiredCallbackPhase, continuation,
     callbackHooks.complete ?? null, callbackHooks.discard ?? null,
     callbackHooks.testOnlyTickTimestamp ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
@@ -1141,7 +1142,7 @@ test("semantic continuation drives a pure wait only when its Rust deadline is du
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("stopping an incomplete semantic continuation never returns its player", async () => {
+test("stopping an incomplete semantic continuation discards input without returning or completing it", async () => {
   const failures = [];
   const continuation = {
     generation: 12,
@@ -1149,16 +1150,59 @@ test("stopping an incomplete semantic continuation never returns its player", as
     onError: (generation, error) => { failures.push({ generation, error }); },
   };
   const f = fixture("transferable", null, continuation);
+  let inputActive = true;
+  const discard = f.context.discardExecutionPlayer;
+  f.context.discardExecutionPlayer = (player) => { discard(player); inputActive = false; };
   try {
     const ready = next(f.control.port2);
     const endpoint = await f.attach();
     await ready;
     endpoint.stop();
+    assert.equal(inputActive, false);
+    assert.equal(f.stats().discarded, 1);
     assert.equal(f.stats().returned, 0);
     assert.equal(f.stats().completedSegments, 0);
     assert.equal(f.stats().stopped, 1);
     assert.deepEqual(failures, []);
   } finally { f.close(); }
+});
+
+test("failed incomplete-source discard retains its exact player and context for retry", async () => {
+  const contexts = new Map();
+  const continuation = { generation: 12, onComplete() { throw new Error("must not complete"); } };
+  const f = fixture("transferable", null, continuation, {}, {
+    onStop() { contexts.delete("source"); },
+  });
+  contexts.set("source", f.context);
+  const discard = f.context.discardExecutionPlayer;
+  let attempts = 0, recoveries = 0;
+  f.context.discardExecutionPlayer = (player) => {
+    assert.equal(player, f.player);
+    if (attempts++ === 0) {
+      const error = new Error("shared input retirement rejected");
+      error.takePlayer = () => { recoveries += 1; return player; };
+      throw error;
+    }
+    discard(player);
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    assert.throws(() => endpoint.stop(), /shared input retirement rejected/);
+    assert.equal(recoveries, 1);
+    assert.equal(contexts.get("source"), f.context);
+    assert.equal(f.stats().returned, 0);
+    assert.equal(f.stats().discarded, 0);
+    assert.equal(f.stats().completedSegments, 0);
+    assert.equal(f.stats().stopped, 0);
+    endpoint.stop();
+    assert.equal(attempts, 2);
+    assert.equal(f.stats().discarded, 1);
+    assert.equal(f.stats().stopped, 1);
+    assert.equal(contexts.size, 0);
+  } finally { endpoint?.stop(); f.close(); }
 });
 
 test("undo-drag command publishes its Rust reversal and returns disabled state", async () => {
@@ -1790,6 +1834,7 @@ test("player construction failure closes both transferred ports", async () => {
   await assert.rejects(attachSemanticEngine({
     createExecutionPlayer: () => { throw new Error("lowering failed"); },
     returnExecutionPlayer: () => { throw new Error("must not return an uncreated player"); },
+    discardExecutionPlayer: () => { throw new Error("must not discard an uncreated player"); },
   }, {
     controlPort: control.port1, renderPort: render.port1, session: 7,
     loopDurationSeconds: 2, transportMode: "transferable",

@@ -1,8 +1,6 @@
 //! Horizontal and vertical probability partitions paired with sample_space.py.
 
-use crate::{
-    Color, ExecutionSession, SampleSpace, SampleSpaceOptions, Scene, BLUE_E, GREEN_E, YELLOW,
-};
+use crate::{Color, SampleSpace, SampleSpaceOptions, Scene, BLUE_E, GREEN_E, YELLOW};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -27,9 +25,9 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     scene()
-        .and_then(|scene| scene.execution_session().map_err(Into::into))
+        .and_then(|scene| scene.into_execution().map_err(Into::into))
         .map_err(|error: Box<dyn std::error::Error>| error.to_string())
 }
 

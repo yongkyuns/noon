@@ -183,5 +183,5 @@ fn live_boolean_constructor_preserves_foreign_store_error() {
 fn paired_boolean_example_executes_through_shared_runtime() {
     let mut session = noon::example_scenes::boolean_geometry::session().unwrap();
     session.seek(0.1).unwrap();
-    assert_eq!(session.frame().objects.len(), 4);
+    assert_eq!(session.session().frame().objects.len(), 4);
 }

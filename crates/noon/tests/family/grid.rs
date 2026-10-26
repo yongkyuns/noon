@@ -292,5 +292,5 @@ fn malformed_grid_options_are_atomic_and_huge_spare_capacity_keeps_precision() {
 #[test]
 fn paired_grid_example_uses_the_normal_execution_session() {
     let session = noon::example_scenes::family_grid::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 4);
+    assert_eq!(session.session().frame().objects.len(), 4);
 }

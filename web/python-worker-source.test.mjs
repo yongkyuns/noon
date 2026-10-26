@@ -4,6 +4,45 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("source disposal retires canonical input before releasing its retained context", async () => {
+  const begin = source.indexOf("function retireSemanticContext(");
+  const end = source.indexOf("\nasync function prepareAuthoringDependencies", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const contexts = new Map();
+  const calls = [];
+  const { retire, flush } = new Function("semanticContexts", "postError", `
+    let requestQueue = Promise.resolve();
+    ${source.slice(begin, end)}
+    return { retire: retireSemanticContext, flush: () => requestQueue };
+  `)(contexts, (_request, error) => { throw error; });
+  const entry = {
+    context: { retireExecutionSource() { calls.push("retire"); } },
+    endpoints: new Set(), released: false,
+    releaseCallbackSession() { calls.push("callbacks"); },
+  };
+  contexts.set("source", entry);
+  retire("source", entry);
+  assert.deepEqual(calls, [], "a recovery stop keeps the source invocation");
+  entry.released = true;
+  entry.endpoints.add({});
+  retire("source", entry);
+  assert.deepEqual(calls, [], "the endpoint must first relinquish its player");
+  entry.endpoints.clear();
+  entry.context.retireExecutionSource = () => { throw new Error("retirement rejected"); };
+  assert.throws(() => retire("source", entry), /retirement rejected/);
+  assert.equal(contexts.get("source"), entry);
+  await flush();
+  assert.deepEqual(calls, []);
+  entry.context.retireExecutionSource = () => {
+    assert.equal(contexts.get("source"), entry);
+    calls.push("retire");
+  };
+  retire("source", entry);
+  assert.equal(contexts.has("source"), false);
+  await flush();
+  assert.deepEqual(calls, ["retire", "callbacks"]);
+});
+
 test("table cell selections dispatch through the cold store or owning live context", () => {
   const worker = {};
   const begin = source.indexOf("  self.noonHighlightTableCell =");
@@ -548,7 +587,10 @@ test("retired callback sessions release only after the active Python run unwinds
   const activeRun = new Promise((resolve) => { finishRun = resolve; });
   let releases = 0;
   const contexts = new Map();
-  const entry = { released: true, endpoints: new Set(), releaseCallbackSession() { releases += 1; } };
+  const entry = {
+    context: { retireExecutionSource() {} },
+    released: true, endpoints: new Set(), releaseCallbackSession() { releases += 1; },
+  };
   contexts.set("context", entry);
   const retire = new Function("semanticContexts", "postError", "activeRun", `
     let requestQueue = activeRun;

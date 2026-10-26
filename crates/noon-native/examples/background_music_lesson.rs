@@ -5,13 +5,14 @@
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scene = noon::example_scenes::background_music_lesson::scene()?;
+    let section_navigation = scene.section_navigation();
     noon_native::run_with_config(
-        scene.execution_session()?,
+        scene.into_execution()?,
         noon_native::NativeViewportConfig {
             title: "Noon — Double the input".to_owned(),
             inspection_zoom: true,
             playback_controls: true,
-            section_navigation: scene.section_navigation(),
+            section_navigation,
             ..Default::default()
         },
     )?;

@@ -1,7 +1,7 @@
 //! Shared labeled BarChart scene for native and direct-WASM qualification.
 
 use crate::plot_presentation::NumberLabelOptions;
-use crate::{BarLabelOptions, ExecutionSession, LatexBackend, ManimBarChartOptions, Scene};
+use crate::{BarLabelOptions, LatexBackend, ManimBarChartOptions, Scene};
 
 pub fn scene(backend: &mut impl LatexBackend) -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -24,9 +24,9 @@ pub fn scene(backend: &mut impl LatexBackend) -> Result<Scene, Box<dyn std::erro
     Ok(scene)
 }
 
-pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
+pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution, String> {
     scene(backend)
         .map_err(|error| error.to_string())?
-        .execution_session()
+        .into_execution()
         .map_err(|error| error.to_string())
 }

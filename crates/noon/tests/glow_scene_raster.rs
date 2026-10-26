@@ -592,6 +592,260 @@ fn authored_glow_pulse_pixels_restore_and_replay() {
     eprintln!("GLOW_PULSE_PASS profiles=6 samples=30 max_error={max_error} repeated_exact=true rewind_exact=true restoration_exact=true identity=true temporary_retirement=true");
 }
 
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn click_glow_pulse_pixels_restore_and_retire() {
+    use noon::integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition};
+    use noon_core::{NativePointerId, NativePointerInput};
+
+    fn click(execution: &mut noon::SceneExecution, sequence: u64) {
+        for (sequence, pressed) in [(sequence, true), (sequence + 1, false)] {
+            let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(40.0, 30.0)).unwrap();
+            let kind = if pressed {
+                NativePointerInputKind::Press {
+                    position,
+                    button: 0,
+                }
+            } else {
+                NativePointerInputKind::Release {
+                    position,
+                    button: 0,
+                }
+            };
+            let token = execution.session().native_pointer_input_token().unwrap();
+            let input = NativePointerInput::new(
+                sequence,
+                token.pointer(),
+                token.context(),
+                NativeInputModifiers::default(),
+                kind,
+            );
+            execution
+                .submit_native_pointer_input(&token, input)
+                .unwrap();
+        }
+    }
+
+    let backends = match std::env::var("NOON_GLOW_BACKEND").as_deref() {
+        Ok("vulkan") => wgpu::Backends::VULKAN,
+        Ok("gl") => wgpu::Backends::GL,
+        Ok("metal") => wgpu::Backends::METAL,
+        Ok("dx12") => wgpu::Backends::DX12,
+        Err(std::env::VarError::NotPresent) => wgpu::Backends::PRIMARY,
+        other => panic!("unsupported NOON_GLOW_BACKEND: {other:?}"),
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .unwrap();
+    let info = adapter.get_info();
+    assert_ne!(info.backend, wgpu::Backend::Noop);
+    eprintln!("click GlowPulse raster adapter: {info:?}");
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let make_scene = |attached: bool| {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.4).unwrap();
+        source.disable_stroke().unwrap();
+        source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        if attached {
+            source
+                .set_glow(
+                    GlowUpdate::default()
+                        .color(Color::RED)
+                        .radius(Pixels(3.25))
+                        .intensity(START),
+                )
+                .unwrap();
+        }
+        scene.add(&source).unwrap();
+        (scene, source)
+    };
+    let (plain_scene, _) = make_scene(false);
+    let mut plain = plain_scene.into_execution().unwrap();
+    let ordinary = Surface::new(&device, &queue).render(&device, &queue, plain.session_mut());
+    let mut max_error = 0;
+    let mut samples = 0;
+    for attached in [true, false] {
+        let (mut scene, source) = make_scene(attached);
+        let pulse = scene
+            .declare_glow_pulse(&source, 2.0, AnimationOptions::new().run_time(1.0))
+            .unwrap();
+        scene.on_click(&source, Some(&pulse)).unwrap();
+        assert_eq!(
+            source.get_effect("glow").is_ok(),
+            attached,
+            "binding alone must not install an absent glow"
+        );
+        let mut execution = scene.into_execution().unwrap();
+        // The declaration saw START, while the admitted click must capture this
+        // later authored value. No declaration-time binding/source is authoritative.
+        let baseline = if attached { 0.9 } else { 0.0 };
+        if attached {
+            execution
+                .live()
+                .set_glow(&source, GlowUpdate::default().intensity(baseline))
+                .unwrap();
+        }
+        let original = source.get_effect("glow").ok();
+        let original_definition = original.as_ref().map(|h| h.authored_definition().unwrap());
+        execution
+            .session_mut()
+            .configure_native_pointer_input(
+                NativePointerId {
+                    source: 81,
+                    pointer: 2,
+                },
+                1,
+            )
+            .unwrap();
+        let mut surface = Surface::new(&device, &queue);
+        let baseline_pixels = surface.render(&device, &queue, execution.session_mut());
+        let sigma = if attached { 3.25 } else { 1.5 };
+        let tint = if attached {
+            [
+                f64::from(Color::RED.red),
+                f64::from(Color::RED.green),
+                f64::from(Color::RED.blue),
+            ]
+        } else {
+            [1.0; 3]
+        };
+        let baseline_oracle = expected_glow(&ordinary, sigma, tint, baseline);
+        assert!(error(&baseline_pixels, &baseline_oracle) <= 2);
+        if attached {
+            assert!(
+                error(
+                    &baseline_oracle,
+                    &expected_glow(&ordinary, sigma, tint, START)
+                ) > 4,
+                "stale declaration-time capture negative control is ineffective"
+            );
+        }
+
+        click(&mut execution, 1);
+        assert!(execution.session().interactions_active());
+        let first_binding = source.get_effect("glow").unwrap();
+        for (index, amplitude) in [0.0, 0.5, 1.0, 0.5, 0.0].into_iter().enumerate() {
+            let wall_time = 100.0 + index as f64 * 0.25;
+            execution.advance_interactions(wall_time).unwrap();
+            if index == 1 {
+                click(&mut execution, 3);
+                assert_eq!(
+                    source.get_effect("glow").unwrap().node_id(),
+                    first_binding.node_id()
+                );
+            }
+            let actual = surface.render(&device, &queue, execution.session_mut());
+            let oracle = expected_glow(
+                &ordinary,
+                sigma,
+                tint,
+                baseline + (2.0 - baseline) * amplitude,
+            );
+            let difference = error(&actual, &oracle);
+            max_error = max_error.max(difference);
+            samples += 1;
+            assert!(
+                difference <= 2,
+                "attached={attached} wall={wall_time}: full RGBA error {difference}"
+            );
+            assert_eq!(
+                execution.session().frame().time,
+                0.0,
+                "click ticks advanced authored time"
+            );
+            assert_eq!(
+                surface.render(&device, &queue, execution.session_mut()),
+                actual,
+                "identical publication changed click-pulse pixels"
+            );
+            if amplitude == 0.0 {
+                assert_eq!(
+                    actual, baseline_pixels,
+                    "neutral/restored frame differs from the ordinary baseline"
+                );
+            } else {
+                assert!(
+                    error(&oracle, &baseline_oracle) > 4,
+                    "missing-pulse negative control is ineffective"
+                );
+                assert!(
+                    error(&actual, &baseline_pixels) > 2,
+                    "no visible click-pulse was rendered"
+                );
+            }
+        }
+        assert!(
+            !execution.session().interactions_active(),
+            "retrigger extended the original deadline"
+        );
+        if let Some(original) = &original {
+            assert_eq!(
+                source.get_effect("glow").unwrap().node_id(),
+                original.node_id()
+            );
+            assert_eq!(
+                original.authored_definition().unwrap(),
+                original_definition.unwrap()
+            );
+        } else {
+            assert!(source.get_effect("glow").is_err());
+            assert!(first_binding.authored_definition().is_err());
+        }
+        let settled = execution.session().publication_context();
+        execution.advance_interactions(101.5).unwrap();
+        assert_eq!(
+            execution.session().publication_context(),
+            settled,
+            "settled pulse kept publishing"
+        );
+
+        // A later click acquires a new temporary generation, and an admitted seek
+        // cancels that exact pulse. Seeking never replays an unrecorded click.
+        click(&mut execution, 5);
+        let second_binding = source.get_effect("glow").unwrap();
+        if attached {
+            assert_eq!(second_binding.node_id(), first_binding.node_id());
+        } else {
+            assert_ne!(second_binding.node_id(), first_binding.node_id());
+        }
+        execution.advance_interactions(200.0).unwrap();
+        execution.advance_interactions(200.5).unwrap();
+        let peak = surface.render(&device, &queue, execution.session_mut());
+        let difference = error(&peak, &expected_glow(&ordinary, sigma, tint, 2.0));
+        max_error = max_error.max(difference);
+        samples += 1;
+        assert!(
+            difference <= 2,
+            "later click failed its independent peak oracle"
+        );
+        execution.seek(0.0).unwrap();
+        assert!(!execution.session().interactions_active());
+        assert_eq!(
+            surface.render(&device, &queue, execution.session_mut()),
+            baseline_pixels,
+            "seek cancellation failed to restore the ordinary baseline"
+        );
+        if let Some(original) = original {
+            assert_eq!(
+                source.get_effect("glow").unwrap().node_id(),
+                original.node_id()
+            );
+            assert_eq!(
+                original.authored_definition().unwrap(),
+                original_definition.unwrap()
+            );
+        } else {
+            assert!(source.get_effect("glow").is_err());
+            assert!(second_binding.authored_definition().is_err());
+        }
+    }
+    eprintln!("CLICK_GLOW_PULSE_PASS profiles=2 samples={samples} max_error={max_error} capture_at_click=true retrigger_original_deadline=true repeated_exact=true restoration_exact=true identity=true temporary_retirement=true seek_cleanup=true idle=true");
+}
+
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 fn drawable_scene(kind: &str, glowing: bool, opacity: f64) -> (Scene, Mobject) {
     let mut scene = Scene::new();

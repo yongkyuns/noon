@@ -1142,6 +1142,10 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
 
 function retireSemanticContext(token, entry) {
   if (entry.released && entry.endpoints.size === 0) {
+    // A Python Scene or Mobject may retain this exact semantic arena. Release
+    // input-owned attachments through its canonical owner before relinquishing
+    // our reference; failed retirement must leave the owner available.
+    entry.context.retireExecutionSource();
     semanticContexts.delete(token);
     // Cancellation may retire the endpoint while its Python stack is still
     // unwinding. Release through the existing interpreter queue after that run.

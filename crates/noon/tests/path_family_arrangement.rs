@@ -88,9 +88,9 @@ fn coarse_path_arrangement_uses_anchors_and_grid_uses_dimensions() {
 #[test]
 fn paired_path_arrangement_runs_the_normal_execution_session() {
     let mut session = noon::example_scenes::path_arrangement::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 4);
+    assert_eq!(session.session().frame().objects.len(), 4);
     session.seek(0.).unwrap();
-    let before = session.frame().objects.clone();
+    let before = session.session().frame().objects.clone();
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, before);
+    assert_eq!(session.session().frame().objects, before);
 }

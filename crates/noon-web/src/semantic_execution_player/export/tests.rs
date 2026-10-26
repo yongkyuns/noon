@@ -22,7 +22,7 @@ fn player() -> SemanticExecutionPlayer {
         )
         .unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.125, 27)
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 1.125, 27)
             .unwrap();
     player.pause();
     player
@@ -183,7 +183,7 @@ fn quiet_wait_publishes_current_receipt_without_dirty_rows_and_holds_reuse_it() 
         )
         .unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 0.125, 27)
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 0.125, 27)
             .unwrap();
     player.pause();
     let initial = player.delta(true).unwrap().unwrap();

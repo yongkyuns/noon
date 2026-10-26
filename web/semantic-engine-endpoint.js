@@ -59,7 +59,8 @@ export async function attachSemanticEngine(
     throw new Error("semantic execution requires control and render ports");
   }
   if (typeof context?.createExecutionPlayer !== "function" ||
-      typeof context.returnExecutionPlayer !== "function") {
+      typeof context.returnExecutionPlayer !== "function" ||
+      typeof context.discardExecutionPlayer !== "function") {
     throw new Error("semantic execution requires a context player lease API");
   }
   if (typeof initiallyPaused !== "boolean") {
@@ -1121,9 +1122,39 @@ export async function attachSemanticEngine(
     }
   }
   function stop() {
-    if (stopped) return;
-    if (hasAudio) post({ type: "audio_stopped" });
+    // Halt progression immediately, while retaining a rejected consuming exit
+    // for an explicit retry. Final release happens only after ownership settles.
+    if (stopped && player === null) return;
     stopped = true;
+    if (player !== null) {
+      if (pendingPhaseJson !== null) {
+        const interruption = new Error("canonical callback phase interrupted by endpoint stop");
+        if (typeof player.interruptCallbackPhaseJson === "function") {
+          player.interruptCallbackPhaseJson(pendingPhaseJson);
+        } else {
+          player.failCallbackPhaseJson(pendingPhaseJson);
+        }
+        callbackFault = interruption;
+        pendingPhaseJson = null;
+      }
+      try {
+        if (continuationActive) {
+          // An incomplete source is aborted, never returned as a completed
+          // continuation. Its exact owner retires input before dropping it.
+          context.discardExecutionPlayer(player);
+        } else {
+          player.clearTranslationDragUndo();
+          context.returnExecutionPlayer(player);
+        }
+      } catch (error) {
+        // Consuming WASM exits preserve a rejected capability on the real Error.
+        // Keep it here for retry before releasing ports or the context registry.
+        if (typeof error?.takePlayer === "function") player = error.takePlayer();
+        throw error;
+      }
+      player = null;
+    }
+    if (hasAudio) post({ type: "audio_stopped" });
     continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
     rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
@@ -1137,25 +1168,6 @@ export async function attachSemanticEngine(
     }
     controls.length = 0;
     latestTick = null;
-    if (player !== null) {
-      player.clearTranslationDragUndo();
-      if (pendingPhaseJson !== null) {
-        const interruption = new Error("canonical callback phase interrupted by endpoint stop");
-        try {
-          if (typeof player.interruptCallbackPhaseJson === "function") {
-            player.interruptCallbackPhaseJson(pendingPhaseJson);
-          } else {
-            player.failCallbackPhaseJson(pendingPhaseJson);
-          }
-        } catch { /* teardown owns final release */ }
-        callbackFault = interruption;
-        pendingPhaseJson = null;
-      }
-      // The authoring context retains this exact runtime for renderer recovery
-      // and setup retries. Dropping the context is the only genuine teardown.
-      if (!continuationActive) context.returnExecutionPlayer(player);
-      player = null;
-    }
     transport?.close?.();
     renderPort.close();
     controlPort.close();

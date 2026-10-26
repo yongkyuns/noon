@@ -337,6 +337,12 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::InvalidGridOption(_) => {
                 Self::new("invalid_input", "authoring.invalid_grid_option", message)
             }
+            AuthoringError::InvalidClickActionDeclaration { .. } => {
+                Self::new("invalid_input", "click.invalid_declaration", message)
+            }
+            AuthoringError::InvalidClickActionOptions => {
+                Self::new("invalid_input", "click.invalid_options", message)
+            }
             AuthoringError::InvalidPolygonOptions(_) => Self::new(
                 "invalid_input",
                 "authoring.invalid_polygon_options",
@@ -807,6 +813,7 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::Interaction(_) => Self::unclassified("publication.interaction", &error),
             E::AudioExecutionImmutable => Self::new(
                 "unsupported",
                 "publication.audio_execution_immutable",

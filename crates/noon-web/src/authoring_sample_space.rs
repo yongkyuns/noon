@@ -237,5 +237,5 @@ pub async fn create_sample_space_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::sample_space::session().map_err(failure)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
