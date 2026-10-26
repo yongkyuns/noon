@@ -1013,6 +1013,10 @@ impl From<LiveSessionError> for AuthoringFailure {
         use LiveSessionError as E;
         let message = error.to_string();
         match error {
+            E::Authoring(
+                cause @ (AuthoringError::InvalidClickActionOptions
+                | AuthoringError::InvalidClickActionDeclaration { .. }),
+            ) => cause.into(),
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
             E::Callback(cause) => Self::caused_by("live.callback", message, cause.into()),
             E::Text(cause) => Self::caused_by("live.text", message, cause.into()),
@@ -1263,6 +1267,30 @@ mod tests {
         );
         assert!(failure.source().is_some());
         assert!(!failure.message.is_empty());
+    }
+
+    #[test]
+    fn live_click_registration_preserves_shared_validation_codes() {
+        for (cause, code) in [
+            (
+                AuthoringError::InvalidClickActionOptions,
+                "click.invalid_options",
+            ),
+            (
+                AuthoringError::InvalidClickActionDeclaration {
+                    target: SemanticNodeId::new(7, 3),
+                    animation: SemanticNodeId::new(8, 2),
+                },
+                "click.invalid_declaration",
+            ),
+        ] {
+            let message = cause.to_string();
+            let failure = AuthoringFailure::from(LiveSessionError::Authoring(cause));
+            assert_eq!(failure.category, "invalid_input");
+            assert_eq!(failure.code, code);
+            assert_eq!(failure.message, message);
+            assert!(failure.cause.is_none());
+        }
     }
 
     #[test]

@@ -376,7 +376,19 @@ mod tests {
         scene.install_execution(session);
         // Integration edits can invalidate an already-installed component too.
         // Consuming that component must retain the same checked-owner contract.
-        scene.integration_store().borrow_mut().insert_family();
+        let mut external = noon_core::SemanticMutationTransaction::new();
+        external.add_node(noon_core::SemanticNodeCreation::family());
+        external
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        assert_ne!(
+            scene.revision(),
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
+            "the semantic transaction must leave the installed execution stale",
+        );
         assert!(matches!(
             scene.into_execution(),
             Err(SceneExecutionError::Publication(
