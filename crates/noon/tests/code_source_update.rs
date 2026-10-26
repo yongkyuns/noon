@@ -8,6 +8,8 @@ use noon::{
     SemanticAnimationCompositionKind, SemanticFadeDirection,
 };
 
+// This widescreen proof leaves the square constructors to the other raster tests.
+#[allow(dead_code)]
 mod raster_support;
 use raster_support::Raster;
 
