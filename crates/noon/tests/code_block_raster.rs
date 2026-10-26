@@ -227,8 +227,13 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
 fn logical_row_example_preserves_glyphs_above_rotated_scaled_highlights() {
     let mut control = noon::example_scenes::code_line_highlight::session(false).unwrap();
     let mut highlighted = noon::example_scenes::code_line_highlight::session(true).unwrap();
+    // A retained renderer belongs to one execution publication stream. Render
+    // the independent control in its own context, just like the browser pair.
+    let before = {
+        let mut control_raster = pollster::block_on(Raster::with_dimensions(960, 540));
+        control_raster.capture(&control.take_renderer_publication())
+    };
     let mut raster = pollster::block_on(Raster::with_dimensions(960, 540));
-    let before = raster.capture(&control.take_renderer_publication());
     let after = raster.capture(&highlighted.take_renderer_publication());
     let mut changed = 0;
     let mut opaque_glyph_pixels = 0;
