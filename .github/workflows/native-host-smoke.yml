@@ -189,11 +189,11 @@ jobs:
           cargo test -p noon --all-features --test selection_overlay_raster \
             -- --include-ignored --nocapture
 
-      - name: Qualify native highlighted Code pixels and retained family edits
+      - name: Qualify native Code highlights, source edits and retained family pixels
         env:
           NOON_CODE_PROOF_DIR: ${{ github.workspace }}/code-proof
         run: |
-          cargo test -p noon --all-features --test code_block_raster \
+          cargo test -p noon --all-features --test code_block_raster --test code_source_update \
             -- --ignored --nocapture --test-threads=1
 
       - name: Present inspection zoom and view recovery without advancing native time
