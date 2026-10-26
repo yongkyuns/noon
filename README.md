@@ -188,6 +188,7 @@ listing = Code(
     syntax_colors={"keyword": PURPLE, "number": GOLD},
     token_colors={"tile": TEAL, "in": TEAL, "out": GREEN,
                   "__syncthreads": PINK},
+    line_number_config={"font_size": 11, "color": GRAY, "min_digits": 2},
 )
 self.add(listing)
 
@@ -213,6 +214,16 @@ Rust exposes `CodeOptions::reserved_source`, `Code::replace_line` and
 [Rust](crates/noon-native/examples/code_source_update.rs) and
 [Python](web/python/examples/code_source_update.py) examples animate the CUDA
 declaration edit using the normal execution path.
+
+`line_number_config` controls the gutter independently: `font_size` inherits the
+source size when omitted, `color` inherits the theme's gutter color, and
+`min_digits` adds leading zeroes without truncating larger numbers. A minus sign
+does not count as a digit; `min_digits=2` produces `-01`, `00`, `01`. Values from
+0 through 32 are supported. Rust owns formatting, shaping and measured right
+alignment on the source baselines; the exact source font face is shared. The
+native equivalent is `CodeOptions::line_number_config: CodeLineNumberConfig`.
+Copied listings and bounded source edits retain the allocated gutter and its
+ordinary Text handles.
 
 #### Associate source tokens with visual concepts
 

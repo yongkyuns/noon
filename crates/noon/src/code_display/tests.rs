@@ -173,6 +173,109 @@ fn line_numbers_share_baselines_and_align_their_right_edge() {
 }
 
 #[test]
+fn smaller_numbered_gutters_preserve_baselines_and_count_digits_without_the_sign() {
+    let mut scene = Scene::new();
+    for (start, digits, expected) in [
+        (-1, 2, ["-01", "00", "01"]),
+        (98, 2, ["98", "99", "100"]),
+        (0, 0, ["0", "1", "2"]),
+    ] {
+        let code = Code::new(
+            &mut scene,
+            "0\n0\n0",
+            CodeOptions {
+                line_numbers_from: start,
+                line_number_config: CodeLineNumberConfig {
+                    font_size: Some(11.0),
+                    color: Some(Color::GRAY),
+                    min_digits: digits,
+                },
+                ..plain()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            code.line_number_sources()
+                .unwrap()
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>(),
+            expected,
+        );
+        let numbers = members(code.line_numbers().unwrap());
+        let (_, source) = resource(&code.line(0).unwrap());
+        let source_advance = source.runs[0].glyphs[0].advance.x;
+        for (index, number) in numbers.iter().enumerate() {
+            let (state, text) = resource(number);
+            assert_eq!(text.runs[0].font, source.runs[0].font);
+            close(text.runs[0].font_size, 11.0);
+            close(baseline(number), baseline(&code.line(index).unwrap()));
+            close(logical_right(number), logical_right(&numbers[0]));
+            close(
+                text.runs[0].glyphs[0].advance.x,
+                source_advance * 11.0 / 24.0,
+            );
+            assert_eq!(
+                state.style.fill,
+                Some(noon_core::SemanticPaint::Solid(Color::GRAY))
+            );
+        }
+        close(baseline(&numbers[0]) - baseline(&numbers[1]), 0.375);
+    }
+}
+
+#[test]
+fn custom_gutters_are_copied_and_stay_fixed_during_reserved_source_replacement() {
+    let mut scene = Scene::new();
+    let original = Code::new(
+        &mut scene,
+        "old\n    unchanged",
+        CodeOptions {
+            reserved_source: Some("longer declaration\n    unchanged".into()),
+            line_number_config: CodeLineNumberConfig {
+                font_size: Some(11.0),
+                color: Some(Color::GRAY),
+                min_digits: 2,
+            },
+            ..plain()
+        },
+    )
+    .unwrap();
+    let copied = original.family().copy_family().unwrap();
+    let copy = Code::from_family(copied.root().clone()).unwrap();
+    copy.family().scale(1.3, 1.3).unwrap();
+    copy.family().shift(1.0, 2.0).unwrap();
+    let original_numbers = members(original.line_numbers().unwrap());
+    let numbers = members(copy.line_numbers().unwrap());
+    let states: Vec<_> = numbers
+        .iter()
+        .map(|number| number.state().unwrap())
+        .collect();
+    let layout = copy.layout().unwrap();
+    for (source, cloned) in original_numbers.iter().zip(&numbers) {
+        assert_ne!(source.node_id(), cloned.node_id());
+        assert_eq!(
+            source.state().unwrap().content,
+            cloned.state().unwrap().content
+        );
+    }
+    copy.replace_line(0, "longer declaration").unwrap();
+    assert_eq!(sources(&original), ["old", "    unchanged"]);
+    assert_eq!(
+        copy.line_number_sources()
+            .unwrap()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>(),
+        ["01", "02"]
+    );
+    assert_eq!(copy.layout().unwrap(), layout);
+    for (number, state) in numbers.iter().zip(states) {
+        assert_eq!(number.state().unwrap(), state);
+    }
+}
+
+#[test]
 fn numbers_are_optional_and_window_buttons_are_ordinary_geometry() {
     let mut scene = Scene::new();
     let numbered = Code::new(&mut scene, "x", plain()).unwrap();
@@ -331,6 +434,37 @@ fn invalid_construction_preserves_scene_and_all_resource_arenas() {
         CodeOptions {
             background_config: CodeBackgroundConfig {
                 fill_opacity: 2.0,
+                ..Default::default()
+            },
+            ..plain()
+        },
+        CodeOptions {
+            line_number_config: CodeLineNumberConfig {
+                min_digits: usize::MAX,
+                ..Default::default()
+            },
+            ..plain()
+        },
+        CodeOptions {
+            line_number_config: CodeLineNumberConfig {
+                font_size: Some(0.0),
+                ..Default::default()
+            },
+            ..plain()
+        },
+        CodeOptions {
+            line_number_config: CodeLineNumberConfig {
+                font_size: Some(f32::INFINITY),
+                ..Default::default()
+            },
+            ..plain()
+        },
+        CodeOptions {
+            line_number_config: CodeLineNumberConfig {
+                color: Some(Color {
+                    red: f32::NAN,
+                    ..Color::GRAY
+                }),
                 ..Default::default()
             },
             ..plain()

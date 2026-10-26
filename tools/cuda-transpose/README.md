@@ -28,8 +28,10 @@ COLUMN = 3                # 0..31
 SYNTAX_HIGHLIGHT = True
 ```
 
-The scene uses syntax-colored CUDA statements, a request
-tray, bank cards, lane registers, and consistent source-row-group colors.
+Shared `Code` owns source lexing, indentation, smaller zero-padded gutters,
+allocated row highlights and the reserved padded-declaration edit. The lesson
+selects category and whole-token colors to connect CUDA source to its request
+tray, bank cards, lane registers and source-row-group colors.
 Source focus is established before each corresponding movement. The global
 store follows completion of all read batches.
 
@@ -77,10 +79,11 @@ python3 tests/cuda_transpose_banks_test.py
 node --test web/cuda-transpose-banks.test.mjs
 ```
 
-The 40 checks cover 320 trace configurations, broadcasts, producer/consumer
-correspondence, deterministic model isolation, syntax token ranges, source sequencing,
-authored geometry, independent packet animation arguments, subtle highlighting,
-and attribution. Helper tests use call spies, not a simulated Noon runtime.
+The checks cover all columns and both strides at five base offsets, broadcasts,
+producer/consumer correspondence, deterministic model isolation, shared Code
+options and source-edit authoring, source sequencing, authored data geometry,
+independent packet animation arguments, subtle highlighting and attribution.
+Shared Code tests own lexical matching and contextual syntax behavior. Helper tests use call spies, not a simulated Noon runtime.
 These tests do not qualify rendering, replay/seek, frame rate, or CUDA execution.
 
 The real browser qualification keeps all three original positive configurations
@@ -89,5 +92,6 @@ retain the same fifteen-minute budget. A successful browser run is functional
 renderer evidence, not physical iPhone performance or CUDA hardware execution.
 The previous async playback implementation was qualified in Chromium and
 JSPI-disabled desktop WebKit; changes require fresh qualification rather than
-inheriting that result. Gallery registration and its renderer-generated thumbnail
-remain separate work. Tracking: #2125; original demo PR: #2126.
+inheriting that result. The gallery poster is source-bound to a retained actual
+fidelity-run frame and must be refreshed whenever this scene changes. Tracking:
+#2302 for shared preset/demo cleanup; original fidelity work #2125 / #2126.

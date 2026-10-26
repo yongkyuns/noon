@@ -74,6 +74,28 @@ impl Default for CodeParagraphConfig {
     }
 }
 
+/// Optional gutter presentation. Numbering and measured placement stay in Rust.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CodeLineNumberConfig {
+    /// `None` inherits the source paragraph's font size. The exact font face
+    /// always matches the source paragraph.
+    pub font_size: Option<f32>,
+    /// `None` inherits the selected syntax theme's line-number color.
+    pub color: Option<Color>,
+    /// Minimum decimal digits, excluding a minus sign; zero padding never
+    /// truncates a number. Values from 0 through 32 are supported.
+    pub min_digits: usize,
+}
+impl Default for CodeLineNumberConfig {
+    fn default() -> Self {
+        Self {
+            font_size: None,
+            color: None,
+            min_digits: 1,
+        }
+    }
+}
+
 /// Source-display options. Source is preserved, not formatted or dedented.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodeOptions {
@@ -85,6 +107,7 @@ pub struct CodeOptions {
     pub tab_width: usize,
     pub add_line_numbers: bool,
     pub line_numbers_from: i32,
+    pub line_number_config: CodeLineNumberConfig,
     pub background: CodeBackground,
     pub background_config: CodeBackgroundConfig,
     pub paragraph_config: CodeParagraphConfig,
@@ -104,6 +127,7 @@ impl Default for CodeOptions {
             tab_width: 4,
             add_line_numbers: true,
             line_numbers_from: 1,
+            line_number_config: CodeLineNumberConfig::default(),
             background: CodeBackground::Rectangle,
             background_config: CodeBackgroundConfig::default(),
             paragraph_config: CodeParagraphConfig::default(),
@@ -457,6 +481,27 @@ impl CodeOptions {
         }
         if !paragraph.line_spacing.is_finite() || paragraph.line_spacing < -1.0 {
             return Err(invalid("line_spacing", paragraph.line_spacing));
+        }
+        let numbers = &self.line_number_config;
+        if let Some(size) = numbers.font_size {
+            if !size.is_finite() || size <= 0.0 {
+                return Err(invalid("line_number_config font_size", size));
+            }
+        }
+        if numbers.min_digits > 32 {
+            return Err(invalid(
+                "line_number_config min_digits (0..=32)",
+                numbers.min_digits,
+            ));
+        }
+        if numbers
+            .color
+            .is_some_and(|color| !noon_core::is_valid_code_color(color))
+        {
+            return Err(invalid(
+                "line_number_config color",
+                "expected finite RGBA channels in 0..=1",
+            ));
         }
         let background = &self.background_config;
         for (name, value) in [

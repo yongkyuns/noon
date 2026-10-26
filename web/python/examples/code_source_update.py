@@ -30,6 +30,7 @@ def listing():
                       "threadIdx.x": GOLD, "threadIdx.y": GOLD,
                       "blockIdx.x": GOLD, "blockIdx.y": GOLD},
         paragraph_config={"font_size": 20},
+        line_number_config={"font_size": 11, "color": GRAY, "min_digits": 2},
     ).scale(1.2).rotate(0.04)
     code.highlight_lines(0)
     return code

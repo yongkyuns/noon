@@ -84,6 +84,8 @@ class Code(_compat.VGroup):
     ``syntax_colors`` overrides foreground/comment/keyword/number/string/operator
     colors. ``token_colors`` selects whole identifiers or dotted identifier paths
     outside comments and strings; omitted colors use the named theme.
+    ``line_number_config`` can set ``font_size``, ``color`` and ``min_digits``
+    for a smaller or zero-padded gutter, aligned by Rust to the source baselines.
     """
 
     default_paragraph_config = {
@@ -101,7 +103,7 @@ class Code(_compat.VGroup):
         formatter_style="vim", tab_width=4, add_line_numbers=True,
         line_numbers_from=1, background="rectangle", background_config=None,
         paragraph_config=None, *, reserved_source=None, syntax_colors=None,
-        token_colors=None,
+        token_colors=None, line_number_config=None,
     ):
         if _create_code is None or _new_code_options is None:
             raise RuntimeError("Code requires Noon’s shared Rust authoring runtime")
@@ -136,6 +138,16 @@ class Code(_compat.VGroup):
         panel = _config("background_config", self.default_background_config, background_config,
                         {"buff", "corner_radius", "fill_color", "fill_opacity",
                          "stroke_color", "stroke_width", "stroke_opacity"})
+        numbers = _config("line_number_config", {}, line_number_config,
+                          {"font_size", "color", "min_digits"})
+        number_size = numbers.get("font_size")
+        if number_size is not None:
+            number_size = _number("line_number_config font_size", number_size)
+        number_digits = _number("line_number_config min_digits", _integer(
+            "line_number_config min_digits", numbers.get("min_digits", 1)))
+        number_color = numbers.get("color")
+        if number_color is not None:
+            number_color = _compat._as_color("line_number_config color", number_color)
         font = paragraph["font"]
         font_face = font if isinstance(font, NativeFontFace) else None
         font_family = font_face.family if font_face is not None else font
@@ -155,6 +167,10 @@ class Code(_compat.VGroup):
             engine_call(options.setParagraph, font_family, font_size, line_spacing,
                         paragraph["disable_ligatures"],
                         None if font_face is None else font_face._clone_for_text())
+            engine_call(options.setLineNumberLayout, number_size, number_digits)
+            if number_color is not None:
+                engine_call(options.setLineNumberColor, number_color.red, number_color.green,
+                            number_color.blue, number_color.alpha)
             engine_call(options.setBackgroundGeometry, float(panel["buff"]), float(panel["corner_radius"]))
             engine_call(options.setBackgroundOpacity, float(panel["fill_opacity"]))
             if fill is not None:
@@ -178,6 +194,7 @@ class Code(_compat.VGroup):
         self._code_font = font_family
         self._code_font_face = font_face
         self._code_font_size = font_size
+        self._code_line_number_font_size = font_size if number_size is None else number_size
         self._code_line_spacing = line_spacing
         self._initialize_code(handle, context)
 
@@ -191,12 +208,13 @@ class Code(_compat.VGroup):
         numbers = engine_call(handle.lineNumbers)
         if numbers is not None:
             self.line_numbers = known[_handle_key(numbers)]
-            self._text_wrappers(self.line_numbers, engine_call(handle.lineNumberSources), context)
+            self._text_wrappers(self.line_numbers, engine_call(handle.lineNumberSources), context,
+                                font_size=self._code_line_number_font_size)
         else:
             self.__dict__.pop("line_numbers", None)
         self._text_wrappers(self.code_lines, engine_call(handle.lineSources), context)
 
-    def _text_wrappers(self, family, sources, context):
+    def _text_wrappers(self, family, sources, context, *, font_size=None):
         # Observe Rust source rows once. Python only gives the returned handles
         # their public Text wrapper class; it neither calculates rows nor places
         # glyphs. Existing wrappers survive copy rehydration and preserve aliases.
@@ -205,8 +223,8 @@ class Code(_compat.VGroup):
             raise RuntimeError("Code line handles and source observations disagree")
         for member, source in zip(members, sources):
             wrapper = member if isinstance(member, Text) else object.__new__(Text)
-            font_size = getattr(wrapper, "_font_size", self._code_font_size)
-            wrapper._initialize_text(str(source), font_size, member._semantic_handle,
+            size = getattr(wrapper, "_font_size", self._code_font_size if font_size is None else font_size)
+            wrapper._initialize_text(str(source), size, member._semantic_handle,
                                      _base.WHITE, 1.0, presentation_applied=True)
             wrapper._font = getattr(wrapper, "_font", self._code_font)
             wrapper._font_face = getattr(wrapper, "_font_face", self._code_font_face)

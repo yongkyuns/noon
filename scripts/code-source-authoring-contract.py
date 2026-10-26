@@ -19,6 +19,7 @@ class CodeSourceAuthoringContract(Scene):
         listing = Code(
             code_string=source, reserved_source=reserved, language="cpp",
             paragraph_config={"font": face, "font_size": 16},
+            line_number_config={"font_size": 11, "color": GRAY, "min_digits": 2},
             syntax_colors={"foreground": WHITE, "keyword": PURPLE,
                            "comment": GRAY, "number": ORANGE},
             token_colors={"in": BLUE, "tile": BLUE, "out": GREEN,
@@ -29,6 +30,8 @@ class CodeSourceAuthoringContract(Scene):
         previous.annotation = "preserve the old source alias"
         untouched = list(listing.code_lines)[1:]
         number_aliases = list(listing.line_numbers)
+        assert [number.text for number in number_aliases] == ["01", "02", "03", "04", "05", "06"]
+        assert all(number.font_size == 11 for number in number_aliases)
         positions = [tuple(row.get_center()) for row in untouched]
         panel_size = (listing.background.width, listing.background.height)
         row_slot = listing.get_highlighted_lines(0, padding=0)
@@ -57,6 +60,8 @@ class CodeSourceAuthoringContract(Scene):
         unchanged_ids = [row.id for row in list(clone.code_lines)[1:]]
         unchanged_positions = [tuple(row.get_center()) for row in clone.code_lines][1:]
         cloned_numbers = list(clone.line_numbers)
+        assert [number.text for number in cloned_numbers] == [number.text for number in number_aliases]
+        assert all(number.font_size == 11 for number in cloned_numbers)
         clone_panel = (clone.background.width, clone.background.height,
                        tuple(clone.background.get_center()))
         clone_row = clone.get_highlighted_lines(0, padding=0)
@@ -135,6 +140,11 @@ class CodeSourceAuthoringContract(Scene):
             {"syntax_colors": {"not_a_category": RED}},
             {"token_colors": {"in[0]": BLUE}},
             {"token_colors": {"": BLUE}},
+            {"line_number_config": {"min_digits": -1}},
+            {"line_number_config": {"min_digits": 33}},
+            {"line_number_config": {"min_digits": 2 ** 100}},
+            {"line_number_config": {"font_size": 0}},
+            {"line_number_config": {"font_size": float("inf")}},
         ]:
             try:
                 Code(code_string=source, language="cpp", **kwargs)

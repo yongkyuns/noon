@@ -167,6 +167,8 @@ class CodeFacadeTests(unittest.TestCase):
         code._create_code.assert_called_once_with(source, self.options[0], self.context)
         self.assertEqual(self.options[0].args, ("python", None, "vim", 4, True, 9, "rectangle"))
         self.assertEqual(self.options[0].calls["setParagraph"], ("Monospace", 24.0, 0.5, True, None))
+        self.assertEqual(self.options[0].calls["setLineNumberLayout"], (None, 1.0))
+        self.assertNotIn("setLineNumberColor", self.options[0].calls)
         self.assertEqual(self.options[0].calls["setBackgroundStroke"][-2:], (0.01, 1.0))
         self.assertFalse(self.options[0].freed)
         self.assertIs(value.code_lines, self.handle.lines)
@@ -206,6 +208,14 @@ class CodeFacadeTests(unittest.TestCase):
             ({"token_colors": "tile"}, TypeError),
             ({"syntax_colors": {1: noon.RED}}, TypeError),
             ({"token_colors": {False: noon.RED}}, TypeError),
+            ({"line_number_config": []}, TypeError),
+            ({"line_number_config": {"unknown": 2}}, NotImplementedError),
+            ({"line_number_config": {"font_size": True}}, TypeError),
+            ({"line_number_config": {"font_size": "11"}}, TypeError),
+            ({"line_number_config": {"min_digits": True}}, TypeError),
+            ({"line_number_config": {"min_digits": 2.5}}, TypeError),
+            ({"line_number_config": {"min_digits": "2"}}, TypeError),
+            ({"line_number_config": {"min_digits": 10 ** 1000}}, ValueError),
         ]:
             with self.subTest(options=options), self.assertRaises(error):
                 code.Code(code_string="x", **options)
@@ -235,6 +245,26 @@ class CodeFacadeTests(unittest.TestCase):
         self.assertEqual(retained.custom_metadata, "author annotation")
         self.assertEqual(retained.font, "Monospace")
         self.assertEqual(retained.line_spacing, 0.5)
+
+    def test_number_presentation_forwards_and_keeps_independent_wrapper_metadata(self):
+        class Integral:
+            def __index__(self):
+                return 2
+
+        value = code.Code(code_string="x", paragraph_config={"font_size": 20},
+                          line_number_config={"font_size": 11, "color": noon.GRAY,
+                                              "min_digits": Integral()})
+        self.assertEqual(self.options[0].calls["setLineNumberLayout"], (11.0, 2.0))
+        self.assertEqual(self.options[0].calls["setLineNumberColor"],
+                         (noon.GRAY.red, noon.GRAY.green, noon.GRAY.blue, noon.GRAY.alpha))
+        self.assertTrue(all(row.font_size == 20 for row in value.code_lines.submobjects))
+        self.assertTrue(all(number.font_size == 11 for number in value.line_numbers.submobjects))
+        retained = value.line_numbers.submobjects[0]
+        retained.annotation = "gutter alias"
+        value._rehydrate_semantic_family_handle()
+        self.assertIs(value.line_numbers.submobjects[0], retained)
+        self.assertEqual(retained.font_size, 11)
+        self.assertEqual(retained.annotation, "gutter alias")
 
     def test_supported_names_come_from_native_registry_and_export_is_available(self):
         self.assertIs(noon.Code, code.Code)
