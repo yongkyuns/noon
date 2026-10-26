@@ -239,7 +239,7 @@ for text_type in (Text, MarkupText):
         context.ordinaryWait(0.1)
         # The target has moved after runtime startup; placement must read its
         # current shared bounds and preserve the masked coordinate.
-        region.shift(UP)
+        region.shift(UP + RIGHT)
         before_y = moving.get_center()[1]
         moving.move_to(region, aligned_edge=edge, coor_mask=(1, 0, 0))
         assert abs(moving.get_left()[0] - region.get_left()[0]) < 1e-6
