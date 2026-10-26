@@ -255,8 +255,10 @@ mod tests {
         assert_eq!(
             execution
                 .session()
-                .runtime
-                .effective_object(object)
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.id == object)
                 .unwrap()
                 .glow
                 .as_ref()
@@ -273,8 +275,10 @@ mod tests {
         assert_eq!(execution.session().frame().time, time);
         assert!(execution
             .session()
-            .runtime
-            .effective_object(object)
+            .frame()
+            .objects
+            .iter()
+            .find(|row| row.id == object)
             .unwrap()
             .glow
             .is_none());
