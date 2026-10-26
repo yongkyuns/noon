@@ -269,6 +269,9 @@ impl FramePreparer {
     /// so the existing preload uploader can write only new resident ranges.
     pub(crate) fn resident_upload_frame(&self, stats: RenderStats) -> PreparedFrame<'_> {
         PreparedFrame {
+            fill_gradients: &self.fill_gradients,
+            gradient_changes: &[],
+            gradient_indices: &self.gradient_indices,
             time: 0.0,
             circle_ids: &[],
             circles: &[],

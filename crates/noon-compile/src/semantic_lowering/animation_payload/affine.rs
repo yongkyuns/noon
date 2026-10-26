@@ -1740,10 +1740,14 @@ pub(super) fn lower_affine_lifecycle_channels(
     if endpoint.point_color.is_some()
         && (matches!(
             source.style.fill.as_ref(),
-            Some(noon_core::SemanticPaint::Resource(_))
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Resource(_)
+            )
         ) || matches!(
             source.style.stroke.as_ref(),
-            Some(noon_core::SemanticPaint::Resource(_))
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Resource(_)
+            )
         ))
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);

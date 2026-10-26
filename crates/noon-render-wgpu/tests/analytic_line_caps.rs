@@ -10,6 +10,7 @@ fn line_frame(cap: StrokeCap, width_mode: StrokeWidthMode) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

@@ -7,9 +7,11 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
         Some(SemanticPaint::Solid(color)) => {
             Ok(Some(Color::rgb(color.red, color.green, color.blue)))
         }
-        Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
-        )),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
+            Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+            ))
+        }
         None => Ok(None),
     }
 }
@@ -17,7 +19,9 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
 pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, AuthoringError> {
     let fill_visible = match style.fill.as_ref() {
         Some(SemanticPaint::Solid(color)) => f64::from(color.alpha) * style.fill_opacity > 0.0,
-        Some(SemanticPaint::Resource(_)) => style.fill_opacity > 0.0,
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
+            style.fill_opacity > 0.0
+        }
         None => false,
     };
     paint_color(if fill_visible {
@@ -34,9 +38,11 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
 fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, AuthoringError> {
     match paint {
         Some(SemanticPaint::Solid(color)) => Ok(f64::from(color.alpha) * opacity),
-        Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
-        )),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
+            Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
+            ))
+        }
         None => Ok(0.0),
     }
 }
@@ -86,7 +92,7 @@ fn replace_paint_color(
     *opacity = match paint {
         None => opacity_when_enabled,
         Some(SemanticPaint::Solid(previous)) => f64::from(previous.alpha) * *opacity,
-        Some(SemanticPaint::Resource(_)) => *opacity,
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => *opacity,
     };
     *paint = Some(SemanticPaint::Solid(color));
 }

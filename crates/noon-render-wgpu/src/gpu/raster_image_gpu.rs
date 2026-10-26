@@ -99,7 +99,7 @@ impl RasterImageGpuRenderer {
         let camera_layout = uniform_layout(
             device,
             "image camera",
-            wgpu::ShaderStages::VERTEX,
+            wgpu::ShaderStages::VERTEX_FRAGMENT,
             size_of::<CameraUniform>(),
         );
         let object_layout = uniform_layout(

@@ -1475,6 +1475,7 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         };
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: line_object,
                 style,
             })
@@ -1514,6 +1515,7 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         };
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: circle_object,
                 style: circle_style,
             })
@@ -1558,6 +1560,7 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         };
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: path_object,
                 style: path_style,
             })
@@ -2385,6 +2388,7 @@ fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
             cairo_boundary_test_scene_with_straight_controls(false, false, false, true);
         scene
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: surface_object,
                 style: noon_core::Style {
                     fill: Some(Color::WHITE),
@@ -2559,6 +2563,7 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
                 }
                 scene
                     .apply_execution_patch(&ExecutionPatch::SetStyle {
+                        fill_gradient: None,
                         object,
                         style: noon_core::Style {
                             fill: Some(Color::WHITE),
@@ -2661,6 +2666,7 @@ fn cairo_concave_planar_proxy_preserves_sloped_depth() {
         let mut scene = SceneInstance::new(compiled);
         scene
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: noon_core::Style {
                     fill: Some(Color::WHITE),
@@ -3000,6 +3006,7 @@ fn mesh_fill_and_stroke_changes_preserve_residency_atomically() {
         no_fill.fill = None;
         scene
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: near_object,
                 style: no_fill,
             })
@@ -3021,6 +3028,7 @@ fn mesh_fill_and_stroke_changes_preserve_residency_atomically() {
 
         scene
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: near_object,
                 style: original_style,
             })
@@ -3042,6 +3050,7 @@ fn mesh_fill_and_stroke_changes_preserve_residency_atomically() {
         stroked.stroke_width = 1.0;
         scene
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: near_object,
                 style: stroked,
             })
@@ -3064,6 +3073,7 @@ fn mesh_fill_and_stroke_changes_preserve_residency_atomically() {
 
         scene
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: near_object,
                 style: original_style,
             })
@@ -3178,7 +3188,11 @@ fn translucent_faces_sort_after_opaque_geometry_and_reorder_on_pose_changes() {
                 .style;
             style.opacity = 0.5;
             scene
-                .apply_execution_patch(&ExecutionPatch::SetStyle { object, style })
+                .apply_execution_patch(&ExecutionPatch::SetStyle {
+                    fill_gradient: None,
+                    object,
+                    style,
+                })
                 .unwrap();
         }
         scene.seek(0.0).unwrap();

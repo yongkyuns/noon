@@ -40,10 +40,25 @@ impl std::fmt::Display for LinearGradientError {
 impl std::error::Error for LinearGradientError {}
 
 /// One immutable straight encoded-sRGB color and normalized stop position.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "GradientStopInput")]
 pub struct GradientStop {
     position: f64,
     color: Color,
+}
+
+#[derive(serde::Deserialize)]
+struct GradientStopInput {
+    position: f64,
+    color: Color,
+}
+
+impl TryFrom<GradientStopInput> for GradientStop {
+    type Error = LinearGradientError;
+
+    fn try_from(value: GradientStopInput) -> Result<Self, Self::Error> {
+        Self::new(value.position, value.color)
+    }
 }
 
 impl GradientStop {
@@ -97,11 +112,27 @@ impl GradientStop {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "LinearGradientInput")]
 pub struct LinearGradient {
     start: [f64; 2],
     end: [f64; 2],
     stops: Arc<[GradientStop]>,
+}
+
+#[derive(serde::Deserialize)]
+struct LinearGradientInput {
+    start: [f64; 2],
+    end: [f64; 2],
+    stops: Vec<GradientStop>,
+}
+
+impl TryFrom<LinearGradientInput> for LinearGradient {
+    type Error = LinearGradientError;
+
+    fn try_from(value: LinearGradientInput) -> Result<Self, Self::Error> {
+        Self::new(value.start, value.end, value.stops)
+    }
 }
 
 impl LinearGradient {

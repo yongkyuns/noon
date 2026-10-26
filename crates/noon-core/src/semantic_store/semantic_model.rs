@@ -241,6 +241,8 @@ impl SemanticTransform {
 #[serde(rename_all = "snake_case")]
 pub enum SemanticPaint {
     Solid(Color),
+    /// Continuous local paint; opacity remains on the owning semantic style.
+    LinearGradient(std::sync::Arc<crate::LinearGradient>),
     /// Stable resource identity for a future gradient/pattern paint resource.
     Resource(u64),
 }
@@ -315,7 +317,7 @@ impl SemanticStyle {
                     && color.blue.is_finite()
                     && color.alpha.is_finite()
             }
-            Some(SemanticPaint::Resource(_)) | None => true,
+            Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) | None => true,
         };
         paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
@@ -388,7 +390,7 @@ impl SemanticStyle {
         }?;
         match paint {
             SemanticPaint::Solid(color) => Some(*color),
-            SemanticPaint::Resource(_) => None,
+            SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_) => None,
         }
     }
 

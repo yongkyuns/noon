@@ -1264,6 +1264,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
+                fill_gradient: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -1291,6 +1292,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -1303,6 +1305,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,

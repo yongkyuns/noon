@@ -7,6 +7,7 @@ mod family_transform_schedule_tests;
 mod host_callbacks;
 mod initial_animation;
 mod membership;
+pub(crate) mod paint;
 mod projection;
 mod publication;
 mod reachability;

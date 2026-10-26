@@ -233,7 +233,11 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         let mut style = runtime.frame().objects[1].style;
         style.opacity = 0.37;
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetStyle { object, style })
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
+                object,
+                style,
+            })
             .unwrap();
         let faded = fixture.prepare(&mut runtime, true);
         assert_eq!(
@@ -721,6 +725,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
             .unwrap();
         runtime
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     fill: None,
@@ -776,7 +781,11 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
         let mut style = runtime.frame().objects[1].style;
         style.opacity = 0.35;
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetStyle { object, style })
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_gradient: None,
+                object,
+                style,
+            })
             .unwrap();
         let faded = fixture.prepare(&mut runtime, true);
         assert_eq!(

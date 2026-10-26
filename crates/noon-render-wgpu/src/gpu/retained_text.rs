@@ -2350,6 +2350,7 @@ impl RetainedFramePreparer {
             scratch.text_bounds = None;
             scratch.transform = frame.render_transform(index);
             scratch.style = object.style;
+            scratch.fill_gradient = object.fill_gradient.clone();
             scratch.appearance = object.appearance;
             self.scratch.reveals[scratch_slot] = frame.reveal(index);
             self.scratch.morphs[scratch_slot] = frame.morph(index);
@@ -2732,6 +2733,7 @@ impl RetainedFramePreparer {
                         frame.reveal(object_index),
                         frame.morph(object_index),
                     );
+                    self.scratch.objects[scratch_slot].fill_gradient = object.fill_gradient.clone();
                     self.scratch_slots[object_index] = Some(scratch_slot);
                 }
                 ObjectContentRef::Text(handle) => {
@@ -2815,6 +2817,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -4594,6 +4597,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        fill_gradient: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4606,6 +4610,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        fill_gradient: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4648,6 +4653,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        fill_gradient: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4660,6 +4666,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        fill_gradient: None,
                         draw_enabled: true,
                         glow: None,
                         spatial: None,
@@ -4973,6 +4980,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
+                fill_gradient: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -5652,6 +5660,7 @@ mod tests {
             image_resource,
         );
         frame.objects.push(FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

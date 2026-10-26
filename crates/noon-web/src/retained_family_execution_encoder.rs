@@ -230,6 +230,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             let previous = self.published_rows.get(&row.slot);
             let stable = previous.is_some_and(|previous| {
                 previous.order == row.order
+                    && previous.fill_gradient == row.fill_gradient
                     && previous.object == row.object
                     && previous.z_index == row.z_index
                     && previous.content == row.content
@@ -929,6 +930,7 @@ mod tests {
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = noon_runtime::FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -941,6 +943,7 @@ mod tests {
             text_bounds: None,
         };
         let second = noon_runtime::FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -974,6 +977,7 @@ mod tests {
             time: 0.5,
             objects: vec![
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -986,6 +990,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
