@@ -322,7 +322,7 @@ fn inverse_closed_cubic_seam_uses_one_curve_measure() {
 #[test]
 fn paired_path_query_example_executes_native_inverse_assertions() {
     let session = noon::example_scenes::path_queries::session().unwrap();
-    assert!((session.frame().time - 2.2).abs() < 1.0e-6);
+    assert!((session.session().frame().time - 2.2).abs() < 1.0e-6);
 }
 
 #[test]
@@ -1137,14 +1137,14 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
 #[test]
 fn paired_query_example_uses_the_normal_execution_session() {
     let session = noon::example_scenes::path_queries::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 10);
+    assert_eq!(session.session().frame().objects.len(), 10);
 }
 
 #[test]
 fn cubic_constructor_reference_keeps_six_manim_point_stroke() {
     let session = noon::example_scenes::cubic_bezier::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 1);
-    assert!((session.frame().objects[0].style.stroke_width - 0.06).abs() < 1e-6);
+    assert_eq!(session.session().frame().objects.len(), 1);
+    assert!((session.session().frame().objects[0].style.stroke_width - 0.06).abs() < 1e-6);
 }
 
 #[test]

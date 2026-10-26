@@ -3,7 +3,7 @@
 use super::*;
 use crate::{NativeViewportConfig, RealtimeClock};
 use noon::integration::{AudioMixFormat, PreparedAudioMix};
-use noon::{AudioClipOptions, AudioResource, ExecutionSession, Scene, SectionType};
+use noon::{AudioClipOptions, AudioResource, Scene, SceneExecution, SectionType};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -19,7 +19,7 @@ use winit::window::WindowId;
 // an unbounded CPU competitor for the software audio daemon.
 const PICTURE_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
-fn fixture() -> (ExecutionSession, noon::SceneSectionNavigation) {
+fn fixture() -> (SceneExecution, noon::SceneSectionNavigation) {
     use noon_core::{
         AnimationOptions, CompositionTimeMap, RateFunction, SemanticAnimationCompositionKind,
         SemanticAnimationIntent, SemanticMutationTransaction, SemanticObjectTrackProperty,
@@ -82,11 +82,12 @@ fn fixture() -> (ExecutionSession, noon::SceneSectionNavigation) {
             AnimationOptions::new(),
         )
         .unwrap();
+    let sections = scene.section_navigation();
     (
         scene
-            .execution_session_with_animation_root(&animation)
+            .into_execution_with_animation_root(&animation)
             .unwrap(),
-        scene.section_navigation(),
+        sections,
     )
 }
 
@@ -491,10 +492,11 @@ fn native_audio_controls_device_smoke() {
     let directory = PathBuf::from(std::env::var_os("NOON_NATIVE_AUDIO_PROOF_DIR").unwrap());
     std::fs::create_dir_all(&directory).unwrap();
     let (session, sections) = fixture();
-    let context = session.publication_context();
+    let context = session.session().publication_context();
     // Freeze the authored reference before any viewer command. Later volume or
     // mute cannot change the oracle by mutating the session under test.
     let expected = session
+        .session()
         .prepare_audio_mix(AudioMixFormat::STEREO_48_KHZ, 1_024)
         .unwrap();
     let now = Instant::now();

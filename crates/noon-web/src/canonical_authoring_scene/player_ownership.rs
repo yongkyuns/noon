@@ -15,6 +15,7 @@
 //! move the same non-Clone player, never construct a second runtime. A failed
 //! validation leaves this state untouched and returns the rejected player to its caller. No transition waits for GPU retirement.
 
+use crate::authoring_error::AuthoringFailure;
 use crate::semantic_execution_player::ExecutionPlayerIdentity;
 use crate::SemanticExecutionPlayer;
 use noon_core::{SceneRevision, SemanticNodeId, SemanticStore};
@@ -75,6 +76,33 @@ impl std::fmt::Display for RejectedPlayerReturn {
 
 impl std::error::Error for RejectedPlayerReturn {}
 
+/// Failed disposal retains the same consumed capability for correction or retry.
+pub(super) struct RejectedPlayerDiscard {
+    pub(super) failure: AuthoringFailure,
+    pub(super) player: Box<SemanticExecutionPlayer>,
+}
+
+impl std::fmt::Debug for RejectedPlayerDiscard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RejectedPlayerDiscard")
+            .field("failure", &self.failure)
+            .field("identity", &self.player.ownership_identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for RejectedPlayerDiscard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.failure.fmt(f)
+    }
+}
+
+impl std::error::Error for RejectedPlayerDiscard {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.failure)
+    }
+}
+
 impl PlayerOwnership {
     pub(super) fn local(&self) -> Option<&SemanticExecutionPlayer> {
         match self {
@@ -121,6 +149,10 @@ impl PlayerOwnership {
                 return Err("authored scene changed while live execution is active".into());
             }
             Self::Returned(player) if player.scene_revision() != authored => {
+                // A reusable Scene may outlive its presentation source. Never
+                // discard the exact owner of an unfinished temporary attachment;
+                // failed retirement preserves this returned capability.
+                player.retire_execution_source()?;
                 *self = Self::Unstarted;
             }
             Self::Unstarted | Self::Active(_) | Self::Returned(_) => {}

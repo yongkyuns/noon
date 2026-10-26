@@ -32,8 +32,8 @@ pub async fn create_direct_pointer_selection_renderer(
         let program = scene.into_live_program(Finished).map_err(js_error)?;
         WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
     } else {
-        let session = scene.execution_session().map_err(js_error)?;
-        WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+        let session = scene.into_execution().map_err(js_error)?;
+        WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
     }
 }
 
@@ -44,7 +44,7 @@ pub async fn create_direct_moving_pointer_selection_renderer(
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session =
         noon::example_scenes::pointer_selection::moving_selection_session().map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Direct-browser counterpart for click-Indicate during authored motion.
@@ -54,7 +54,7 @@ pub async fn create_direct_moving_click_indicate_renderer(
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::pointer_selection::moving_click_indicate_session()
         .map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Direct-browser counterpart of the native collector's shared Rust-authored
@@ -65,13 +65,17 @@ pub async fn create_direct_pointer_input_trace_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let fixture = noon::example_scenes::pointer_input_trace::Fixture::new();
-    let session = noon::ExecutionSession::from_semantic_root(&fixture.store, fixture.root)
-        .map_err(js_error)?;
-    let mut session = session;
+    let scene = noon::Scene::with_integration_root(
+        std::rc::Rc::new(std::cell::RefCell::new(fixture.store)),
+        fixture.root,
+    )
+    .map_err(js_error)?;
+    let mut session = scene.into_execution().map_err(js_error)?;
     session
+        .session_mut()
         .enable_pointer_fill_selection(4.0)
         .map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// Qualification-only live animation; not click-action dispatch. Inspection must

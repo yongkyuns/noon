@@ -179,7 +179,7 @@ fn arc_inputs_reject_before_semantic_resource_creation() {
 #[test]
 fn paired_arc_example_uses_the_shared_execution_session() {
     let session = noon::example_scenes::arc_geometry::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 3);
+    assert_eq!(session.session().frame().objects.len(), 3);
 }
 
 #[test]

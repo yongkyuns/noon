@@ -97,28 +97,39 @@ fn input(
 }
 
 fn submit(
+    store: &mut SemanticStore,
     session: &mut ExecutionSession,
     sequence: u64,
     kind: NativePointerInputKind,
 ) -> NativePointerInputPublication {
     let (token, input) = input(session, sequence, kind);
-    session.submit_native_pointer_input(&token, input).unwrap()
+    session
+        .submit_native_pointer_input(store, &token, input)
+        .unwrap()
 }
 
-fn click(session: &mut ExecutionSession, sequence: u64, x: f32) -> NativePointerInputPublication {
-    assert_eq!(submit(session, sequence, press(x)).playback_control(), None);
-    submit(session, sequence + 1, release(x))
+fn click(
+    store: &mut SemanticStore,
+    session: &mut ExecutionSession,
+    sequence: u64,
+    x: f32,
+) -> NativePointerInputPublication {
+    assert_eq!(
+        submit(store, session, sequence, press(x)).playback_control(),
+        None
+    );
+    submit(store, session, sequence + 1, release(x))
 }
 
 #[test]
 fn playback_control_is_a_local_committed_request_without_time_or_authored_mutation() {
-    let (store, _, target, mut session) = fixture();
+    let (mut store, _, target, mut session) = fixture();
     let revision = store.scene_revision();
     let frame = session.frame().clone();
     let publication = session.publication_context();
     assert!(session.has_playback_controls());
     assert!(session.has_native_pointer_subscribers());
-    let receipt = click(&mut session, 1, 0.0);
+    let receipt = click(&mut store, &mut session, 1, 0.0);
     assert_eq!(
         receipt.playback_control(),
         Some(PlaybackControl::NextSection)
@@ -134,7 +145,7 @@ fn playback_control_is_a_local_committed_request_without_time_or_authored_mutati
     assert_eq!(query.spatial_stats().candidates_tested, 1);
     assert_eq!(query.spatial_stats().full_scan_fallbacks, 0);
     assert_eq!(
-        submit(&mut session, 3, release(0.0)).playback_control(),
+        submit(&mut store, &mut session, 3, release(0.0)).playback_control(),
         None
     );
 }
@@ -160,46 +171,51 @@ fn playback_uses_painter_correct_pick_and_background_does_not_dispatch() {
     );
     let occluder = attach(&mut store, root, object(4.0, None));
     let mut session = session(&store, root);
-    let receipt = click(&mut session, 1, 0.0);
+    let receipt = click(&mut store, &mut session, 1, 0.0);
     assert_eq!(receipt.selection_click().unwrap().target(), Some(front));
     assert_eq!(receipt.playback_control(), Some(PlaybackControl::Restart));
-    let blocked = click(&mut session, 3, 4.0);
+    let blocked = click(&mut store, &mut session, 3, 4.0);
     assert_eq!(blocked.selection_click().unwrap().target(), Some(occluder));
     assert_eq!(blocked.playback_control(), None);
-    assert_eq!(click(&mut session, 5, -4.0).playback_control(), None);
+    assert_eq!(
+        click(&mut store, &mut session, 5, -4.0).playback_control(),
+        None
+    );
 }
 
 #[test]
 fn drag_cancel_and_seek_do_not_emit_or_retain_playback_requests() {
-    let (_, _, _, mut session) = fixture();
-    submit(&mut session, 1, press(0.0));
+    let (mut store, _, _, mut session) = fixture();
+    submit(&mut store, &mut session, 1, press(0.0));
     submit(
+        &mut store,
         &mut session,
         2,
         NativePointerInputKind::Move(position(0.0, 105.0)),
     );
     assert_eq!(
-        submit(&mut session, 3, release(0.0)).playback_control(),
+        submit(&mut store, &mut session, 3, release(0.0)).playback_control(),
         None
     );
-    submit(&mut session, 4, press(0.0));
+    submit(&mut store, &mut session, 4, press(0.0));
     submit(
+        &mut store,
         &mut session,
         5,
         NativePointerInputKind::Cancel(NativePointerCancellation::FocusLost),
     );
     assert_eq!(
-        submit(&mut session, 6, release(0.0)).playback_control(),
+        submit(&mut store, &mut session, 6, release(0.0)).playback_control(),
         None
     );
-    submit(&mut session, 7, press(0.0));
-    session.seek(1.0).unwrap();
+    submit(&mut store, &mut session, 7, press(0.0));
+    session.seek_with_store(&mut store, 1.0).unwrap();
     assert_eq!(
-        submit(&mut session, 8, release(0.0)).playback_control(),
+        submit(&mut store, &mut session, 8, release(0.0)).playback_control(),
         None
     );
     assert_eq!(
-        click(&mut session, 9, 0.0).playback_control(),
+        click(&mut store, &mut session, 9, 0.0).playback_control(),
         Some(PlaybackControl::NextSection)
     );
     assert_eq!(session.frame().time, 1.0);
@@ -207,13 +223,13 @@ fn drag_cancel_and_seek_do_not_emit_or_retain_playback_requests() {
 
 #[test]
 fn stale_release_does_not_dispatch_or_acknowledge_the_occurrence() {
-    let (_, _, _, mut session) = fixture();
-    submit(&mut session, 1, press(0.0));
+    let (mut store, _, _, mut session) = fixture();
+    submit(&mut store, &mut session, 1, press(0.0));
     let (stale, release) = input(&session, 2, release(0.0));
-    session.seek(1.0).unwrap();
+    session.seek_with_store(&mut store, 1.0).unwrap();
     let frame = session.frame().clone();
     assert!(matches!(
-        session.submit_native_pointer_input(&stale, release),
+        session.submit_native_pointer_input(&mut store, &stale, release),
         Err(ExecutionSessionInputError::StalePointerPublication { .. })
     ));
     assert_eq!(session.last_native_event_sequence, Some(1));
@@ -262,13 +278,13 @@ fn failed_reactive_release_has_no_request_and_the_same_sequence_can_retry() {
         .unwrap();
     let mut session = session(&store, root);
     session.set_reactive_input(gain, 1.0e20_f32).unwrap();
-    submit(&mut session, 1, press(0.0));
+    submit(&mut store, &mut session, 1, press(0.0));
     let before = session.pointer_selection;
     let publication = session.publication_context();
     let frame = session.frame().clone();
     let (token, release_input) = input(&session, 2, release(0.0));
     assert!(matches!(
-        session.submit_native_pointer_input(&token, release_input),
+        session.submit_native_pointer_input(&mut store, &token, release_input),
         Err(ExecutionSessionInputError::Evaluation(_))
     ));
     assert_eq!(session.pointer_selection, before);
@@ -276,14 +292,14 @@ fn failed_reactive_release_has_no_request_and_the_same_sequence_can_retry() {
     assert_eq!(session.publication_context(), publication);
     assert_eq!(session.frame(), &frame);
     session.set_reactive_input(gain, 1.0_f32).unwrap();
-    let receipt = submit(&mut session, 2, release(0.0));
+    let receipt = submit(&mut store, &mut session, 2, release(0.0));
     assert_eq!(receipt.selection_click().unwrap().target(), Some(target));
     assert_eq!(
         receipt.playback_control(),
         Some(PlaybackControl::ToggleAudioMuted)
     );
     assert_eq!(
-        submit(&mut session, 3, release(0.0)).playback_control(),
+        submit(&mut store, &mut session, 3, release(0.0)).playback_control(),
         None
     );
 }
@@ -307,7 +323,10 @@ fn playback_binding_is_root_relative_and_does_not_use_a_recycled_generation() {
     assert_ne!(replacement.generation(), old.generation());
     let mut session = session(&store, root);
     assert!(!session.has_playback_controls());
-    assert_eq!(click(&mut session, 1, 0.0).playback_control(), None);
+    assert_eq!(
+        click(&mut store, &mut session, 1, 0.0).playback_control(),
+        None
+    );
 }
 
 #[test]
@@ -333,7 +352,7 @@ fn predeclared_control_plan_rejects_authored_edits_and_history_without_changes()
     assert_eq!(store.scene_revision(), revision);
     assert_eq!(session.publication_context(), publication);
     assert_eq!(
-        click(&mut session, 1, 0.0).playback_control(),
+        click(&mut store, &mut session, 1, 0.0).playback_control(),
         Some(PlaybackControl::NextSection)
     );
 }

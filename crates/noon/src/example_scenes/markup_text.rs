@@ -1,7 +1,7 @@
 //! Paired native/WASM MarkupText example exercising supported inline styles.
-use crate::{ExecutionSession, MarkupText, Scene};
+use crate::{MarkupText, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let title = scene
         .text(
@@ -22,5 +22,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     live.complete_segment(wait)
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }

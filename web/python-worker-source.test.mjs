@@ -4,6 +4,105 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("source disposal retires canonical input before releasing its retained context", async () => {
+  const begin = source.indexOf("function retireSemanticContext(");
+  const end = source.indexOf("\nasync function prepareAuthoringDependencies", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const contexts = new Map();
+  const calls = [];
+  const { retire, flush } = new Function("semanticContexts", "postError", `
+    let requestQueue = Promise.resolve();
+    ${source.slice(begin, end)}
+    return { retire: retireSemanticContext, flush: () => requestQueue };
+  `)(contexts, (_request, error) => { throw error; });
+  const entry = {
+    context: { retireExecutionSource() { calls.push("retire"); } },
+    endpoints: new Set(), released: false,
+    releaseCallbackSession() { calls.push("callbacks"); },
+  };
+  contexts.set("source", entry);
+  retire("source", entry);
+  assert.deepEqual(calls, [], "a recovery stop keeps the source invocation");
+  entry.released = true;
+  entry.endpoints.add({});
+  retire("source", entry);
+  assert.deepEqual(calls, [], "the endpoint must first relinquish its player");
+  entry.endpoints.clear();
+  entry.context.retireExecutionSource = () => { throw new Error("retirement rejected"); };
+  assert.throws(() => retire("source", entry), /retirement rejected/);
+  assert.equal(contexts.get("source"), entry);
+  await flush();
+  assert.deepEqual(calls, []);
+  entry.context.retireExecutionSource = () => {
+    assert.equal(contexts.get("source"), entry);
+    calls.push("retire");
+  };
+  retire("source", entry);
+  assert.equal(contexts.has("source"), false);
+  await flush();
+  assert.deepEqual(calls, ["retire", "callbacks"]);
+});
+
+for (const failureAt of ["stop", "retire"]) {
+  test(`source release waits for exact endpoint cleanup and retains a rejected ${failureAt} for retry`, async () => {
+    const start = source.indexOf("function isContinuationControl");
+    const end = source.indexOf("async function handleRequest", start);
+    const calls = [], posts = [], errors = [];
+    const entry = { released: false, endpoints: new Set() };
+    const contexts = new Map([["source", entry]]);
+    let reject = true;
+    const endpoint = {
+      stop(options) {
+        assert.deepEqual(options, { retireSource: true });
+        assert.equal(contexts.get("source"), entry);
+        assert.equal(entry.released, false);
+        calls.push("stop");
+        if (reject && failureAt === "stop") throw new Error("stop rejected");
+        entry.endpoints.delete(endpoint);
+      },
+    };
+    entry.endpoints.add(endpoint);
+    const handle = new Function(
+      "AUTHORING_CHANNEL", "isRecord", "validateRequest", "pyodidePromise",
+      "attachSemanticExecutionRequest", "semanticContexts", "activeAuthoringRun",
+      "retireSemanticContext", "post", "postError", "failContinuation", `
+        ${source.slice(start, end)}
+        return handleContinuationControl;
+      `,
+    )(
+      "noon.authoring", value => typeof value === "object" && value !== null,
+      () => {}, Promise.resolve({}), () => assert.fail("release must not attach a player"),
+      contexts, null,
+      (token, retained) => {
+        assert.equal(retained, entry);
+        assert.equal(entry.endpoints.size, 0);
+        assert.equal(entry.released, true);
+        calls.push("retire");
+        if (reject && failureAt === "retire") throw new Error("retire rejected");
+        contexts.delete(token);
+      },
+      (type, payload) => { calls.push("acknowledge"); posts.push({ type, ...payload }); },
+      (requestId, error) => errors.push({ requestId, message: error.message }),
+      () => assert.fail("release must not cancel an unrelated continuation"),
+    );
+    const request = { channel: "noon.authoring", type: "release_semantic_execution",
+      requestId: 9, contextId: "source" };
+    await handle(request);
+    assert.equal(contexts.get("source"), entry);
+    assert.equal(entry.released, false);
+    assert.deepEqual(posts, []);
+    assert.deepEqual(errors, [{ requestId: 9, message: `${failureAt} rejected` }]);
+    if (failureAt === "stop") assert.equal(entry.endpoints.has(endpoint), true);
+    reject = false;
+    await handle({ ...request, requestId: 10 });
+    assert.equal(contexts.has("source"), false);
+    assert.deepEqual(calls, failureAt === "stop"
+      ? ["stop", "stop", "retire", "acknowledge"]
+      : ["stop", "retire", "retire", "acknowledge"]);
+    assert.deepEqual(posts, [{ type: "semantic_execution_released", requestId: 10 }]);
+  });
+}
+
 test("table cell selections dispatch through the cold store or owning live context", () => {
   const worker = {};
   const begin = source.indexOf("  self.noonHighlightTableCell =");
@@ -548,7 +647,10 @@ test("retired callback sessions release only after the active Python run unwinds
   const activeRun = new Promise((resolve) => { finishRun = resolve; });
   let releases = 0;
   const contexts = new Map();
-  const entry = { released: true, endpoints: new Set(), releaseCallbackSession() { releases += 1; } };
+  const entry = {
+    context: { retireExecutionSource() {} },
+    released: true, endpoints: new Set(), releaseCallbackSession() { releases += 1; },
+  };
   contexts.set("context", entry);
   const retire = new Function("semanticContexts", "postError", "activeRun", `
     let requestQueue = activeRun;

@@ -979,8 +979,18 @@ async function handleContinuationControl(request) {
         throw new Error("cannot release an active semantic continuation context");
       }
       if (entry) {
+        // This acknowledgement is the pre-authoring source-release barrier.
+        // Stop on the owning worker, so a cross-port stop cannot race the next
+        // Run's writes into the same semantic arena. Recovery still uses the
+        // ordinary endpoint stop/return path without retiring its source.
+        for (const endpoint of [...entry.endpoints]) endpoint.stop({ retireSource: true });
         entry.released = true;
-        retireSemanticContext(request.contextId, entry);
+        try {
+          retireSemanticContext(request.contextId, entry);
+        } catch (error) {
+          entry.released = false;
+          throw error;
+        }
       }
       post("semantic_execution_released", { requestId });
       return;
@@ -1144,6 +1154,10 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
 
 function retireSemanticContext(token, entry) {
   if (entry.released && entry.endpoints.size === 0) {
+    // A Python Scene or Mobject may retain this exact semantic arena. Release
+    // input-owned attachments through its canonical owner before relinquishing
+    // our reference; failed retirement must leave the owner available.
+    entry.context.retireExecutionSource();
     semanticContexts.delete(token);
     // Cancellation may retire the endpoint while its Python stack is still
     // unwinding. Release through the existing interpreter queue after that run.

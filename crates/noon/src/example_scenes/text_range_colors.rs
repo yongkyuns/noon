@@ -3,9 +3,9 @@
 //! The selectors intentionally cover repeated matching, UTF-8 text, whitespace/newlines,
 //! and a negative-end slice without overlapping one another.
 
-use crate::{Color, ExecutionSession, Scene, Text};
+use crate::{Color, Scene, Text};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let source = "Noon  café\nNoon Ω";
     let mut scene = Scene::new();
     let label = scene
@@ -33,5 +33,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     live.complete_segment(wait)
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }

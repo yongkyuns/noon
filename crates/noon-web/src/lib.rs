@@ -87,6 +87,12 @@ mod background_audio_example;
 #[cfg(any(target_arch = "wasm32", test))]
 mod browser_pointer_input;
 mod canonical_authoring_scene;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod click_glow_pulse_smoke;
 mod clock;
 #[cfg(any(target_arch = "wasm32", test))]
 mod worker_audio;

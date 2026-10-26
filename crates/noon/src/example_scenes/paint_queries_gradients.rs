@@ -1,7 +1,7 @@
 //! Shared family gradient and paint observations, paired with ordinary_paint_queries_gradients.py.
-use crate::{Color, ExecutionSession, Scene};
+use crate::{Color, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut boxes = Vec::new();
@@ -54,7 +54,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             live.advance_segment_to(segment, segment.end_time())?;
             live.complete_segment(segment)?;
         }
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

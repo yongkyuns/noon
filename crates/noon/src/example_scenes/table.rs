@@ -1,14 +1,13 @@
 //! One retained plain, math, and composite-entry table scene for every host.
 
 use crate::{
-    Color, DecimalFormat, DecimalTable, ExecutionSession, LatexBackend, MathTable, MathTex,
-    Mobject, MobjectFamily, MobjectTable, MobjectTarget, Scene, StrokeCap, StrokeJoin, Table,
-    TableOptions,
+    Color, DecimalFormat, DecimalTable, LatexBackend, MathTable, MathTex, Mobject, MobjectFamily,
+    MobjectTable, MobjectTarget, Scene, StrokeCap, StrokeJoin, Table, TableOptions,
 };
 
 /// Scene counterpart of the Python fixture that exercises group-valued table
 /// labels and a group-valued top-left entry.
-pub fn family_labels_session() -> Result<ExecutionSession, String> {
+pub fn family_labels_session() -> Result<crate::SceneExecution, String> {
     enum Shape {
         Circle(f64),
         Square(f64),
@@ -81,11 +80,11 @@ pub fn family_labels_session() -> Result<ExecutionSession, String> {
     scene
         .add_many(&[table.family().into()])
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 /// Plain-text Table counterpart of the ManimCE fixture with retained labels.
-pub fn labels_session() -> Result<ExecutionSession, String> {
+pub fn labels_session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let row_labels = [
         scene.circle(0.15).map_err(|error| error.to_string())?,
@@ -110,12 +109,12 @@ pub fn labels_session() -> Result<ExecutionSession, String> {
     scene
         .add_many(&[table.family().into()])
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 /// Retained counterpart of the ManimCE line-config fixture, including cap and
 /// join style values that are carried through Table's sparse layout.
-pub fn line_config_session() -> Result<ExecutionSession, String> {
+pub fn line_config_session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let first_circle = scene.circle(0.3).map_err(|error| error.to_string())?;
     let first_square = scene.square(0.5).map_err(|error| error.to_string())?;
@@ -146,10 +145,10 @@ pub fn line_config_session() -> Result<ExecutionSession, String> {
     scene
         .add_many(&[table.family().into()])
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
-pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
+pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let options = TableOptions {
         include_outer_lines: true,
@@ -252,11 +251,15 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
             .requires_content_boundary(entry.as_target())
             .map_err(|error| error.to_string())?);
     }
-    Ok(execution)
+    scene
+        .into_execution_with_session(execution)
+        .map_err(|error| error.to_string())
 }
 
 /// DecimalTable counterpart for ManimCE's configurable DecimalNumber entries.
-pub fn decimal_format_session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
+pub fn decimal_format_session(
+    backend: &mut impl LatexBackend,
+) -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let table = DecimalTable::from_rows_with_options(
         &mut scene,
@@ -278,5 +281,5 @@ pub fn decimal_format_session(backend: &mut impl LatexBackend) -> Result<Executi
     scene
         .add_many(&[table.family().into()])
         .map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }

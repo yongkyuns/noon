@@ -1,6 +1,5 @@
 use super::*;
 use crate::{execution_source::LiveProgramExecutionSource, NativeViewportConfig};
-use noon::ExecutionSession;
 use noon_core::{
     NativeEventOccurrence, NativeEventSource, ReactiveValue, SemanticMutationTransaction,
     SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticSignalValue,
@@ -42,9 +41,13 @@ fn signal(
 impl Fixture {
     fn new() -> Self {
         let fixture = shared_trace::Fixture::new();
-        let mut session =
-            ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
-        session.enable_pointer_fill_selection(4.0).unwrap();
+        let mut session = crate::test_scene_from_root(fixture.store, fixture.root)
+            .into_execution()
+            .unwrap();
+        session
+            .session_mut()
+            .enable_pointer_fill_selection(4.0)
+            .unwrap();
         Self {
             app: NativeApp::new(session, NativeViewportConfig::default()),
             target: fixture.target,
@@ -222,7 +225,9 @@ fn paired_trace_qualifies_reactive_edges_selection_and_cancellation() {
 #[test]
 fn native_input_classifies_unrecorded_replay_without_blocking_forward_execution() {
     let fixture = shared_trace::Fixture::signals_only();
-    let session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
+    let session = crate::test_scene_from_root(fixture.store, fixture.root)
+        .into_execution()
+        .unwrap();
     let mut app = NativeApp::new(session, NativeViewportConfig::default());
     app.static_session_mut()
         .begin_replay_retention(Default::default())
@@ -655,8 +660,10 @@ fn event_only_pointer_interest_includes_the_full_button_vocabulary() {
         SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button: 255 }),
         SemanticSignalValue::Scalar(0.0),
     );
-    let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
-    assert!(session.has_native_pointer_subscribers());
+    let session = crate::test_scene_from_root(store, root)
+        .into_execution()
+        .unwrap();
+    assert!(session.session().has_native_pointer_subscribers());
     let mut app = NativeApp::new(session, NativeViewportConfig::default());
     model_presentation(&mut app, SIZE, 1.0);
     app.dispatch_pointer_position(PhysicalPosition::new(200.0, 100.0), SIZE, 1.0)
@@ -857,7 +864,9 @@ fn signal_only_epoch_change_gets_a_presentation_wake_without_full_scene_invalida
         SemanticSignalValue::Scalar(0.0),
     );
     let mut app = NativeApp::new(
-        ExecutionSession::from_semantic_root(&store, root).unwrap(),
+        crate::test_scene_from_root(store, root)
+            .into_execution()
+            .unwrap(),
         NativeViewportConfig::default(),
     );
     app.static_session_mut().take_renderer_publication();

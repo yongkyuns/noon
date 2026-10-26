@@ -1,10 +1,9 @@
 //! Ordinary style animation shares property tracks on native and direct Rust/WASM.
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
-    TransformToRequest,
+    AnimationCompositionRequest, AnimationOptions, RateFunction, Scene, TransformToRequest,
 };
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut shape = scene.circle(1.)?;
@@ -36,7 +35,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             live.advance_segment_to(segment, segment.end_time())?;
             live.complete_segment(segment)?;
         }
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

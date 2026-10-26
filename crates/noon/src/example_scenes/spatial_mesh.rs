@@ -14,7 +14,7 @@ use noon_core::{
 /// The red front instance moves through the blue rear instance on an authored world
 /// transform track. Both objects retain the same immutable mesh resource in the semantic
 /// store, so native and direct-WASM execution exercise identical mesh/camera semantics.
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut store = SemanticStore::new();
     let scene_root = store.insert_family();
     let mesh = MeshResource::new(
@@ -93,8 +93,19 @@ pub fn session() -> Result<ExecutionSession, String> {
     let animation_root = committed
         .resolve(animation_root)
         .expect("created composition");
-    ExecutionSession::from_semantic_root_with_animation_root(&store, scene_root, animation_root)
-        .map_err(|error| error.to_string())
+    let session = ExecutionSession::from_semantic_root_with_animation_root(
+        &store,
+        scene_root,
+        animation_root,
+    )
+    .map_err(|error| error.to_string())?;
+    crate::Scene::with_integration_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        scene_root,
+    )
+    .map_err(|error| error.to_string())?
+    .into_execution_with_session(session)
+    .map_err(|error| error.to_string())
 }
 
 fn opaque(color: Color) -> SemanticStyle {
@@ -122,7 +133,7 @@ fn world_transform(translation: SemanticVec3) -> SemanticWorldTransform3D {
 mod tests {
     use super::*;
 
-    fn red_position(session: &ExecutionSession) -> SemanticVec3 {
+    fn red_position(session: &crate::ExecutionSession) -> SemanticVec3 {
         session
             .frame()
             .objects
@@ -137,7 +148,7 @@ mod tests {
     #[test]
     fn shared_mesh_camera_scene_lowers_and_animates_through_normal_session() {
         let mut session = session().unwrap();
-        let initial = session.frame();
+        let initial = session.session().frame();
         assert_eq!(initial.objects.len(), 3);
         assert_eq!(
             initial
@@ -149,17 +160,20 @@ mod tests {
         );
         assert!(initial.objects.iter().all(|row| row.spatial.is_some()));
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().wake_state().timeline(),
             noon_runtime::TimelineWakeState::Continuous
         );
 
         session.seek(1.0).unwrap();
-        assert_eq!(red_position(&session).z, 0.0);
-        assert_eq!(session.camera_3d().unwrap().unwrap().position.x, 0.125);
-        session.seek(2.0).unwrap();
-        assert_eq!(red_position(&session).z, -1.0);
+        assert_eq!(red_position(session.session()).z, 0.0);
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().camera_3d().unwrap().unwrap().position.x,
+            0.125
+        );
+        session.seek(2.0).unwrap();
+        assert_eq!(red_position(session.session()).z, -1.0);
+        assert_eq!(
+            session.session().wake_state().timeline(),
             noon_runtime::TimelineWakeState::Quiescent
         );
     }
@@ -170,20 +184,20 @@ mod tests {
         let mut forward = session().unwrap();
         let mut expected = Vec::with_capacity(sample_times.len());
         for time in sample_times {
-            forward.advance_to(time).unwrap();
-            assert_eq!(red_position(&forward).z, 1.0 - time);
+            forward.session_mut().advance_to(time).unwrap();
+            assert_eq!(red_position(forward.session()).z, 1.0 - time);
             assert_eq!(
-                forward.camera_3d().unwrap().unwrap().position.x,
+                forward.session().camera_3d().unwrap().unwrap().position.x,
                 time * 0.125
             );
-            expected.push(forward.frame().clone());
+            expected.push(forward.session().frame().clone());
         }
 
         let mut sought = session().unwrap();
         for (time, expected_frame) in sample_times.into_iter().zip(expected) {
             sought.seek(time).unwrap();
             assert_eq!(
-                sought.frame(),
+                sought.session().frame(),
                 &expected_frame,
                 "direct seek at t={time} must match source-forward advancement"
             );

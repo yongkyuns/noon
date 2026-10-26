@@ -1,8 +1,8 @@
 //! Explicit graph inputs, paired with `web/python/examples/graph_queries.py`.
 //! Current axes queries leave the already sampled graph unchanged.
 use crate::{
-    ExecutionSession, ManimAxesOptions, ManimGeometryOptions, PlotSamplingOptions, Scene, BLUE,
-    GREEN, ORANGE, RED, YELLOW,
+    ManimAxesOptions, ManimGeometryOptions, PlotSamplingOptions, Scene, BLUE, GREEN, ORANGE, RED,
+    YELLOW,
 };
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
@@ -45,10 +45,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     scene()
         .map_err(|error| error.to_string())?
-        .execution_session()
+        .into_execution()
         .map_err(|error| error.to_string())
 }
 

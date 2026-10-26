@@ -1009,7 +1009,7 @@ pub async fn create_coordinate_plotting_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::coordinate_plotting_example::session()
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 /// The native and direct-WASM qualification paths use the same typed builder.
@@ -1063,7 +1063,7 @@ pub async fn create_area_helpers_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session =
         noon::example_scenes::area_helpers::session().map_err(|error| JsValue::from_str(&error))?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
 #[cfg(all(
@@ -1076,5 +1076,5 @@ pub async fn create_graph_queries_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::graph_queries::session()
         .map_err(|error| JsValue::from_str(&error))?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

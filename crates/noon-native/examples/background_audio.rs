@@ -7,14 +7,15 @@
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (scene, animation) = noon::example_scenes::background_audio::scene()?;
-    let session = scene.execution_session_with_animation_root(&animation)?;
+    let section_navigation = scene.section_navigation();
+    let session = scene.into_execution_with_animation_root(&animation)?;
     noon_native::run_with_config(
         session,
         noon_native::NativeViewportConfig {
             title: "Noon — A Small Discovery".to_owned(),
             inspection_zoom: true,
             playback_controls: true,
-            section_navigation: scene.section_navigation(),
+            section_navigation,
             ..Default::default()
         },
     )?;

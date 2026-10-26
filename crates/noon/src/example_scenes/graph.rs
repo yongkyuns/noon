@@ -1,6 +1,6 @@
 //! Explicit-layout Graph/DiGraph proof over ordinary retained semantics.
 
-use crate::{ExecutionSession, GraphOptions, MobjectTarget, Scene, BLUE, GREEN, RED};
+use crate::{GraphOptions, MobjectTarget, Scene, BLUE, GREEN, RED};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -51,9 +51,9 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let scene = scene().map_err(|error| error.to_string())?;
-    scene.execution_session().map_err(|error| error.to_string())
+    scene.into_execution().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

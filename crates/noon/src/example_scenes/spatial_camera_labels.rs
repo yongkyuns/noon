@@ -1,9 +1,9 @@
 //! Mixed World/FixedOrientation/FixedFrame text under an ordinary camera-profile track.
 
 use crate::{
-    AnimationOptions, Color, DeclaredAnimation, ExecutionSession, MathTypst, MobjectTarget,
-    RateFunction, Scene, SemanticPaint, SemanticSpatialCompositionDomain, SemanticStyle,
-    SemanticVec3, SemanticWorldTransform3D, Typst, VectorPath,
+    AnimationOptions, Color, DeclaredAnimation, MathTypst, MobjectTarget, RateFunction, Scene,
+    SemanticPaint, SemanticSpatialCompositionDomain, SemanticStyle, SemanticVec3,
+    SemanticWorldTransform3D, Typst, VectorPath,
 };
 use noon_core::{ManimCamera3DProfile, SemanticRotation3D};
 
@@ -164,7 +164,7 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
     Ok((scene, camera, movement))
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, movement) = scene()?;
     let mut session = scene
         .execution_session()
@@ -176,7 +176,9 @@ pub fn session() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -208,17 +210,19 @@ mod tests {
             ),
             (1.0, to_profile()),
         ] {
-            session.advance_to(time).unwrap();
+            session.session_mut().advance_to(time).unwrap();
             assert_eq!(
                 session
+                    .session()
                     .effective_camera_profile(camera.node_id())
                     .unwrap()
                     .0,
                 expected
             );
         }
-        assert_eq!(session.frame().objects.len(), 7);
+        assert_eq!(session.session().frame().objects.len(), 7);
         let family_rows: Vec<_> = session
+            .session()
             .frame()
             .objects
             .iter()
@@ -238,6 +242,7 @@ mod tests {
         assert!((fixed_center.z).abs() < 1e-9);
         assert_eq!(
             session
+                .session()
                 .frame()
                 .objects
                 .iter()
