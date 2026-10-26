@@ -52,6 +52,7 @@ fn build_frame(segments: usize) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

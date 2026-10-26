@@ -317,6 +317,7 @@ mod viewport_tests {
             },
             occurrence_index: 0,
             base: DerivedDisplayObjectState {
+                fill_gradient: None,
                 z_index: 0.0,
                 content: GeometryRef::circle(0.5).into(),
                 text_bounds: None,

@@ -6,6 +6,7 @@ use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
 mod derived_display;
+mod linear_gradient;
 mod source_capture;
 pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
 mod glow_filter;
@@ -505,6 +506,7 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    fill_gradients: Option<Box<linear_gradient::LinearGradientGpu>>,
     analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
     retained_glow: retained_text::glow_publication::RetainedGlowPublication,
     spatial: mesh::SpatialGpuState,
@@ -633,7 +635,7 @@ impl GpuRenderer {
             label: Some("Noon camera bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -871,6 +873,7 @@ impl GpuRenderer {
             derived_display,
             images: None,
             analytic_glows: None,
+            fill_gradients: None,
             retained_glow: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
@@ -1319,9 +1322,10 @@ impl GpuRenderer {
             &mut trace,
         );
 
+        let gradients = self.upload_fill_gradients(device, queue, prepared);
         UploadStats {
-            bytes_uploaded,
-            buffer_reallocations,
+            bytes_uploaded: bytes_uploaded + gradients.bytes_uploaded,
+            buffer_reallocations: buffer_reallocations + gradients.buffer_reallocations,
         }
     }
 
@@ -1726,10 +1730,47 @@ impl GpuRenderer {
     ) -> DrawStats {
         let mut stats = DrawStats::default();
         for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
+            let mut start = instance_range.start;
+            if let Some(indices) =
+                prepared.gradient_indices(resolved.batch.primitive, instance_range.clone())
+            {
+                for &index in indices {
+                    if start < index {
+                        let solid = ResolvedOrderedBatch {
+                            batch: OrderedRenderBatch {
+                                primitive: resolved.batch.primitive,
+                                instance_range: start..index,
+                            },
+                            mega: resolved.mega.clone(),
+                        };
+                        stats += self.draw_contributing_ordered_batch(
+                            pass,
+                            prepared,
+                            &solid,
+                            single_sample_analytics,
+                            binding,
+                        );
+                    }
+                    if let Some(drawn) = self.draw_gradient_instance(
+                        pass,
+                        prepared,
+                        resolved.batch.primitive,
+                        index,
+                        single_sample_analytics,
+                        binding,
+                    ) {
+                        stats += drawn;
+                    }
+                    start = index + 1;
+                }
+            }
+            if start == instance_range.end {
+                continue;
+            }
             let segment = ResolvedOrderedBatch {
                 batch: OrderedRenderBatch {
                     primitive: resolved.batch.primitive,
-                    instance_range,
+                    instance_range: start..instance_range.end,
                 },
                 mega: resolved.mega.clone(),
             };
@@ -2460,6 +2501,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2472,6 +2514,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2487,6 +2530,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,
@@ -2520,6 +2564,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     z_index: 0.0,
@@ -2539,6 +2584,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_gradient: None,
                     draw_enabled: true,
                     glow: None,
                     spatial: None,

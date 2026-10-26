@@ -683,6 +683,7 @@ mod tests {
                 },
             },
             ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: missing,
                 style: Style::default(),
             },
@@ -736,6 +737,7 @@ mod tests {
         };
         let transaction = ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: changed_style,
             },
@@ -774,6 +776,7 @@ mod tests {
             .unwrap();
         let transaction =
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: authored,
                 style: Style {
                     opacity: 0.25,
@@ -816,6 +819,7 @@ mod tests {
         let before_frame = instance.frame().clone();
         let frame = instance.prepare_advance_to(0.5).unwrap();
         let invalid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+            fill_gradient: None,
             object,
             style: Style {
                 opacity: f32::NAN,
@@ -938,6 +942,7 @@ mod tests {
         let before = instance.publication_context();
         let transaction =
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: Style {
                     opacity: 0.25,
@@ -1023,6 +1028,7 @@ mod tests {
                 },
             },
             ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object: missing,
                 style: Style::default(),
             },
@@ -1148,6 +1154,7 @@ mod tests {
                 transform: original.transform,
             },
             ExecutionPatch::SetStyle {
+                fill_gradient: None,
                 object,
                 style: original.style,
             },

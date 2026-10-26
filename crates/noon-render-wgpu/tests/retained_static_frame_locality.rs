@@ -13,6 +13,7 @@ const STATIC_FRAMES: u64 = 128;
 fn static_geometry_frame() -> FrameState {
     let objects = (0..STATIC_OBJECTS)
         .map(|index| FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,
@@ -105,6 +106,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         time: 0.0,
         objects: (0..STATIC_OBJECTS)
             .map(|index| FrameObjectState {
+                fill_gradient: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,
@@ -281,6 +283,7 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
     frame.objects.push(FrameObjectState {
+        fill_gradient: None,
         draw_enabled: true,
         glow: None,
         spatial: None,
@@ -379,6 +382,7 @@ fn one_text_update_stays_local_in_ten_thousand_glyph_mixed_scene() {
     let mut frame = static_geometry_frame();
     for index in 0..TEXT_OBJECTS {
         frame.objects.push(FrameObjectState {
+            fill_gradient: None,
             draw_enabled: true,
             glow: None,
             spatial: None,

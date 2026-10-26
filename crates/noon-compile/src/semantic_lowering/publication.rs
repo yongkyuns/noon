@@ -1325,6 +1325,7 @@ fn lower_prepared_entry(
         lowered.base_style,
     );
     compiled.glow = glow::lower_prepared_attachment(prepared, object)?;
+    compiled.fill_gradient = lowered.fill_gradient;
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
@@ -1485,6 +1486,7 @@ fn lower_semantic_publication(
         // A style/content/domain edit must not leave an installed or newly staged
         // glow outside the same finite profile accepted at initial lowering.
         glow::lower_prepared_attachment(prepared, node.into())?;
+        super::paint::lower_fill(node, &state, prepared.store())?;
         // Object-owned interaction/metadata declarations have no render-value patch.
         let Some(flags) = domains.get(&node) else {
             continue;
@@ -1570,6 +1572,7 @@ fn lower_semantic_publication(
             mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,
+                fill_gradient: super::paint::lower_fill(node, &state, prepared.store())?,
             });
         }
     }

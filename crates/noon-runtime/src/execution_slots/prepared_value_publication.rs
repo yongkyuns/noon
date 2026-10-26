@@ -29,6 +29,7 @@ enum PreparedAuthoredValueWrite {
     Style {
         object_index: usize,
         style: Style,
+        fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
         changes_execution: bool,
     },
 }
@@ -150,9 +151,17 @@ impl SceneInstance {
                         changes_execution,
                     }
                 }
-                (1, ExecutionPatch::SetStyle { style, .. }) => PreparedAuthoredValueWrite::Style {
+                (
+                    1,
+                    ExecutionPatch::SetStyle {
+                        style,
+                        fill_gradient,
+                        ..
+                    },
+                ) => PreparedAuthoredValueWrite::Style {
                     object_index,
                     style: *style,
+                    fill_gradient: fill_gradient.clone(),
                     changes_execution,
                 },
                 (2, ExecutionPatch::SetSemanticTransform { transform, .. }) => {
@@ -327,12 +336,17 @@ impl SceneInstance {
                 }
                 PreparedAuthoredValueWrite::Style {
                     style,
+                    fill_gradient,
                     object_index,
                     ..
                 } => {
-                    self.compiled
-                        .commit_prepared_style_value(object_index as u32, style);
+                    self.compiled.commit_prepared_style_value(
+                        object_index as u32,
+                        style,
+                        fill_gradient.clone(),
+                    );
                     self.frame.objects[object_index].style = style;
+                    self.frame.objects[object_index].fill_gradient = fill_gradient;
                     self.reapply_properties(
                         object_index,
                         &[
@@ -348,7 +362,11 @@ impl SceneInstance {
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
             if before.differs_from_frame(&self.frame, object_index) {
-                self.mark_changed(object_index);
+                if before.spatially_differs_from_frame(&self.frame, object_index) {
+                    self.mark_changed(object_index);
+                } else {
+                    self.changes.insert(object_index);
+                }
             }
         }
 

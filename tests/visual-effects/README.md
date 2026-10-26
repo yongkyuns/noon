@@ -128,12 +128,34 @@ validation boundary without reclassifying the future-feature review programs.
 
 ## Linear-gradient values and reference boundary
 
-The next paint slice for #1897 defines checked inert Rust `GradientStop` and
-`LinearGradient` values in `noon-core::object_state`. This is a value/reference
-contract, **not enabled Scene paint, animation, Python authoring or GPU support**.
-No placeholder Scene setter or Python class is exported. The remaining vertical
-slice must integrate these values through shared semantics, lowering, ordinary
-animation, publication and retained drawing with equivalent Rust/Python examples.
+The first paint prerequisite for #1897 defines checked inert Rust `GradientStop`
+and `LinearGradient` values in `noon-core::object_state`. The integration now
+carries these immutable definitions through semantic fill, checked planar
+lowering, compiled/effective rows, atomic style publication, the genuine worker
+codec, and retained analytic/path draws. No placeholder Scene setter or Python
+class is exported. This remains **an integration prerequisite, not a supported
+cross-language paint/animation feature or M3 completion**.
+
+The finite GPU definition admits at most 16 stops, distinct endpoints after f32
+conversion, and no distinct stop positions that collapse to one GPU position.
+Text, images and spatial paint are rejected by semantic lowering. Gradient source
+capture with glow and transient derived-display packing are explicitly rejected
+until their shared integration is implemented. Ordinary gradient animation,
+effective target capture, paired public authoring, actual browser execution and
+the broader coverage/quality/performance gates remain outstanding.
+
+The native `continuous_gradient_pixels_match_literal_encoded_ldr_reference`
+test checks analytic circles/rectangles, convex paths and tessellated concave
+paths against literal encoded-LDR interior references. Its eight profiles cover
+solid baseline, local paint edits, transparent-stop premultiplication,
+right-continuous coincident stops, diagonal axes, separate fill/object opacity
+and affine transforms. It requests a real adapter and fails if none is available;
+it is not a software/noop pixel test. Retained structural tests check no paint
+program on an ordinary frame, one reused uniform per changed paint, zero clean
+uploads, unchanged path meshes and bounded painter-chunk rebuilding. A 100,000
+object runtime test checks atomic, sparse paint-only publication and idempotence.
+These component tests do not qualify coverage edges, temporal paint interpolation,
+export equivalence, physical-device performance or browser/backend parity.
 
 For the first encoded-LDR profile:
 

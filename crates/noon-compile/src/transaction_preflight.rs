@@ -563,11 +563,16 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 overlay.set_glow(scene, *object, glow.clone());
             }
-            ExecutionPatch::SetStyle { object, style } => {
+            ExecutionPatch::SetStyle {
+                object,
+                style,
+                fill_gradient,
+            } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
                 validate_style(*object, *style).map_err(map_object_state_error)?;
+                crate::execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if overlay.object_index(scene, *object).is_none() {

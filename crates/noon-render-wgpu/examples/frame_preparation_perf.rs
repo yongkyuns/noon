@@ -515,6 +515,7 @@ fn build_frame(object_count: usize) -> FrameState {
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {
+                fill_gradient: None,
                 draw_enabled: true,
                 glow: None,
                 spatial: None,

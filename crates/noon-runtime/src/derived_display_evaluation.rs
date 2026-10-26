@@ -229,6 +229,7 @@ impl std::error::Error for DerivedDisplayEvaluationError {}
 
 fn row_from_derived(base: &DerivedDisplayObjectState) -> FrameRowState {
     FrameRowState {
+        fill_gradient: base.fill_gradient.clone(),
         glow: None,
         z_index: base.z_index,
         transform: base.transform,
@@ -250,6 +251,7 @@ fn derived_from_row(
     row: FrameRowState,
 ) -> DerivedDisplayObjectState {
     DerivedDisplayObjectState {
+        fill_gradient: row.fill_gradient,
         z_index: row.z_index,
         content: row.content_override.unwrap_or(base_content),
         text_bounds,
@@ -338,6 +340,7 @@ mod tests {
 
     fn base(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
+            fill_gradient: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,
