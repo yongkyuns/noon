@@ -100,19 +100,20 @@ impl RetainedGlowPublication {
                 }
             }
         }
-        if !self.sources.is_empty() {
-            let order = publication.painter_order();
-            if full || self.painter_ranks.is_empty() {
-                self.painter_ranks.clear();
-                self.painter_ranks.resize(frame.objects.len(), usize::MAX);
-                for (rank, &index) in order.iter().enumerate() {
-                    self.painter_ranks[index as usize] = rank;
-                }
-            } else if let Some(range) = publication.changes().painter_order_range() {
-                self.painter_ranks.resize(frame.objects.len(), usize::MAX);
-                for rank in range.start..range.end.min(order.len()) {
-                    self.painter_ranks[order[rank] as usize] = rank;
-                }
+        // Order belongs to the publication, including intervals with no glow.
+        // Initialize this projection at the full-publication barrier and keep
+        // its changed ranges current so a later local attachment needs no scan.
+        let order = publication.painter_order();
+        if full {
+            self.painter_ranks.clear();
+            self.painter_ranks.resize(frame.objects.len(), usize::MAX);
+            for (rank, &index) in order.iter().enumerate() {
+                self.painter_ranks[index as usize] = rank;
+            }
+        } else if let Some(range) = publication.changes().painter_order_range() {
+            self.painter_ranks.resize(frame.objects.len(), usize::MAX);
+            for rank in range.start..range.end.min(order.len()) {
+                self.painter_ranks[order[rank] as usize] = rank;
             }
         }
         self.context = Some(context);
