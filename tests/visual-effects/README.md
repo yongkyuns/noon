@@ -232,7 +232,7 @@ The compiler rejects axis collapse anywhere in the interval, GPU precision loss,
 opening/closing subpixel stop gaps, overshooting leaf rates and unsupported sources
 before publication. Immediate edits may change stop count. Native reactive fill
 drivers retain existing conflict admission. Initial support is planar positive-area
-circle/rectangle/path fills. Strokes, text/image fills, source effects, content morphs,
+circle/rectangle/path fills. Strokes, text/image fills, content morphs,
 derived displays, callback paint edits and group fills remain explicitly unsupported.
 Scalar color queries reject continuous paint; fill opacity reports its multiplier.
 
@@ -249,9 +249,11 @@ are qualification gates, not claims of a pass on every physical device.
 
 ## Implemented shared Rust boundary
 
-`crates/noon-core/src/object_state/glow.rs` contains production, renderer-independent
-values: `Glow`, `EffectUpdate`, `EffectRadius`, `Pixels`, `GlowSource`, typed parameter
-errors, and `PreparedEffectUpdate`. The existing object-state module exports them.
+`crates/noon-core/src/object_state/glow.rs` contains the production,
+renderer-independent `Glow` and `GlowSource` values. Its sibling
+`effect_parameters.rs` owns `EffectUpdate`, `EffectRadius`, `Pixels`, typed
+parameter errors and `PreparedEffectUpdate`, shared with `Blur`. The existing
+object-state module exports them.
 They use Noon's existing `Color`, not a parallel color type or Python validator.
 No new crate, dependency, identity allocator, scene store, timeline or shader exists.
 
@@ -1000,10 +1002,11 @@ No compatibility aliases, semantic identity allocator or effect clock is added.
 
 `public_scene_blur_rgba_pixels_seek_neutral_and_removal` compares normal public
 Scene output against an independent direct two-dimensional RGBA convolution of
-separately rendered ordinary sources. Circle, rectangle and asymmetric image
-profiles cover scene/pixel units, partial opacity, forward/backward seek, neutral
+separately rendered ordinary sources. Circle, rectangle, asymmetric image,
+mirrored stroked path, alpha gradient, text and math profiles cover scene/pixel
+units, partial opacity, forward/backward seek, neutral
 submission, exact removal and zero-work clean frames. Local Apple M6/Metal
-qualification produced 30 full-image samples across six profiles with maximum
+qualification produced 70 full-image samples across 14 profiles with maximum
 RGBA8 error 1. Browser parity and merge qualification remain separate gates;
 `scripts/blur-qualification.mjs` requires identical real Rust/WASM and Python
 pixels on WebGPU and WebGL2, including a visible outside-source Blur witness.
