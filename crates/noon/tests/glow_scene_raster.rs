@@ -2012,7 +2012,7 @@ fn blur_fixture(
             )
             .unwrap();
     }
-    source.set_opacity(f64::from(opacity)).unwrap();
+    source.set_object_opacity(f64::from(opacity)).unwrap();
     let radius = |sigma| {
         if pixels {
             noon::effects::EffectRadius::Pixels(sigma)
