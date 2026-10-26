@@ -9,6 +9,8 @@ await qualifyPairedAuthoring({
     id: `linear-gradient-${sampleTime}`, file: "linear_gradient.py",
     factory: "createDirectLinearGradientSmokeRenderer", objectCount: 1,
     duration: 4.25, sampleTime, playback: "live",
+    // Quiet waits retain their last picture and timer deadline in the direct host.
+    directHeldSampleTime: sampleTime === 0.25 ? 0 : undefined,
     boundaries: [0.5, 1.5, 1.75, 2.75, 3, 4],
     stopAtSourceCompletion: sampleTime === 4.25,
   })),
