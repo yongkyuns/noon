@@ -79,7 +79,7 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
         state.style = target_style_from_effective(
             &state.style,
             observed.object.style,
-            observed.object.fill_gradient.as_ref(),
+            observed.object.fill_paint.as_ref(),
         )?;
     }
     Ok(state)
@@ -91,7 +91,7 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
 pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
     effective: Style,
-    fill_gradient: Option<&std::sync::Arc<noon_core::LinearGradient>>,
+    fill_paint: Option<&std::sync::Arc<noon_core::SemanticPaint>>,
 ) -> Result<SemanticStyle, AuthoringError> {
     if matches!(authored.fill.as_ref(), Some(SemanticPaint::Resource(_)))
         || matches!(
@@ -103,7 +103,7 @@ pub(crate) fn target_style_from_effective(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));
     }
-    let (fill, fill_opacity) = authored.capture_effective_fill(effective.fill, fill_gradient);
+    let (fill, fill_opacity) = authored.capture_effective_fill(effective.fill, fill_paint);
     let (stroke, stroke_opacity) =
         if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
             == effective.stroke

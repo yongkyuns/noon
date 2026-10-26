@@ -35,15 +35,18 @@ impl GradientUniform {
         let mut result = Self::zeroed();
         let extent = value.bounds.max - value.bounds.min;
         result.bounds = [value.bounds.min.x, value.bounds.min.y, extent.x, extent.y];
-        let start = value.definition.start();
-        let end = value.definition.end();
+        let noon_core::SemanticPaint::LinearGradient(definition) = value.definition.as_ref() else {
+            unreachable!("checked gradient renderer profile");
+        };
+        let start = definition.start();
+        let end = definition.end();
         result.endpoints = [
             start[0] as f32,
             start[1] as f32,
             end[0] as f32,
             end[1] as f32,
         ];
-        result.metadata[0] = value.definition.stops().len() as u32;
+        result.metadata[0] = definition.stops().len() as u32;
         let transform = value.transform;
         result.transform = [
             transform.translation.x,
@@ -52,7 +55,7 @@ impl GradientUniform {
             transform.scale.y,
         ];
         result.rotation = [transform.rotation.cos(), transform.rotation.sin(), 0.0, 0.0];
-        for (target, stop) in result.stops.iter_mut().zip(value.definition.stops()) {
+        for (target, stop) in result.stops.iter_mut().zip(definition.stops()) {
             let c = stop.color();
             target.color = [
                 c.red * c.alpha,

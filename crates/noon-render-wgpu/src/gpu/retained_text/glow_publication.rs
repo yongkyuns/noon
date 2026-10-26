@@ -277,7 +277,7 @@ impl GpuRenderer {
                     row.geometry(),
                     Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
                 ) && row.style.fill.is_some()
-                    && row.fill_gradient.is_none()
+                    && row.fill_paint.is_none()
                     && row.style.stroke.is_none()
                     && frame.reveal(index) == 1.0
                     && publication.active_family_animation_indices().is_empty();

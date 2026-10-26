@@ -745,7 +745,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![crate::RetainedTransportObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 slot: crate::TransportSlotId {
                     slot: 0,
@@ -960,7 +960,7 @@ mod tests {
                 camera: Camera2DState::default(),
                 inset_2d_views: Vec::new(),
                 objects: vec![crate::RetainedTransportObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot: 0,
@@ -1007,7 +1007,7 @@ mod tests {
                                      camera_projection: Option<crate::TransportProjection3D>,
                                      point_light: bool| {
                 crate::RetainedTransportObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot,
@@ -1144,7 +1144,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,
@@ -1228,7 +1228,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,

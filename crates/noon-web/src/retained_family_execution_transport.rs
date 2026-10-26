@@ -27,7 +27,7 @@ pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTransientPresentationOccurrence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     pub anchor: ObjectId,
     pub before_anchor: bool,
     pub occurrence_index: u32,
@@ -70,7 +70,7 @@ impl RetainedTransientPresentationOccurrence {
             before_anchor: object.anchor_side() == noon_runtime::TransientAnchorSide::Before,
             occurrence_index: object.occurrence_index(),
             z_index: state.z_index,
-            fill_gradient: state.fill_gradient.clone(),
+            fill_paint: state.fill_paint.clone(),
             geometry,
             transform: state.transform,
             style: state.style,
@@ -88,7 +88,7 @@ impl RetainedTransientPresentationOccurrence {
             anchor_object_index,
             self.occurrence_index,
             TransientPresentationState {
-                fill_gradient: self.fill_gradient.clone(),
+                fill_paint: self.fill_paint.clone(),
                 z_index: self.z_index,
                 content: ObjectContentRef::Geometry(self.geometry.clone()),
                 text_bounds: None,
@@ -888,7 +888,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 effect: None,
                 spatial: None,
@@ -920,7 +920,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 slot: TransportSlotId {
                     slot: 0,
@@ -954,7 +954,7 @@ mod tests {
 
     fn geometry_plan() -> RetainedFamilyAnimationPlan {
         let object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -1028,7 +1028,7 @@ mod tests {
             0,
             7,
             TransientPresentationState {
-                fill_gradient: None,
+                fill_paint: None,
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::VectorPath(path.clone())),
                 text_bounds: None,
@@ -1072,7 +1072,7 @@ mod tests {
                 0,
                 9,
                 TransientPresentationState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     z_index: 0.0,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
                     text_bounds: None,

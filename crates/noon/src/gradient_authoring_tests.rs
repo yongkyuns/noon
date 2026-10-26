@@ -66,7 +66,12 @@ fn public_gradient_transform_samples_shared_fill_and_reconciles_exact_endpoint()
         .unwrap();
     let middle = row(&session, &source);
     assert_eq!(middle.style.fill.unwrap().alpha, 0.5);
-    let paint = middle.fill_gradient.as_ref().unwrap();
+    let paint = middle
+        .fill_paint
+        .as_ref()
+        .unwrap()
+        .as_linear_gradient()
+        .unwrap();
     assert_eq!(paint.start(), [0.25, 0.25]);
     assert_eq!(paint.end(), [0.75, 0.75]);
     assert_eq!(
@@ -78,7 +83,12 @@ fn public_gradient_transform_samples_shared_fill_and_reconciles_exact_endpoint()
         .advance_segment_to(segment, 1.0)
         .unwrap();
     assert!(Arc::ptr_eq(
-        row(&session, &source).fill_gradient.as_ref().unwrap(),
+        row(&session, &source)
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_linear_gradient()
+            .unwrap(),
         &target_paint
     ));
     scene.live(&mut session).complete_segment(segment).unwrap();
@@ -107,9 +117,9 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
         .live(&mut session)
         .advance_segment_to(segment, 0.5)
         .unwrap();
-    let current = row(&session, &source).fill_gradient.clone().unwrap();
+    let current = row(&session, &source).fill_paint.clone().unwrap();
     let effective = scene.live(&mut session).effective(&source).unwrap();
-    assert_eq!(effective.fill_gradient.as_ref(), Some(&current));
+    assert_eq!(effective.fill_paint.as_ref(), Some(&current));
     assert!(
         scene
             .live(&mut session)
@@ -118,7 +128,11 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
         "continuous paint has no single RGB color"
     );
     assert_eq!(
-        current.sample_premultiplied([0.5, 0.5]).unwrap(),
+        current
+            .as_linear_gradient()
+            .unwrap()
+            .sample_premultiplied([0.5, 0.5])
+            .unwrap(),
         [0.5, 0.25, 0.25, 1.0]
     );
     let source_style = scene.live(&mut session).authored(&source).unwrap().style;
@@ -126,7 +140,7 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
         source_style
             .capture_effective_fill(row(&session, &source).style.fill, Some(&current))
             .0,
-        Some(SemanticPaint::LinearGradient(current))
+        Some(current.as_ref().clone())
     );
     // Creating an authored target observes the ordinary segment completion barrier.
     assert!(scene.live(&mut session).target_editor(&source).is_err());
@@ -135,13 +149,10 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
         .advance_segment_to(segment, 1.0)
         .unwrap();
     scene.live(&mut session).complete_segment(segment).unwrap();
-    let current = row(&session, &source).fill_gradient.clone().unwrap();
+    let current = row(&session, &source).fill_paint.clone().unwrap();
     let captured = scene.live(&mut session).target_editor(&source).unwrap();
     let state = scene.live(&mut session).authored(&captured).unwrap();
-    assert_eq!(
-        state.style.fill,
-        Some(SemanticPaint::LinearGradient(current))
-    );
+    assert_eq!(state.style.fill, Some(current.as_ref().clone()));
     assert_eq!(
         session.frame().objects.len(),
         1,
@@ -211,7 +222,12 @@ fn bounded_returning_and_reversed_paint_tracks_restore_exact_source() {
             Some(SemanticPaint::LinearGradient(original.clone()))
         );
         assert!(Arc::ptr_eq(
-            row(&session, &source).fill_gradient.as_ref().unwrap(),
+            row(&session, &source)
+                .fill_paint
+                .as_ref()
+                .unwrap()
+                .as_linear_gradient()
+                .unwrap(),
             &original
         ));
     }
@@ -269,7 +285,16 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
                 < 1e-12
         );
         assert_eq!(state.style.fill.unwrap().alpha, 0.5);
-        assert_eq!(state.fill_gradient.as_ref().unwrap().start(), [0.25, 0.25]);
+        assert_eq!(
+            state
+                .fill_paint
+                .as_ref()
+                .unwrap()
+                .as_linear_gradient()
+                .unwrap()
+                .start(),
+            [0.25, 0.25]
+        );
         scene
             .live(&mut session)
             .advance_segment_to(segment, 1.0)
@@ -324,7 +349,12 @@ fn gradient_temporary_pulse_restores_exact_paint_and_retires_only_glow() {
         2.0
     );
     assert!(Arc::ptr_eq(
-        row(&session, &source).fill_gradient.as_ref().unwrap(),
+        row(&session, &source)
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_linear_gradient()
+            .unwrap(),
         &original
     ));
     scene
@@ -335,7 +365,12 @@ fn gradient_temporary_pulse_restores_exact_paint_and_retires_only_glow() {
     assert!(row(&session, &source).effect.is_none());
     assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.375);
     assert!(Arc::ptr_eq(
-        row(&session, &source).fill_gradient.as_ref().unwrap(),
+        row(&session, &source)
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_linear_gradient()
+            .unwrap(),
         &original
     ));
 }

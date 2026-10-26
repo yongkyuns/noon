@@ -43,7 +43,7 @@ fn compiled_property_patches_reject_non_finite_state_without_mutation() {
         ),
         (
             ExecutionPatch::SetStyle {
-                fill_gradient: None,
+                fill_paint: None,
                 object,
                 style: Style {
                     opacity: f32::INFINITY,
@@ -122,7 +122,7 @@ fn compiled_transaction_preflight_rejects_late_invalid_object_state_atomically()
             },
         },
         ExecutionPatch::SetStyle {
-            fill_gradient: None,
+            fill_paint: None,
             object,
             style: Style {
                 stroke_width: f32::NAN,

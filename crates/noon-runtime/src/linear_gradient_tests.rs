@@ -5,8 +5,8 @@ use noon_core::{Color, GeometryRef, GradientStop, LinearGradient, ObjectId, Styl
 
 use crate::{FrameChanges, SceneInstance};
 
-fn gradient(count: usize) -> Arc<LinearGradient> {
-    Arc::new(
+fn gradient(count: usize) -> Arc<noon_core::SemanticPaint> {
+    Arc::new(noon_core::SemanticPaint::LinearGradient(Arc::new(
         LinearGradient::new(
             [0.0, 0.5],
             [1.0, 0.5],
@@ -23,7 +23,7 @@ fn gradient(count: usize) -> Arc<LinearGradient> {
             }),
         )
         .unwrap(),
-    )
+    )))
 }
 
 fn runtime(count: usize) -> SceneInstance {
@@ -45,11 +45,14 @@ fn runtime(count: usize) -> SceneInstance {
     )
 }
 
-fn transaction(index: usize, paint: Option<Arc<LinearGradient>>) -> ExecutionMutationTransaction {
+fn transaction(
+    index: usize,
+    paint: Option<Arc<noon_core::SemanticPaint>>,
+) -> ExecutionMutationTransaction {
     ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
         object: ObjectId::new(index as u64),
         style: Style::default(),
-        fill_gradient: paint,
+        fill_paint: paint,
     }])
 }
 
@@ -66,7 +69,7 @@ fn gradient_only_prepared_publication_is_atomic_and_local_in_100k_scene() {
         .prepare_authored_value_publication(&edits, before, next_scene)
         .unwrap()
         .unwrap();
-    assert!(runtime.frame().objects[50_000].fill_gradient.is_none());
+    assert!(runtime.frame().objects[50_000].fill_paint.is_none());
     assert_eq!(runtime.publication_context(), before);
     drop(prepared);
     assert!(runtime.frame_changes().is_empty());
@@ -76,14 +79,11 @@ fn gradient_only_prepared_publication_is_atomic_and_local_in_100k_scene() {
         .unwrap();
     runtime.commit_prepared_authored_value_publication(prepared);
     assert!(Arc::ptr_eq(
-        runtime.frame().objects[50_000]
-            .fill_gradient
-            .as_ref()
-            .unwrap(),
+        runtime.frame().objects[50_000].fill_paint.as_ref().unwrap(),
         &paint
     ));
-    assert!(runtime.frame().objects[49_999].fill_gradient.is_none());
-    assert!(runtime.frame().objects[50_001].fill_gradient.is_none());
+    assert!(runtime.frame().objects[49_999].fill_paint.is_none());
+    assert!(runtime.frame().objects[50_001].fill_paint.is_none());
     assert_eq!(
         runtime.take_frame_changes(),
         FrameChanges::objects(vec![50_000])
@@ -111,7 +111,7 @@ fn gradient_only_prepared_publication_is_atomic_and_local_in_100k_scene() {
     runtime
         .apply_execution_transaction(&transaction(50_000, None))
         .unwrap();
-    assert!(runtime.frame().objects[50_000].fill_gradient.is_none());
+    assert!(runtime.frame().objects[50_000].fill_paint.is_none());
     assert_eq!(
         runtime.take_frame_changes(),
         FrameChanges::objects(vec![50_000])
@@ -128,12 +128,12 @@ fn invalid_gradient_in_late_patch_preserves_all_earlier_values() {
         ExecutionPatch::SetStyle {
             object: ObjectId::new(0),
             style: Style::default(),
-            fill_gradient: Some(gradient(2)),
+            fill_paint: Some(gradient(2)),
         },
         ExecutionPatch::SetStyle {
             object: ObjectId::new(1),
             style: Style::default(),
-            fill_gradient: Some(gradient(17)),
+            fill_paint: Some(gradient(17)),
         },
     ]);
     assert!(runtime
@@ -186,14 +186,11 @@ fn gradient_base_survives_completed_solid_history_and_out_of_order_seek() {
         .unwrap()
         .unwrap();
     runtime.commit_prepared_authored_value_publication(prepared);
-    assert_eq!(
-        runtime.frame().objects[0].fill_gradient.as_ref(),
-        Some(&paint)
-    );
+    assert_eq!(runtime.frame().objects[0].fill_paint.as_ref(), Some(&paint));
     for time in [0.5, 1.5, 0.25, 1.0, 2.0, 0.0, 1.5] {
         let object = &runtime.seek(time).unwrap().objects[0];
         assert_eq!(
-            object.fill_gradient.as_ref(),
+            object.fill_paint.as_ref(),
             (time >= 1.0).then_some(&paint),
             "time={time}"
         );
@@ -214,7 +211,7 @@ fn paint_track(object: u64, start: f64) -> noon_core::TrackDefinition {
                 PaintTransition::new(
                     Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0))),
                     1.0,
-                    Some(SemanticPaint::LinearGradient(gradient(2))),
+                    Some(gradient(2).as_ref().clone()),
                     0.5,
                 )
                 .unwrap(),
@@ -237,8 +234,10 @@ fn paint_animation_touches_one_row_in_100k_scene_and_has_no_spatial_work() {
     let row = &runtime.frame().objects[50_000];
     assert_eq!(row.style.fill.unwrap().alpha, 0.75);
     assert_eq!(
-        row.fill_gradient
+        row.fill_paint
             .as_ref()
+            .unwrap()
+            .as_linear_gradient()
             .unwrap()
             .sample_premultiplied([0.25, 0.5])
             .unwrap(),
@@ -250,8 +249,8 @@ fn paint_animation_touches_one_row_in_100k_scene_and_has_no_spatial_work() {
         FrameChanges::objects(vec![50_000])
     );
     assert!(runtime.take_spatial_changes().is_empty());
-    assert!(runtime.frame().objects[49_999].fill_gradient.is_none());
-    assert!(runtime.frame().objects[50_001].fill_gradient.is_none());
+    assert!(runtime.frame().objects[49_999].fill_paint.is_none());
+    assert!(runtime.frame().objects[50_001].fill_paint.is_none());
     runtime.advance_to(0.5).unwrap();
     assert!(runtime.take_frame_changes().is_empty());
 }
@@ -267,7 +266,7 @@ fn paint_seek_matches_forward_and_recovers_source_before_reconciled_delayed_trac
                 fill: Some(Color::rgb(1.0, 0.0, 0.0)),
                 ..Style::default()
             },
-            fill_gradient: None,
+            fill_paint: None,
         })
         .unwrap();
     runtime
@@ -289,20 +288,20 @@ fn paint_seek_matches_forward_and_recovers_source_before_reconciled_delayed_trac
         .apply_execution_patch(&ExecutionPatch::SetStyle {
             object: ObjectId::new(0),
             style: target.style,
-            fill_gradient: target.fill_gradient.clone(),
+            fill_paint: target.fill_paint.clone(),
         })
         .unwrap();
     for time in [2.5, 0.5, 3.0, 2.25, 1.0, 2.5, 4.0] {
         let row = &runtime.seek(time).unwrap().objects[0];
         if time < 2.0 {
             assert_eq!(row.style.fill, Some(Color::rgb(1.0, 0.0, 0.0)));
-            assert!(row.fill_gradient.is_none());
+            assert!(row.fill_paint.is_none());
         } else if time == 2.5 {
             assert_eq!(row.style, middle.style);
-            assert_eq!(row.fill_gradient, middle.fill_gradient);
+            assert_eq!(row.fill_paint, middle.fill_paint);
         } else if time >= 3.0 {
             assert_eq!(row.style, target.style);
-            assert_eq!(row.fill_gradient, target.fill_gradient);
+            assert_eq!(row.fill_paint, target.fill_paint);
         }
     }
 }
@@ -352,7 +351,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
     let style = ExecutionPatch::SetStyle {
         object: ObjectId::new(0),
         style: Style::default(),
-        fill_gradient: Some(gradient(2)),
+        fill_paint: Some(gradient(2)),
     };
     let track = ExecutionPatch::AddTrack(paint_track(0, 0.0));
     for paint in [style, track] {
@@ -382,7 +381,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                 runtime.frame().objects[0].effect.as_deref(),
                 Some(glow.as_ref())
             );
-            assert!(runtime.frame().objects[0].fill_gradient.is_some());
+            assert!(runtime.frame().objects[0].fill_paint.is_some());
             // Content remains independently checked; supported geometry can be
             // replaced without discarding either appearance input.
             runtime
@@ -392,7 +391,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                     text_bounds: None,
                 })
                 .unwrap();
-            assert!(runtime.frame().objects[0].fill_gradient.is_some());
+            assert!(runtime.frame().objects[0].fill_paint.is_some());
             assert_eq!(
                 runtime.frame().objects[0].effect.as_deref(),
                 Some(glow.as_ref())
@@ -405,7 +404,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                 .apply_execution_patch(&ExecutionPatch::SetStyle {
                     object: ObjectId::new(0),
                     style,
-                    fill_gradient: runtime.frame().objects[0].fill_gradient.clone(),
+                    fill_paint: runtime.frame().objects[0].fill_paint.clone(),
                 })
                 .unwrap();
             assert_eq!(

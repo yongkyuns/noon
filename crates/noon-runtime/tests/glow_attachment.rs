@@ -206,7 +206,7 @@ fn stale_attachment_changes_and_same_identity_schema_edits_fail_without_a_prefix
         );
         let edits = tx([
             ExecutionPatch::SetStyle {
-                fill_gradient: None,
+                fill_paint: None,
                 object: ObjectId::new(1),
                 style: Style {
                     fill: Some(Color::BLUE),

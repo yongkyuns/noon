@@ -31,7 +31,12 @@ fn lowering_preserves_continuous_definition_and_separate_opacity_domains() {
         lower_semantic_execution_root(&store, root, &mut SemanticExecutionIndex::new()).unwrap();
     let object = &output.compiled().objects()[0];
     assert!(Arc::ptr_eq(
-        object.fill_gradient.as_ref().unwrap(),
+        object
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_linear_gradient()
+            .unwrap(),
         &gradient
     ));
     assert_eq!(
@@ -74,8 +79,8 @@ fn gradient_profile_rejects_collapsed_gpu_axes_and_stop_intervals_before_identit
 fn animation_admission_checks_interior_gpu_axis_and_moving_stop_precision() {
     let from = paint([0.25, 0.5], [0.75, 0.5]);
     let to = paint([0.75, 0.5], [0.25, 0.50000001]);
-    validate_definition(&from).unwrap();
-    validate_definition(&to).unwrap();
+    validate_gradient(&from).unwrap();
+    validate_gradient(&to).unwrap();
     let transition = noon_core::PaintTransition::new(
         Some(SemanticPaint::LinearGradient(from)),
         1.0,

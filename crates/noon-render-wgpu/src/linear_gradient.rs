@@ -1,7 +1,7 @@
 //! Disposable retained projection of effective continuous fill values.
 use std::sync::Arc;
 
-use noon_core::{LinearGradient, Rect, Transform2D};
+use noon_core::{Rect, SemanticPaint, Transform2D};
 use noon_runtime::FrameState;
 
 use crate::{FramePreparer, PreparedFrame, RenderPrimitive};
@@ -24,7 +24,7 @@ impl PreparedFrame<'_> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PreparedGradient {
-    pub definition: Arc<LinearGradient>,
+    pub definition: Arc<SemanticPaint>,
     pub bounds: Rect,
     pub transform: Transform2D,
     source_index: usize,
@@ -67,7 +67,7 @@ impl FramePreparer {
             return;
         };
         let next = object
-            .fill_gradient
+            .fill_paint
             .as_ref()
             .filter(|_| frame.is_drawable(index))
             .and_then(|definition| {

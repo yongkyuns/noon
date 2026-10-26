@@ -339,7 +339,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -352,7 +352,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -447,7 +447,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text = texts.insert(text_resource()).unwrap();
         let object = FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

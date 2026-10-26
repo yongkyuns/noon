@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
-pub(crate) fn validate_definition(
+pub(crate) fn validate_gradient(
     gradient: &LinearGradient,
 ) -> Result<(), SemanticExecutionValueError> {
     let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
@@ -33,6 +33,19 @@ pub(crate) fn validate_definition(
     Ok(())
 }
 
+pub(crate) fn validate_definition(
+    paint: &SemanticPaint,
+) -> Result<(), SemanticExecutionValueError> {
+    match paint {
+        SemanticPaint::LinearGradient(gradient) => validate_gradient(gradient),
+        SemanticPaint::Solid(_) | SemanticPaint::Resource(_) => {
+            Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+                field: SemanticExecutionField::FillPaint,
+            })
+        }
+    }
+}
+
 pub(crate) fn validate_transition(
     transition: &noon_core::PaintTransition,
 ) -> Result<(), SemanticExecutionValueError> {
@@ -40,8 +53,8 @@ pub(crate) fn validate_transition(
         field: SemanticExecutionField::FillPaint,
     };
     let [from, to] = transition.gradients();
-    validate_definition(from)?;
-    validate_definition(to)?;
+    validate_gradient(from)?;
+    validate_gradient(to)?;
     if from.start() != to.start() || from.end() != to.end() {
         let coordinate_scale = from
             .start()
@@ -80,7 +93,7 @@ pub fn lower_fill(
     node: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,
-) -> Result<Option<Arc<LinearGradient>>, SemanticLoweringError> {
+) -> Result<Option<Arc<SemanticPaint>>, SemanticLoweringError> {
     let Some(SemanticPaint::LinearGradient(gradient)) = state.style.fill.as_ref() else {
         return Ok(None);
     };
@@ -88,7 +101,7 @@ pub fn lower_fill(
         node,
         field: SemanticExecutionField::FillPaint,
     };
-    validate_definition(gradient).map_err(|error| error.with_node(node))?;
+    validate_gradient(gradient).map_err(|error| error.with_node(node))?;
     if super::projection::object_requires_spatial_lowering(state, store)
         || state.role() != SemanticObjectRole::Ordinary
     {
@@ -114,5 +127,7 @@ pub fn lower_fill(
     if !extent.x.is_finite() || !extent.y.is_finite() || extent.x <= 0.0 || extent.y <= 0.0 {
         return Err(invalid());
     }
-    Ok(Some(Arc::clone(gradient)))
+    Ok(Some(Arc::new(SemanticPaint::LinearGradient(Arc::clone(
+        gradient,
+    )))))
 }

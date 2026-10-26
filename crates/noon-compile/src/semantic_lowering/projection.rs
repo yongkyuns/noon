@@ -355,7 +355,7 @@ impl SemanticExecutionIndex {
         let objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
-                fill_gradient: state.fill_gradient,
+                fill_paint: state.fill_paint,
                 semantic_id,
                 effect: state.effect,
                 execution_id: self.ensure_object(semantic_id),
@@ -455,7 +455,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
-    pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub effect: Option<std::sync::Arc<crate::CompiledEffect>>,
     /// Authoritative scene-global semantic identity.
@@ -888,7 +888,7 @@ fn lower_graph_dependencies(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
-    pub(super) fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub(super) effect: Option<std::sync::Arc<crate::CompiledEffect>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
@@ -1103,7 +1103,7 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     };
     Ok(LoweredObjectState {
-        fill_gradient: super::paint::lower_fill(semantic_id, state, store)?,
+        fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
         effect: None,
         content: state.content,
         base_transform,
@@ -1319,7 +1319,7 @@ fn lower_paint(
                     field: paint_field,
                 });
             }
-            super::paint::validate_definition(gradient)?;
+            super::paint::validate_gradient(gradient)?;
             Ok(Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)))
         }
         SemanticPaint::Solid(color) => {

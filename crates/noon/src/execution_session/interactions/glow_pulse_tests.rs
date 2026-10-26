@@ -199,7 +199,7 @@ fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
             .live(&mut f.session)
             .set_fill_gradient(&f.targets[0], gradient, Some(0.6))
             .unwrap();
-        let paint = Arc::clone(f.session.frame().objects[0].fill_gradient.as_ref().unwrap());
+        let paint = Arc::clone(f.session.frame().objects[0].fill_paint.as_ref().unwrap());
         let style = f.session.frame().objects[0].style;
         let original = f.glow(0);
         let attachment = f.effect(0);
@@ -207,7 +207,7 @@ fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
         for time in [10.0, 10.5, 11.0] {
             f.tick(time);
             let row = &f.session.frame().objects[0];
-            assert!(Arc::ptr_eq(row.fill_gradient.as_ref().unwrap(), &paint));
+            assert!(Arc::ptr_eq(row.fill_paint.as_ref().unwrap(), &paint));
             assert_eq!(row.style, style);
             assert_eq!(f.session.frame().time, 0.0);
             if time == 10.5 {

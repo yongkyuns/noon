@@ -1325,7 +1325,7 @@ fn lower_prepared_entry(
         lowered.base_style,
     );
     compiled.effect = effect::lower_prepared_attachment(prepared, object)?;
-    compiled.fill_gradient = lowered.fill_gradient;
+    compiled.fill_paint = lowered.fill_paint;
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
@@ -1572,7 +1572,7 @@ fn lower_semantic_publication(
             mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,
-                fill_gradient: super::paint::lower_fill(node, &state, prepared.store())?,
+                fill_paint: super::paint::lower_fill(node, &state, prepared.store())?,
             });
         }
     }

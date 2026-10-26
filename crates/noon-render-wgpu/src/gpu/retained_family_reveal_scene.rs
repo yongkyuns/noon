@@ -174,7 +174,7 @@ mod tests {
         store.add_member(family, leaf).unwrap();
 
         let object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

@@ -28,7 +28,7 @@ fn target() -> VectorPath {
 fn frame(progress: f32, unrelated: usize) -> FrameState {
     let objects = (0..=unrelated)
         .map(|index| FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

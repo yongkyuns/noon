@@ -639,7 +639,7 @@ mod tests {
 
     fn state(geometry: GeometryRef) -> TransientPresentationState {
         TransientPresentationState {
-            fill_gradient: None,
+            fill_paint: None,
             z_index: 0.0,
             content: noon_core::ObjectContentRef::Geometry(geometry),
             text_bounds: None,

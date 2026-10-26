@@ -1125,7 +1125,7 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -1624,7 +1624,7 @@ fn pack_derived_display_object(
 ) -> Result<(), DerivedDisplayRenderError> {
     let state = object.state();
     let occurrence = object.occurrence_index();
-    if state.fill_gradient.is_some() {
+    if state.fill_paint.is_some() {
         return Err(DerivedDisplayRenderError::UnsupportedPaint(occurrence));
     }
     if !state.presence {
@@ -1841,7 +1841,7 @@ mod derived_display_tests {
 
     fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,

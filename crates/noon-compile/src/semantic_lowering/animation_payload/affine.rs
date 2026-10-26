@@ -26,7 +26,7 @@ use super::transform_payload::{
 /// The activation-time effective domains consumed by the shared animation lowerer.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
-    pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub effect: Option<crate::CompiledEffect>,
     pub z_index: f64,
     pub transform: Transform2D,
@@ -1659,16 +1659,16 @@ pub(super) fn lower_affine_channels(
         || source.style.fill_opacity != target.style.fill_opacity
         || (from.style.fill != target_style.fill
             && !has_binding(source, SemanticObjectProperty::FillOpacity))
-        || (from.fill_gradient.as_deref()
+        || (from.fill_paint.as_deref()
             != match target.style.fill.as_ref() {
-                Some(noon_core::SemanticPaint::LinearGradient(gradient)) => Some(gradient.as_ref()),
+                Some(paint @ noon_core::SemanticPaint::LinearGradient(_)) => Some(paint),
                 _ => None,
             }
             && !has_binding(source, SemanticObjectProperty::FillOpacity));
     let (from_paint, from_opacity) = source
         .style
-        .capture_effective_fill(from.style.fill, from.fill_gradient.as_ref());
-    let continuous_fill = from.fill_gradient.is_some()
+        .capture_effective_fill(from.style.fill, from.fill_paint.as_ref());
+    let continuous_fill = from.fill_paint.is_some()
         || matches!(
             target.style.fill,
             Some(noon_core::SemanticPaint::LinearGradient(_))
@@ -1779,7 +1779,7 @@ pub(super) fn lower_affine_lifecycle_channels(
             Some(
                 noon_core::SemanticPaint::LinearGradient(_) | noon_core::SemanticPaint::Resource(_)
             )
-        ) || from.fill_gradient.is_some())
+        ) || from.fill_paint.is_some())
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
@@ -2122,7 +2122,7 @@ pub(super) fn lower_draw_border_then_fill_channels(
     stroke_width: f64,
     stroke_color: Option<noon_core::Color>,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if from.fill_gradient.is_some() {
+    if from.fill_paint.is_some() {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
@@ -2206,7 +2206,7 @@ pub(super) fn lower_subset_display_channels(
     source: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if from.fill_gradient.is_some() {
+    if from.fill_paint.is_some() {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
@@ -2391,7 +2391,7 @@ pub fn lower_indicate_channels_with_bindings(
     color: noon_core::Color,
     scale_center: noon_core::SemanticVec3,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if from.fill_gradient.is_some() {
+    if from.fill_paint.is_some() {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if !transform_is_finite(from.transform) {
@@ -2627,7 +2627,7 @@ pub(super) fn lower_transform_channels(
             return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
         }
     }
-    if from.fill_gradient.is_some()
+    if from.fill_paint.is_some()
         || matches!(
             target.style.fill,
             Some(noon_core::SemanticPaint::LinearGradient(_))
@@ -3101,7 +3101,7 @@ mod tests {
 
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: 0.0,
             transform,
@@ -3385,7 +3385,7 @@ mod tests {
             end: Vec2::new(1.0, 0.5),
         });
         let from = EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -3519,7 +3519,7 @@ mod tests {
         let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -3721,7 +3721,7 @@ mod tests {
             &schedule(&store, &index, animation),
             |_| {
                 Some(EffectiveAnimationProperties {
-                    fill_gradient: None,
+                    fill_paint: None,
                     effect: None,
                     z_index: 0.0,
                     transform: Transform2D::default(),
@@ -3962,7 +3962,7 @@ mod tests {
             .unwrap();
         let index = index(&store);
         let current = EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: 0.0,
             transform: Transform2D::default(),

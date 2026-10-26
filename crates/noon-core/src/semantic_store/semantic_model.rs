@@ -247,6 +247,15 @@ pub enum SemanticPaint {
     Resource(u64),
 }
 
+impl SemanticPaint {
+    pub fn as_linear_gradient(&self) -> Option<&std::sync::Arc<crate::LinearGradient>> {
+        match self {
+            Self::LinearGradient(gradient) => Some(gradient),
+            Self::Solid(_) | Self::Resource(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StrokeWidthMode {
@@ -313,14 +322,14 @@ impl SemanticStyle {
     pub fn capture_effective_fill(
         &self,
         fill: Option<Color>,
-        gradient: Option<&std::sync::Arc<crate::LinearGradient>>,
+        paint: Option<&std::sync::Arc<crate::SemanticPaint>>,
     ) -> (Option<SemanticPaint>, f64) {
-        if let Some(gradient) = gradient {
+        if let Some(paint) = paint {
             let alpha = fill.map_or(0.0, |color| color.alpha);
-            let unchanged = matches!(&self.fill, Some(SemanticPaint::LinearGradient(authored))
-                if authored == gradient && self.fill_opacity as f32 == alpha);
+            let unchanged =
+                self.fill.as_ref() == Some(paint.as_ref()) && self.fill_opacity as f32 == alpha;
             return (
-                Some(SemanticPaint::LinearGradient(gradient.clone())),
+                Some(paint.as_ref().clone()),
                 if unchanged {
                     self.fill_opacity
                 } else {

@@ -10,8 +10,8 @@ use noon_runtime::{FrameChanges, SceneInstance};
 use super::*;
 use crate::{Camera2D, FramePreparer};
 
-fn gradient(first: Color) -> Arc<LinearGradient> {
-    Arc::new(
+fn gradient(first: Color) -> Arc<noon_core::SemanticPaint> {
+    Arc::new(noon_core::SemanticPaint::LinearGradient(Arc::new(
         LinearGradient::new(
             [0.0, 0.5],
             [1.0, 0.5],
@@ -21,7 +21,7 @@ fn gradient(first: Color) -> Arc<LinearGradient> {
             ],
         )
         .unwrap(),
-    )
+    )))
 }
 
 fn runtime(geometry: GeometryRef) -> SceneInstance {
@@ -43,13 +43,13 @@ fn runtime(geometry: GeometryRef) -> SceneInstance {
     )
 }
 
-fn set_gradient(runtime: &mut SceneInstance, paint: Option<Arc<LinearGradient>>) {
+fn set_gradient(runtime: &mut SceneInstance, paint: Option<Arc<noon_core::SemanticPaint>>) {
     let style = runtime.frame().objects[0].style;
     runtime
         .apply_execution_patch(&ExecutionPatch::SetStyle {
             object: ObjectId::new(7),
             style,
-            fill_gradient: paint,
+            fill_paint: paint,
         })
         .unwrap();
 }
@@ -74,7 +74,7 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
         .apply_execution_patch(&ExecutionPatch::SetStyle {
             object: ObjectId::new(50_000),
             style: Style::default(),
-            fill_gradient: Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
+            fill_paint: Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
         })
         .unwrap();
     let changes = runtime.take_frame_changes();
@@ -127,7 +127,7 @@ fn path_gradient_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 object: ObjectId::new(500),
                 style: runtime.frame().objects[500].style,
-                fill_gradient: paint,
+                fill_paint: paint,
             })
             .unwrap();
         let changes = runtime.take_frame_changes();
@@ -247,16 +247,18 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
             let red = Color::rgb(1.0, 0.0, 0.0);
             let blue = Color::rgb(0.0, 0.0, 1.0);
             let make = |start, end, stops: Vec<(f64, Color)>| {
-                Some(Arc::new(
-                    LinearGradient::new(
-                        start,
-                        end,
-                        stops
-                            .into_iter()
-                            .map(|(p, c)| GradientStop::new(p, c).unwrap()),
-                    )
-                    .unwrap(),
-                ))
+                Some(Arc::new(noon_core::SemanticPaint::LinearGradient(
+                    Arc::new(
+                        LinearGradient::new(
+                            start,
+                            end,
+                            stops
+                                .into_iter()
+                                .map(|(p, c)| GradientStop::new(p, c).unwrap()),
+                        )
+                        .unwrap(),
+                    ),
+                )))
             };
             let paint = match profile {
                 0 => None,
@@ -278,7 +280,7 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
             runtime
                 .apply_execution_patch(&ExecutionPatch::SetStyle {
                     object: ObjectId::new(7),
-                    fill_gradient: paint,
+                    fill_paint: paint,
                     style: Style {
                         fill: Some(Color::rgba(
                             1.0,

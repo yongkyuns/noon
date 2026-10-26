@@ -65,7 +65,7 @@ fn lower(
     let activation = prepare_family_transform_activations(&prepared, &index, &schedule, |id| {
         let position = source_ids.iter().position(|source| *source == id).unwrap();
         Some(EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             world_transform: None,
             camera_profile: None,
