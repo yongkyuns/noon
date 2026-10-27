@@ -7,6 +7,13 @@
 
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
+// Prepared captures lease backend GPU resources. WASM resources stay within
+// their owning context; native leases retain their Send/Sync sharing contract.
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc as CaptureSourceLease;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc as CaptureSourceLease;
+
 use bytemuck::{Pod, Zeroable};
 use noon_core::{EffectDefinition, GeometryRef, GlowSource, ObjectId, Transform2D, Vec2};
 
@@ -47,8 +54,8 @@ enum SourceInstance {
     Circle(CircleInstance),
     Rectangle(RectangleInstance),
     Draws {
-        source: Arc<super::source_capture::PreparedSource>,
-        silhouette: Option<Arc<super::source_capture::PreparedSource>>,
+        source: CaptureSourceLease<super::source_capture::PreparedSource>,
+        silhouette: Option<CaptureSourceLease<super::source_capture::PreparedSource>>,
     },
 }
 impl SourceInstance {
@@ -64,9 +71,9 @@ impl SourceInstance {
                     silhouette: y,
                 },
             ) => {
-                (Arc::ptr_eq(a, b) || a == b)
+                (CaptureSourceLease::ptr_eq(a, b) || a == b)
                     && match (x, y) {
-                        (Some(x), Some(y)) => Arc::ptr_eq(x, y) || x == y,
+                        (Some(x), Some(y)) => CaptureSourceLease::ptr_eq(x, y) || x == y,
                         (None, None) => true,
                         _ => false,
                     }
@@ -78,7 +85,7 @@ impl SourceInstance {
         if let Self::Draws { source, silhouette } = self {
             for source in std::iter::once(source).chain(silhouette.iter_mut()) {
                 if source.needs_capture_region(tile.origin, tile.size) {
-                    Arc::make_mut(source)
+                    CaptureSourceLease::make_mut(source)
                         .set_capture_region(tile.origin, tile.size)
                         .ok_or(EffectPrepareError::CaptureCoordinatesOutOfRange)?;
                 }
@@ -543,7 +550,10 @@ impl GpuRenderer {
             } else {
                 None
             };
-            (Arc::new(source), silhouette.map(Arc::new))
+            (
+                CaptureSourceLease::new(source),
+                silhouette.map(CaptureSourceLease::new),
+            )
         };
         // Share the logical-view qualification with analytic capture. Physical
         // sampling remains independent of CSS/DPR rounding.
