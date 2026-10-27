@@ -1,76 +1,136 @@
 name: Audio 2296 integration workbench
 
-# Temporary, branch-local workbench for #2296. Never merge this workflow.
-# It reads three public source trees and uploads only their Git objects.
+# Temporary branch-local qualification for #2296. Never merge this workflow.
+# It may publish ONLY the explicitly named scratch branch, never master or #2296.
 on:
   push:
     branches: [codex/audio-2296-integration-workbench]
-    paths: [.github/workflows/audio-2296-integration-workbench.yml]
+    paths:
+      - .github/workflows/audio-2296-integration-workbench.yml
+      - integration/**
 
 permissions:
   contents: read
 
 concurrency:
   group: audio-2296-integration-workbench
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  snapshot:
-    runs-on: macos-latest
-    timeout-minutes: 10
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+      MASTER: f71a4c121bc29921133f790ae9783e89e962e7d9
+      EXPECTED_HEAD: 5cc7e16e2df651e62fe66e71b1b607e4e418f90e
+      CANDIDATE_BRANCH: codex/audio-2296-integrated-5cc-f71
+    defaults:
+      run:
+        working-directory: candidate
+        shell: bash
     steps:
-      - name: Checkout workbench
+      - name: Checkout workbench recipe
         uses: actions/checkout@v7
         with:
+          path: workbench
           persist-credentials: false
-      - name: Snapshot exact integration inputs without repository credentials
-        shell: bash
-        env:
-          BASE: d6afd19037d8eb421fcbd3ddc222fa20f150922b
-          HEAD: 5cc7e16e2df651e62fe66e71b1b607e4e418f90e
-          MASTER: f71a4c121bc29921133f790ae9783e89e962e7d9
+      - name: Checkout exact product head and full original ancestry
+        uses: actions/checkout@v7
+        with:
+          ref: 5cc7e16e2df651e62fe66e71b1b607e4e418f90e
+          fetch-depth: 0
+          path: candidate
+      - name: Reconstruct and verify the reviewed integration tree
         run: |
           set -euo pipefail
-          mkdir -p snapshot
-          git fetch --no-tags --depth=1 https://github.com/yongkyuns/noon.git "$BASE" "$HEAD" "$MASTER"
+          mkdir -p ../evidence
+          git config user.name 'Noon integration workbench'
+          git config user.email 'noreply@example.invalid'
+          python3 ../workbench/integration/prepare_candidate.py ../workbench/integration/resolution.patch.gz ../evidence | tee ../evidence/preparation.log
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose | tee ../evidence/rustc.txt
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Format and publish isolated candidate, with qualification pending
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          git diff --binary > ../evidence/format.patch
+          python3 - <<'PY'
+          import subprocess
+          paths = subprocess.check_output(['git', 'diff', '--name-only']).decode().splitlines()
+          if any(not path.endswith('.rs') for path in paths):
+              raise SystemExit('Formatter changed a non-Rust file')
+          PY
+          git add -u
+          tree=$(git write-tree)
+          commit=$(git commit-tree "$tree" -p "$EXPECTED_HEAD" -p "$MASTER" -m 'Merge current master into finite Python scene playback controls (#2263)')
+          git checkout --detach "$commit"
+          export tree commit
           python3 - <<'PY'
           import json, os, pathlib, subprocess
-          def git(*args):
-              return subprocess.check_output(['git', *args]).decode().strip()
-          refs = {name.lower(): os.environ[name] for name in ('BASE', 'HEAD', 'MASTER')}
-          objects = set(refs.values())
-          identities = {}
-          for name, sha in refs.items():
-              tree = git('rev-parse', sha + '^{tree}')
-              objects.add(tree)
-              entries = subprocess.check_output(['git', 'ls-tree', '-r', '-t', '-z', sha]).split(b'\0')
-              for entry in entries:
-                  if entry:
-                      metadata, _ = entry.split(b'\t', 1)
-                      _, kind, oid = metadata.split()
-                      if kind in (b'tree', b'blob'):
-                          objects.add(oid.decode())
-              identities[name] = {'commit': sha, 'tree': tree}
-          pathlib.Path('snapshot/identities.json').write_text(json.dumps(identities, indent=2) + '\n')
-          pathlib.Path('snapshot/object-ids.txt').write_text('\n'.join(sorted(objects)) + '\n')
-          for name in ('head', 'master'):
-              diff = subprocess.check_output(['git', 'diff', '--name-status', refs['base'], refs[name]])
-              pathlib.Path(f'snapshot/{name}-changes.txt').write_bytes(diff)
-          print(json.dumps(identities, indent=2))
-          print(f'Snapshotting {len(objects)} source objects; no Git config, credentials or working-directory files.')
+          receipt = json.loads(pathlib.Path('../evidence/candidate-preformat.json').read_text())
+          receipt.update(formatted_tree=os.environ['tree'], candidate_commit=os.environ['commit'],
+                         branch=os.environ['CANDIDATE_BRANCH'], rust_validation='pending', published=False)
+          if subprocess.check_output(['git', 'status', '--porcelain']).strip():
+              raise SystemExit('Candidate source is dirty before publication')
+          pathlib.Path('../evidence/candidate.json').write_text(json.dumps(receipt, indent=2)+'\n')
           PY
-          git pack-objects --stdout < snapshot/object-ids.txt > snapshot/source-objects.pack
+          current_head=$(git ls-remote --heads origin refs/heads/codex/python-scene-playback-controls-2263 | cut -f1)
+          test "$current_head" = "$EXPECTED_HEAD"
+          test -z "$(git ls-remote --heads origin "refs/heads/$CANDIDATE_BRANCH")"
+          git push origin "$commit:refs/heads/$CANDIDATE_BRANCH"
           python3 - <<'PY'
-          import hashlib, pathlib
-          root = pathlib.Path('snapshot')
-          rows = [f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}' for p in sorted(root.iterdir()) if p.is_file()]
-          (root / 'SHA256SUMS').write_text('\n'.join(rows) + '\n')
+          import json, pathlib
+          path = pathlib.Path('../evidence/candidate.json')
+          receipt = json.loads(path.read_text()); receipt['published'] = True
+          path.write_text(json.dumps(receipt, indent=2)+'\n')
           PY
-          ls -lh snapshot/source-objects.pack
-      - name: Retain exact source snapshot
+          git diff --stat "$MASTER" HEAD | tee ../evidence/diff-stat.txt
+      - name: Validate worker lifecycle regression suite
+        run: |
+          set -euo pipefail
+          node --test web/execution-worker-client.test.mjs web/semantic-engine-endpoint.test.mjs scripts/playground-preload.test.mjs | tee ../evidence/worker-tests.log
+      - name: Install native audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Run full repository gate on exact candidate
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh full "$MASTER" 2>&1 | tee ../evidence/full-gate.log
+          printf 'passed\n' > ../evidence/full-gate.result
+      - name: Retain source identities and validation evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: audio-2296-integration-inputs
-          path: snapshot/
+          name: audio-2296-integration-qualification
+          path: evidence/
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7
