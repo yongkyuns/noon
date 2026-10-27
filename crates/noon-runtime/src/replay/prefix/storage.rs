@@ -1,6 +1,22 @@
 //! Explicit capacity maintenance; append itself never relocates scene storage.
-use super::{PrefixError, PrefixReceiver, ReplayError};
+use super::{PrefixError, PrefixReceiver, ReplayError, Revision};
 use crate::{FrameObjectState, SceneInstance};
+
+/// Constant-time admission for the index allocation only, including spare slots.
+/// Kept separate from payload/resource accounting: Revision contains Vec headers,
+/// not the allocations owned by those vectors. No history traversal or allocation.
+pub(super) fn preflight_history_index_capacity(capacity: usize) -> Result<usize, PrefixError> {
+    let bytes_per_revision = std::mem::size_of::<Revision>();
+    let limit_bytes = SceneInstance::MAX_PREFIX_HISTORY_INDEX_BYTES;
+    capacity
+        .checked_mul(bytes_per_revision)
+        .filter(|&bytes| bytes <= limit_bytes)
+        .ok_or(PrefixError::HistoryIndexBudgetExceeded {
+            revision_capacity: capacity,
+            bytes_per_revision,
+            limit_bytes,
+        })
+}
 
 impl PrefixReceiver {
     /// Named O(existing storage) maintenance barrier, separate from ordinary

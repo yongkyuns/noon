@@ -12,6 +12,8 @@ mod storage;
 use resource_budget::ResourceBudget;
 
 #[cfg(test)]
+mod history_index_budget_tests;
+#[cfg(test)]
 mod payload_budget_tests;
 #[cfg(test)]
 mod resource_budget_tests;
@@ -45,6 +47,13 @@ pub enum PrefixError {
     ResourceBudgetExceeded {
         retained_bytes: usize,
         additional_bytes: usize,
+        limit_bytes: usize,
+    },
+    /// The preallocated revision index exceeds its byte ceiling. These fields
+    /// remain representable even when capacity times entry size would overflow.
+    HistoryIndexBudgetExceeded {
+        revision_capacity: usize,
+        bytes_per_revision: usize,
         limit_bytes: usize,
     },
     Resources(CompiledResourceError),
@@ -447,6 +456,11 @@ impl SceneInstance {
     /// overhead, source allocations and renderer residency require separate caps.
     pub const DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
+    /// Provisional ceiling for the reader's preallocated revision index,
+    /// including unused Vec capacity. This excludes nested row/track payloads,
+    /// source history, object storage, allocator overhead and GPU residency.
+    pub const MAX_PREFIX_HISTORY_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
     /// Low-level bootstrap. The owning ExecutionSession must additionally prove
     /// its source segment and callback completion BEFORE invoking this method.
     /// This experimental path excludes native-reactive bindings and external
@@ -488,6 +502,11 @@ impl SceneInstance {
         {
             return Err(ReplayError::UnsupportedDomain.into());
         }
+        // Charge reserved entries, not just current history length. Reject a
+        // pathological configured maximum before cloning any reader state.
+        storage::preflight_history_index_capacity(
+            history.limits.revisions.max(history.revisions.len()),
+        )?;
         let resource_bytes = self
             .compiled
             .resources()
@@ -523,6 +542,9 @@ impl SceneInstance {
             .revisions
             .try_reserve_exact(extra)
             .map_err(|_| PrefixError::Allocation)?;
+        // Vec may report more capacity than requested. Never publish an index
+        // over the ceiling; this is not a bound on transient allocator peaks.
+        storage::preflight_history_index_capacity(copied.revisions.capacity())?;
         runtime.seal_replay()?;
         runtime.seek(history.start)?;
         let receiver = PrefixReceiver {
