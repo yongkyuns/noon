@@ -18,6 +18,7 @@ struct TrackShadow {
     id: TrackId,
     object_index: u32,
     property: Property,
+    attachment: Option<noon_core::SemanticNodeId>,
     start_time: f64,
     duration: f64,
     reconciliation_end: f64,
@@ -35,6 +36,7 @@ impl TrackShadow {
             id: track.id,
             object_index: track.object_index,
             property: track.property,
+            attachment: track.channel().attachment(),
             start_time,
             duration: end_time - start_time,
             reconciliation_end: track.timing.start_time + track.timing.duration,
@@ -42,6 +44,15 @@ impl TrackShadow {
             reconciled: track.reconciled,
             presence: presence_endpoints(track.property, &track.values),
             continuous_paint: matches!(track.values, TrackValues::Paint { .. }),
+        }
+    }
+
+    fn channel(self) -> CompiledChannelKey {
+        match self.attachment {
+            Some(attachment) => {
+                CompiledChannelKey::effect(self.object_index, self.property, attachment)
+            }
+            None => CompiledChannelKey::new(self.object_index, self.property),
         }
     }
 
@@ -53,6 +64,8 @@ impl TrackShadow {
             id: track.id,
             object_index,
             property: track.property,
+            attachment: CompiledChannelKey::for_values(object_index, track.property, &track.values)
+                .attachment(),
             start_time,
             duration: end_time - start_time,
             reconciliation_end: timing.start_time + timing.duration,
@@ -263,7 +276,7 @@ impl PreflightOverlay {
 
     fn set_track(&mut self, id: TrackId, replacement: Option<TrackShadow>) {
         if let Some(Some(previous)) = self.tracks.get(&id) {
-            let channel = CompiledChannelKey::new(previous.object_index, previous.property);
+            let channel = previous.channel();
             if let Some(ids) = self.channels.get_mut(&channel) {
                 ids.remove(&id);
                 if ids.is_empty() {
@@ -272,10 +285,7 @@ impl PreflightOverlay {
             }
         }
         if let Some(track) = replacement {
-            self.channels
-                .entry(CompiledChannelKey::new(track.object_index, track.property))
-                .or_default()
-                .insert(id);
+            self.channels.entry(track.channel()).or_default().insert(id);
         }
         self.tracks.insert(id, replacement);
     }
@@ -297,10 +307,10 @@ impl PreflightOverlay {
             }
         }
         let first = CompiledChannelKey::new(object_index, Property::Presence);
-        let last = CompiledChannelKey::new(object_index, Property::Morph);
         let staged = self
             .channels
-            .range(first..=last)
+            .range(first..)
+            .take_while(|(channel, _)| channel.object_index == object_index)
             .flat_map(|(_, ids)| ids.iter().copied())
             .collect::<Vec<_>>();
         for id in staged {
@@ -309,13 +319,7 @@ impl PreflightOverlay {
         }
     }
 
-    fn channel(
-        &mut self,
-        scene: &CompiledScene,
-        object_index: u32,
-        property: Property,
-    ) -> Vec<TrackShadow> {
-        let channel = CompiledChannelKey::new(object_index, property);
+    fn channel(&mut self, scene: &CompiledScene, channel: CompiledChannelKey) -> Vec<TrackShadow> {
         let mut tracks = Vec::new();
         let mut base_ids = BTreeSet::new();
         for track in scene.channel_tracks(channel) {
@@ -323,11 +327,7 @@ impl PreflightOverlay {
             self.seen_tracks.insert(track.id);
             base_ids.insert(track.id);
             match self.tracks.get(&track.id).copied() {
-                Some(Some(shadow))
-                    if shadow.object_index == object_index && shadow.property == property =>
-                {
-                    tracks.push(shadow)
-                }
+                Some(Some(shadow)) if shadow.channel() == channel => tracks.push(shadow),
                 Some(Some(_)) => {}
                 Some(None) => {}
                 None => tracks.push(TrackShadow::from_compiled(track)),
@@ -362,7 +362,7 @@ impl PreflightOverlay {
         if !supported
             && (painted
                 || self
-                    .channel(scene, index, Property::Fill)
+                    .channel(scene, CompiledChannelKey::new(index, Property::Fill))
                     .iter()
                     .any(|track| track.continuous_paint))
         {
@@ -476,7 +476,7 @@ pub(super) fn preflight_transaction_with_resources(
                 )?;
                 for property in [Property::Transform, Property::Morph] {
                     if let Some(track) = overlay
-                        .channel(scene, index, property)
+                        .channel(scene, CompiledChannelKey::new(index, property))
                         .iter()
                         .find(|track| !track.reconciled)
                     {
@@ -638,9 +638,14 @@ pub(super) fn preflight_transaction_with_resources(
                 )?;
                 // Respect staged adds/replacements as well as base tracks. A
                 // retired generation cannot retain drivers or block its successor.
-                for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
-                    for track in overlay.channel(scene, index, property) {
-                        overlay.set_track(track.id, None);
+                if let Some(attachment) = expected {
+                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                        for track in overlay.channel(
+                            scene,
+                            CompiledChannelKey::effect(index, property, *attachment),
+                        ) {
+                            overlay.set_track(track.id, None);
+                        }
                     }
                 }
                 overlay.set_effect(scene, *object, effect.clone());
@@ -876,7 +881,7 @@ pub(super) fn preflight_transaction_with_resources(
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
                 }
-                for other in overlay.channel(scene, object_index, *property) {
+                for other in overlay.channel(scene, reconciled.channel()) {
                     if other.id == *track {
                         continue;
                     }
@@ -909,8 +914,14 @@ fn validate_camera_track_overlap(
     overlay: &mut PreflightOverlay,
     object_index: u32,
 ) -> Result<(), CompilePatchError> {
-    let profiles = overlay.channel(scene, object_index, Property::CameraProfile);
-    let worlds = overlay.channel(scene, object_index, Property::WorldTransform);
+    let profiles = overlay.channel(
+        scene,
+        CompiledChannelKey::new(object_index, Property::CameraProfile),
+    );
+    let worlds = overlay.channel(
+        scene,
+        CompiledChannelKey::new(object_index, Property::WorldTransform),
+    );
     for profile in &profiles {
         for world in &worlds {
             if profile.start_time < world.start_time + world.duration
@@ -963,7 +974,10 @@ fn validate_presence_channel(
     overlay: &mut PreflightOverlay,
     object_index: u32,
 ) -> Result<(), CompilePatchError> {
-    let mut tracks = overlay.channel(scene, object_index, Property::Presence);
+    let mut tracks = overlay.channel(
+        scene,
+        CompiledChannelKey::new(object_index, Property::Presence),
+    );
     tracks.sort_by(|left, right| {
         left.start_time
             .total_cmp(&right.start_time)

@@ -7,9 +7,9 @@ use noon_core::{ReactiveValue, SignalId};
 use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
-    effective_object_conservative_bounds_with_resources, upper_bound_start, EffectiveBoundsBasis,
-    EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity,
-    SceneInstance, TrackGroup, PROPERTY_ORDER,
+    effective_object_conservative_bounds_with_resources, evaluation_property_channels,
+    upper_bound_start, EffectiveBoundsBasis, EffectiveObjectProperties, EffectivePropertyWrite,
+    FrameRowState, FrameState, RuntimeIdentity, SceneInstance, TrackGroup, PROPERTY_ORDER,
 };
 use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
 
@@ -354,8 +354,9 @@ impl SceneInstance {
             prior_driver_rows += 1;
             let mut row = FrameRowState::from_frame(&self.frame, object_index);
             let base_content = &self.frame.objects[object_index].content;
-            for property in PROPERTY_ORDER {
-                let channel = CompiledChannelKey::new(object_index as u32, property);
+            for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
+                evaluation_property_channels(&self.compiled, object_index as u32, property)
+            }) {
                 let tracks = self.compiled.channel_tracks(channel);
                 let Some(group) = self.groups.get(&channel) else {
                     continue;

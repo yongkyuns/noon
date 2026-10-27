@@ -777,6 +777,7 @@ pub struct CompiledTrack {
 pub struct CompiledChannelKey {
     pub object_index: u32,
     pub property: Property,
+    attachment: Option<noon_core::SemanticNodeId>,
 }
 
 impl CompiledChannelKey {
@@ -784,7 +785,43 @@ impl CompiledChannelKey {
         Self {
             object_index,
             property,
+            attachment: None,
         }
+    }
+
+    /// An effect parameter belongs to an exact semantic attachment generation.
+    /// An ordinary object/property key never aliases an attachment channel.
+    pub const fn effect(
+        object_index: u32,
+        property: Property,
+        attachment: noon_core::SemanticNodeId,
+    ) -> Self {
+        Self {
+            object_index,
+            property,
+            attachment: Some(attachment),
+        }
+    }
+
+    pub const fn attachment(self) -> Option<noon_core::SemanticNodeId> {
+        self.attachment
+    }
+
+    /// Derive the address from the validated payload; never resolve a name or
+    /// substitute the current attachment for a track's captured generation.
+    pub fn for_values(object_index: u32, property: Property, values: &TrackValues) -> Self {
+        match values {
+            TrackValues::Effect { attachment, .. } => {
+                Self::effect(object_index, property, *attachment)
+            }
+            _ => Self::new(object_index, property),
+        }
+    }
+}
+
+impl CompiledTrack {
+    pub fn channel(&self) -> CompiledChannelKey {
+        CompiledChannelKey::for_values(self.object_index, self.property, &self.values)
     }
 }
 
@@ -799,6 +836,7 @@ impl Ord for CompiledChannelKey {
         self.object_index
             .cmp(&other.object_index)
             .then_with(|| property_rank(self.property).cmp(&property_rank(other.property)))
+            .then_with(|| self.attachment.cmp(&other.attachment))
     }
 }
 
@@ -806,6 +844,7 @@ impl Ord for CompiledChannelKey {
 struct CompiledTrackLocator {
     object_index: u32,
     property: Property,
+    attachment: Option<noon_core::SemanticNodeId>,
     start_time: f64,
     id: TrackId,
 }
@@ -815,8 +854,17 @@ impl CompiledTrackLocator {
         Self {
             object_index: track.object_index,
             property: track.property,
+            attachment: track.channel().attachment(),
             start_time: track.timing.start_time,
             id: track.id,
+        }
+    }
+
+    fn channel(self) -> CompiledChannelKey {
+        CompiledChannelKey {
+            object_index: self.object_index,
+            property: self.property,
+            attachment: self.attachment,
         }
     }
 }
@@ -1453,7 +1501,11 @@ impl CompiledScene {
             )
             .map_err(CompilePatchError::InvalidTrack)?;
             candidates
-                .entry(CompiledChannelKey::new(object_index, track.property))
+                .entry(CompiledChannelKey::for_values(
+                    object_index,
+                    track.property,
+                    &track.values,
+                ))
                 .or_default()
                 .push(track);
         }
@@ -1572,7 +1624,7 @@ impl CompiledScene {
         let mut tracks_by_channel = BTreeMap::<CompiledChannelKey, Vec<CompiledTrack>>::new();
         for track in tracks {
             tracks_by_channel
-                .entry(CompiledChannelKey::new(track.object_index, track.property))
+                .entry(track.channel())
                 .or_default()
                 .push(track);
         }
@@ -1852,7 +1904,7 @@ impl CompiledScene {
 
     pub fn track(&self, id: TrackId) -> Option<&CompiledTrack> {
         let locator = *self.track_locators.get(&id)?;
-        let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+        let channel = locator.channel();
         let tracks = self.tracks.get(&channel)?;
         let position = tracks
             .binary_search_by(|track| compare_track_locator(track, locator))
@@ -1866,10 +1918,7 @@ impl CompiledScene {
 
     pub fn channel_for_track(&self, id: TrackId) -> Option<CompiledChannelKey> {
         let locator = self.track_locators.get(&id)?;
-        Some(CompiledChannelKey::new(
-            locator.object_index,
-            locator.property,
-        ))
+        Some(locator.channel())
     }
 
     pub fn channel_tracks(&self, channel: CompiledChannelKey) -> &[CompiledTrack] {
@@ -1890,6 +1939,21 @@ impl CompiledScene {
         self.tracks
             .range(start..)
             .take_while(move |(channel, _)| channel.object_index == object_index)
+            .map(|(channel, _)| *channel)
+    }
+
+    /// Enumerate only this object's channels for one property. The ordered
+    /// prefix includes every attachment generation without scanning other rows.
+    pub fn channels_for_object_property(
+        &self,
+        object_index: u32,
+        property: Property,
+    ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+        self.tracks
+            .range(CompiledChannelKey::new(object_index, property)..)
+            .take_while(move |(channel, _)| {
+                channel.object_index == object_index && channel.property == property
+            })
             .map(|(channel, _)| *channel)
     }
 
@@ -2475,7 +2539,7 @@ impl CompiledScene {
                 stats.presence_tracks_inspected +=
                     self.validate_presence_edit(None, Some(&compiled))?;
                 let locator = CompiledTrackLocator::from_track(&compiled);
-                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel = locator.channel();
                 let channel_tracks = self.tracks.entry(channel).or_default();
                 let position = track_insertion_position(channel_tracks, &compiled);
                 stats.dense_track_slots_shifted = channel_tracks.len().saturating_sub(position);
@@ -2516,8 +2580,7 @@ impl CompiledScene {
                     .get(&track.id)
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(track.id))?;
-                let old_channel =
-                    CompiledChannelKey::new(old_locator.object_index, old_locator.property);
+                let old_channel = old_locator.channel();
                 let old_position = self.track_position(old_locator);
                 let compiled = self.compile_patch_track(track)?;
                 stats.presence_tracks_inspected +=
@@ -2538,8 +2601,7 @@ impl CompiledScene {
                 }
 
                 let new_locator = CompiledTrackLocator::from_track(&compiled);
-                let new_channel =
-                    CompiledChannelKey::new(new_locator.object_index, new_locator.property);
+                let new_channel = new_locator.channel();
                 let new_tracks = self.tracks.entry(new_channel).or_default();
                 let new_position = track_insertion_position(new_tracks, &compiled);
                 stats.dense_track_slots_shifted += new_tracks.len().saturating_sub(new_position);
@@ -2558,8 +2620,7 @@ impl CompiledScene {
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(*id))?;
                 stats.presence_tracks_inspected += self.validate_presence_edit(Some(*id), None)?;
-                let channel =
-                    CompiledChannelKey::new(old_locator.object_index, old_locator.property);
+                let channel = old_locator.channel();
                 let position = self.track_position(old_locator);
                 let remove_channel = {
                     let tracks = self
@@ -2590,7 +2651,7 @@ impl CompiledScene {
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(*track))?;
                 let position = self.track_position(locator);
-                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel = locator.channel();
                 let compiled = &self.tracks[&channel][position];
                 if compiled.reconciled {
                     return Err(CompilePatchError::TrackAlreadyReconciled(*track));
@@ -2685,7 +2746,7 @@ impl CompiledScene {
     }
 
     fn track_position(&self, locator: CompiledTrackLocator) -> usize {
-        let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+        let channel = locator.channel();
         self.channel_tracks(channel)
             .binary_search_by(|track| compare_track_locator(track, locator))
             .expect("track locator index must match channel-local sorted storage")
@@ -3336,18 +3397,16 @@ fn track_insertion_position(tracks: &[CompiledTrack], track: &CompiledTrack) -> 
 }
 
 fn compare_tracks(left: &CompiledTrack, right: &CompiledTrack) -> Ordering {
-    left.object_index
-        .cmp(&right.object_index)
-        .then_with(|| property_rank(left.property).cmp(&property_rank(right.property)))
+    left.channel()
+        .cmp(&right.channel())
         .then_with(|| left.timing.start_time.total_cmp(&right.timing.start_time))
         .then_with(|| left.id.cmp(&right.id))
 }
 
 fn compare_track_locator(track: &CompiledTrack, locator: CompiledTrackLocator) -> Ordering {
     track
-        .object_index
-        .cmp(&locator.object_index)
-        .then_with(|| property_rank(track.property).cmp(&property_rank(locator.property)))
+        .channel()
+        .cmp(&locator.channel())
         .then_with(|| track.timing.start_time.total_cmp(&locator.start_time))
         .then_with(|| track.id.cmp(&locator.id))
 }

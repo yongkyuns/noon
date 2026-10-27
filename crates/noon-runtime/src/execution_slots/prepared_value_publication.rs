@@ -400,7 +400,11 @@ impl SceneInstance {
             Property::EffectIntensity,
             Property::EffectOffset,
         ] {
-            let channel = noon_compile::CompiledChannelKey::new(object_index as u32, property);
+            let channel = noon_compile::CompiledChannelKey::effect(
+                object_index as u32,
+                property,
+                base.attachment,
+            );
             let Some(mut group) = self.groups.get(&channel).cloned() else {
                 continue;
             };

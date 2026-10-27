@@ -106,7 +106,7 @@ impl CompiledScene {
         for track in self.tracks.values().flatten() {
             let mut track = track.clone();
             track.object_index = remap(track.object_index);
-            let channel = CompiledChannelKey::new(track.object_index, track.property);
+            let channel = track.channel();
             track_locators.insert(track.id, CompiledTrackLocator::from_track(&track));
             tracks.entry(channel).or_default().push(track);
             track_rows_reindexed += 1;

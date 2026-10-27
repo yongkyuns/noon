@@ -124,11 +124,14 @@ impl CompiledScene {
             | ExecutionPatch::SetEffect { object, .. } => {
                 rows.insert(index(*object)?);
             }
-            ExecutionPatch::SetEffectAttachment { object, .. } => {
+            ExecutionPatch::SetEffectAttachment {
+                object, expected, ..
+            } => {
                 let slot = index(*object)?;
                 rows.insert(slot);
                 for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
-                    let channel = CompiledChannelKey::new(slot, property);
+                    let Some(attachment) = expected else { break };
+                    let channel = CompiledChannelKey::effect(slot, property, *attachment);
                     if !self.channel_tracks(channel).is_empty() {
                         channels.insert(channel);
                         tracks.extend(self.channel_tracks(channel).iter().map(|track| track.id));
@@ -139,7 +142,11 @@ impl CompiledScene {
                 tracks.insert(track.id);
                 let slot = index(track.object)?;
                 rows.insert(slot);
-                channels.insert(CompiledChannelKey::new(slot, track.property));
+                channels.insert(CompiledChannelKey::for_values(
+                    slot,
+                    track.property,
+                    &track.values,
+                ));
                 if let Some(channel) = self.channel_for_track(track.id) {
                     rows.insert(channel.object_index);
                     channels.insert(channel);
@@ -285,7 +292,7 @@ impl CompiledScene {
         }
         for (id, saved) in &mut revision.tracks {
             let current = self.track_locators.remove(id).map(|locator| {
-                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel = locator.channel();
                 let position = self.track_position(locator);
                 let tracks = self
                     .tracks
@@ -299,7 +306,7 @@ impl CompiledScene {
                 track
             });
             if let Some(track) = saved.take() {
-                let channel = CompiledChannelKey::new(track.object_index, track.property);
+                let channel = track.channel();
                 let tracks = self.tracks.entry(channel).or_default();
                 let position = crate::track_insertion_position(tracks, &track);
                 self.track_locators

@@ -83,6 +83,199 @@ fn tx(patches: impl IntoIterator<Item = ExecutionPatch>) -> ExecutionMutationTra
 }
 
 #[test]
+fn parameter_channels_require_exact_attachment_addresses_for_every_finite_kind() {
+    use noon_core::{Blur, EffectDefinition, Shadow};
+    for (definition, update, properties) in [
+        (
+            EffectDefinition::Glow(Glow::new(EffectUpdate::default().radius(Pixels(2.0))).unwrap()),
+            EffectUpdate::default()
+                .color(Color::BLUE)
+                .radius(Pixels(4.0))
+                .intensity(2.0),
+            vec![
+                Property::EffectColor,
+                Property::EffectRadius,
+                Property::EffectIntensity,
+            ],
+        ),
+        (
+            EffectDefinition::Blur(Blur::new(EffectUpdate::default().radius(Pixels(2.0))).unwrap()),
+            EffectUpdate::default().radius(Pixels(4.0)),
+            vec![Property::EffectRadius],
+        ),
+        (
+            EffectDefinition::Shadow(
+                Shadow::new(
+                    EffectUpdate::default()
+                        .radius(Pixels(2.0))
+                        .offset(noon_core::EffectOffset::Pixels([0.0, 0.0])),
+                )
+                .unwrap(),
+            ),
+            EffectUpdate::default()
+                .color(Color::RED)
+                .radius(Pixels(4.0))
+                .offset(noon_core::EffectOffset::Pixels([2.0, -1.0])),
+            vec![
+                Property::EffectColor,
+                Property::EffectRadius,
+                Property::EffectOffset,
+            ],
+        ),
+    ] {
+        let effect = Arc::new(CompiledEffect {
+            attachment: SemanticNodeId::new(7, 3),
+            definition,
+        });
+        let tracks: Vec<_> = effect
+            .parameter_channels(update)
+            .unwrap()
+            .into_iter()
+            .enumerate()
+            .map(|(id, (property, values))| TrackDefinition {
+                id: TrackId::new(id as u64),
+                object: ObjectId::new(1),
+                property,
+                values,
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: Default::default(),
+            })
+            .collect();
+        let compiled = scene(Some(effect.clone()), &tracks);
+        for property in properties {
+            let key = CompiledChannelKey::effect(0, property, effect.attachment);
+            assert_eq!(
+                compiled
+                    .channels_for_object_property(0, property)
+                    .collect::<Vec<_>>(),
+                vec![key]
+            );
+            let channel = compiled.channel_tracks(key);
+            assert_eq!(channel.len(), 1);
+            assert_eq!(compiled.channel_for_track(channel[0].id), Some(key));
+            assert_eq!(compiled.track(channel[0].id).unwrap().channel(), key);
+            assert!(compiled
+                .channel_tracks(CompiledChannelKey::new(0, property))
+                .is_empty());
+            for foreign in [SemanticNodeId::new(7, 4), SemanticNodeId::new(8, 3)] {
+                assert!(compiled
+                    .channel_tracks(CompiledChannelKey::effect(0, property, foreign))
+                    .is_empty());
+            }
+            assert!(compiled
+                .channels_for_object_property(1, property)
+                .next()
+                .is_none());
+        }
+        let mut runtime = SceneInstance::new(compiled);
+        runtime.advance_to(0.5).unwrap();
+        let midpoint = runtime.frame().clone();
+        runtime.advance_to(1.0).unwrap();
+        assert_eq!(
+            runtime.frame().objects[0]
+                .effect
+                .as_ref()
+                .unwrap()
+                .definition,
+            update.apply_to(definition).unwrap()
+        );
+        runtime.seek(0.5).unwrap();
+        assert_eq!(runtime.frame(), &midpoint);
+    }
+}
+
+#[test]
+fn compaction_relocates_channels_without_replacing_attachment_identity() {
+    let a = attachment(3);
+    let tracks = channels(&a, 0.0, 1);
+    let mut prefix = source(None);
+    prefix.id = ObjectId::new(99);
+    let compiled =
+        CompiledScene::compile_objects(vec![prefix, source(Some(a.clone()))], &tracks).unwrap();
+    let mut runtime = SceneInstance::new(compiled);
+    runtime.advance_to(0.25).unwrap();
+    let effective = runtime.frame().objects[1].clone();
+    runtime
+        .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(99)))
+        .unwrap();
+    let stats = runtime.reclaim_retired_object_slots().unwrap();
+    assert_eq!(stats.compiled.track_rows_reindexed, 3);
+    assert_eq!(runtime.frame().objects.len(), 1);
+    assert_eq!(runtime.frame().objects[0], effective);
+    runtime.advance_to(0.5).unwrap();
+    assert!(
+        (runtime.frame().objects[0]
+            .effect
+            .as_ref()
+            .unwrap()
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity()
+            - 1.2)
+            .abs()
+            < 1e-12
+    );
+    runtime.take_frame_changes();
+    runtime.advance_to(0.5).unwrap();
+    assert!(runtime.frame_changes().is_empty());
+    runtime.seek(0.25).unwrap();
+    assert_eq!(runtime.frame().objects[0], effective);
+    runtime
+        .apply_execution_patch(&change(Some(a.attachment), None))
+        .unwrap();
+    assert_eq!(runtime.last_patch_stats().track_locators_removed, 3);
+    runtime.advance_to(1.0).unwrap();
+    assert!(runtime.frame().objects[0].effect.is_none());
+    runtime.take_frame_changes();
+    runtime.advance_to(1.5).unwrap();
+    assert_eq!(runtime.last_stats().groups_evaluated, 0);
+    assert!(runtime.frame_changes().is_empty());
+}
+
+#[test]
+fn staged_object_retirement_releases_effect_and_priority_track_ids_atomically() {
+    let a = attachment(3);
+    let b = attachment(4);
+    let priority = TrackDefinition {
+        id: TrackId::new(50),
+        object: ObjectId::new(1),
+        property: Property::ZIndex,
+        values: TrackValues::ZIndex { from: 0.0, to: 2.0 },
+        timing: TrackTiming::instant(0.0),
+        time_map: Default::default(),
+    };
+    let mut edits = vec![change(None, Some(a.clone()))];
+    edits.extend(
+        channels(&a, 0.0, 1)
+            .into_iter()
+            .map(ExecutionPatch::AddTrack),
+    );
+    edits.push(ExecutionPatch::AddTrack(priority.clone()));
+    edits.push(ExecutionPatch::RemoveObject(ObjectId::new(1)));
+    edits.push(ExecutionPatch::CreateObject(source(Some(b.clone()))));
+    edits.extend(
+        channels(&b, 0.0, 1)
+            .into_iter()
+            .map(ExecutionPatch::AddTrack),
+    );
+    edits.push(ExecutionPatch::AddTrack(priority));
+    let transaction = tx(edits);
+    let mut sequential = scene(None, &[]);
+    for patch in transaction.mutations() {
+        sequential.apply_execution_patch(patch).unwrap();
+    }
+    assert_eq!(sequential.track_count(), 4);
+    let mut runtime = SceneInstance::new(scene(None, &[]));
+    runtime.apply_execution_transaction(&transaction).unwrap();
+    runtime.advance_to(0.5).unwrap();
+    assert_eq!(runtime.frame().objects[0].z_index, 2.0);
+    let current = runtime.frame().objects[0].effect.as_ref().unwrap();
+    assert_eq!(current.attachment, b.attachment);
+    assert!((current.definition.as_glow().unwrap().intensity() - 1.2).abs() < 1e-12);
+}
+
+#[test]
 fn attach_remove_and_new_generation_preserve_the_object_and_only_dirty_rendering() {
     let mut rt = SceneInstance::new(scene(None, &[]));
     let a = attachment(3);
