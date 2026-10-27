@@ -1,0 +1,163 @@
+name: One-off 2308 ordered-effects combined qualification
+on:
+  push:
+    branches: [agent/2308-combined-memory-qualification-20261027]
+    paths:
+      - .github/ci/one-off-2308-effects.py
+      - .github/workflows/one-off-2308-effects.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PIN_MASTER: bc25e92bb741607f678f6adea528c9e894c6335c
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Checkout isolated helper without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download authenticated green combined candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: noon2308-combined-memory-source-qualification
+          run-id: 40571552550
+          repository: yongkyuns/noon
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/qualified-input
+      - name: Reconstruct exact reviewed ordered-effects integration
+        id: stage
+        run: python3 .github/ci/one-off-2308-effects.py
+      - name: Install pinned Rust and native dependencies
+        if: ${{ steps.stage.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        run: |
+          set -euo pipefail
+          rustup install
+          rustc --version --verbose | tee "$RUNNER_TEMP/noon2308-effects-evidence/rust-version.log"
+          bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Restore Cargo sources
+        if: ${{ steps.stage.outcome == 'success' }}
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-reconcile-2308
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Read-only compiler cache
+        if: ${{ steps.stage.outcome == 'success' }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and freeze exact source
+        id: formatted
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          cargo fmt --all 2>&1 | tee "$EVIDENCE/format.log"
+          git add --all
+          git diff --cached --check
+          git diff --cached --binary HEAD > "$EVIDENCE/formatter.patch"
+          if ! git diff --cached --quiet; then git commit -m 'Apply pinned formatter to ordered-effects integration'; fi
+          git show -s --format='%H%n%T%n%P' HEAD > "$EVIDENCE/tested-head.txt"
+      - name: Canonical Fast Gate with warnings denied
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          trap 'code=$?; echo "$code" > "$EVIDENCE/fast.exit"; exit "$code"' EXIT
+          bash scripts/check.sh fast "$PIN_MASTER" 2>&1 | tee "$EVIDENCE/fast.log"
+      - name: Execute retained memory seek admission and upstream ordered-effects suites
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          trap 'code=$?; echo "$code" > "$EVIDENCE/prepared.exit"; exit "$code"' EXIT
+          cargo test --locked -p noon-runtime --features prepared-prefix --lib replay::prefix 2>&1 | tee "$EVIDENCE/prefix.log"
+          grep -F 'historical_inset_rejection_precedes_zero_component_budgets ... ok' "$EVIDENCE/prefix.log"
+          cargo test --locked -p noon-runtime --features prepared-prefix --lib seek_storage_tests 2>&1 | tee "$EVIDENCE/seek.log"
+          grep -F 'merged_seek_preserves_paint_effect_and_reserved_storage ... ok' "$EVIDENCE/seek.log"
+          cargo test --locked -p noon-runtime --lib seek_storage_tests 2>&1 | tee "$EVIDENCE/seek-default.log"
+          cargo test --locked -p noon-compile --features prepared-prefix --lib replay_revision::prefix::storage 2>&1 | tee "$EVIDENCE/compiler-storage.log"
+          grep -F 'ordered_effect_rows_remain_outside_prefix_suffix_admission ... ok' "$EVIDENCE/compiler-storage.log"
+          cargo test --locked -p noon-runtime --features prepared-prefix --test prefix_bindings --test prefix_interactions --test prefix_lifecycle 2>&1 | tee "$EVIDENCE/runtime-input.log"
+          cargo test --locked -p noon --features prepared-prefix --test prepared_prefix_bindings --test prepared_prefix_identity --test prepared_prefix_interactions --test prepared_prefix_lifecycle 2>&1 | tee "$EVIDENCE/prepared-input.log"
+          cargo test --locked -p noon --test ordered_effects 2>&1 | tee "$EVIDENCE/ordered-effects.log"
+      - name: Require paint loss effect loss order reversal and missing admission guard to fail
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          trap 'code=$?; echo "$code" > "$EVIDENCE/controls.exit"; exit "$code"' EXIT
+          python3 "$GITHUB_WORKSPACE/.github/ci/one-off-2308-effects.py" controls
+      - name: Check WASM with and without renderer
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          trap 'code=$?; echo "$code" > "$EVIDENCE/wasm.exit"; exit "$code"' EXIT
+          cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-renderer.log"
+          cargo check --locked -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-rendererless.log"
+      - name: Worker budget regression and complete web preflight
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        env:
+          NOON_WEB_PREFLIGHT_ONLY: "1"
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          trap 'code=$?; echo "$code" > "$EVIDENCE/web.exit"; exit "$code"' EXIT
+          node --test web/python-worker-prepared-budget.test.mjs 2>&1 | tee "$EVIDENCE/worker-budget.log"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/web-preflight.log"
+      - name: Preserve exact source and independent gate results
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-effects
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-effects-evidence"
+          git diff --exit-code
+          git diff --cached --exit-code
+          git archive --format=tar.gz --output="$EVIDENCE/combined-source.tar.gz" HEAD
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['RUNNER_TEMP']) / 'noon2308-effects-evidence'
+          m = json.loads((out/'manifest.json').read_text())
+          m['tested_commit_local_only'] = subprocess.check_output(['git','rev-parse','HEAD']).decode().strip()
+          m['tested_tree'] = subprocess.check_output(['git','rev-parse','HEAD^{tree}']).decode().strip()
+          m['source_archive_sha256'] = hashlib.sha256((out/'combined-source.tar.gz').read_bytes()).hexdigest()
+          m['command_exit_codes'] = {k: int(p.read_text()) if p.exists() else None for k in ('fast','prepared','controls','wasm','web') for p in [out/(k+'.exit')]}
+          m['tracked_source_unchanged'] = True
+          (out/'manifest.json').write_text(json.dumps(m,indent=2)+'\n')
+          print(json.dumps(m,indent=2))
+          PY
+      - name: Upload complete evidence including failed gates
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-ordered-effects-combined-qualification
+          path: ${{ runner.temp }}/noon2308-effects-evidence
+          retention-days: 3
+          if-no-files-found: error
