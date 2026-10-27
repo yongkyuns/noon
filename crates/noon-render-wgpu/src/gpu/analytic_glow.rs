@@ -12,8 +12,8 @@ use noon_core::{EffectDefinition, GeometryRef, GlowSource, ObjectId, Transform2D
 
 use super::{
     Camera2D, CameraUniform, DrawStats, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
-    EffectRasterStats, GeometryBinding, GlowCapture, GlowFilter, GlowParameters, GlowScope,
-    GpuRenderer, ResolvedOrderedBatch, PATH_SAMPLE_COUNT,
+    EffectRasterStats, EffectStackFilter, EffectStackParameters, EffectStackScope, GeometryBinding,
+    GlowCapture, GpuRenderer, ResolvedOrderedBatch, PATH_SAMPLE_COUNT,
 };
 use crate::{CircleInstance, PackedStyle, PreparedFrame, RectangleInstance, RenderPrimitive};
 
@@ -125,52 +125,6 @@ impl CaptureImage {
 }
 
 #[derive(Debug)]
-enum ResidentFilter {
-    Glow(Box<GlowScope>),
-    Blur(Box<super::gaussian_blur::GaussianBlurScope>),
-    Shadow(Box<super::shadow_filter::ShadowScope>),
-}
-impl ResidentFilter {
-    fn new(definition: EffectDefinition) -> Self {
-        match definition {
-            EffectDefinition::Glow(_) => Self::Glow(Box::default()),
-            EffectDefinition::Blur(_) => Self::Blur(Default::default()),
-            EffectDefinition::Shadow(_) => Self::Shadow(Default::default()),
-        }
-    }
-    fn matches(&self, definition: EffectDefinition) -> bool {
-        matches!(
-            (self, definition),
-            (Self::Glow(_), EffectDefinition::Glow(_))
-                | (Self::Blur(_), EffectDefinition::Blur(_))
-                | (Self::Shadow(_), EffectDefinition::Shadow(_))
-        )
-    }
-    fn invalidate(&mut self) {
-        match self {
-            Self::Glow(v) => v.invalidate(),
-            Self::Blur(v) => v.invalidate(),
-            Self::Shadow(v) => v.invalidate(),
-        }
-    }
-    fn output_view(&self) -> Option<&wgpu::TextureView> {
-        match self {
-            Self::Glow(v) => v.output_view(),
-            Self::Blur(v) => v.output_view(),
-            Self::Shadow(v) => v.output_view(),
-        }
-    }
-    #[cfg(test)]
-    fn output(&self) -> Option<&wgpu::Texture> {
-        match self {
-            Self::Glow(v) => v.output(),
-            Self::Blur(v) => v.output(),
-            Self::Shadow(v) => v.output(),
-        }
-    }
-}
-
-#[derive(Debug)]
 struct ResidentEffect {
     object: ObjectId,
     tile: EffectCaptureTile,
@@ -191,7 +145,7 @@ struct ResidentEffect {
     placement: Placement,
     placement_buffer: wgpu::Buffer,
     placement_binding: Option<wgpu::BindGroup>,
-    filter: ResidentFilter,
+    filter: EffectStackScope,
     revision: u64,
     invalidated: bool,
     enabled: bool,
@@ -210,9 +164,7 @@ pub(super) struct EffectCaptureGpu {
     // cache keys; owners retain their normal published object identities.
     scopes: BTreeMap<(u8, usize), ResidentEffect>,
     owners: BTreeMap<ObjectId, (u8, usize)>,
-    filter: GlowFilter,
-    blur: super::gaussian_blur::GaussianBlurFilter,
-    shadow: super::shadow_filter::ShadowFilter,
+    filter: EffectStackFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
 }
@@ -610,7 +562,7 @@ impl GpuRenderer {
                 .get_or_insert_with(|| PlacementPrograms::new(device, self.target_format));
             let replace = glows.scopes.get(&key).is_none_or(|s| {
                 s.object != object
-                    || !s.filter.matches(request.definition)
+                    || !s.filter.matches(&[request.definition])
                     || s.tile.size != tile.size
                     || s.silhouette.is_some() != needs_silhouette
                     || s.source_buffer.size() < source_instance.bytes().len() as u64
@@ -683,7 +635,7 @@ impl GpuRenderer {
                         placement,
                         placement_buffer,
                         placement_binding: None,
-                        filter: ResidentFilter::new(request.definition),
+                        filter: EffectStackScope::default(),
                         revision: 0,
                         invalidated: true,
                         enabled: true,
@@ -818,88 +770,24 @@ impl GpuRenderer {
                 queue.write_buffer(&scope.placement_buffer, 0, bytemuck::bytes_of(&placement));
                 stats.placement_bytes_uploaded = size_of::<Placement>();
             }
-            let upload = match (&mut scope.filter, request.definition) {
-                (ResidentFilter::Glow(filter), EffectDefinition::Glow(definition)) => {
-                    let upload = glows.filter.prepare(
-                        device,
-                        queue,
-                        filter,
-                        GlowCapture {
-                            source: &scope.source.texture,
-                            silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
-                            revision: scope.revision,
-                        },
-                        GlowParameters {
-                            definition,
-                            output_height: parameters.output_height,
-                            world_view_height: parameters.world_view_height,
-                            scope_opacity: opacity,
-                            scratch_budget_bytes: request.texture_budget_bytes,
-                        },
-                    )?;
-                    let encoded = glows.filter.encode(encoder, filter);
-                    EffectRasterStats {
-                        blur_passes: encoded.blur_passes,
-                        composite_passes: encoded.composite_passes,
-                        ..upload
-                    }
-                }
-                (ResidentFilter::Blur(filter), EffectDefinition::Blur(definition)) => {
-                    use super::gaussian_blur::{GaussianBlurCapture, GaussianBlurParameters};
-                    let sigma_pixels = definition
-                        .radius()
-                        .to_output_pixels(parameters.output_height, parameters.world_view_height)
-                        .map_err(EffectPrepareError::Parameter)?;
-                    let upload = glows
-                        .blur
-                        .prepare(
-                            device,
-                            queue,
-                            filter,
-                            GaussianBlurCapture {
-                                source: &scope.source.texture,
-                                revision: scope.revision,
-                            },
-                            GaussianBlurParameters {
-                                sigma_pixels,
-                                scope_opacity: opacity,
-                                scratch_budget_bytes: request.texture_budget_bytes,
-                            },
-                        )
-                        .map_err(EffectPrepareError::Blur)?;
-                    let encoded = glows.blur.encode(encoder, filter);
-                    EffectRasterStats {
-                        pipeline_compiles: upload.pipeline_compiles,
-                        kernel_builds: upload.kernel_builds,
-                        texture_allocations: upload.texture_allocations,
-                        buffer_allocations: upload.buffer_allocations,
-                        bind_group_creations: upload.bind_group_creations,
-                        bytes_uploaded: upload.bytes_uploaded,
-                        scratch_bytes: upload.scratch_bytes,
-                        blur_passes: encoded.blur_passes,
-                        composite_passes: encoded.output_passes,
-                    }
-                }
-                (ResidentFilter::Shadow(filter), EffectDefinition::Shadow(definition)) => {
-                    glows.shadow.prepare_encode(
-                        &mut glows.blur,
-                        device,
-                        queue,
-                        encoder,
-                        filter,
-                        super::gaussian_blur::GaussianBlurCapture {
-                            source: &scope.source.texture,
-                            revision: scope.revision,
-                        },
-                        definition,
-                        parameters.output_height,
-                        parameters.world_view_height,
-                        opacity,
-                        request.texture_budget_bytes,
-                    )?
-                }
-                _ => unreachable!("validated filter kind"),
-            };
+            let upload = glows.filter.prepare_encode(
+                device,
+                queue,
+                encoder,
+                &mut scope.filter,
+                GlowCapture {
+                    source: &scope.source.texture,
+                    silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
+                    revision: scope.revision,
+                },
+                &[request.definition],
+                EffectStackParameters {
+                    output_height: parameters.output_height,
+                    world_view_height: parameters.world_view_height,
+                    scope_opacity: opacity,
+                    scratch_budget_bytes: request.texture_budget_bytes,
+                },
+            )?;
             stats.filter = upload;
             if replace || upload.texture_allocations != 0 || scope.placement_binding.is_none() {
                 scope.placement_binding =

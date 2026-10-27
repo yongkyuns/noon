@@ -1,5 +1,5 @@
 use super::*;
-use crate::FramePreparer;
+use crate::{FramePreparer, GlowParameters};
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::Glow;
 use noon_core::{Color, EffectUpdate, Pixels, Style};

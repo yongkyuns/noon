@@ -179,18 +179,7 @@ impl EffectCaptureTile {
         memory_budget_bytes: u64,
     ) -> Result<Option<Self>, EffectPrepareError> {
         let parameters = parameters.into();
-        let sigma = parameters
-            .definition
-            .radius()
-            .to_output_pixels(parameters.output_height, parameters.world_view_height)
-            .map_err(EffectPrepareError::Parameter)?;
-        if sigma > MAX_SIGMA {
-            return Err(EffectPrepareError::RadiusExceedsProfile);
-        }
-        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
-        {
-            return Err(EffectPrepareError::InvalidScopeOpacity);
-        }
+        let sigma = parameters.sigma_pixels()?;
         if viewport.contains(&0) {
             return Err(EffectPrepareError::Parameter(
                 EffectParameterError::InvalidView,
@@ -201,24 +190,10 @@ impl EffectCaptureTile {
         {
             return Err(EffectPrepareError::InvalidSourceBounds);
         }
-        if parameters.definition.is_neutral() || parameters.scope_opacity == 0.0 {
+        if parameters.is_neutral_at_sigma(sigma) || parameters.scope_opacity == 0.0 {
             return Ok(None);
         }
-        let offset = if let Some(shadow) = parameters.definition.as_shadow() {
-            let [x, y] = shadow
-                .offset()
-                .to_output_pixels(parameters.output_height, parameters.world_view_height)
-                .map_err(EffectPrepareError::Parameter)?;
-            if [x, y]
-                .into_iter()
-                .any(|v| !(v as f32).is_finite() || (f64::from(v as f32) - v).abs() > 1.0 / 256.0)
-            {
-                return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
-            }
-            [x, -y]
-        } else {
-            [0.0; 2]
-        };
+        let offset = parameters.offset_pixels()?;
         let support_radius = (3.0 * sigma).ceil() as u32;
         let padding = f64::from(support_radius) + 1.0; // analytic AA footprint
         let mut start = [0_i64; 2];
@@ -293,6 +268,40 @@ pub struct EffectCaptureParameters {
     pub scope_opacity: f32,
 }
 impl EffectCaptureParameters {
+    pub(super) fn is_neutral_at_sigma(self, sigma: f64) -> bool {
+        self.definition.is_neutral()
+            || (matches!(self.definition, noon_core::EffectDefinition::Blur(_)) && sigma == 0.0)
+    }
+    pub(super) fn sigma_pixels(self) -> Result<f64, EffectPrepareError> {
+        let sigma = self
+            .definition
+            .radius()
+            .to_output_pixels(self.output_height, self.world_view_height)
+            .map_err(EffectPrepareError::Parameter)?;
+        if sigma > MAX_SIGMA {
+            return Err(EffectPrepareError::RadiusExceedsProfile);
+        }
+        if !self.scope_opacity.is_finite() || !(0.0..=1.0).contains(&self.scope_opacity) {
+            return Err(EffectPrepareError::InvalidScopeOpacity);
+        }
+        Ok(sigma)
+    }
+    pub(super) fn offset_pixels(self) -> Result<[f64; 2], EffectPrepareError> {
+        let Some(shadow) = self.definition.as_shadow() else {
+            return Ok([0.0; 2]);
+        };
+        let [x, y] = shadow
+            .offset()
+            .to_output_pixels(self.output_height, self.world_view_height)
+            .map_err(EffectPrepareError::Parameter)?;
+        if [x, y]
+            .into_iter()
+            .any(|v| !(v as f32).is_finite() || (f64::from(v as f32) - v).abs() > 1.0 / 256.0)
+        {
+            return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
+        }
+        Ok([x, -y])
+    }
     pub(crate) fn bytes_per_pixel(self) -> u64 {
         match self.definition {
             noon_core::EffectDefinition::Glow(effect)
@@ -346,6 +355,8 @@ pub enum EffectPrepareError {
     CaptureSizeMismatch,
     ExtentExceedsDevice,
     ScratchBudgetExceeded,
+    StackExceedsProfile,
+    RevisionExhausted,
 }
 impl std::fmt::Display for EffectPrepareError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -381,19 +392,7 @@ struct GlowUniform {
 
 impl GlowUniform {
     fn validate(parameters: GlowParameters) -> Result<f64, EffectPrepareError> {
-        let sigma = parameters
-            .definition
-            .radius()
-            .to_output_pixels(parameters.output_height, parameters.world_view_height)
-            .map_err(EffectPrepareError::Parameter)?;
-        if sigma > MAX_SIGMA {
-            return Err(EffectPrepareError::RadiusExceedsProfile);
-        }
-        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
-        {
-            return Err(EffectPrepareError::InvalidScopeOpacity);
-        }
-        Ok(sigma)
+        EffectCaptureParameters::from(parameters).sigma_pixels()
     }
 
     fn prepare(
@@ -701,7 +700,7 @@ impl GlowFilter {
     }
 }
 
-fn validate_capture(texture: &wgpu::Texture) -> Result<(), EffectPrepareError> {
+pub(super) fn validate_capture(texture: &wgpu::Texture) -> Result<(), EffectPrepareError> {
     if !matches!(
         texture.format(),
         wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm

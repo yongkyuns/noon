@@ -1095,6 +1095,43 @@ uses production primitive rasterization; GPU timing and physical-hardware
 performance are separate acceptance requirements. Pixel tolerances remain 2
 RGBA8 bytes and mask error remains 1e-5.
 
+## Retained ordered raster operators
+
+`EffectStackFilter` composes up to eight finite Glow, Blur and Shadow operators
+over one caller-owned padded RGBA8 capture. Existing single-effect capture uses
+this same implementation. Each active pass consumes the preceding premultiplied
+encoded-LDR result. Painted glow uses its alpha; silhouette glow uses the original
+declared geometry mask. Intermediate outputs quantize to RGBA8. Final scope
+opacity applies once, on the last non-neutral pass. An entirely neutral stack
+returns ordinary source submission without copying or allocating GPU images.
+If unit conversion underflows a positive Blur radius to exact output sigma zero,
+that Blur is also an identity; it cannot claim a nonexistent filtered output or
+take final opacity away from the preceding active pass.
+
+The caller must supply the complete cumulative padded extent, original mask,
+source-content revision, and normal submission/abandoned-encoder lifecycle.
+These are renderer operators, not public authored-stack or composed-group
+admission. Ordered semantic target activation, capture bounds, painter isolation,
+paired creator examples and their publication/lifecycle qualification remain M3.
+
+Programs are shared; per-pass uniforms and intermediates are independent. A
+parameter edit leaves earlier passes intact and invalidates its actual suffix.
+Retained filters charge 12/28/32 bytes per pixel for Glow/Blur/Shadow, excluding
+source/mask, MSAA and host in-flight resources. Warm neutral slots remain charged;
+truncation/clear retires them. Every later-pass profile/capability/budget rejection
+precedes prefix mutation or queue writes. Clean calls upload/encode/allocate
+nothing. No physical-device performance guarantee follows from these counters.
+
+`gpu::effect_stack::tests` includes literal CPU witnesses, sparse invalidation,
+aggregate budget, neutral, retirement and late-failure tests. Its ignored native
+pixel test uses a separate direct 2-D convolution/compositor and checks every
+prefix and RGBA channel, with a predeclared two-byte bound for up to three
+mixed quantized operators and four bytes for the eight-Gaussian boundary witness
+(successive RGBA8 quantization can accumulate). It covers repeated kinds, both orders, original silhouettes,
+transparent input, fractional signed shadows, scene/pixel units, sigma 64, final
+opacity, clean exact repeat and invalidation recovery. These tests qualify the
+operator contract; they do not assert public group or animation-stack support.
+
 ## RGBA Gaussian raster prerequisite
 
 The reusable renderer's `GaussianBlurFilter` consumes an encoded-premultiplied
