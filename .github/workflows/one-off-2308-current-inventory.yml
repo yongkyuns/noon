@@ -2,7 +2,7 @@ name: One-off 2308 current-master and memory-stack inventory
 
 on:
   push:
-    branches: [agent/2308-current-master-memory-inventory-20261027]
+    branches: [agent/2308-latest-master-conflict-inventory-20261027]
     paths:
       - ".github/workflows/one-off-2308-current-inventory.yml"
       - ".github/ci/one-off-2308-current-inventory.py"
@@ -19,7 +19,7 @@ jobs:
     env:
       PIN_PR2308: b3a4b7f484e607a4b14bc57e70f4947f8520ca42
       PIN_MASTER_OLD: f102a74b9bf28440f4862e799604a57c7882fa68
-      PIN_MASTER_CURRENT: f71a4c121bc29921133f790ae9783e89e962e7d9
+      PIN_MASTER_CURRENT: 0351da54754cd2d5f95a7624aacd10872a5b8499
       PIN_MEMORY: 472a61fadfdabba44756b75caaa184cee8c4be57
       ARCHIVE_SHA256: 79caa8a019ea07e644cc699c2c69c158971b30cc428ee8ae301fba8314f6224c
       CANDIDATE_BASE_TREE: a9fcbdd982e1c617fea7f20ae0856d6841a2457d
