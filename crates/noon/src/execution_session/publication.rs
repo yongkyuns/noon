@@ -691,14 +691,7 @@ impl ExecutionSession {
                 .map(ExecutionPatch::RemoveObject),
         );
         let graph_patches = publication.conservative_graph_patches().collect::<Vec<_>>();
-        if !execution_suffix.is_empty()
-            || order_patches
-                .as_ref()
-                .is_some_and(|items| !items.is_empty())
-            || !graph_patches.is_empty()
-        {
-            conservative_patches.extend(publication.conservative_entry_patches(&prepared));
-        }
+        conservative_patches.extend(publication.conservative_entry_patches(&prepared));
         conservative_patches.extend(order_patches.iter().flatten().cloned());
         conservative_patches.extend(graph_patches);
         conservative_patches.extend(execution_suffix.iter().cloned());
@@ -711,9 +704,7 @@ impl ExecutionSession {
                 declaration: entry.declaration,
             })
             .collect::<Vec<_>>();
-        let mut numeric_patches = conservative.mutations().to_vec();
-        numeric_patches.extend(publication.conservative_entry_patches(&prepared));
-        let numeric_transaction = ExecutionMutationTransaction::from_mutations(numeric_patches);
+        let numeric_transaction = conservative.clone();
         let mut pending_numeric_signals = scalar
             .as_ref()
             .and_then(|scalar| scalar.reactive_enrollment.as_ref())

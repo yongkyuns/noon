@@ -1079,6 +1079,26 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
     }
 
+    /// Read final direct parents through the same sparse edge overlay as member
+    /// order. Removed edges and parents are absent; provisional parents retain
+    /// their transaction-local identity until the atomic commit.
+    pub fn family_parents(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Vec<SemanticTransactionNodeRef>, SemanticTransactionReadError> {
+        let node = node.into();
+        // This checked read accepts exactly the shared authoring-node domain.
+        // Its bounded attachment list is not used as a membership authority.
+        self.animation_effect_snapshot(node)?;
+        Ok(self
+            .preflight
+            .family_edges
+            .parents_for_read(self.store, node)
+            .into_iter()
+            .filter(|parent| !self.is_removed_ref(*parent))
+            .collect())
+    }
+
     /// Read final direct family order through the transaction-local overlay.
     pub fn family_members(
         &self,

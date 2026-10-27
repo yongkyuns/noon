@@ -84,9 +84,17 @@ pub(super) fn lower_changes(
         if !reachability.is_reachable(owner) || prepared.node_is_removed(owner) {
             continue;
         }
+        // First family attachment is an ordinary prepared execution entry.
+        // Removing its last attachment is an ordinary execution membership exit.
+        if !reachability.is_object_reachable(owner)
+            || (super::composed::unrendered_family(prepared, owner.into())?
+                && prepared.animation_effect_snapshot(owner)?.is_empty())
+        {
+            continue;
+        }
         let Some(object) = index.execution_object_id(owner) else {
-            // A reachable family cannot quietly accept a per-leaf treatment
-            // in place of an unimplemented composed-group effect.
+            // Every already-live execution row must have its existing identity.
+            // Newly admitted scope rows are prepared separately above.
             return Err(SemanticLoweringError::UnsupportedEffectProfile { owner }.into());
         };
         let original = prepared
