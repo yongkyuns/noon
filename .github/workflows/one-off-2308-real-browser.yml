@@ -1,0 +1,182 @@
+name: One-off 2308 prepared real browser qualification
+
+on:
+  push:
+    branches: [agent/2308-real-browser-qualify-20261027]
+    paths: [.github/workflows/one-off-2308-real-browser.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepared-browser:
+    name: Opt-in prepared WebGPU/WebGL2 and worker/Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PIN_RUN: "40571552550"
+      PIN_SOURCE_SHA256: "2139a31eeab3da11296fe1373c32f2593a9e7c65795e2f58d0493c35d9422df7"
+      PIN_SOURCE_TREE: "1ef901ef0d649bd04e4054211f1e715ca87fac03"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Checkout isolated diagnostic helper without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download and authenticate exact green combined source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_ROOT="$RUNNER_TEMP/noon-prepared-browser-source"
+          export EVIDENCE="$RUNNER_TEMP/noon-prepared-browser-evidence"
+          mkdir -p "$SOURCE_ROOT" "$EVIDENCE/incoming"
+          printf 'SOURCE_ROOT=%s\nEVIDENCE=%s\n' "$SOURCE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
+          gh run download "$PIN_RUN" --repo "$GITHUB_REPOSITORY" \
+            -n noon-2308-reconciled-source-qualification -D "$EVIDENCE/incoming"
+          python3 - <<'PY'
+          import hashlib,io,json,os,subprocess,tarfile
+          from pathlib import Path
+          root=Path(os.environ['SOURCE_ROOT'])
+          evidence=Path(os.environ['EVIDENCE'])
+          base=evidence/'incoming'
+          manifest=json.loads((base/'manifest.json').read_text())
+          payload=(base/'combined-source.tar.gz').read_bytes()
+          digest=hashlib.sha256(payload).hexdigest()
+          assert digest==os.environ['PIN_SOURCE_SHA256']==manifest['source_archive_sha256'],digest
+          assert manifest['tested_tree']==os.environ['PIN_SOURCE_TREE']
+          assert manifest['tracked_source_unchanged'] is True
+          assert all(manifest['command_exit_codes'][k]==0 for k in ('fast','prepared','controls','wasm','web'))
+          with tarfile.open(fileobj=io.BytesIO(payload),mode='r:gz') as tar:
+              tar.extractall(root,filter='data')
+          def git(*args):
+              return subprocess.check_output(['git',*args],cwd=root).decode().strip()
+          git('init','-q','--initial-branch=qualification')
+          git('config','user.name','Noon browser qualification')
+          git('config','user.email','qualification@example.invalid')
+          git('add','--all')
+          tree=git('write-tree')
+          assert tree==os.environ['PIN_SOURCE_TREE'],('authenticated source tree mismatch',tree)
+          git('commit','-q','-m','Freeze pinned combined source for browser qualification')
+          assert git('rev-parse','HEAD^{tree}')==tree
+          report={'source_run':int(os.environ['PIN_RUN']),'source_tree':tree,'source_archive_sha256':digest,
+                  'scope':'isolated actual browser qualification of combined #2308/#2317 on master 0351da5',
+                  'limitations':'not current ordered-effects master; headless Chromium not physical GPU',
+                  'source_ref_modified':False,'default_playback_changed':False}
+          (evidence/'browser-source.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Install repository-pinned Rust and WebAssembly target
+        working-directory: ${{ runner.temp }}/noon-prepared-browser-source
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$EVIDENCE/rust-version.log"
+      - name: Restore Cargo source cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-2308-prepared-browser
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Use read-only compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install repository-pinned wasm-pack
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Compile opt-in production prepared WASM browser package
+        working-directory: ${{ runner.temp }}/noon-prepared-browser-source
+        env:
+          RUSTC_WRAPPER: sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/build.exit"; exit "$code"' EXIT
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked 2>&1 | tee "$EVIDENCE/wasm-pack.log"
+          node scripts/build-python-worker.mjs 2>&1 | tee "$EVIDENCE/python-worker.log"
+          node scripts/build-runtime-identity.mjs 2>&1 | tee "$EVIDENCE/runtime-identity.log"
+          node scripts/check-web-package.mjs 2>&1 | tee "$EVIDENCE/package-check.log"
+      - name: Restore pinned Chromium cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned Chromium and PNG decoder
+        working-directory: ${{ runner.temp }}/noon-prepared-browser-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0 2>&1 | tee "$EVIDENCE/npm.log"
+          npx playwright install chromium 2>&1 | tee "$EVIDENCE/chromium.log"
+      - name: Run prepared browser matrix including both worker transports and Python
+        working-directory: ${{ runner.temp }}/noon-prepared-browser-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,subprocess,sys,time
+          from pathlib import Path
+          evidence=Path(os.environ['EVIDENCE'])
+          cases=[
+            ('prepared-canvas','scripts/prepared-canvas-qualification.mjs',{}),
+            ('prepared-source','scripts/prepared-source-qualification.mjs',{}),
+            ('prepared-python','scripts/prepared-python-qualification.mjs',{}),
+            ('prepared-construct','scripts/prepared-construct-qualification.mjs',{}),
+            ('prepared-worker-rust','scripts/prepared-worker-qualification.mjs',{}),
+            ('prepared-worker-python','scripts/prepared-worker-qualification.mjs',{'NOON_PREPARED_WORKER_SOURCE':'python'}),
+            ('prepared-authoring-worker','scripts/prepared-authoring-worker-qualification.mjs',{}),
+            ('prepared-gallery-lifecycle','scripts/playground-prepared-lifecycle-qualification.mjs',{}),
+          ]
+          outcomes=[]
+          for name,script,vars in cases:
+              env=os.environ.copy();env.update(vars)
+              start=time.monotonic()
+              with (evidence/(name+'.log')).open('wb') as log:
+                  try:
+                      cp=subprocess.run(['node',script],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=360)
+                      rc=cp.returncode
+                  except subprocess.TimeoutExpired:
+                      rc=124
+              report={'case':name,'script':script,'exit':rc,'seconds':round(time.monotonic()-start,1)}
+              outcomes.append(report)
+              (evidence/'browser-results.json').write_text(json.dumps(outcomes,indent=2)+'\n')
+              print(json.dumps(report),flush=True)
+          if any(row['exit'] for row in outcomes):
+              sys.exit('Prepared real-browser matrix failed: inspect separate logs and pixel evidence')
+          print('All eight prepared browser entrypoints passed')
+          PY
+      - name: Verify original candidate source stayed unchanged
+        if: always()
+        working-directory: ${{ runner.temp }}/noon-prepared-browser-source
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 > "$EVIDENCE/source-status.txt"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test "$(git rev-parse 'HEAD^{tree}')" = "$PIN_SOURCE_TREE"
+      - name: Preserve logs and actual Chromium render evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-2308-combined-prepared-browser-evidence
+          path: |
+            ${{ runner.temp }}/noon-prepared-browser-evidence
+            ${{ runner.temp }}/noon-prepared-browser-source/browser-smoke-artifacts/prepared-canvas
+            ${{ runner.temp }}/noon-prepared-browser-source/browser-smoke-artifacts/prepared-worker
+            ${{ runner.temp }}/noon-prepared-browser-source/browser-smoke-artifacts/prepared-authoring-worker
+            ${{ runner.temp }}/noon-prepared-browser-source/browser-smoke-artifacts/prepared-gallery
+          if-no-files-found: warn
+          retention-days: 3
