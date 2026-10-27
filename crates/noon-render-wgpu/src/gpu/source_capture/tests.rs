@@ -9,6 +9,8 @@ use noon_core::{
 };
 use noon_runtime::SceneInstance;
 
+mod composed_publication;
+
 const SIZE: [u32; 2] = [80, 60];
 const IMAGE_SIZE: [usize; 2] = [16, 12];
 
@@ -229,6 +231,10 @@ fn compose(layers: &[Vec<u8>; 3]) -> Vec<u8> {
 }
 
 fn blur(source: &[u8]) -> Vec<u8> {
+    blur_with_opacity(source, 0.5)
+}
+
+fn blur_with_opacity(source: &[u8], opacity: f64) -> Vec<u8> {
     let mut output = vec![0; source.len()];
     let mut taps = Vec::new();
     let mut mass = 0.0;
@@ -256,7 +262,7 @@ fn blur(source: &[u8]) -> Vec<u8> {
             }
             for c in 0..4 {
                 output[(y as usize * SIZE[0] as usize + x as usize) * 4 + c] =
-                    (value[c] * 0.5).round().clamp(0.0, 255.0) as u8;
+                    (value[c] * opacity).round().clamp(0.0, 255.0) as u8;
             }
         }
     }

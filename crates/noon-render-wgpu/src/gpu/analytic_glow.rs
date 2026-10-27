@@ -50,6 +50,28 @@ enum SourceInstance {
     },
 }
 impl SourceInstance {
+    fn same_source(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Draws {
+                    source: a,
+                    silhouette: x,
+                },
+                Self::Draws {
+                    source: b,
+                    silhouette: y,
+                },
+            ) => {
+                (Arc::ptr_eq(a, b) || a == b)
+                    && match (x, y) {
+                        (Some(x), Some(y)) => Arc::ptr_eq(x, y) || x == y,
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => self == other,
+        }
+    }
     fn prepared(prepared: &PreparedFrame<'_>, key: (u8, usize)) -> Option<Self> {
         match key {
             (0, index) => prepared.circles.get(index).copied().map(Self::Circle),
@@ -355,6 +377,8 @@ impl GpuRenderer {
         request: EffectCaptureRequest<'_>,
         object: ObjectId,
         opacity: f32,
+        composed: Option<Arc<noon_core::ComposedSource>>,
+        recapture: bool,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         if !matches!(
             self.target_format,
@@ -362,29 +386,59 @@ impl GpuRenderer {
         ) {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
-        let source = super::source_capture::PreparedSource::prepare(
-            prepared,
-            &[(object, opacity.max(f32::MIN_POSITIVE))],
-            false,
-            device.limits().min_uniform_buffer_offset_alignment as usize,
-        )
-        .ok_or(EffectPrepareError::UnsupportedCapture)?;
-        let silhouette = if request.definitions.iter().any(|definition| {
+        let needs_silhouette = request.definitions.iter().any(|definition| {
             definition
                 .as_glow()
                 .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
-        }) {
-            Some(
-                super::source_capture::PreparedSource::prepare(
-                    prepared,
-                    &[(object, opacity.max(f32::MIN_POSITIVE))],
-                    true,
-                    device.limits().min_uniform_buffer_offset_alignment as usize,
-                )
-                .ok_or(EffectPrepareError::UnsupportedCapture)?,
-            )
+        });
+        let cached = composed.as_ref().filter(|_| !recapture).and_then(|_| {
+            self.effect_captures
+                .as_deref()?
+                .scopes
+                .get(&(2, request.object_index))
+                .filter(|scope| scope.object == object)
+                .and_then(|scope| match &scope.effective {
+                    SourceInstance::Draws { source, silhouette }
+                        if !needs_silhouette || silhouette.is_some() =>
+                    {
+                        Some((source.clone(), silhouette.clone()))
+                    }
+                    _ => None,
+                })
+        });
+        let (source, silhouette) = if let Some(cached) = cached {
+            cached
         } else {
-            None
+            let members = composed.as_ref().map(|source| {
+                source
+                    .members()
+                    .iter()
+                    .map(|&id| (id, 1.0))
+                    .collect::<Vec<_>>()
+            });
+            let leaf = [(object, opacity.max(f32::MIN_POSITIVE))];
+            let members = members.as_deref().unwrap_or(&leaf);
+            let source = super::source_capture::PreparedSource::prepare(
+                prepared,
+                members,
+                false,
+                device.limits().min_uniform_buffer_offset_alignment as usize,
+            )
+            .ok_or(EffectPrepareError::UnsupportedCapture)?;
+            let silhouette = if needs_silhouette {
+                Some(
+                    super::source_capture::PreparedSource::prepare(
+                        prepared,
+                        members,
+                        true,
+                        device.limits().min_uniform_buffer_offset_alignment as usize,
+                    )
+                    .ok_or(EffectPrepareError::UnsupportedCapture)?,
+                )
+            } else {
+                None
+            };
+            (Arc::new(source), silhouette.map(Arc::new))
         };
         // Share the logical-view qualification with analytic capture. Physical
         // sampling remains independent of CSS/DPR rounding.
@@ -430,10 +484,7 @@ impl GpuRenderer {
             request,
             (2, request.object_index),
             object,
-            SourceInstance::Draws {
-                source: Arc::new(source),
-                silhouette: silhouette.map(Arc::new),
-            },
+            SourceInstance::Draws { source, silhouette },
             bounds,
             opacity,
             Some(text),
@@ -563,9 +614,13 @@ impl GpuRenderer {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
         if let SourceInstance::Draws { source, silhouette } = &mut effective {
-            Arc::make_mut(source).set_capture_origin(tile.origin);
+            if source.capture_origin() != tile.origin {
+                Arc::make_mut(source).set_capture_origin(tile.origin);
+            }
             if let Some(silhouette) = silhouette {
-                Arc::make_mut(silhouette).set_capture_origin(tile.origin);
+                if silhouette.capture_origin() != tile.origin {
+                    Arc::make_mut(silhouette).set_capture_origin(tile.origin);
+                }
             }
         }
         let mut source_instance = effective.clone();
@@ -686,7 +741,7 @@ impl GpuRenderer {
             }
             let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
             let source_changed = scope.invalidated
-                || scope.source_instance != source_instance
+                || !scope.source_instance.same_source(&source_instance)
                 || scope.tile.origin != tile.origin
                 || scope.camera != self.camera
                 || scope.viewport != self.viewport_size;
@@ -892,6 +947,10 @@ impl GpuRenderer {
     }
 
     pub(super) fn has_draw_source_effect(&self, object: ObjectId) -> bool {
+        let object = self
+            .retained_effects
+            .composed_placement(object)
+            .map_or(object, |(owner, _)| owner);
         self.effect_captures.as_deref().is_some_and(|g| {
             g.owners
                 .get(&object)
@@ -901,12 +960,23 @@ impl GpuRenderer {
         })
     }
 
+    pub(super) fn skip_composed_source(&self, object: ObjectId) -> bool {
+        self.retained_effects
+            .composed_placement(object)
+            .is_some_and(|(owner, anchor)| !anchor && self.has_draw_source_effect(owner))
+    }
+
     pub(super) fn draw_source_effect<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         object: ObjectId,
         single_sample: bool,
     ) -> bool {
+        let object = match self.retained_effects.composed_placement(object) {
+            Some((owner, true)) => owner,
+            Some((_, false)) => return false,
+            None => object,
+        };
         let Some(glows) = self.effect_captures.as_deref() else {
             return false;
         };

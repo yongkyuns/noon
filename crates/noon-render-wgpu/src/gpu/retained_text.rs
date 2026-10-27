@@ -2232,6 +2232,13 @@ impl RetainedFramePreparer {
             let Some(object) = frame.objects.get(index) else {
                 return false;
             };
+            if object.content.composed_source().is_some() {
+                // An effect controller contributes no geometry/text scratch.
+                // Its ordinary parameter row must not rebuild every child.
+                return !frame.is_drawable(index)
+                    && self.scratch_slots.get(index).is_some_and(Option::is_none)
+                    && !self.fast_text_only.get(index).copied().unwrap_or(false);
+            }
             if object.content.image().is_some() {
                 // Image-only updates have no geometry/text scratch rows. A
                 // cross-kind replacement must rebuild those rows before reuse.
@@ -4046,6 +4053,9 @@ impl GpuRenderer {
                 .is_some_and(|(image_rank, _)| **image_rank < item_rank)
             {
                 let (_, image) = images.next().expect("peeked image draw item");
+                if self.skip_composed_source(image.object_id()) {
+                    continue;
+                }
                 if !excluded.contains(&image.object_id())
                     && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
                 {
@@ -4071,7 +4081,7 @@ impl GpuRenderer {
                     }
                 }
             }
-            if excluded.contains(&item.object_id()) {
+            if excluded.contains(&item.object_id()) || self.skip_composed_source(item.object_id()) {
                 continue;
             }
             if self.draw_source_effect(pass, item.object_id(), sample_count == 1) {
@@ -4156,6 +4166,9 @@ impl GpuRenderer {
             }
         }
         for (_, image) in images {
+            if self.skip_composed_source(image.object_id()) {
+                continue;
+            }
             if !excluded.contains(&image.object_id())
                 && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
             {

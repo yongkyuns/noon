@@ -5,6 +5,8 @@ use noon_core::Glow;
 use noon_core::{Color, EffectUpdate, Pixels, Style};
 use noon_runtime::{FrameChanges, SceneInstance};
 
+mod composed;
+
 fn runtime() -> SceneInstance {
     SceneInstance::new(
         CompiledScene::compile_objects(

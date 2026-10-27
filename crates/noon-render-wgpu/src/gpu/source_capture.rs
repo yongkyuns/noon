@@ -44,6 +44,7 @@ pub(super) struct PreparedSource {
     draws: Vec<SourceDraw>,
     pub bytes: Vec<u8>,
     pub bounds: Option<Rect>,
+    capture_origin: [i32; 2],
 }
 
 impl PreparedSource {
@@ -63,6 +64,7 @@ impl PreparedSource {
             draws: Vec::new(),
             bytes: Vec::new(),
             bounds: None,
+            capture_origin: [0; 2],
         };
         let mut previous_rank = None;
         for &(object, opacity) in objects {
@@ -271,6 +273,10 @@ impl PreparedSource {
     }
 
     pub(super) fn set_capture_origin(&mut self, origin: [i32; 2]) {
+        if self.capture_origin == origin {
+            return;
+        }
+        self.capture_origin = origin;
         for draw in &self.draws {
             if let SourceDraw::Image { bytes, .. } = draw {
                 let bytes = &mut self.bytes[bytes.start as usize..bytes.end as usize];
@@ -279,6 +285,10 @@ impl PreparedSource {
                 bytes.copy_from_slice(bytemuck::bytes_of(&uniform));
             }
         }
+    }
+
+    pub(super) fn capture_origin(&self) -> [i32; 2] {
+        self.capture_origin
     }
 
     /// Rebind only when an immutable image resource or the capture buffer changes.

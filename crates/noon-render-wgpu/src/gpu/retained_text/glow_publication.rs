@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::{EffectCaptureRequest, EffectCaptureStats, EffectPrepareError};
 
+mod composed;
+use composed::ComposedCaptures;
+
 /// Current renderer-owned capture/filter texture budget. In-flight resources and
 /// driver bookkeeping are not included; hosts retain their own submission fences.
 pub const DEFAULT_EFFECT_TEXTURE_BUDGET: u64 = 64 * 1024 * 1024;
@@ -49,6 +52,8 @@ pub(crate) struct RetainedEffectPublication {
     // Existing source indices -> current private geometry scratch identities.
     packed: BTreeMap<usize, (ObjectId, ObjectId)>,
     dirty: BTreeSet<usize>,
+    capture_dirty: BTreeSet<usize>,
+    composed: ComposedCaptures,
     visible: Vec<usize>,
     painter_ranks: Vec<usize>,
     view: Option<(Camera2D, [u32; 2])>,
@@ -56,6 +61,10 @@ pub(crate) struct RetainedEffectPublication {
     invalidated: bool,
 }
 impl RetainedEffectPublication {
+    pub(crate) fn composed_placement(&self, object: ObjectId) -> Option<(ObjectId, bool)> {
+        self.composed.placement(object)
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.invalidated = true;
     }
@@ -73,35 +82,88 @@ impl RetainedEffectPublication {
         }
         let frame = publication.frame();
         let full = self.context.is_none() || publication.changes().is_all();
+        let order = publication.painter_order();
+        if full {
+            self.painter_ranks.clear();
+            self.painter_ranks.resize(frame.objects.len(), usize::MAX);
+            for (rank, &index) in order.iter().enumerate() {
+                self.painter_ranks[index as usize] = rank;
+            }
+            self.composed = ComposedCaptures::default();
+        } else if let Some(range) = publication.changes().painter_order_range() {
+            self.painter_ranks.resize(frame.objects.len(), usize::MAX);
+            let mut affected = BTreeSet::new();
+            for (rank, &index) in order.iter().enumerate().take(range.end).skip(range.start) {
+                let index = index as usize;
+                self.painter_ranks[index] = rank;
+                if let Some(scope) = self.composed.dependent(index) {
+                    affected.insert(scope);
+                }
+            }
+            for scope in affected {
+                self.composed.validate_order(&self.painter_ranks, scope)?;
+                self.capture_dirty.insert(scope);
+                self.dirty.insert(scope);
+            }
+        }
         if full {
             self.dirty.extend(self.packed.keys().copied());
             self.sources.clear();
             for (index, row) in frame.objects.iter().enumerate() {
                 self.rows_examined += 1;
                 if row.content.composed_source().is_some() {
-                    // #1897: capture plans must be connected to whole-interval
-                    // placement before this renderer profile admits group rows.
-                    return Err(EffectPrepareError::UnsupportedCapture);
+                    self.composed
+                        .install(publication, &self.painter_ranks, index)?;
                 }
-                if row.effects.is_some() && frame.is_drawable(index) {
+                if row.effects.is_some()
+                    && (frame.is_drawable(index)
+                        || (row.content.composed_source().is_some() && frame.is_present(index)))
+                {
                     self.sources.insert(index, row.id);
                     self.dirty.insert(index);
+                    self.capture_dirty.insert(index);
                 }
             }
         } else {
             for &index in publication.changes().object_indices() {
                 self.rows_examined += 1;
+                if let Some(scope) = self.composed.changed_member(publication, index)? {
+                    self.dirty.insert(scope);
+                    self.capture_dirty.insert(scope);
+                }
+                let old_source = self
+                    .composed
+                    .scopes
+                    .get(&index)
+                    .map(|scope| scope.source.clone());
                 if frame
                     .objects
                     .get(index)
                     .is_some_and(|row| row.content.composed_source().is_some())
                 {
-                    return Err(EffectPrepareError::UnsupportedCapture);
+                    self.composed
+                        .install(publication, &self.painter_ranks, index)?;
+                    if old_source.as_ref().is_none_or(|old| {
+                        self.composed
+                            .scopes
+                            .get(&index)
+                            .is_none_or(|next| !Arc::ptr_eq(old, &next.source))
+                    }) {
+                        self.capture_dirty.insert(index);
+                    }
+                } else if old_source.is_some() {
+                    self.composed
+                        .install(publication, &self.painter_ranks, index)?;
                 }
                 let next = frame
                     .objects
                     .get(index)
-                    .filter(|row| row.effects.is_some() && frame.is_drawable(index))
+                    .filter(|row| {
+                        row.effects.is_some()
+                            && (frame.is_drawable(index)
+                                || (row.content.composed_source().is_some()
+                                    && frame.is_present(index)))
+                    })
                     .map(|row| row.id);
                 if let Some(object) = next {
                     self.sources.insert(index, object);
@@ -110,22 +172,6 @@ impl RetainedEffectPublication {
                 {
                     self.dirty.insert(index);
                 }
-            }
-        }
-        // Order belongs to the publication, including intervals with no glow.
-        // Initialize this projection at the full-publication barrier and keep
-        // its changed ranges current so a later local attachment needs no scan.
-        let order = publication.painter_order();
-        if full {
-            self.painter_ranks.clear();
-            self.painter_ranks.resize(frame.objects.len(), usize::MAX);
-            for (rank, &index) in order.iter().enumerate() {
-                self.painter_ranks[index as usize] = rank;
-            }
-        } else if let Some(range) = publication.changes().painter_order_range() {
-            self.painter_ranks.resize(frame.objects.len(), usize::MAX);
-            for rank in range.start..range.end.min(order.len()) {
-                self.painter_ranks[order[rank] as usize] = rank;
             }
         }
         self.context = Some(context);
@@ -173,8 +219,20 @@ impl GpuRenderer {
         // Typical on-screen glow needs no visibility copy, allocation or full
         // candidate scan: prove each source by its existing inverse rank.
         // The ordinary retained preparer still validates the input index set.
-        if self.retained_effects.sources.keys().all(|index| {
-            let rank = self.retained_effects.painter_ranks[*index];
+        let required = || {
+            self.retained_effects
+                .sources
+                .keys()
+                .copied()
+                .filter(|index| !self.retained_effects.composed.scopes.contains_key(index))
+                .chain(
+                    self.retained_effects
+                        .composed
+                        .visibility(&self.retained_effects.sources),
+                )
+        };
+        if required().all(|index| {
+            let rank = self.retained_effects.painter_ranks[index];
             visible
                 .binary_search_by_key(&rank, |candidate| {
                     self.retained_effects
@@ -189,12 +247,13 @@ impl GpuRenderer {
         }
         validate_visible_object_indices(publication.frame(), visible)
             .map_err(|_| EffectPrepareError::PublicationMismatch)?;
+        let extra = required().collect::<Vec<_>>();
         let state = &mut self.retained_effects;
         // Visibility is in painter order, NOT source-index order. Merge the
         // extra source candidates with the existing runtime-derived ranks.
         state.visible.clear();
         state.visible.extend_from_slice(visible);
-        state.visible.extend(state.sources.keys().copied());
+        state.visible.extend(extra);
         state.visible.sort_unstable_by_key(|index| {
             state
                 .painter_ranks
@@ -265,6 +324,9 @@ impl GpuRenderer {
             self.retained_effects
                 .dirty
                 .extend(self.retained_effects.sources.keys().copied());
+            self.retained_effects
+                .capture_dirty
+                .extend(self.retained_effects.sources.keys().copied());
         }
         if !self.retained_effects.sources.is_empty() && !self.inset_views.is_empty() {
             return Err(EffectPrepareError::UnsupportedCapture);
@@ -279,13 +341,31 @@ impl GpuRenderer {
                     .objects
                     .get(index)
                     .ok_or(EffectPrepareError::PublicationMismatch)?;
-                if row.id != object || !frame.is_drawable(index) || row.spatial.is_some() {
+                let composed = self.retained_effects.composed.scopes.contains_key(&index);
+                if row.id != object
+                    || (!composed && !frame.is_drawable(index))
+                    || row.spatial.is_some()
+                {
                     return Err(EffectPrepareError::PublicationMismatch);
                 }
                 let effect = row
                     .effects
                     .as_ref()
                     .ok_or(EffectPrepareError::PublicationMismatch)?;
+                if composed {
+                    let anchor = self.retained_effects.composed.scopes[&index]
+                        .source
+                        .members()[0];
+                    if !prepared.source_is_visible(anchor)
+                        || prepared
+                            .capture_items(anchor)
+                            .is_none_or(|items| items.is_empty())
+                    {
+                        return Err(EffectPrepareError::UnsupportedCapture);
+                    }
+                    sources.push((index, Some((object, index, effect.definitions(), None))));
+                    continue;
+                }
                 let analytic = matches!(
                     row.geometry(),
                     Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
@@ -431,6 +511,12 @@ impl GpuRenderer {
                         request,
                         object,
                         crate::pack_style(&frame.objects[index]).opacity,
+                        self.retained_effects
+                            .composed
+                            .scopes
+                            .get(&index)
+                            .map(|scope| scope.source.clone()),
+                        self.retained_effects.capture_dirty.contains(&index),
                     )?
                 };
                 stats.accumulate(value);
@@ -445,6 +531,7 @@ impl GpuRenderer {
         stats.rows_examined = std::mem::take(&mut self.retained_effects.rows_examined);
         stats.retained_texture_bytes = self.effect_capture_texture_bytes();
         self.retained_effects.dirty.clear();
+        self.retained_effects.capture_dirty.clear();
         self.retained_effects.view = Some(view);
         self.retained_effects.invalidated = false;
         Ok(stats)
