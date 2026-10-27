@@ -585,14 +585,13 @@ impl SceneInstance {
             .expect("cloned finite history");
         // Validate reported capacities too, before exposing the reader. This
         // cannot bound an allocator's transient over-allocation or clone peak.
-        let history_payload_budget = history_payload_budget.with_additional(
-            history_payload_budget::retained_bytes(
+        let history_payload_budget =
+            history_payload_budget.with_additional(history_payload_budget::retained_bytes(
                 copied
                     .revisions
                     .iter()
                     .filter_map(|revision| revision.inverse.as_ref()),
-            )?,
-        )?;
+            )?)?;
         // A named, bounded bootstrap allocation, not an unpredictable O(history)
         // relocation on every append. Payload budgets retain existing semantics.
         let extra = history
@@ -756,9 +755,11 @@ impl SceneInstance {
         }
         // Forward conversion preserves vector lengths, not necessarily their
         // reported capacities. Admit its known cost before allocating that copy.
-        publisher.history_payload_budget.with_additional(
-            history_payload_budget::clone_bytes(inverse.iter().copied())?,
-        )?;
+        publisher
+            .history_payload_budget
+            .with_additional(history_payload_budget::clone_bytes(
+                inverse.iter().copied(),
+            )?)?;
         let forward = self
             .compiled
             .forward_prefix_revisions(&inverse)
