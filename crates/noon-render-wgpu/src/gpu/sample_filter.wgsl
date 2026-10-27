@@ -25,9 +25,10 @@ fn field(uv: vec2<f32>) -> f32 {
 }
 // WGSL integer division truncates toward zero; source padding needs floor.
 fn grid_floor_axis(value: i32, divisor: i32) -> i32 {
-    var quotient = value/divisor;
-    if value%divisor < 0 { quotient = quotient-1; }
-    return quotient;
+    // ES 3.0 leaves remainder with negative operands undefined. Keep the
+    // division operands nonnegative on every backend, including padded cells.
+    if value < 0 { return -((-value+divisor-1)/divisor); }
+    return value/divisor;
 }
 fn grid_floor(value: vec2<i32>, divisor: i32) -> vec2<i32> {
     return vec2<i32>(grid_floor_axis(value.x,divisor),grid_floor_axis(value.y,divisor));
