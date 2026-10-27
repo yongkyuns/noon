@@ -134,6 +134,22 @@ for path, expected_count in zip(expected, counts):
     assert new.count("click_indicate") >= raw.count("click_indicate") - 4, path
     file.write_text(new)
     git("add", path, cwd=work)
+# Old #2308-only compiled-row and overlay references must use the modern
+# typed effect attachment on the latest compiler. These are exact guarded edits.
+normalizations = [
+    ("crates/noon-compile/src/replay_revision/prefix.rs",
+     "|| object.glow.is_some()", "|| object.effect.is_some()"),
+    ("crates/noon-compile/src/transaction_preflight.rs",
+     "glow: row.glow.clone(),", "effect: row.effect.clone(),"),
+]
+for path, before, after in normalizations:
+    file = work / path
+    raw = file.read_text()
+    assert raw.count(before) == 1, (path, before, raw.count(before))
+    file.write_text(raw.replace(before, after))
+    git("add", path, cwd=work)
+    decisions.append({"file":path, "auto_merged_stale_field":before,
+                      "modern_effect_field":after})
 assert not output("ls-files", "-u", cwd=work)
 git("diff", "--cached", "--check", cwd=work)
 resolved_tree = output("write-tree", cwd=work)
