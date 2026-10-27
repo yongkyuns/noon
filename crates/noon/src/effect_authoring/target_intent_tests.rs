@@ -175,10 +175,7 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
             .unwrap();
         let middle = row(&session, &source);
         assert!(
-            (middle
-                .effect
-                .as_ref()
-                .unwrap()
+            (only_effect(middle.effects.as_ref().unwrap())
                 .definition
                 .as_glow()
                 .unwrap()
@@ -188,7 +185,13 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
                 < 1e-12
         );
         assert!(
-            (middle.effect.as_ref().unwrap().definition.radius().value() - 4.875).abs() < 1e-12
+            (only_effect(middle.effects.as_ref().unwrap())
+                .definition
+                .radius()
+                .value()
+                - 4.875)
+                .abs()
+                < 1e-12
         );
         assert!((middle.transform.translation.x - 1.0).abs() < 1e-6);
         scene
@@ -198,10 +201,7 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
         scene.live(&mut session).complete_segment(segment).unwrap();
         let final_row = row(&session, &source);
         assert_eq!(
-            final_row
-                .effect
-                .as_ref()
-                .unwrap()
+            only_effect(final_row.effects.as_ref().unwrap())
                 .definition
                 .as_glow()
                 .unwrap()
@@ -209,7 +209,9 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
             1.2
         );
         assert_eq!(
-            final_row.effect.as_ref().unwrap().definition.radius(),
+            only_effect(final_row.effects.as_ref().unwrap())
+                .definition
+                .radius(),
             Pixels(6.5).into()
         );
         assert_eq!(final_row.transform.translation.x, 2.0);

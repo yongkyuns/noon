@@ -108,22 +108,18 @@ pub enum ExecutionPatch {
         object: ObjectId,
         view: Option<CompiledInset2DView>,
     },
-    /// Replace the authored parameter base of one existing attachment.
-    /// Attachment generation, radius units and source mode must be unchanged;
-    /// structural attachment edits are not ordinary value publication.
-    SetEffect {
+    /// Replace one immutable parameter column. The complete ordered identity
+    /// list and every surviving kind/unit/source schema must remain unchanged.
+    SetEffects {
         object: ObjectId,
-        effect: std::sync::Arc<crate::CompiledEffect>,
+        effects: std::sync::Arc<crate::CompiledEffectStack>,
     },
-    /// Attach, remove or replace the single lowered leaf glow at a semantic
-    /// publication boundary. `expected` must match the currently installed
-    /// attachment exactly. A replacement must have a different semantic identity;
-    /// parameter-only writes use `SetGlow` instead. Retires only the old glow's
-    /// parameter tracks; object identity, motion and painter position survive.
-    SetEffectAttachment {
+    /// Replace ordered attachment topology after checking the complete identity
+    /// list. Retire only removed generations; value-only edits use SetEffects.
+    SetEffectStack {
         object: ObjectId,
-        expected: Option<noon_core::SemanticNodeId>,
-        effect: Option<std::sync::Arc<crate::CompiledEffect>>,
+        expected: Box<[noon_core::SemanticNodeId]>,
+        effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     },
     /// Replace one graph root's complete endpoint dependency declaration.
     /// Empty dependencies retire that root without relocating unrelated slots.
@@ -248,27 +244,30 @@ impl CompiledScene {
 impl CompiledScene {
     /// Commit an already-preflighted existing attachment value on one stable row.
     #[doc(hidden)]
-    pub fn commit_prepared_effect_value(
+    pub fn commit_prepared_effect_values(
         &mut self,
         object_index: u32,
-        effect: std::sync::Arc<crate::CompiledEffect>,
+        effects: std::sync::Arc<crate::CompiledEffectStack>,
     ) {
-        self.objects[object_index as usize].effect = Some(effect);
+        self.objects[object_index as usize].effects = Some(effects);
     }
 }
 
 /// Value updates must not rebind compiled track endpoints to another generation
 /// or silently reinterpret radius/source channels. Definition fields are validated
 /// by Glow's typed construction before this boundary.
-pub(crate) fn validate_effect_replacement(
+pub(crate) fn validate_effect_values(
     object: ObjectId,
-    previous: Option<&crate::CompiledEffect>,
-    next: &crate::CompiledEffect,
+    previous: Option<&crate::CompiledEffectStack>,
+    next: &crate::CompiledEffectStack,
 ) -> Result<(), crate::CompilePatchError> {
-    let previous = previous
-        .filter(|previous| previous.attachment == next.attachment)
-        .ok_or(crate::CompilePatchError::InvalidEffectUpdate { object })?;
-    noon_core::EffectValue::validate_effect_transition(previous.definition, next.definition)
-        .map_err(|_| crate::CompilePatchError::InvalidEffectUpdate { object })?;
+    let previous = previous.ok_or(crate::CompilePatchError::InvalidEffectUpdate { object })?;
+    if previous.attachments() != next.attachments() {
+        return Err(crate::CompilePatchError::InvalidEffectUpdate { object });
+    }
+    for (old, new) in previous.iter().zip(next.iter()) {
+        noon_core::EffectValue::validate_effect_transition(old.definition, new.definition)
+            .map_err(|_| crate::CompilePatchError::InvalidEffectUpdate { object })?;
+    }
     Ok(())
 }

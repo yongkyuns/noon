@@ -172,10 +172,10 @@ try {
       const rejection = await page.evaluate(async mode => {
         const state = glowTest.endpoints.get("scene");
         const invalid = structuredClone(glowTest.fixture.cases[0].frames[1].delta);
-        const row = invalid.objects.find(row => row.effect);
+        const row = invalid.objects.find(row => row.effects?.length);
         if (!row) throw new Error("negative control lacks a glow row");
-        row.effect.intensity = 99;
-        const expected = `retained worker slot ${row.slot.slot}:${row.slot.generation} contains invalid or unsupported glow`;
+        row.effects[0].intensity = 99;
+        const expected = `retained worker slot ${row.slot.slot}:${row.slot.generation} contains invalid or unsupported effect stack`;
         state.failures.expectRejection(expected);
         if (!state.sender.send(JSON.stringify(invalid))) throw new Error("negative control unexpectedly backpressured");
         if (mode === "shared") state.port.postMessage({ type: "shared_delta" });

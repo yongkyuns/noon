@@ -230,7 +230,7 @@ impl std::error::Error for DerivedDisplayEvaluationError {}
 fn row_from_derived(base: &DerivedDisplayObjectState) -> FrameRowState {
     FrameRowState {
         fill_paint: base.fill_paint.clone(),
-        effect: None,
+        effects: None,
         z_index: base.z_index,
         transform: base.transform,
         spatial: None,

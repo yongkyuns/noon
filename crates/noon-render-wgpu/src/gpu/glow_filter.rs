@@ -179,7 +179,42 @@ impl EffectCaptureTile {
         memory_budget_bytes: u64,
     ) -> Result<Option<Self>, EffectPrepareError> {
         let parameters = parameters.into();
-        let sigma = parameters.sigma_pixels()?;
+        Self::prepare_stack(
+            bounds,
+            viewport,
+            &[parameters.definition],
+            super::EffectStackParameters {
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                scope_opacity: parameters.scope_opacity,
+                scratch_budget_bytes: memory_budget_bytes,
+            },
+            maximum_texture_dimension,
+            memory_budget_bytes,
+        )
+    }
+
+    /// Plan the full cumulative finite support before capture or GPU mutation.
+    /// Silhouette glow always starts from original geometry; every painted
+    /// operator expands the preceding output. AA padding applies once.
+    pub fn prepare_stack(
+        bounds: EffectPixelBounds,
+        viewport: [u32; 2],
+        definitions: &[noon_core::EffectDefinition],
+        parameters: super::EffectStackParameters,
+        maximum_texture_dimension: u32,
+        memory_budget_bytes: u64,
+    ) -> Result<Option<Self>, EffectPrepareError> {
+        if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
+            return Err(EffectPrepareError::StackExceedsProfile);
+        }
+        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
+        {
+            return Err(EffectPrepareError::InvalidScopeOpacity);
+        }
+        noon_core::EffectRadius::Scene(0.0)
+            .to_output_pixels(parameters.output_height, parameters.world_view_height)
+            .map_err(EffectPrepareError::Parameter)?;
         if viewport.contains(&0) {
             return Err(EffectPrepareError::Parameter(
                 EffectParameterError::InvalidView,
@@ -190,17 +225,53 @@ impl EffectCaptureTile {
         {
             return Err(EffectPrepareError::InvalidSourceBounds);
         }
-        if parameters.is_neutral_at_sigma(sigma) || parameters.scope_opacity == 0.0 {
+        let original = EffectPixelBounds {
+            min: bounds.min.map(|v| v - 1.0),
+            max: bounds.max.map(|v| v + 1.0),
+        };
+        let mut extent = original;
+        let mut support_radius = 0_u32;
+        let mut active = false;
+        let mut cost_per_pixel = 4_u64; // one RGBA8 source
+        let mut silhouette = false;
+        for &definition in definitions {
+            let value = EffectCaptureParameters {
+                definition,
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                scope_opacity: parameters.scope_opacity,
+            };
+            let sigma = value.sigma_pixels()?;
+            let offset = value.offset_pixels()?;
+            let mask = definition
+                .as_glow()
+                .is_some_and(|glow| glow.source() == GlowSource::Silhouette);
+            silhouette |= mask;
+            // Include warm neutral storage in the conservative scope budget.
+            cost_per_pixel += value.filter_bytes_per_pixel();
+            if value.is_neutral_at_sigma(sigma) {
+                continue;
+            }
+            active = true;
+            let support = (3.0 * sigma).ceil() as u32;
+            support_radius += support;
+            let input = if mask { original } else { extent };
+            for (axis, offset) in offset.into_iter().enumerate() {
+                extent.min[axis] =
+                    extent.min[axis].min(input.min[axis] + offset.min(0.0) - f64::from(support));
+                extent.max[axis] =
+                    extent.max[axis].max(input.max[axis] + offset.max(0.0) + f64::from(support));
+            }
+        }
+        cost_per_pixel += if silhouette { 4 } else { 0 };
+        if !active || parameters.scope_opacity == 0.0 {
             return Ok(None);
         }
-        let offset = parameters.offset_pixels()?;
-        let support_radius = (3.0 * sigma).ceil() as u32;
-        let padding = f64::from(support_radius) + 1.0; // analytic AA footprint
         let mut start = [0_i64; 2];
         let mut end = [0_i64; 2];
         for axis in 0..2 {
-            let left = (bounds.min[axis] + offset[axis].min(0.0) - padding).floor();
-            let right = (bounds.max[axis] + offset[axis].max(0.0) + padding).ceil();
+            let left = extent.min[axis].floor();
+            let right = extent.max[axis].ceil();
             if !left.is_finite()
                 || !right.is_finite()
                 || left < f64::from(i32::MIN)
@@ -233,7 +304,6 @@ impl EffectCaptureTile {
             return Err(EffectPrepareError::ExtentExceedsDevice);
         }
         let size = [width as u32, height as u32];
-        let cost_per_pixel = parameters.bytes_per_pixel();
         let bytes = u64::from(size[0])
             .checked_mul(u64::from(size[1]))
             .and_then(|pixels| pixels.checked_mul(cost_per_pixel))
@@ -302,16 +372,11 @@ impl EffectCaptureParameters {
         }
         Ok([x, -y])
     }
-    pub(crate) fn bytes_per_pixel(self) -> u64 {
+    pub(crate) fn filter_bytes_per_pixel(self) -> u64 {
         match self.definition {
-            noon_core::EffectDefinition::Glow(effect)
-                if effect.source() == GlowSource::Silhouette =>
-            {
-                20
-            }
-            noon_core::EffectDefinition::Glow(_) => 16,
-            noon_core::EffectDefinition::Blur(_) => 32,
-            noon_core::EffectDefinition::Shadow(_) => 36,
+            noon_core::EffectDefinition::Glow(_) => 12,
+            noon_core::EffectDefinition::Blur(_) => 28,
+            noon_core::EffectDefinition::Shadow(_) => 32,
         }
     }
 }

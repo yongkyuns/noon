@@ -954,7 +954,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(90),
-                effect: Some(crate::TransportEffectState::from(&compiled_glow)),
+                effects: vec![crate::TransportEffectState::from(&compiled_glow)],
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -1007,8 +1007,10 @@ mod tests {
         assert_eq!(resolved_frame.reveals[0], 0.35);
         assert_eq!(
             resolved
-                .effect
+                .effects
                 .as_deref()
+                .unwrap()
+                .get(compiled_glow.attachment)
                 .unwrap()
                 .definition
                 .as_glow()
@@ -1169,7 +1171,7 @@ mod tests {
                     },
                     order: 0,
                     object: ObjectId::new(90),
-                    effect: None,
+                    effects: Vec::new(),
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -1216,7 +1218,7 @@ mod tests {
                     },
                     order: slot,
                     object: ObjectId::new(object),
-                    effect: None,
+                    effects: Vec::new(),
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1353,7 +1355,7 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        effect: None,
+                        effects: Vec::new(),
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1437,7 +1439,7 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        effect: None,
+                        effects: Vec::new(),
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),

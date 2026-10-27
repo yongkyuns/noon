@@ -332,6 +332,14 @@ impl LiveSession<'_> {
 }
 
 #[cfg(test)]
+pub(crate) fn only_effect(
+    stack: &noon_compile::CompiledEffectStack,
+) -> noon_compile::CompiledEffect {
+    assert_eq!(stack.len(), 1, "single-effect authoring fixture");
+    stack.iter().next().unwrap()
+}
+
+#[cfg(test)]
 mod activation_tests;
 #[cfg(test)]
 mod blur_tests;

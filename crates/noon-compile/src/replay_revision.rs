@@ -121,20 +121,30 @@ impl CompiledScene {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetEffect { object, .. } => {
+            | ExecutionPatch::SetEffects { object, .. } => {
                 rows.insert(index(*object)?);
             }
-            ExecutionPatch::SetEffectAttachment {
-                object, expected, ..
+            ExecutionPatch::SetEffectStack {
+                object,
+                expected,
+                effects,
             } => {
                 let slot = index(*object)?;
                 rows.insert(slot);
-                for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
-                    let Some(attachment) = expected else { break };
-                    let channel = CompiledChannelKey::effect(slot, property, *attachment);
-                    if !self.channel_tracks(channel).is_empty() {
-                        channels.insert(channel);
-                        tracks.extend(self.channel_tracks(channel).iter().map(|track| track.id));
+                for &attachment in expected {
+                    if effects
+                        .as_ref()
+                        .is_some_and(|stack| stack.get(attachment).is_some())
+                    {
+                        continue;
+                    }
+                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                        let channel = CompiledChannelKey::effect(slot, property, attachment);
+                        if !self.channel_tracks(channel).is_empty() {
+                            channels.insert(channel);
+                            tracks
+                                .extend(self.channel_tracks(channel).iter().map(|track| track.id));
+                        }
                     }
                 }
             }

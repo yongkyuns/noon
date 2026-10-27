@@ -77,8 +77,10 @@ fn glow(execution: &SceneExecution, object: &Mobject) -> Glow {
         .runtime
         .effective_object(id)
         .unwrap()
-        .effect
+        .effects
         .as_ref()
+        .unwrap()
+        .get(object.get_effect("glow").unwrap().node_id())
         .unwrap()
         .definition
         .as_glow()
@@ -312,7 +314,7 @@ fn transient_glow_admits_preclick_motion_target_without_adopting_temporary_attac
         .runtime
         .effective_object(object_id)
         .unwrap()
-        .effect
+        .effects
         .is_none());
     execution
         .live()

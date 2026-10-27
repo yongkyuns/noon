@@ -56,7 +56,12 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
         .unwrap();
     for time in [0.0, 0.75, 1.0, 0.25, 0.5] {
         session.seek(time).unwrap();
-        let value = session.frame().objects[0].effect.as_ref().unwrap();
+        let value = session.frame().objects[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(binding.node_id())
+            .unwrap();
         assert_eq!(value.attachment, binding.node_id());
         let shadow = value.definition.as_shadow().unwrap();
         assert_eq!(
@@ -101,7 +106,7 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
         .remove_effect(&source, "depth")
         .unwrap();
     assert!(binding.authored_definition().is_err());
-    assert!(session.frame().objects[0].effect.is_none());
+    assert!(session.frame().objects[0].effects.is_none());
 }
 
 #[test]
@@ -149,10 +154,7 @@ fn an_explicit_unchanged_offset_still_owns_its_method_target_channel() {
         .live(&mut session)
         .advance_segment_to(segment, 0.5)
         .unwrap();
-    let value = session.frame().objects[0]
-        .effect
-        .as_ref()
-        .unwrap()
+    let value = only_effect(session.frame().objects[0].effects.as_ref().unwrap())
         .definition
         .as_shadow()
         .unwrap();

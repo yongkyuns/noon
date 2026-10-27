@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{btree_map::Entry, BTreeMap, HashMap};
 
 use noon_core::{
     validate_track_definition, CompositionTimeMap, CompositionTimeMapError, CompositionTimeMapStep,
@@ -27,7 +27,7 @@ use super::transform_payload::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
     pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
-    pub effect: Option<crate::CompiledEffect>,
+    pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -576,7 +576,7 @@ where
     F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
 {
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
-    let mut driven = HashMap::<(u64, u8), SemanticNodeId>::new();
+    let mut driven = DriverMap::<SemanticNodeId>::new();
     let mut tracks = Vec::new();
 
     for leaf in schedule.leaves() {
@@ -694,7 +694,7 @@ where
                 leaf.target,
                 source,
                 &attachments,
-                from.effect,
+                from.effects.as_deref(),
                 intensity,
             )
             .map_err(glow_error)?;
@@ -702,6 +702,7 @@ where
                 &mut driven,
                 leaf.execution_object_id,
                 Property::EffectIntensity,
+                &values,
                 leaf.animation,
             )
             .map_err(|first_animation| {
@@ -982,7 +983,7 @@ where
             .map_err(SemanticAffineAnimationTrackError::Animation)?
             .transform_effect_snapshot();
         if snapshot.is_some()
-            || from.effect.is_some()
+            || from.effects.is_some()
             || !source_effects.is_empty()
             || !target_effects.is_empty()
         {
@@ -993,7 +994,7 @@ where
             snapshot,
             &source_effects,
             &target_effects,
-            from.effect,
+            from.effects.as_deref(),
             complete_priority,
             &Default::default(),
         )
@@ -1011,6 +1012,7 @@ where
                 &mut driven,
                 leaf.execution_object_id,
                 property,
+                &values,
                 leaf.animation,
             )
             .map_err(|first_animation| {
@@ -1440,7 +1442,7 @@ fn object_state<'a>(
 fn push_published_channel(
     leaf: &SemanticScheduledAnimationLeaf,
     channel: LoweredAffineChannel,
-    driven: &mut HashMap<(u64, u8), SemanticNodeId>,
+    driven: &mut DriverMap<SemanticNodeId>,
     tracks: &mut Vec<SemanticAffineAnimationTrack>,
 ) -> Result<(), SemanticAffineAnimationTrackError> {
     if let Some(first_animation) = transform_driver_conflict(
@@ -2957,50 +2959,64 @@ fn rotation_payload_error(
     }
 }
 
+pub(super) type DriverKey = (u64, u8, Option<SemanticNodeId>);
+pub(super) type DriverMap<T> = BTreeMap<DriverKey, T>;
+
+/// Ordered object prefixes make cross-parameter conflict queries local even
+/// when several generations of the same effect kind share an owner.
+pub(super) fn object_drivers<T>(
+    driven: &DriverMap<T>,
+    object: ObjectId,
+) -> impl Iterator<Item = (&DriverKey, &T)> {
+    driven
+        .range((object.get(), 0, None)..)
+        .take_while(move |(key, _)| key.0 == object.get())
+}
+
+pub(super) fn channel_driver_key(
+    object: ObjectId,
+    property: Property,
+    values: &TrackValues,
+) -> DriverKey {
+    let mut key = driver_key(object, property);
+    if let TrackValues::Effect { attachment, .. } = values {
+        key.2 = Some(*attachment);
+    }
+    key
+}
+
 /// Check only this object's bounded channel set, never the entire composition.
 pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
-    driven: &HashMap<(u64, u8), T>,
+    driven: &DriverMap<T>,
     object: ObjectId,
     property: Property,
     animation: T,
 ) -> Option<T> {
-    let (_, reveal_slot) = driver_key(object, Property::Reveal);
-    let (_, morph_slot) = driver_key(object, Property::Morph);
-    let (object, transform_slot) = driver_key(object, Property::Transform);
+    let (_, reveal_slot, _) = driver_key(object, Property::Reveal);
+    let (_, morph_slot, _) = driver_key(object, Property::Morph);
+    let (_, transform_slot, _) = driver_key(object, Property::Transform);
     let glow_slots = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
         Property::EffectOffset,
     ]
-    .map(|property| driver_key(ObjectId::new(object), property).1);
+    .map(|property| driver_key(object, property).1);
     if property == Property::Morph {
-        (0..morph_slot).chain(glow_slots).find_map(|slot| {
-            if slot == reveal_slot {
-                return None;
-            }
-            driven
-                .get(&(object, slot))
-                .copied()
-                .filter(|owner| *owner != animation)
+        object_drivers(driven, object).find_map(|(key, &owner)| {
+            (key.1 != reveal_slot
+                && (key.1 < morph_slot || glow_slots.contains(&key.1))
+                && owner != animation)
+                .then_some(owner)
         })
     } else if property == Property::Transform {
-        (0..=morph_slot).chain(glow_slots).find_map(|slot| {
-            if slot == reveal_slot {
-                None
-            } else {
-                driven.get(&(object, slot)).copied()
-            }
+        object_drivers(driven, object).find_map(|(key, &owner)| {
+            (key.1 != reveal_slot && (key.1 <= morph_slot || glow_slots.contains(&key.1)))
+                .then_some(owner)
         })
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
-        (0..=driver_key(ObjectId::new(object), Property::EffectOffset).1)
-            .filter(|slot| *slot != reveal_slot)
-            .find_map(|slot| {
-                driven
-                    .get(&(object, slot))
-                    .copied()
-                    .filter(|owner| *owner != animation)
-            })
+        object_drivers(driven, object)
+            .find_map(|(key, &owner)| (key.1 != reveal_slot && owner != animation).then_some(owner))
     } else if matches!(
         property,
         Property::EffectColor
@@ -3017,7 +3033,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
         .into_iter()
         .find_map(|property| {
             driven
-                .get(&driver_key(ObjectId::new(object), property))
+                .get(&driver_key(object, property))
                 .copied()
                 .filter(|owner| *owner != animation)
         })
@@ -3028,8 +3044,8 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
         None
     } else {
         driven
-            .get(&(object, transform_slot))
-            .or_else(|| driven.get(&(object, morph_slot)))
+            .get(&(object.get(), transform_slot, None))
+            .or_else(|| driven.get(&(object.get(), morph_slot, None)))
             .copied()
             .filter(|owner| *owner != animation)
     }
@@ -3043,7 +3059,7 @@ const AFFINE_CENTER_DEPENDENCIES: [Property; 4] = [
 ];
 
 pub(super) fn affine_center_dependency_conflict<T: Copy + PartialEq>(
-    driven: &HashMap<(u64, u8), T>,
+    driven: &DriverMap<T>,
     object: ObjectId,
     animation: T,
 ) -> Option<T> {
@@ -3056,7 +3072,7 @@ pub(super) fn affine_center_dependency_conflict<T: Copy + PartialEq>(
 }
 
 pub(super) fn reserve_affine_center_dependencies<T: Copy>(
-    driven: &mut HashMap<(u64, u8), T>,
+    driven: &mut DriverMap<T>,
     object: ObjectId,
     animation: T,
 ) {
@@ -3067,7 +3083,7 @@ pub(super) fn reserve_affine_center_dependencies<T: Copy>(
     }
 }
 
-pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
+pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
     let slot = match property {
         Property::Position => 0,
         Property::Rotation => 1,
@@ -3089,7 +3105,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::EffectIntensity => 17,
         Property::EffectOffset => 18,
     };
-    (object.get(), slot)
+    (object.get(), slot, None)
 }
 
 fn style_is_finite(style: Style) -> bool {
@@ -3128,7 +3144,7 @@ mod tests {
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             transform,
             style: Style {
@@ -3412,7 +3428,7 @@ mod tests {
         });
         let from = EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(10.0, -20.0),
@@ -3546,7 +3562,7 @@ mod tests {
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(-2.0, 1.0),
@@ -3748,7 +3764,7 @@ mod tests {
             |_| {
                 Some(EffectiveAnimationProperties {
                     fill_paint: None,
-                    effect: None,
+                    effects: None,
                     z_index: 0.0,
                     transform: Transform2D::default(),
                     style: current,
@@ -3989,7 +4005,7 @@ mod tests {
         let index = index(&store);
         let current = EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             transform: Transform2D::default(),
             style: Style {

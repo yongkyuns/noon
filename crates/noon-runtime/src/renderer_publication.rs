@@ -503,7 +503,7 @@ mod derived_display_tests {
             objects: vec![FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),

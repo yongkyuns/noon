@@ -66,7 +66,7 @@ fn lower(
         let position = source_ids.iter().position(|source| *source == id).unwrap();
         Some(EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             world_transform: None,
             camera_profile: None,
             z_index: 0.0,

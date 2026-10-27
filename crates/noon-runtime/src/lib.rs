@@ -906,13 +906,16 @@ impl SceneInstance {
                 | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetDrawEnabled { .. }
                 | ExecutionPatch::SetStyle { .. }
-                | ExecutionPatch::SetEffect { .. }
+                | ExecutionPatch::SetEffects { .. }
         ) {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
         }
-        if let ExecutionPatch::SetEffectAttachment { object, effect, .. } = patch {
-            self.apply_effect_attachment_patch(patch, *object, effect.clone())?;
+        if let ExecutionPatch::SetEffectStack {
+            object, effects, ..
+        } = patch
+        {
+            self.apply_effect_stack_patch(patch, *object, effects.clone())?;
             return Ok(&self.frame);
         }
         if let ExecutionPatch::SetInset2DView { object, .. } = patch {
@@ -1292,7 +1295,7 @@ impl SceneInstance {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetEffect { object, .. } => *object,
+            | ExecutionPatch::SetEffects { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -1300,6 +1303,14 @@ impl SceneInstance {
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))? as usize;
         let before = self.frame.objects[index].clone();
+        let effective_attachment = if let ExecutionPatch::SetEffects { effects, .. } = patch {
+            self.compiled.preflight_execution_transaction(
+                &noon_compile::ExecutionMutationTransaction::from_mutations([patch.clone()]),
+            )?;
+            Some(self.prepare_effective_effect_values(index, effects))
+        } else {
+            None
+        };
         let style_spatial_before = matches!(patch, ExecutionPatch::SetStyle { .. })
             .then(|| FrameRowState::from_frame(&self.frame, index));
         self.compiled.apply_execution_patch(patch)?;
@@ -1364,17 +1375,9 @@ impl SceneInstance {
                 self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
                 self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
             }
-            ExecutionPatch::SetEffect { effect, .. } => {
-                self.frame.objects[index].effect = Some(std::sync::Arc::clone(effect));
-                self.reapply_properties(
-                    index,
-                    &[
-                        Property::EffectColor,
-                        Property::EffectRadius,
-                        Property::EffectIntensity,
-                        Property::EffectOffset,
-                    ],
-                );
+            ExecutionPatch::SetEffects { .. } => {
+                let effective = effective_attachment.expect("prepared effect value");
+                self.frame.objects[index].effects = Some(effective);
             }
             ExecutionPatch::SetDrawEnabled { enabled, .. } => {
                 self.frame.objects[index].draw_enabled = *enabled;
@@ -1399,7 +1402,7 @@ impl SceneInstance {
         }
         if matches!(
             patch,
-            ExecutionPatch::SetEffect { .. } | ExecutionPatch::SetDrawEnabled { .. }
+            ExecutionPatch::SetEffects { .. } | ExecutionPatch::SetDrawEnabled { .. }
         ) {
             if self.frame.objects[index] != before {
                 self.mark_nonspatial_changed(index);
@@ -1487,14 +1490,16 @@ impl SceneInstance {
                 | Property::EffectOffset => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
-                    if let (Some(base), Some(current)) =
-                        (&object.effect, &mut self.frame.objects[object_index].effect)
-                    {
-                        if channel.attachment() != Some(base.attachment)
-                            || current.attachment != base.attachment
-                        {
+                    if let (Some(base), Some(stack), Some(attachment)) = (
+                        &object.effects,
+                        &mut self.frame.objects[object_index].effects,
+                        channel.attachment(),
+                    ) {
+                        let (Some(base), Some(mut current)) =
+                            (base.get(attachment), stack.get(attachment))
+                        else {
                             continue;
-                        }
+                        };
                         let next = noon_core::EffectTrackValue::from_definition(
                             channel.property,
                             base.definition,
@@ -1504,7 +1509,8 @@ impl SceneInstance {
                         .apply_to(current.definition)
                         .expect("validated base glow");
                         if current.definition != next {
-                            Arc::make_mut(current).definition = next;
+                            current.definition = next;
+                            Arc::make_mut(stack).replace(current);
                         }
                     }
                 }
@@ -1914,7 +1920,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .map(|(index, object)| FrameObjectState {
             fill_paint: object.fill_paint.clone(),
             draw_enabled: object.draw_enabled,
-            effect: object.effect.clone(),
+            effects: object.effects.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
@@ -2136,7 +2142,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     frame.objects.push(FrameObjectState {
         fill_paint: object.fill_paint.clone(),
         draw_enabled: object.draw_enabled,
-        effect: object.effect.clone(),
+        effects: object.effects.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2180,7 +2186,7 @@ fn reset_object_frame(
     frame.objects[object_index] = FrameObjectState {
         fill_paint: object.fill_paint.clone(),
         draw_enabled: object.draw_enabled,
-        effect: object.effect.clone(),
+        effects: object.effects.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2483,15 +2489,24 @@ fn apply_group_to_row(
             | Property::EffectIntensity
             | Property::EffectOffset
     ) {
-        return apply_effect_channel(
-            compiled.objects()[group.channel.object_index as usize]
-                .effect
-                .as_deref(),
-            row.effect,
-            tracks,
-            group,
-            time,
-        );
+        let Some(attachment) = group.channel.attachment() else {
+            return false;
+        };
+        let Some(stack) = row.effects.as_mut() else {
+            return false;
+        };
+        let Some(mut current) = stack.get(attachment) else {
+            return false;
+        };
+        let base = compiled.objects()[group.channel.object_index as usize]
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(attachment));
+        let changed = apply_effect_channel(base.as_ref(), &mut current, tracks, group, time);
+        if changed {
+            Arc::make_mut(stack).replace(current);
+        }
+        return changed;
     }
     if matches!(
         group.channel.property,
@@ -3020,7 +3035,7 @@ fn apply_prepared_morph_values(
 
 fn apply_effect_channel(
     base: Option<&noon_compile::CompiledEffect>,
-    effect: &mut Option<Arc<noon_compile::CompiledEffect>>,
+    effect: &mut noon_compile::CompiledEffect,
     tracks: &[CompiledTrack],
     group: &TrackGroup,
     time: f64,
@@ -3054,12 +3069,10 @@ fn apply_effect_channel(
     else {
         unreachable!("validated glow channel");
     };
-    let Some(current) = effect
-        .as_ref()
-        .filter(|effect| effect.attachment == attachment)
-    else {
+    if effect.attachment != attachment {
         return false; // an old generation can never control a replacement
-    };
+    }
+    let current = *effect;
     let patch = if restore_base
         || (tracks.last().is_some_and(|last| last.id == track.id)
             && track.reconciled
@@ -3081,7 +3094,7 @@ fn apply_effect_channel(
     if current.definition == next {
         return false;
     }
-    Arc::make_mut(effect.as_mut().expect("checked attachment")).definition = next;
+    effect.definition = next;
     true
 }
 

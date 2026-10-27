@@ -11,7 +11,7 @@ import { createGlowWorkerTransport, createGlowWorkerErrorCollector } from "./glo
 
 test("negative-control rejection remains scoped across delayed duplicate channel reports", async () => {
   const collector = createGlowWorkerErrorCollector();
-  const expected = "retained worker slot 1:0 contains invalid or unsupported glow";
+  const expected = "retained worker slot 1:0 contains invalid or unsupported effect stack";
   collector.expectRejection(expected);
   collector.collect(expected);
   await new Promise(resolve => queueMicrotask(() => { collector.collect(`Uncaught ${expected}`); resolve(); }));

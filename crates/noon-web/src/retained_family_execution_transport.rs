@@ -890,7 +890,7 @@ mod tests {
             objects: vec![FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(7),
@@ -928,7 +928,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(7),
-                effect: None,
+                effects: Vec::new(),
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::circle(1.0),
@@ -956,7 +956,7 @@ mod tests {
         let object = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(7),

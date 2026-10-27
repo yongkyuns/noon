@@ -37,7 +37,8 @@ fn authored_static_attachment_reaches_coherent_runtime_without_new_identity() {
     let (compiled, index) = lower(&scene);
     let object = index.execution_object_id(dot.node_id()).unwrap();
     let row = compiled.objects().iter().find(|r| r.id == object).unwrap();
-    let definition = row.effect.clone().unwrap();
+    let stack = row.effects.clone().unwrap();
+    let definition = only_effect(&stack);
     assert_eq!(definition.attachment, handle.node_id());
     assert_eq!(definition.definition.as_glow().unwrap().intensity(), 1.4);
     let mut runtime = SceneInstance::new(compiled);
@@ -49,7 +50,7 @@ fn authored_static_attachment_reaches_coherent_runtime_without_new_identity() {
             .iter()
             .find(|r| r.id == object)
             .unwrap();
-        assert!(Arc::ptr_eq(effective.effect.as_ref().unwrap(), &definition));
+        assert!(Arc::ptr_eq(effective.effects.as_ref().unwrap(), &stack));
         assert!(publication.changes().is_all());
     }
     let publication = runtime.take_renderer_publication();
@@ -69,17 +70,14 @@ fn static_effect_snapshot_is_independent_of_later_authored_mutation_and_readd() 
         .set_glow(&dot, EffectUpdate::default().intensity(0.5))
         .unwrap();
     let (first, _) = lower(&scene);
-    let original = first.objects()[0].effect.clone().unwrap();
+    let original = only_effect(first.objects()[0].effects.as_ref().unwrap());
     scene
         .set_glow(&dot, EffectUpdate::default().intensity(1.5))
         .unwrap();
     let (second, _) = lower(&scene);
     assert_eq!(original.definition.as_glow().unwrap().intensity(), 0.5);
     assert_eq!(
-        second.objects()[0]
-            .effect
-            .as_ref()
-            .unwrap()
+        only_effect(second.objects()[0].effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -87,22 +85,22 @@ fn static_effect_snapshot_is_independent_of_later_authored_mutation_and_readd() 
         1.5
     );
     assert_eq!(
-        second.objects()[0].effect.as_ref().unwrap().attachment,
+        only_effect(second.objects()[0].effects.as_ref().unwrap()).attachment,
         original.attachment
     );
     scene.remove_glow(&dot).unwrap();
     let (removed, _) = lower(&scene);
-    assert!(removed.objects()[0].effect.is_none());
+    assert!(removed.objects()[0].effects.is_none());
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let (readded, _) = lower(&scene);
     assert_ne!(
-        readded.objects()[0].effect.as_ref().unwrap().attachment,
+        only_effect(readded.objects()[0].effects.as_ref().unwrap()).attachment,
         original.attachment
     );
 }
 
 #[test]
-fn unsupported_stack_rejects_projection_atomically_without_index_pollution() {
+fn ordered_stack_preserves_identity_order_and_rejects_profile_overflow_atomically() {
     let mut scene = Scene::new();
     let mut dot = scene.circle(0.4).unwrap();
     dot.disable_stroke().unwrap();
@@ -110,13 +108,34 @@ fn unsupported_stack_rejects_projection_atomically_without_index_pollution() {
     scene.add(&dot).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     scene.add_effect(&dot, Glow::default(), "second").unwrap();
+    let (compiled, _) = lower(&scene);
+    let ids = scene
+        .integration_store()
+        .borrow()
+        .node(dot.node_id())
+        .unwrap()
+        .effect_ids()
+        .to_vec();
+    assert_eq!(
+        compiled.objects()[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .attachments(),
+        ids
+    );
+    for i in 2..=noon_core::MAX_EFFECT_STACK_LEN {
+        scene
+            .add_effect(&dot, Glow::default(), &format!("extra{i}"))
+            .unwrap();
+    }
     let mut index = SemanticExecutionIndex::new();
     assert!(index
         .lower_root(&scene.integration_store().borrow(), scene.root())
         .is_err());
     assert!(index.is_empty());
     assert_eq!(
-        std::mem::size_of::<Option<Arc<noon_compile::CompiledEffect>>>(),
+        std::mem::size_of::<Option<Arc<noon_compile::CompiledEffectStack>>>(),
         std::mem::size_of::<usize>()
     );
 }
@@ -141,7 +160,7 @@ fn prepared_existing_glow_updates_merge_fields_without_mutating_either_authority
         .unwrap();
     let handle = scene.get_effect(&dot, "glow").unwrap();
     let (mut compiled, index) = lower(&scene);
-    let original = compiled.objects()[0].effect.clone().unwrap();
+    let original = only_effect(compiled.objects()[0].effects.as_ref().unwrap());
     let mut store = scene.integration_store().borrow_mut();
     let revision = store.scene_revision();
     let reachability = SemanticExecutionReachability::from_root(&store, scene.root()).unwrap();
@@ -157,10 +176,11 @@ fn prepared_existing_glow_updates_merge_fields_without_mutating_either_authority
     let plan = prepare_semantic_publication(&semantic, &index, &reachability).unwrap();
     assert_eq!(plan.stats().object_states_lowered, 0);
     assert_eq!(plan.possible_entry_count(), 0);
-    let [ExecutionPatch::SetEffect { object, effect }] = plan.value_transaction().mutations()
+    let [ExecutionPatch::SetEffects { object, effects }] = plan.value_transaction().mutations()
     else {
         panic!("one final existing-attachment value patch required")
     };
+    let effect = effects.get(handle.node_id()).unwrap();
     assert_eq!(*object, index.execution_object_id(dot.node_id()).unwrap());
     assert_eq!(effect.attachment, handle.node_id());
     assert_eq!(effect.definition.as_glow().unwrap().intensity(), 1.5);
@@ -177,10 +197,7 @@ fn prepared_existing_glow_updates_merge_fields_without_mutating_either_authority
         compiled.apply_execution_patch(patch).unwrap();
     }
     assert_eq!(
-        compiled.objects()[0]
-            .effect
-            .as_ref()
-            .unwrap()
+        only_effect(compiled.objects()[0].effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -244,7 +261,7 @@ fn prepared_existing_effect_enrollment_preserves_the_staged_glow_column() {
         panic!("one newly reachable object with its existing attachment")
     };
     assert_eq!(
-        object.effect.as_ref().unwrap().attachment,
+        only_effect(object.effects.as_ref().unwrap()).attachment,
         prepared
             .store()
             .effect_by_name(detached.node_id(), "glow")

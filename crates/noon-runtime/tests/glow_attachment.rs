@@ -31,15 +31,22 @@ fn source(effect: Option<Arc<CompiledEffect>>) -> CompiledObject {
         Transform2D::IDENTITY,
         Style::default(),
     );
-    row.effect = effect;
+    row.effects = effect.map(|effect| stack(*effect));
     row
 }
 fn change(expected: Option<SemanticNodeId>, effect: Option<Arc<CompiledEffect>>) -> ExecutionPatch {
-    ExecutionPatch::SetEffectAttachment {
+    ExecutionPatch::SetEffectStack {
         object: ObjectId::new(1),
-        expected,
-        effect,
+        expected: expected.into_iter().collect(),
+        effects: effect.map(|effect| stack(*effect)),
     }
+}
+fn stack(effect: CompiledEffect) -> Arc<noon_compile::CompiledEffectStack> {
+    Arc::new(noon_compile::CompiledEffectStack::new([effect]).unwrap())
+}
+fn only(stack: &noon_compile::CompiledEffectStack) -> CompiledEffect {
+    assert_eq!(stack.len(), 1);
+    stack.iter().next().unwrap()
 }
 fn channels(effect: &CompiledEffect, start: f64, offset: u64) -> Vec<TrackDefinition> {
     effect
@@ -172,11 +179,7 @@ fn parameter_channels_require_exact_attachment_addresses_for_every_finite_kind()
         let midpoint = runtime.frame().clone();
         runtime.advance_to(1.0).unwrap();
         assert_eq!(
-            runtime.frame().objects[0]
-                .effect
-                .as_ref()
-                .unwrap()
-                .definition,
+            only(runtime.frame().objects[0].effects.as_ref().unwrap()).definition,
             update.apply_to(definition).unwrap()
         );
         runtime.seek(0.5).unwrap();
@@ -204,10 +207,7 @@ fn compaction_relocates_channels_without_replacing_attachment_identity() {
     assert_eq!(runtime.frame().objects[0], effective);
     runtime.advance_to(0.5).unwrap();
     assert!(
-        (runtime.frame().objects[0]
-            .effect
-            .as_ref()
-            .unwrap()
+        (only(runtime.frame().objects[0].effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -226,7 +226,7 @@ fn compaction_relocates_channels_without_replacing_attachment_identity() {
         .unwrap();
     assert_eq!(runtime.last_patch_stats().track_locators_removed, 3);
     runtime.advance_to(1.0).unwrap();
-    assert!(runtime.frame().objects[0].effect.is_none());
+    assert!(runtime.frame().objects[0].effects.is_none());
     runtime.take_frame_changes();
     runtime.advance_to(1.5).unwrap();
     assert_eq!(runtime.last_stats().groups_evaluated, 0);
@@ -270,7 +270,7 @@ fn staged_object_retirement_releases_effect_and_priority_track_ids_atomically() 
     runtime.apply_execution_transaction(&transaction).unwrap();
     runtime.advance_to(0.5).unwrap();
     assert_eq!(runtime.frame().objects[0].z_index, 2.0);
-    let current = runtime.frame().objects[0].effect.as_ref().unwrap();
+    let current = only(runtime.frame().objects[0].effects.as_ref().unwrap());
     assert_eq!(current.attachment, b.attachment);
     assert!((current.definition.as_glow().unwrap().intensity() - 1.2).abs() < 1e-12);
 }
@@ -309,9 +309,15 @@ fn attach_remove_and_new_generation_preserve_the_object_and_only_dirty_rendering
             before.scene_revision().checked_next().unwrap(),
         )
         .unwrap();
-        assert_eq!(rt.frame().objects[0].effect, next);
+        assert_eq!(
+            rt.frame().objects[0]
+                .effects
+                .as_ref()
+                .map(|stack| only(stack)),
+            next.as_deref().copied()
+        );
         let mut row = rt.frame().objects[0].clone();
-        row.effect = None;
+        row.effects = None;
         assert_eq!(row, original);
         assert_eq!(rt.frame().objects.len(), 1);
         assert_eq!(rt.painter_order(), &[0]);
@@ -363,7 +369,7 @@ fn removal_retires_only_glow_tracks_and_keeps_motion_and_other_attachments() {
     for time in [0.5, 1.0, 1.5, 2.0, 0.25] {
         rt.evaluate(time).unwrap();
         assert!(
-            rt.frame().objects[0].effect.is_none(),
+            rt.frame().objects[0].effects.is_none(),
             "retired drivers cannot recreate a halo"
         );
         assert!((rt.frame().objects[0].transform.translation.x as f64 - time).abs() < 1e-6);
@@ -434,26 +440,32 @@ fn topology_barrier_keeps_value_writes_bound_to_their_own_generation() {
         .unwrap();
     let mut rt = SceneInstance::new(scene(Some(a.clone()), &[]));
     rt.apply_execution_transaction(&tx([
-        ExecutionPatch::SetEffect {
+        ExecutionPatch::SetEffects {
             object: ObjectId::new(1),
-            effect: Arc::new(old_value),
+            effects: stack(old_value),
         },
         change(Some(a.attachment), Some(b.clone())),
-        ExecutionPatch::SetEffect {
+        ExecutionPatch::SetEffects {
             object: ObjectId::new(1),
-            effect: Arc::new(new_value),
+            effects: stack(new_value),
         },
     ]))
     .unwrap();
-    assert_eq!(rt.frame().objects[0].effect.as_deref(), Some(&new_value));
+    assert_eq!(
+        rt.frame().objects[0]
+            .effects
+            .as_ref()
+            .map(|stack| only(stack)),
+        Some(new_value)
+    );
     let before = rt.frame().clone();
     assert!(rt
         .apply_execution_transaction(&tx([
             change(Some(b.attachment), None),
             change(None, Some(attachment(5))),
-            ExecutionPatch::SetEffect {
+            ExecutionPatch::SetEffects {
                 object: ObjectId::new(1),
-                effect: a
+                effects: stack(*a)
             },
         ]))
         .is_err());
@@ -476,14 +488,11 @@ fn preflight_accounts_for_staged_drivers_and_rejects_old_generation_tracks() {
     rt.apply_execution_transaction(&tx(edits)).unwrap();
     rt.advance_to(0.5).unwrap();
     assert_eq!(
-        rt.frame().objects[0].effect.as_ref().unwrap().attachment,
+        only(rt.frame().objects[0].effects.as_ref().unwrap()).attachment,
         b.attachment
     );
     assert!(
-        (rt.frame().objects[0]
-            .effect
-            .as_ref()
-            .unwrap()
+        (only(rt.frame().objects[0].effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -519,12 +528,9 @@ fn replacing_one_attachment_does_not_retire_another_objects_moved_track() {
     ]))
     .unwrap();
     rt.advance_to(0.5).unwrap();
-    assert!(rt.frame().objects[0].effect.is_none());
+    assert!(rt.frame().objects[0].effects.is_none());
     assert!(
-        (rt.frame().objects[1]
-            .effect
-            .as_ref()
-            .unwrap()
+        (only(rt.frame().objects[1].effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()

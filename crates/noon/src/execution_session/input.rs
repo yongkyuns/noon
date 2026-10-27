@@ -477,10 +477,14 @@ impl ExecutionSession {
                         "click target retired before publication".into(),
                     )
                 })?;
+                let attachment = store
+                    .effect_by_name(target, "glow")
+                    .map_err(|error| ExecutionSessionInputError::Interaction(error.to_string()))?;
                 let glow = self
                     .runtime
                     .effective_object(object)
-                    .and_then(|row| row.effect.as_deref().copied());
+                    .and_then(|row| row.effects.as_ref())
+                    .and_then(|stack| attachment.and_then(|id| stack.get(id)));
                 if let Some(glow) = glow {
                     if store.effect_by_name(target, "glow").ok().flatten() != Some(glow.attachment)
                     {
@@ -500,6 +504,11 @@ impl ExecutionSession {
                         .map_err(ExecutionSessionInputError::Interaction)?
                         .map(super::interactions::PreparedClickAction::Animation);
                 } else {
+                    if attachment.is_some() {
+                        return Err(ExecutionSessionInputError::Interaction(
+                            "click glow does not match its effective attachment".into(),
+                        ));
+                    }
                     use super::publication::{
                         PreparedRuntimePublication, SemanticPublicationPurpose,
                     };

@@ -120,8 +120,12 @@ impl Fixture {
             .iter()
             .find(|row| row.id == object)
             .unwrap()
-            .effect
+            .effects
             .as_ref()
+            .and_then(|stack| {
+                self.effect(target)
+                    .and_then(|attachment| stack.get(attachment))
+            })
             .map(|binding| binding.definition.as_glow().unwrap())
     }
 

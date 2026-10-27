@@ -725,8 +725,10 @@ fn scalar_live_evaluate_backwards_retires_click_glow_and_commits_clock_after_suc
         .unwrap();
     assert_eq!(
         player.session.frame().objects[0]
-            .effect
+            .effects
             .as_ref()
+            .unwrap()
+            .get(temporary)
             .unwrap()
             .definition
             .as_glow()
@@ -748,7 +750,7 @@ fn scalar_live_evaluate_backwards_retires_click_glow_and_commits_clock_after_suc
     assert_eq!(player.live_effective_signal(&tracker).unwrap(), 0.5);
     assert_eq!(player.clock.scene_time(3_000.0).unwrap(), 0.25);
     assert!(!player.session.interactions_active());
-    assert!(player.session.frame().objects[0].effect.is_none());
+    assert!(player.session.frame().objects[0].effects.is_none());
     assert!(semantics.borrow().node(temporary).is_none());
 }
 

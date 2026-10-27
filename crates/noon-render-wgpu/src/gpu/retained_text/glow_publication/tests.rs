@@ -1,5 +1,7 @@
 use super::*;
-use noon_compile::{CompiledEffect, CompiledObject, CompiledScene, ExecutionPatch};
+use noon_compile::{
+    CompiledEffect, CompiledEffectStack, CompiledObject, CompiledScene, ExecutionPatch,
+};
 use noon_core::{EffectUpdate, Glow, Pixels, SemanticNodeId};
 use noon_runtime::SceneInstance;
 
@@ -31,10 +33,14 @@ fn runtime_profile(
         })
         .collect::<Vec<_>>();
     if glowing {
-        objects[1].effect = Some(Arc::new(CompiledEffect {
-            attachment: SemanticNodeId::new(31, 5),
-            definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0))).unwrap()).into(),
-        }));
+        objects[1].effects = Some(Arc::new(
+            CompiledEffectStack::new([CompiledEffect {
+                attachment: SemanticNodeId::new(31, 5),
+                definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0))).unwrap())
+                    .into(),
+            }])
+            .unwrap(),
+        ));
     }
     let mut resources = noon_compile::CompiledResources::default();
     if mixed {
@@ -75,12 +81,15 @@ fn runtime_profile(
             alpha: 0.43,
             ..Color::WHITE
         });
-        objects[1].effect = Some(Arc::new(CompiledEffect {
-            attachment: SemanticNodeId::new(31, 5),
-            definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0)).source(source))
-                .unwrap())
-            .into(),
-        }));
+        objects[1].effects = Some(Arc::new(
+            CompiledEffectStack::new([CompiledEffect {
+                attachment: SemanticNodeId::new(31, 5),
+                definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0)).source(source))
+                    .unwrap())
+                .into(),
+            }])
+            .unwrap(),
+        ));
     }
     // Painter order differs from source index order: a visibility union must NOT
     // sort by object index. This also forces original index1 -> mixed scratch0.
@@ -131,7 +140,7 @@ impl Fixture {
             .renderer
             .effect_source_visibility(&publication, &visible)
             .unwrap();
-        if publication.frame().objects[1].effect.is_some() && publication.frame().is_present(1) {
+        if publication.frame().objects[1].effects.is_some() && publication.frame().is_present(1) {
             assert_eq!(
                 expanded,
                 publication
@@ -207,15 +216,20 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         assert_eq!(fixture.last_image_upload, RasterImageUploadStats::default());
 
         let object = runtime.frame().objects[1].id;
-        let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+        let mut effect = runtime.frame().objects[1]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(31, 5))
+            .unwrap();
         effect.definition = EffectUpdate::default()
             .intensity(0.8)
             .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetEffect {
+            .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object,
-                effect: Arc::new(effect),
+                effects: Arc::new(CompiledEffectStack::new([effect]).unwrap()),
             })
             .unwrap();
         let edited = fixture.prepare(&mut runtime, true);
@@ -322,15 +336,18 @@ fn glow_order_initially_effect_free_publication_prepares_later_local_attachment(
         RetainedEffectStats::default()
     );
     scene
-        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
             object: ObjectId::new(101),
-            expected: None,
-            effect: Some(Arc::new(CompiledEffect {
-                attachment: SemanticNodeId::new(31, 5),
-                definition: Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
-                    .unwrap()
-                    .into(),
-            })),
+            expected: Box::new([]),
+            effects: Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: SemanticNodeId::new(31, 5),
+                    definition: Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
+                        .unwrap()
+                        .into(),
+                }])
+                .unwrap(),
+            )),
         })
         .unwrap();
     assert!(scene.frame_changes().painter_order_range().is_none());
@@ -351,12 +368,17 @@ fn glow_order_reattachment_keeps_reorders_published_without_effects() {
         let mut fixture = Fixture::new();
         let mut scene = runtime(3, true, mixed);
         fixture.prepare(&mut scene, true);
-        let old = scene.frame().objects[1].effect.as_ref().unwrap().clone();
+        let old = scene.frame().objects[1]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(31, 5))
+            .unwrap();
         scene
-            .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
                 object: ObjectId::new(101),
-                expected: Some(old.attachment),
-                effect: None,
+                expected: Box::new([old.attachment]),
+                effects: None,
             })
             .unwrap();
         let removed = fixture.prepare(&mut scene, true);
@@ -374,13 +396,16 @@ fn glow_order_reattachment_keeps_reorders_published_without_effects() {
             RetainedEffectStats::default()
         );
         scene
-            .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
                 object: ObjectId::new(101),
-                expected: None,
-                effect: Some(Arc::new(CompiledEffect {
-                    attachment: SemanticNodeId::new(31, 6),
-                    definition: old.definition,
-                })),
+                expected: Box::new([]),
+                effects: Some(Arc::new(
+                    CompiledEffectStack::new([CompiledEffect {
+                        attachment: SemanticNodeId::new(31, 6),
+                        definition: old.definition,
+                    }])
+                    .unwrap(),
+                )),
             })
             .unwrap();
         assert!(scene.frame_changes().painter_order_range().is_none());
@@ -396,12 +421,17 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
     let mut fixture = Fixture::new();
     let mut scene = runtime(4096, true, false);
     fixture.prepare(&mut scene, true);
-    let old = scene.frame().objects[1].effect.as_ref().unwrap().clone();
+    let old = scene.frame().objects[1]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(31, 5))
+        .unwrap();
     scene
-        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
             object: ObjectId::new(101),
-            expected: Some(old.attachment),
-            effect: None,
+            expected: Box::new([old.attachment]),
+            effects: None,
         })
         .unwrap();
     fixture.prepare(&mut scene, true);
@@ -421,13 +451,16 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
     let created = fixture.prepare(&mut scene, true);
     assert_eq!((created.rows_examined, created.sources_prepared), (1, 0));
     scene
-        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
             object: added,
-            expected: None,
-            effect: Some(Arc::new(CompiledEffect {
-                attachment: SemanticNodeId::new(32, 5),
-                definition: old.definition,
-            })),
+            expected: Box::new([]),
+            effects: Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: SemanticNodeId::new(32, 5),
+                    definition: old.definition,
+                }])
+                .unwrap(),
+            )),
         })
         .unwrap();
     assert!(scene.frame_changes().painter_order_range().is_none());
@@ -466,15 +499,20 @@ fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
             }
         );
         let row = &runtime.frame().objects[1];
-        let mut effect = **row.effect.as_ref().unwrap();
+        let mut effect = row
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(31, 5))
+            .unwrap();
         effect.definition = EffectUpdate::default()
             .intensity(0.3)
             .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetEffect {
+            .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object: row.id,
-                effect: Arc::new(effect),
+                effects: Arc::new(CompiledEffectStack::new([effect]).unwrap()),
             })
             .unwrap();
         let edited = fixture.prepare(&mut runtime, true);
@@ -506,14 +544,17 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
     let temporary = runtime.frame().objects[2].id;
     let temporary_attachment = SemanticNodeId::new(32, 5);
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
             object: temporary,
-            expected: None,
-            effect: Some(Arc::new(CompiledEffect {
-                attachment: temporary_attachment,
-                definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0))).unwrap())
-                    .into(),
-            })),
+            expected: Box::new([]),
+            effects: Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: temporary_attachment,
+                    definition: (Glow::new(EffectUpdate::default().radius(Pixels(3.0))).unwrap())
+                        .into(),
+                }])
+                .unwrap(),
+            )),
         })
         .unwrap();
     let warm = fixture.prepare(&mut runtime, true);
@@ -528,22 +569,27 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
             transform,
         })
         .unwrap();
-    let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+    let mut effect = runtime.frame().objects[1]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(31, 5))
+        .unwrap();
     effect.definition = EffectUpdate::default()
         .radius(Pixels(4.0))
         .apply_to(effect.definition)
         .unwrap();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetEffect {
+        .apply_execution_patch(&ExecutionPatch::SetEffects {
             object: persistent,
-            effect: Arc::new(effect),
+            effects: Arc::new(CompiledEffectStack::new([effect]).unwrap()),
         })
         .unwrap();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
             object: temporary,
-            expected: Some(temporary_attachment),
-            effect: None,
+            expected: Box::new([temporary_attachment]),
+            effects: None,
         })
         .unwrap();
 
@@ -911,15 +957,20 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
             clean.bytes_uploaded + clean.source_passes + clean.blur_passes + clean.composite_passes,
             0
         );
-        let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+        let mut effect = runtime.frame().objects[1]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(31, 5))
+            .unwrap();
         effect.definition = EffectUpdate::default()
             .intensity(0.4)
             .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetEffect {
+            .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object,
-                effect: Arc::new(effect),
+                effects: Arc::new(CompiledEffectStack::new([effect]).unwrap()),
             })
             .unwrap();
         let edited = fixture.prepare(&mut runtime, true);

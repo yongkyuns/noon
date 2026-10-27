@@ -51,7 +51,8 @@ fn row<'a>(session: &'a ExecutionSession, object: &Mobject) -> &'a noon_runtime:
 }
 
 fn effect(session: &ExecutionSession, object: &Mobject) -> Glow {
-    (row(session, object).effect.as_ref().unwrap().definition)
+    (crate::effect_authoring::only_effect(row(session, object).effects.as_ref().unwrap())
+        .definition)
         .as_glow()
         .unwrap()
 }
@@ -113,19 +114,19 @@ fn glow_pulse_predeclared_absence_enrolls_only_at_activation_and_replays_cleanup
     advance(&scene, &mut session, segment, 0.5);
     let middle = row(&session, &object).clone();
     assert_eq!(
-        middle.effect.as_ref().unwrap().attachment,
+        crate::effect_authoring::only_effect(middle.effects.as_ref().unwrap()).attachment,
         temporary.node_id()
     );
     finish(&scene, &mut session, segment);
     assert!(object.get_effect("glow").is_err());
     assert!(temporary.authored_definition().is_err());
-    assert!(row(&session, &object).effect.is_none());
+    assert!(row(&session, &object).effects.is_none());
     session.seal_replay().unwrap();
     for _ in 0..2 {
         session.seek(0.5).unwrap();
         assert_eq!(row(&session, &object), &middle);
         session.seek(1.0).unwrap();
-        assert!(row(&session, &object).effect.is_none());
+        assert!(row(&session, &object).effects.is_none());
         assert!(object.get_effect("glow").is_err());
     }
 }
@@ -184,7 +185,7 @@ fn glow_pulse_same_valued_color_adopts_but_empty_patch_does_not() {
             assert_eq!(effect(&session, &object).intensity(), 0.0);
         } else {
             assert!(object.get_effect("glow").is_err());
-            assert!(row(&session, &object).effect.is_none());
+            assert!(row(&session, &object).effects.is_none());
         }
     }
 }
@@ -404,7 +405,7 @@ fn glow_pulse_motion_does_not_adopt_a_temporary_attachment() {
     finish(&scene, &mut session, segment);
     assert_eq!(row(&session, &object).transform.translation.x, 2.0);
     assert!(object.get_effect("glow").is_err());
-    assert!(row(&session, &object).effect.is_none());
+    assert!(row(&session, &object).effects.is_none());
 }
 
 #[test]

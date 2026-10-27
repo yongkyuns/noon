@@ -149,15 +149,12 @@ mod tests {
                 frame
                     .objects
                     .iter()
-                    .filter(|row| row.effect.is_some())
+                    .filter(|row| row.effects.is_some())
                     .count(),
                 1
             );
             assert_eq!(
-                frame.objects[2]
-                    .effect
-                    .as_ref()
-                    .unwrap()
+                crate::effect_authoring::only_effect(frame.objects[2].effects.as_ref().unwrap())
                     .definition
                     .as_shadow()
                     .unwrap()
@@ -175,6 +172,6 @@ mod tests {
             .frame()
             .objects
             .iter()
-            .all(|row| row.effect.is_none()));
+            .all(|row| row.effects.is_none()));
     }
 }

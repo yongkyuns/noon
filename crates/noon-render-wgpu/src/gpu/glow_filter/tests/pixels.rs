@@ -107,7 +107,7 @@ fn primitive_capture(
         objects: vec![FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,
