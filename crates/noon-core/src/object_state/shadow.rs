@@ -41,11 +41,11 @@ impl Shadow {
 impl sealed::Sealed for Shadow {}
 impl EffectValue for Shadow {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
-        for parameter in [EffectParameter::Intensity, EffectParameter::Source] {
-            if update.writes(parameter) {
-                return Err(EffectParameterError::UnsupportedParameter(parameter));
-            }
-        }
+        update.require_parameters(&[
+            EffectParameter::Color,
+            EffectParameter::Radius,
+            EffectParameter::Offset,
+        ])?;
         update.validate()?;
         Ok(Self {
             color: update.color.unwrap_or(self.color),

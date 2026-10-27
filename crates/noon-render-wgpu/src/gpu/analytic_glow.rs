@@ -567,6 +567,7 @@ impl GpuRenderer {
             world_view_height: f64::from(self.camera.world_size.y),
             scope_opacity: opacity,
             scratch_budget_bytes: request.texture_budget_bytes,
+            source_bounds: None,
         };
         let tile = EffectCaptureTile::prepare_stack_input(
             bounds,
@@ -659,6 +660,20 @@ impl GpuRenderer {
             tile.size[axis] = reserved.max(previous);
         }
         tile.refresh_visible_region(self.viewport_size);
+        let source_bounds = EffectPixelBounds {
+            min: std::array::from_fn(|axis| bounds.min[axis] - f64::from(tile.origin[axis])),
+            max: std::array::from_fn(|axis| bounds.max[axis] - f64::from(tile.origin[axis])),
+        };
+        if request.definitions.iter().any(|definition| {
+            definition
+                .as_noise_dissolve()
+                .is_some_and(|value| !value.is_neutral())
+        }) {
+            // Check the final high-water capture domain before taking or
+            // mutating any retained scope. A rejected tiny source must keep the
+            // previous coherent outputs, including unrelated captures.
+            super::dissolve_filter::checked_domain(tile.size, source_bounds)?;
+        }
         tile.capture_and_scratch_bytes = u64::from(tile.size[0])
             .checked_mul(u64::from(tile.size[1]))
             .and_then(|pixels| {
@@ -963,6 +978,7 @@ impl GpuRenderer {
                     world_view_height: parameters.world_view_height,
                     scope_opacity: opacity,
                     scratch_budget_bytes: request.texture_budget_bytes,
+                    source_bounds: Some(source_bounds),
                 },
             )?;
             stats.filter = upload;

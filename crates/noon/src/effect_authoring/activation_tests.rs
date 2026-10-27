@@ -212,7 +212,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
     assert_eq!(effective_glow(&runtime, object).intensity(), 2.0);
     assert_eq!(
         effective_glow(&runtime, object).radius(),
-        base.definition.radius()
+        base.definition.as_glow().unwrap().radius()
     );
     assert_eq!(
         effective_glow(&runtime, object).color(),

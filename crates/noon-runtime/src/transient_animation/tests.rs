@@ -285,6 +285,9 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
         .unwrap()
         .definition;
     assert_eq!(final_glow.as_glow().unwrap().color(), Color::BLUE);
-    assert_eq!(final_glow.radius(), noon_core::EffectRadius::Scene(0.3));
+    assert_eq!(
+        final_glow.radius(),
+        Some(noon_core::EffectRadius::Scene(0.3))
+    );
     assert_eq!(final_glow.as_glow().unwrap().intensity(), 0.4);
 }

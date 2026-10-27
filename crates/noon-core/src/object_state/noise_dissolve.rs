@@ -1,5 +1,7 @@
 //! Inert deterministic mask parameters. The shared runtime supplies progress;
 //! this value has no clock, attachment identity, resource or scene membership.
+use super::effect_parameters::{interpolate, sealed};
+use crate::{EffectParameter, EffectParameterError, EffectUpdate, EffectValue};
 
 /// Seeded value-noise dissolve over normalized source bounds. Zero progress is
 /// exactly the original premultiplied input; one is exactly transparent. The
@@ -66,9 +68,136 @@ impl NoiseDissolve {
     }
 }
 
+impl sealed::Sealed for NoiseDissolve {}
+impl EffectValue for NoiseDissolve {
+    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+        update.require_parameters(&[
+            EffectParameter::Progress,
+            EffectParameter::Softness,
+            EffectParameter::Seed,
+        ])?;
+        update.validate()?;
+        Ok(Self {
+            seed: update.seed.unwrap_or(self.seed),
+            softness: update.softness.unwrap_or(self.softness),
+            progress: update.progress.unwrap_or(self.progress),
+        })
+    }
+    fn validate_effect_value_update(self, _target: Self) -> Result<(), EffectParameterError> {
+        Ok(())
+    }
+    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+        if self.seed != target.seed {
+            return Err(EffectParameterError::DiscreteTransition(
+                EffectParameter::Seed,
+            ));
+        }
+        Ok(())
+    }
+    fn sample_effect_parameters(
+        self,
+        target: Self,
+        request: EffectUpdate,
+        alpha: f64,
+    ) -> Result<EffectUpdate, EffectParameterError> {
+        let update = EffectUpdate {
+            progress: request
+                .progress
+                .map(|_| interpolate(self.progress, target.progress, alpha)),
+            softness: request
+                .softness
+                .map(|_| interpolate(self.softness, target.softness, alpha)),
+            seed: request.seed,
+            ..EffectUpdate::default()
+        };
+        update.apply_to(self)?;
+        Ok(update)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mask_updates_are_partial_typed_and_seed_transitions_are_discrete() {
+        let value = NoiseDissolve::new(7, 0.08)
+            .unwrap()
+            .with_progress(0.25)
+            .unwrap();
+        let zero = EffectUpdate::default()
+            .progress(0.0)
+            .apply_to(value)
+            .unwrap();
+        assert_eq!(
+            (zero.seed(), zero.softness(), zero.progress()),
+            (7, 0.08, 0.0)
+        );
+        let request = EffectUpdate::default().progress(0.75).softness(0.4);
+        let prepared = request.prepare(value).unwrap();
+        assert_eq!(
+            prepared.sample(0.0).unwrap().apply_to(value).unwrap(),
+            value
+        );
+        let middle = prepared.sample(0.5).unwrap().apply_to(value).unwrap();
+        assert_eq!(
+            (middle.progress(), middle.softness(), middle.seed()),
+            (0.5, 0.08 * 0.5 + 0.4 * 0.5, 7)
+        );
+        assert_eq!(
+            EffectUpdate::default()
+                .seed(0)
+                .apply_to(value)
+                .unwrap()
+                .seed(),
+            0
+        );
+        assert_eq!(
+            EffectUpdate::default().seed(0).prepare(value),
+            Err(EffectParameterError::DiscreteTransition(
+                EffectParameter::Seed
+            ))
+        );
+        assert_eq!(
+            EffectUpdate::default()
+                .progress(0.0)
+                .softness(0.0)
+                .seed(0)
+                .parameters()
+                .collect::<Vec<_>>(),
+            vec![
+                EffectParameter::Progress,
+                EffectParameter::Softness,
+                EffectParameter::Seed
+            ]
+        );
+        let definition: crate::EffectDefinition = value.into();
+        assert_eq!(definition.radius(), None);
+        assert_eq!(definition.color(), None);
+        assert_eq!(
+            EffectUpdate::default()
+                .progress(0.0)
+                .apply_to(crate::Glow::default()),
+            Err(EffectParameterError::UnsupportedParameter(
+                EffectParameter::Progress
+            ))
+        );
+        assert_eq!(
+            EffectUpdate::default()
+                .softness(0.0)
+                .apply_to(crate::Blur::default()),
+            Err(EffectParameterError::UnsupportedParameter(
+                EffectParameter::Softness
+            ))
+        );
+        assert_eq!(
+            EffectUpdate::default()
+                .seed(0)
+                .apply_to(crate::Shadow::default()),
+            Err(EffectParameterError::UnsupportedParameter(
+                EffectParameter::Seed
+            ))
+        );
+    }
     #[test]
     fn checked_parameters_preserve_precision_and_reject_nonfinite_values() {
         let softness = 0.0800000000000123;

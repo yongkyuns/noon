@@ -3072,13 +3072,8 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     let (_, reveal_slot, _) = driver_key(object, Property::Reveal);
     let (_, morph_slot, _) = driver_key(object, Property::Morph);
     let (_, transform_slot, _) = driver_key(object, Property::Transform);
-    let glow_slots = [
-        Property::EffectColor,
-        Property::EffectRadius,
-        Property::EffectIntensity,
-        Property::EffectOffset,
-    ]
-    .map(|property| driver_key(object, property).1);
+    let glow_slots =
+        crate::CompiledEffect::PARAMETER_PROPERTIES.map(|property| driver_key(object, property).1);
     if property == Property::Morph {
         object_drivers(driven, object).find_map(|(key, &owner)| {
             (key.1 != reveal_slot
@@ -3094,13 +3089,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
         object_drivers(driven, object)
             .find_map(|(key, &owner)| (key.1 != reveal_slot && owner != animation).then_some(owner))
-    } else if matches!(
-        property,
-        Property::EffectColor
-            | Property::EffectRadius
-            | Property::EffectIntensity
-            | Property::EffectOffset
-    ) {
+    } else if property.is_effect() {
         [
             Property::Transform,
             Property::Morph,
@@ -3181,6 +3170,8 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
         Property::EffectRadius => 16,
         Property::EffectIntensity => 17,
         Property::EffectOffset => 18,
+        Property::EffectProgress => 19,
+        Property::EffectSoftness => 20,
     };
     (object.get(), slot, None)
 }

@@ -409,6 +409,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
                     world_view_height: 6.0,
                     scope_opacity: 0.5,
                     scratch_budget_bytes: 1_000_000,
+                    source_bounds: None,
                 },
             )
             .unwrap();

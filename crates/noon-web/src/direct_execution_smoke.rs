@@ -806,6 +806,15 @@ pub async fn create_direct_ordered_effects_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Persistent composed masks through native's shared live Rust program.
+#[wasm_bindgen(js_name = createDirectNoiseDissolveSmokeRenderer)]
+pub async fn create_direct_noise_dissolve_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::noise_dissolve::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Nested composed families through the same live Rust program as native.
 #[wasm_bindgen(js_name = createDirectComposedEffectsSmokeRenderer)]
 pub async fn create_direct_composed_effects_smoke_renderer(

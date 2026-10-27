@@ -108,7 +108,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                         .unwrap()
                         .definition
                         .radius(),
-                    Pixels(radius).into()
+                    Some(Pixels(radius).into())
                 );
             }
             assert_eq!(
@@ -121,7 +121,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
             );
             assert_eq!(
                 root_effect.authored_definition().unwrap().radius(),
-                Pixels(3.0).into()
+                Some(Pixels(3.0).into())
             );
             match &row(&session, family.node_id()).unwrap().content {
                 noon_core::ObjectContentRef::Composed(source) => {
@@ -133,15 +133,15 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
             scene.live(&mut session).complete_segment(segment).unwrap();
             assert_eq!(
                 root_effect.authored_definition().unwrap().radius(),
-                Pixels(7.0).into()
+                Some(Pixels(7.0).into())
             );
             assert_eq!(
                 inner_effect.authored_definition().unwrap().radius(),
-                Pixels(6.0).into()
+                Some(Pixels(6.0).into())
             );
             assert_eq!(
                 leaf_effect.authored_definition().unwrap().radius(),
-                Pixels(5.0).into()
+                Some(Pixels(5.0).into())
             );
             assert_eq!(session.execution_object_id(family.node_id()), Some(owner));
         }
@@ -162,6 +162,7 @@ fn effect_radius(
         .unwrap()
         .definition
         .radius()
+        .unwrap()
         .value()
 }
 
@@ -234,7 +235,7 @@ fn family_scope_clock_preserves_play_overrides_member_lag_and_seek() {
     scene.live(&mut session).complete_segment(segment).unwrap();
     assert_eq!(
         attachment.authored_definition().unwrap().radius(),
-        Pixels(6.0).into()
+        Some(Pixels(6.0).into())
     );
 }
 
@@ -324,11 +325,11 @@ fn parallel_family_targets_reserve_exact_parameter_generations_and_rollback_conf
             scene.live(&mut session).complete_segment(segment).unwrap();
             assert_eq!(
                 first.authored_definition().unwrap().radius(),
-                Pixels(5.0).into()
+                Some(Pixels(5.0).into())
             );
             assert_eq!(
                 second.authored_definition().unwrap().radius(),
-                Pixels(10.0).into()
+                Some(Pixels(10.0).into())
             );
         }
     }
@@ -452,7 +453,7 @@ fn sequential_family_targets_capture_prior_scope_endpoint_and_seek_deterministic
     scene.live(&mut session).complete_segment(segment).unwrap();
     assert_eq!(
         attachment.authored_definition().unwrap().radius(),
-        Pixels(2.0).into()
+        Some(Pixels(2.0).into())
     );
 }
 

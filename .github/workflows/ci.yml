@@ -65,6 +65,7 @@ on:
       - "scripts/shadow-qualification.mjs"
       - "scripts/ordered-effects-qualification.mjs"
       - "scripts/composed-effects-qualification.mjs"
+      - "scripts/noise-dissolve-qualification.mjs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -517,6 +518,8 @@ jobs:
         run: node scripts/ordered-effects-qualification.mjs
       - name: Qualify paired composed family controls on WebGPU and WebGL2
         run: node scripts/composed-effects-qualification.mjs
+      - name: Qualify composed seeded masks through Rust and Python
+        run: node scripts/noise-dissolve-qualification.mjs
       - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2
         run: node scripts/image-fill-qualification.mjs
       - name: Qualify retained worker glow images and recovery

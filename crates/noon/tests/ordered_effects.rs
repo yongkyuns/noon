@@ -19,6 +19,7 @@ fn radius(session: &ExecutionSession, attachment: noon_core::SemanticNodeId) -> 
         .unwrap()
         .definition
         .radius()
+        .unwrap()
         .value()
 }
 
@@ -88,11 +89,11 @@ fn ordinary_parallel_targets_drive_two_blurs_and_preserve_order_through_seek_and
     scene.live(&mut session).complete_segment(segment).unwrap();
     assert_eq!(
         a.authored_definition().unwrap().radius(),
-        Pixels(5.0).into()
+        Some(Pixels(5.0).into())
     );
     assert_eq!(
         b.authored_definition().unwrap().radius(),
-        Pixels(10.0).into()
+        Some(Pixels(10.0).into())
     );
     scene.live(&mut session).remove_effect(&source, &a).unwrap();
     assert_eq!(radius(&session, b.node_id()), 10.0);

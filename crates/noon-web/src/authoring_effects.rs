@@ -67,6 +67,34 @@ pub(crate) fn effect_update(
         intensity,
         source,
         offset,
+        ..EffectUpdate::default()
+    };
+    update.validate().map_err(noon::AuthoringError::from)?;
+    Ok(update)
+}
+
+pub(crate) fn mask_parameters(
+    mut update: EffectUpdate,
+    progress: Option<f64>,
+    softness: Option<f64>,
+    seed: Option<f64>,
+) -> Result<EffectUpdate, AuthoringFailure> {
+    update.progress = progress;
+    update.softness = softness;
+    update.seed = match seed {
+        None => None,
+        Some(v)
+            if v.is_finite() && v.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&v) =>
+        {
+            Some(v as u32)
+        }
+        _ => {
+            return Err(AuthoringFailure::new(
+                "invalid_input",
+                "effect.invalid_seed",
+                "effect seed must be an integer in [0, 4294967295]",
+            ))
+        }
     };
     update.validate().map_err(noon::AuthoringError::from)?;
     Ok(update)
@@ -95,6 +123,9 @@ mod wasm {
             source: Option<String>,
             offset: &[f64],
             offset_pixels: bool,
+            progress: Option<f64>,
+            softness: Option<f64>,
+            seed: Option<f64>,
         ) -> Result<WasmEffectUpdate, JsValue> {
             super::effect_update(
                 color,
@@ -105,6 +136,7 @@ mod wasm {
                 offset,
                 offset_pixels,
             )
+            .and_then(|value| super::mask_parameters(value, progress, softness, seed))
             .map(|value| Self { value })
             .map_err(js_error)
         }
@@ -116,6 +148,22 @@ mod wasm {
         value: EffectDefinition,
     }
     impl WasmEffectDefinition {
+        fn radius_value(&self) -> Result<EffectRadius, JsValue> {
+            self.value.radius().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Radius),
+                ))
+            })
+        }
+        fn mask_value(&self) -> Result<noon_core::NoiseDissolve, JsValue> {
+            self.value.as_noise_dissolve().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(
+                        noon_core::EffectParameter::Progress,
+                    ),
+                ))
+            })
+        }
         fn glow_value(&self) -> Result<Glow, JsValue> {
             self.value.as_glow().ok_or_else(|| {
                 js_error(noon::AuthoringError::from(
@@ -169,6 +217,29 @@ mod wasm {
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name=noiseDissolve)]
+        pub fn noise_dissolve(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            update
+                .value
+                .apply_to(noon_core::NoiseDissolve::default())
+                .map(|value| Self {
+                    value: value.into(),
+                })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(getter)]
+        pub fn progress(&self) -> Result<f64, JsValue> {
+            Ok(self.mask_value()?.progress())
+        }
+        #[wasm_bindgen(getter)]
+        pub fn softness(&self) -> Result<f64, JsValue> {
+            Ok(self.mask_value()?.softness())
+        }
+        #[wasm_bindgen(getter)]
+        pub fn seed(&self) -> Result<u32, JsValue> {
+            Ok(self.mask_value()?.seed())
+        }
         #[wasm_bindgen(getter, js_name = offsetX)]
         pub fn offset_x(&self) -> Result<f64, JsValue> {
             Ok(self.shadow_value()?.offset().value()[0])
@@ -190,6 +261,7 @@ mod wasm {
                 EffectDefinition::Glow(_) => "glow",
                 EffectDefinition::Blur(_) => "blur",
                 EffectDefinition::Shadow(_) => "shadow",
+                EffectDefinition::NoiseDissolve(_) => "noise_dissolve",
             }
             .into()
         }
@@ -210,12 +282,12 @@ mod wasm {
             Ok(f64::from(self.color_value()?.alpha))
         }
         #[wasm_bindgen(getter)]
-        pub fn radius(&self) -> f64 {
-            self.value.radius().value()
+        pub fn radius(&self) -> Result<f64, JsValue> {
+            Ok(self.radius_value()?.value())
         }
         #[wasm_bindgen(getter)]
-        pub fn pixels(&self) -> bool {
-            matches!(self.value.radius(), EffectRadius::Pixels(_))
+        pub fn pixels(&self) -> Result<bool, JsValue> {
+            Ok(matches!(self.radius_value()?, EffectRadius::Pixels(_)))
         }
         #[wasm_bindgen(getter)]
         pub fn intensity(&self) -> Result<f64, JsValue> {

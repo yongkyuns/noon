@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
 use crate::{
     Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Glow,
-    Shadow,
+    NoiseDissolve, Shadow,
 };
 
 /// Maximum attachment count in the qualified finite planar execution profile.
@@ -19,6 +19,13 @@ pub enum EffectDefinition {
     Glow(Glow),
     Blur(Blur),
     Shadow(Shadow),
+    NoiseDissolve(NoiseDissolve),
+}
+
+impl From<NoiseDissolve> for EffectDefinition {
+    fn from(value: NoiseDissolve) -> Self {
+        Self::NoiseDissolve(value)
+    }
 }
 
 impl From<Shadow> for EffectDefinition {
@@ -40,11 +47,12 @@ impl From<Glow> for EffectDefinition {
 }
 
 impl EffectDefinition {
-    pub const fn radius(self) -> EffectRadius {
+    pub const fn radius(self) -> Option<EffectRadius> {
         match self {
-            Self::Glow(v) => v.radius(),
-            Self::Blur(v) => v.radius(),
-            Self::Shadow(v) => v.radius(),
+            Self::Glow(v) => Some(v.radius()),
+            Self::Blur(v) => Some(v.radius()),
+            Self::Shadow(v) => Some(v.radius()),
+            Self::NoiseDissolve(_) => None,
         }
     }
     pub fn is_neutral(self) -> bool {
@@ -52,6 +60,7 @@ impl EffectDefinition {
             Self::Glow(v) => v.is_neutral(),
             Self::Blur(v) => v.is_neutral(),
             Self::Shadow(v) => v.is_neutral(),
+            Self::NoiseDissolve(v) => v.is_neutral(),
         }
     }
     pub const fn as_shadow(self) -> Option<Shadow> {
@@ -65,7 +74,7 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => Some(v.color()),
             Self::Shadow(v) => Some(v.color()),
-            Self::Blur(_) => None,
+            Self::Blur(_) | Self::NoiseDissolve(_) => None,
         }
     }
     pub const fn as_glow(self) -> Option<Glow> {
@@ -80,6 +89,13 @@ impl EffectDefinition {
             _ => None,
         }
     }
+    pub const fn as_noise_dissolve(self) -> Option<NoiseDissolve> {
+        if let Self::NoiseDissolve(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
     /// Compare only the supplied write channels against the prepared result.
     /// Declaration identity and stack order are independent of parameter dirtiness.
     pub(crate) fn parameter_changed(self, next: Self, parameter: EffectParameter) -> bool {
@@ -90,6 +106,7 @@ impl EffectDefinition {
                 EffectParameter::Radius => previous.radius() != next.radius(),
                 EffectParameter::Intensity => previous.intensity() != next.intensity(),
                 EffectParameter::Source => previous.source() != next.source(),
+                _ => false,
             },
             (Self::Shadow(previous), Self::Shadow(next)) => match parameter {
                 EffectParameter::Color => previous.color() != next.color(),
@@ -100,12 +117,27 @@ impl EffectDefinition {
             (Self::Blur(previous), Self::Blur(next)) => {
                 parameter == EffectParameter::Radius && previous.radius() != next.radius()
             }
+            (Self::NoiseDissolve(previous), Self::NoiseDissolve(next)) => match parameter {
+                EffectParameter::Progress => previous.progress() != next.progress(),
+                EffectParameter::Softness => previous.softness() != next.softness(),
+                EffectParameter::Seed => previous.seed() != next.seed(),
+                _ => false,
+            },
             _ => true,
         }
     }
 
     pub fn update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         update.apply_to(self)
+    }
+    /// Authored fields with no continuous runtime channel. Persistent value
+    /// publication carries these directly while preserving other driven fields.
+    pub fn discrete_parameters(self) -> EffectUpdate {
+        match self {
+            Self::Glow(value) => EffectUpdate::default().source(value.source()),
+            Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
+            Self::Blur(_) | Self::Shadow(_) => EffectUpdate::default(),
+        }
     }
 }
 
@@ -116,6 +148,13 @@ impl EffectValue for EffectDefinition {
             Self::Glow(v) => update.apply_to(v).map(Self::Glow),
             Self::Blur(v) => update.apply_to(v).map(Self::Blur),
             Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
+            Self::NoiseDissolve(v) => update.apply_to(v).map(Self::NoiseDissolve),
+        }
+    }
+    fn validate_effect_value_update(self, target: Self) -> Result<(), EffectParameterError> {
+        match (self, target) {
+            (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_value_update(b),
+            _ => self.validate_effect_transition(target),
         }
     }
     fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
@@ -123,6 +162,7 @@ impl EffectValue for EffectDefinition {
             (Self::Glow(a), Self::Glow(b)) => a.validate_effect_transition(b),
             (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
             (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
+            (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_transition(b),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -136,6 +176,9 @@ impl EffectValue for EffectDefinition {
             (Self::Glow(a), Self::Glow(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Blur(a), Self::Blur(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Shadow(a), Self::Shadow(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => {
+                a.sample_effect_parameters(b, request, alpha)
+            }
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -192,6 +235,9 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Intensity => 4,
         EffectParameter::Source => 8,
         EffectParameter::Offset => 16,
+        EffectParameter::Progress => 32,
+        EffectParameter::Softness => 64,
+        EffectParameter::Seed => 128,
     }
 }
 

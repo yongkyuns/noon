@@ -86,6 +86,7 @@ fn neutral(effect: EffectDefinition, height: u32, world: f64) -> bool {
             v.radius().value() == 0.0 || v.intensity() == 0.0 || v.color().alpha == 0.0
         }
         EffectDefinition::Shadow(v) => v.color().alpha == 0.0,
+        EffectDefinition::NoiseDissolve(v) => v.is_neutral(),
     }
 }
 
@@ -106,7 +107,24 @@ pub(super) fn evaluate(
         if neutral(effect, height, world) {
             continue;
         }
-        let sigma = scalar(effect.radius(), height, world);
+        let stage_opacity = if Some(index) == last { opacity } else { 1.0 };
+        if let EffectDefinition::NoiseDissolve(definition) = effect {
+            input = crate::gpu::dissolve_filter::tests::reference(
+                &input,
+                crate::DissolveParameters {
+                    definition,
+                    source_bounds: crate::EffectPixelBounds {
+                        min: [0.0; 2],
+                        max: size.map(f64::from),
+                    },
+                    scope_opacity: stage_opacity as f32,
+                    scratch_budget_bytes: u64::MAX,
+                },
+                size,
+            );
+            continue;
+        }
+        let sigma = scalar(effect.radius().unwrap(), height, world);
         let blurred = convolve(
             match effect {
                 EffectDefinition::Glow(v) if v.source() == GlowSource::Silhouette => mask,
@@ -115,7 +133,6 @@ pub(super) fn evaluate(
             size,
             sigma,
         );
-        let stage_opacity = if Some(index) == last { opacity } else { 1.0 };
         input = input
             .as_chunks::<4>()
             .0
@@ -125,6 +142,9 @@ pub(super) fn evaluate(
                 let source: [f64; 4] = std::array::from_fn(|c| f64::from(pixel[c]) / 255.0);
                 let value: [f64; 4] = match effect {
                     EffectDefinition::Blur(_) => blurred[at],
+                    EffectDefinition::NoiseDissolve(_) => {
+                        unreachable!("mask stage was evaluated above")
+                    }
                     EffectDefinition::Glow(v) => {
                         let color = v.color();
                         let h = (v.intensity() * f64::from(color.alpha) * blurred[at][3]).min(1.0);

@@ -111,7 +111,7 @@ pub(crate) fn validate_change(
     if let (Some(previous), Some(next)) = (previous, next) {
         for effect in next.iter() {
             if let Some(old) = previous.get(effect.attachment) {
-                noon_core::EffectValue::validate_effect_transition(
+                noon_core::EffectValue::validate_effect_value_update(
                     old.definition,
                     effect.definition,
                 )

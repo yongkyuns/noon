@@ -363,6 +363,7 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
         world_view_height: 10.0,
         scope_opacity: 0.5,
         scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
     };
     let bounds = EffectPixelBounds {
         min: [-16.0, 50.0],
@@ -447,6 +448,7 @@ fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
         world_view_height: 10.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
     };
     let silhouette =
         EffectCaptureTile::prepare_stack(bounds, [100, 100], &[a, b], values, 4096, 1_000_000)

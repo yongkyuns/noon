@@ -129,6 +129,16 @@ fn ordered_pixels_match_independent_composition_with_single_final_opacity() {
         vec![scene_blur, shadow(0.1)],
         vec![blur(64.0), glow(0.8, GlowSource::Painted)],
         vec![blur(0.8); MAX_EFFECT_STACK_LEN],
+        vec![blur(1.25), dissolve(7, 0.08, 0.5)],
+        vec![dissolve(7, 0.08, 0.5), blur(1.25)],
+        vec![shadow(0.1), dissolve(u32::MAX, 0.5, 0.75)],
+        vec![dissolve(11, 0.0, 0.25), glow(0.8, GlowSource::Painted)],
+        vec![glow(0.8, GlowSource::Silhouette), dissolve(7, 0.08, 0.5)],
+        vec![dissolve(7, 0.08, 0.5), glow(0.8, GlowSource::Silhouette)],
+        vec![blur(1.25), dissolve(7, 0.08, 1.0)],
+        vec![dissolve(7, 0.08, 1.0), glow(0.8, GlowSource::Silhouette)],
+        vec![blur(1.25), dissolve(7, 0.08, 0.0)],
+        vec![dissolve(7, 0.08, 0.25), dissolve(11, 0.5, 0.75)],
     ];
     let mut frames = 0;
     let mut channels = 0;
@@ -149,6 +159,15 @@ fn ordered_pixels_match_independent_composition_with_single_final_opacity() {
             first.iter().zip(second).any(|(&a, b)| a.abs_diff(b) > 3),
             "ineffective order witness"
         );
+        for pair in [[15, 16], [19, 20], [21, 22]] {
+            let first = reference::evaluate(&input, &mask, size, &profiles[pair[0]], 1.0, 240, 8.0);
+            let second =
+                reference::evaluate(&input, &mask, size, &profiles[pair[1]], 1.0, 240, 8.0);
+            assert!(
+                first.iter().zip(second).any(|(&a, b)| a.abs_diff(b) > 3),
+                "ineffective mask order witness {pair:?}"
+            );
+        }
         for (profile, effects) in profiles.iter().enumerate() {
             for opacity in [1.0, 0.37] {
                 let params = EffectStackParameters {

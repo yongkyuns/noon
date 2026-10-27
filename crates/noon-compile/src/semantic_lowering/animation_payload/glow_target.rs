@@ -208,8 +208,25 @@ fn attachment_channels(
             update.offset = Some(b.offset());
         }
     }
-    if writes_radius || baseline.radius() != destination.radius() {
-        update.radius = Some(destination.radius());
+    if let (Some(a), Some(b)) = (baseline.radius(), destination.radius()) {
+        if writes_radius || a != b {
+            update.radius = Some(b);
+        }
+    }
+    if let (Some(a), Some(b)) = (
+        baseline.as_noise_dissolve(),
+        destination.as_noise_dissolve(),
+    ) {
+        if a.progress() != b.progress()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Progress))
+        {
+            update.progress = Some(b.progress());
+        }
+        if a.softness() != b.softness()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Softness))
+        {
+            update.softness = Some(b.softness());
+        }
     }
     effective
         .parameter_channels(update)

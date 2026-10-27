@@ -143,6 +143,9 @@ pub enum EffectParameter {
     Radius,
     Intensity,
     Source,
+    Progress,
+    Softness,
+    Seed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -152,6 +155,7 @@ pub enum EffectParameterError {
     InvalidRadius,
     InvalidIntensity,
     InvalidProgress,
+    InvalidSoftness,
     InvalidView,
     DiscreteTransition(EffectParameter),
     UnsupportedParameter(EffectParameter),
@@ -168,6 +172,7 @@ impl std::fmt::Display for EffectParameterError {
             Self::InvalidRadius => f.write_str("effect radius must be finite and non-negative"),
             Self::InvalidIntensity => f.write_str("effect intensity must be finite and in [0, 8]"),
             Self::InvalidProgress => f.write_str("effect progress must be finite and in [0, 1]"),
+            Self::InvalidSoftness => f.write_str("effect softness must be finite and in [0, 1]"),
             Self::InvalidView => f.write_str("effect requires a positive finite uniform 2D view"),
             Self::UnsupportedParameter(parameter) => write!(
                 f,
@@ -204,6 +209,9 @@ pub struct EffectUpdate {
     pub radius: Option<EffectRadius>,
     pub intensity: Option<f64>,
     pub source: Option<GlowSource>,
+    pub progress: Option<f64>,
+    pub softness: Option<f64>,
+    pub seed: Option<u32>,
 }
 
 impl EffectUpdate {
@@ -239,6 +247,18 @@ impl EffectUpdate {
         {
             return Err(EffectParameterError::InvalidIntensity);
         }
+        if self
+            .progress
+            .is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+        {
+            return Err(EffectParameterError::InvalidProgress);
+        }
+        if self
+            .softness
+            .is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+        {
+            return Err(EffectParameterError::InvalidSoftness);
+        }
         Ok(())
     }
 
@@ -257,6 +277,31 @@ impl EffectUpdate {
         self
     }
 
+    pub fn progress(mut self, value: f64) -> Self {
+        self.progress = Some(value);
+        self
+    }
+    pub fn softness(mut self, value: f64) -> Self {
+        self.softness = Some(value);
+        self
+    }
+    pub fn seed(mut self, value: u32) -> Self {
+        self.seed = Some(value);
+        self
+    }
+
+    pub(crate) fn require_parameters(
+        self,
+        supported: &[EffectParameter],
+    ) -> Result<(), EffectParameterError> {
+        for parameter in self.parameters() {
+            if !supported.contains(&parameter) {
+                return Err(EffectParameterError::UnsupportedParameter(parameter));
+            }
+        }
+        Ok(())
+    }
+
     /// Schema-ordered explicit write channels, including unchanged values.
     /// Empty patches own no channels. This iterator allocates no storage.
     pub fn parameters(self) -> impl Iterator<Item = EffectParameter> {
@@ -266,6 +311,9 @@ impl EffectUpdate {
             EffectParameter::Radius,
             EffectParameter::Intensity,
             EffectParameter::Source,
+            EffectParameter::Progress,
+            EffectParameter::Softness,
+            EffectParameter::Seed,
         ]
         .into_iter()
         .filter(move |parameter| self.writes(*parameter))
@@ -278,6 +326,9 @@ impl EffectUpdate {
             EffectParameter::Radius => self.radius.is_some(),
             EffectParameter::Intensity => self.intensity.is_some(),
             EffectParameter::Source => self.source.is_some(),
+            EffectParameter::Progress => self.progress.is_some(),
+            EffectParameter::Softness => self.softness.is_some(),
+            EffectParameter::Seed => self.seed.is_some(),
         }
     }
 
@@ -308,6 +359,13 @@ pub(crate) mod sealed {
 pub trait EffectValue: sealed::Sealed + Copy {
     #[doc(hidden)]
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError>;
+    /// Validate replacement of a persistent value while retaining its attachment
+    /// and any compatible drivers. This need not permit interpolation between
+    /// the values: a dissolve seed is discrete and has no animation channel.
+    #[doc(hidden)]
+    fn validate_effect_value_update(self, target: Self) -> Result<(), EffectParameterError> {
+        self.validate_effect_transition(target)
+    }
     #[doc(hidden)]
     fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError>;
     #[doc(hidden)]

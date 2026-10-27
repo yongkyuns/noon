@@ -25,7 +25,7 @@ use composed::PublishedComposedSource;
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
 // V25 binds composed rows to installed immutable source plans at the genuine
 // execution/render worker boundary. Older envelopes reject.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 25;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 26;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,6 +78,11 @@ pub enum TransportEffectDefinition {
         radius: EffectRadius,
         offset: noon_core::EffectOffset,
     },
+    NoiseDissolve {
+        seed: u32,
+        softness: f64,
+        progress: f64,
+    },
 }
 impl From<&noon_compile::CompiledEffect> for TransportEffectState {
     fn from(effect: &noon_compile::CompiledEffect) -> Self {
@@ -96,6 +101,13 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
             noon_core::EffectDefinition::Blur(blur) => TransportEffectDefinition::Blur {
                 radius: blur.radius(),
             },
+            noon_core::EffectDefinition::NoiseDissolve(value) => {
+                TransportEffectDefinition::NoiseDissolve {
+                    seed: value.seed(),
+                    softness: value.softness(),
+                    progress: value.progress(),
+                }
+            }
         };
         Self {
             attachment: effect.attachment,
@@ -137,6 +149,15 @@ impl TransportEffectState {
                     .ok()?
                     .into()
             }
+            TransportEffectDefinition::NoiseDissolve {
+                seed,
+                softness,
+                progress,
+            } => noon_core::NoiseDissolve::new(seed, softness)
+                .ok()?
+                .with_progress(progress)
+                .ok()?
+                .into(),
         };
         Some(noon_compile::CompiledEffect {
             attachment: self.attachment,
@@ -2487,7 +2508,7 @@ mod tests {
         let bindings: Vec<_> = (0..noon_core::MAX_EFFECT_STACK_LEN)
             .map(|index| CompiledEffect {
                 attachment: SemanticNodeId::new(90 + index as u32, u32::MAX - index as u32),
-                definition: match index % 3 {
+                definition: match index % 4 {
                     0 => noon_core::Blur::new(
                         EffectUpdate::default().radius(noon_core::Pixels(1.25 + index as f64)),
                     )
@@ -2500,12 +2521,17 @@ mod tests {
                     )
                     .unwrap()
                     .into(),
-                    _ => noon_core::Shadow::new(
+                    2 => noon_core::Shadow::new(
                         EffectUpdate::default()
                             .offset(noon_core::EffectOffset::Pixels([-2.25, 3.75])),
                     )
                     .unwrap()
                     .into(),
+                    _ => noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
+                        .unwrap()
+                        .with_progress(0.6250000000000123)
+                        .unwrap()
+                        .into(),
                 },
             })
             .collect();
@@ -2557,7 +2583,7 @@ mod tests {
         let before = mirror.frame().unwrap().clone();
         let sequence = mirror.next_sequence;
         let context = mirror.publication_context;
-        for failure in 0..3 {
+        for failure in 0..9 {
             let mut bad = delta.clone();
             // A valid first row must not publish before a bad later binding.
             let mut suffix = snapshot.objects[1].clone();
@@ -2569,9 +2595,26 @@ mod tests {
                 1 => {
                     suffix.effects.push(suffix.effects[0]);
                 }
-                _ => {
+                2 => {
                     suffix.effects[7].definition = TransportEffectDefinition::Blur {
                         radius: EffectRadius::Pixels(-1.0),
+                    };
+                }
+                _ => {
+                    suffix.effects[7].definition = TransportEffectDefinition::NoiseDissolve {
+                        seed: u32::MAX,
+                        progress: match failure {
+                            3 => -0.1,
+                            4 => 1.1,
+                            5 => f64::NAN,
+                            _ => 0.5,
+                        },
+                        softness: match failure {
+                            6 => -0.1,
+                            7 => 1.1,
+                            8 => f64::INFINITY,
+                            _ => 0.08,
+                        },
                     };
                 }
             }
@@ -2592,6 +2635,50 @@ mod tests {
             frame.objects[0].effects
         );
         assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
+    }
+
+    #[test]
+    fn tagged_mask_preserves_seed_and_precision_and_rejects_foreign_fields() {
+        let mut frame = mixed_frame();
+        let definition = noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
+            .unwrap()
+            .with_progress(0.6250000000000123)
+            .unwrap();
+        let effect = Arc::new(noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(77, u32::MAX),
+            definition: definition.into(),
+        });
+        frame.objects[0].effects = Some(effect_stack(&effect));
+        let snapshot = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["protocol_version"], 26);
+        let mask = &value["objects"][0]["effects"][0];
+        assert_eq!(mask["kind"], "noise_dissolve");
+        assert_eq!(mask["seed"], u32::MAX);
+        for (field, bad) in [
+            ("radius", serde_json::json!(1.0)),
+            ("seed", serde_json::json!(1.5)),
+            ("seed", serde_json::json!(-1)),
+            ("seed", serde_json::json!(4294967296u64)),
+        ] {
+            let mut invalid = value.clone();
+            invalid["objects"][0]["effects"][0][field] = bad;
+            assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(invalid).is_err());
+        }
+        let mut mirror = test_mirror();
+        mirror
+            .apply(serde_json::from_value(value).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
     }
 
     #[test]
@@ -2696,7 +2783,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 25);
+        assert_eq!(snapshot.protocol_version, 26);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -2769,7 +2856,7 @@ mod tests {
         // Every predecessor, including the former single-binding schema,
         // rejects rather than silently discarding ordered effects.
         let next_sequence = mirror.next_sequence;
-        for version in 14..25 {
+        for version in 14..26 {
             let mut old = snapshot.clone();
             old.protocol_version = version;
             assert_eq!(

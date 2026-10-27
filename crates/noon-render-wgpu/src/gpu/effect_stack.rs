@@ -9,8 +9,8 @@ use super::{
         GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurScope,
     },
     shadow_filter::{ShadowFilter, ShadowScope},
-    EffectCaptureParameters, EffectPrepareError, EffectRasterStats, GlowCapture, GlowFilter,
-    GlowParameters, GlowScope,
+    DissolveFilter, DissolveParameters, DissolveScope, EffectCaptureParameters, EffectPixelBounds,
+    EffectPrepareError, EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
 
 /// The fixed-quality finite operator profile; no silent truncation of a stack.
@@ -25,6 +25,29 @@ pub struct EffectStackParameters {
     /// All currently retained filter images, including warm neutral slots.
     /// Source/mask images and in-flight host resources are accounted separately.
     pub scratch_budget_bytes: u64,
+    /// Original source extent in capture pixels, excluding padding and rounded
+    /// capacity. None describes a raw capture whose entire image is the source.
+    pub source_bounds: Option<EffectPixelBounds>,
+}
+
+impl EffectStackParameters {
+    fn dissolve(
+        self,
+        definition: noon_core::NoiseDissolve,
+        source: &wgpu::Texture,
+        opacity: f32,
+        budget: u64,
+    ) -> DissolveParameters {
+        DissolveParameters {
+            definition,
+            source_bounds: self.source_bounds.unwrap_or(EffectPixelBounds {
+                min: [0.0; 2],
+                max: [f64::from(source.width()), f64::from(source.height())],
+            }),
+            scope_opacity: opacity,
+            scratch_budget_bytes: budget,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -32,6 +55,7 @@ enum PassFilter {
     Glow(Box<GlowScope>),
     Blur(Box<GaussianBlurScope>),
     Shadow(Box<ShadowScope>),
+    Dissolve(Box<DissolveScope>),
 }
 impl PassFilter {
     fn new(definition: EffectDefinition) -> Self {
@@ -39,6 +63,7 @@ impl PassFilter {
             EffectDefinition::Glow(_) => Self::Glow(Box::default()),
             EffectDefinition::Blur(_) => Self::Blur(Box::default()),
             EffectDefinition::Shadow(_) => Self::Shadow(Box::default()),
+            EffectDefinition::NoiseDissolve(_) => Self::Dissolve(Box::default()),
         }
     }
     fn matches(&self, definition: EffectDefinition) -> bool {
@@ -47,6 +72,7 @@ impl PassFilter {
             (Self::Glow(_), EffectDefinition::Glow(_))
                 | (Self::Blur(_), EffectDefinition::Blur(_))
                 | (Self::Shadow(_), EffectDefinition::Shadow(_))
+                | (Self::Dissolve(_), EffectDefinition::NoiseDissolve(_))
         )
     }
     fn output(&self) -> Option<&wgpu::Texture> {
@@ -54,6 +80,7 @@ impl PassFilter {
             Self::Glow(v) => v.output(),
             Self::Blur(v) => v.output(),
             Self::Shadow(v) => v.output(),
+            Self::Dissolve(v) => v.output(),
         }
     }
     fn output_view(&self) -> Option<&wgpu::TextureView> {
@@ -61,6 +88,7 @@ impl PassFilter {
             Self::Glow(v) => v.output_view(),
             Self::Blur(v) => v.output_view(),
             Self::Shadow(v) => v.output_view(),
+            Self::Dissolve(v) => v.output_view(),
         }
     }
     fn scratch_bytes(&self) -> u64 {
@@ -68,6 +96,7 @@ impl PassFilter {
             Self::Glow(v) => v.scratch_bytes(),
             Self::Blur(v) => v.scratch_bytes(),
             Self::Shadow(v) => v.scratch_bytes(),
+            Self::Dissolve(v) => v.scratch_bytes(),
         }
     }
     fn invalidate(&mut self) {
@@ -75,6 +104,7 @@ impl PassFilter {
             Self::Glow(v) => v.invalidate(),
             Self::Blur(v) => v.invalidate(),
             Self::Shadow(v) => v.invalidate(),
+            Self::Dissolve(v) => v.invalidate(),
         }
     }
 }
@@ -148,6 +178,7 @@ pub struct EffectStackFilter {
     glow: GlowFilter,
     blur: GaussianBlurFilter,
     shadow: ShadowFilter,
+    dissolve: DissolveFilter,
 }
 
 impl EffectStackFilter {
@@ -210,6 +241,19 @@ impl EffectStackFilter {
                     revision,
                 };
                 let work = match (&mut pass.filter, effect) {
+                    (PassFilter::Dissolve(filter), EffectDefinition::NoiseDissolve(definition)) => {
+                        self.dissolve.prepare_encode(
+                            device,
+                            queue,
+                            encoder,
+                            filter,
+                            GaussianBlurCapture {
+                                source: capture.source,
+                                revision,
+                            },
+                            parameters.dissolve(definition, capture.source, opacity, budget),
+                        )?
+                    }
                     (PassFilter::Glow(filter), EffectDefinition::Glow(definition)) => {
                         let upload = self.glow.prepare(
                             device,
@@ -331,6 +375,13 @@ fn preflight(
         .map_err(EffectPrepareError::Parameter)?;
     let limits = device.limits();
     let size = [capture.source.width(), capture.source.height()];
+    if scope.passes.iter().any(|p| {
+        p.filter
+            .output()
+            .is_some_and(|output| output == capture.source)
+    }) {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
     let pixels = u64::from(size[0]) * u64::from(size[1]);
     let mut budgets = [0; MAX_EFFECT_STACK_LEN];
     let mut active = [false; MAX_EFFECT_STACK_LEN];
@@ -390,6 +441,20 @@ fn preflight(
             budgets[index] = pixels
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
+            if let EffectDefinition::NoiseDissolve(definition) = effect {
+                super::dissolve_filter::validate_input(
+                    GaussianBlurCapture {
+                        source: capture.source,
+                        revision: capture.revision,
+                    },
+                    parameters.dissolve(
+                        definition,
+                        capture.source,
+                        parameters.scope_opacity,
+                        budgets[index],
+                    ),
+                )?;
+            }
             active[index] = true;
             last = Some(index);
         }

@@ -144,7 +144,7 @@ mod tests {
                     .definition;
             if time == 1.3 {
                 assert!((left.as_glow().unwrap().intensity() - 2.0).abs() < 1e-12);
-                assert_eq!(left.radius(), noon_core::EffectRadius::Pixels(11.0));
+                assert_eq!(left.radius(), Some(noon_core::EffectRadius::Pixels(11.0)));
                 assert!((frame.render_transform(1).translation.y - 0.2).abs() < 1e-6);
                 assert!(
                     (crate::effect_authoring::only_effect(
@@ -161,7 +161,7 @@ mod tests {
             }
             if time >= 1.6 {
                 assert!((left.as_glow().unwrap().intensity() - 1.2).abs() < 1e-12);
-                assert_eq!(left.radius(), noon_core::EffectRadius::Pixels(12.0));
+                assert_eq!(left.radius(), Some(noon_core::EffectRadius::Pixels(12.0)));
                 assert!((frame.render_transform(1).translation.y - 0.4).abs() < 1e-6);
             }
             if [1.6, 2.5, 3.25, 3.5].contains(&time) {

@@ -209,12 +209,12 @@ fn noise(seed: u32, uv: [f64; 2]) -> f64 {
     }
     sum
 }
-fn reference(input: &[u8], p: DissolveParameters) -> Vec<u8> {
+pub(in crate::gpu) fn reference(input: &[u8], p: DissolveParameters, size: [u32; 2]) -> Vec<u8> {
     let progress = f64::from(p.definition.progress() as f32);
     let softness = f64::from(p.definition.softness() as f32);
     let mut result = Vec::with_capacity(input.len());
-    for y in 0..SIZE[1] {
-        for x in 0..SIZE[0] {
+    for y in 0..size[1] {
+        for x in 0..size[0] {
             let uv = std::array::from_fn::<_, 2, _>(|a| {
                 ((f64::from([x, y][a]) + 0.5) - p.source_bounds.min[a])
                     / (p.source_bounds.max[a] - p.source_bounds.min[a])
@@ -236,7 +236,7 @@ fn reference(input: &[u8], p: DissolveParameters) -> Vec<u8> {
                     1.0 - (3.0 * t * t - 2.0 * t * t * t)
                 }
             };
-            let at = ((y * SIZE[0] + x) * 4) as usize;
+            let at = ((y * size[0] + x) * 4) as usize;
             result.extend(
                 input[at..at + 4]
                     .iter()
@@ -379,7 +379,7 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
                                 assert_eq!(work.pipeline_compiles, 0);
                             }
                             let actual = read(&device, &queue, scope.output().unwrap());
-                            let expected = reference(&input, p);
+                            let expected = reference(&input, p, SIZE);
                             let error = actual
                                 .iter()
                                 .zip(&expected)
@@ -539,7 +539,7 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
             ),
             (0, 0, 1)
         );
-        let expected = reference(&input, parameters(0.75));
+        let expected = reference(&input, parameters(0.75), SIZE);
         assert!(read(&device, &queue, scope.output().unwrap())
             .iter()
             .zip(expected)

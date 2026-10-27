@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use std::mem::size_of;
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DissolveParameters {
@@ -64,6 +64,93 @@ struct Program {
 pub struct DissolveFilter {
     program: Option<Program>,
 }
+pub(super) fn checked_domain(
+    size: [u32; 2],
+    bounds: EffectPixelBounds,
+) -> Result<[f32; 4], EffectPrepareError> {
+    if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite)
+        || (0..2).any(|a| bounds.min[a] >= bounds.max[a])
+    {
+        return Err(EffectPrepareError::InvalidSourceBounds);
+    }
+    let domain = [
+        bounds.min[0],
+        bounds.min[1],
+        1.0 / (bounds.max[0] - bounds.min[0]),
+        1.0 / (bounds.max[1] - bounds.min[1]),
+    ];
+    if domain.into_iter().any(|v| !(v as f32).is_finite())
+        || (0..2).any(|a| (f64::from(domain[a] as f32) - domain[a]).abs() > 1.0 / 256.0)
+        || domain[2..].iter().any(|v| (*v as f32) <= 0.0)
+    {
+        return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
+    }
+    // Keep normalized lattice coordinates finite, integer-addressable and
+    // within the declared 1/256-cell coordinate precision before GPU writes.
+    for (axis, size) in size.into_iter().enumerate() {
+        for pixel in [0.5, f64::from(size) - 0.5] {
+            let exact = (pixel - domain[axis]) * domain[axis + 2] * 16.0;
+            let encoded = ((pixel as f32 - domain[axis] as f32) * domain[axis + 2] as f32) * 16.0;
+            if !encoded.is_finite()
+                || exact.abs() > 65536.0
+                || (f64::from(encoded) - exact).abs() > 1.0 / 256.0
+            {
+                return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
+            }
+        }
+    }
+    Ok(domain.map(|v| v as f32))
+}
+
+fn checked_uniform(
+    capture: GaussianBlurCapture<'_>,
+    parameters: DissolveParameters,
+) -> Result<Uniform, EffectPrepareError> {
+    if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity) {
+        return Err(EffectPrepareError::InvalidScopeOpacity);
+    }
+    let domain = checked_domain(
+        [capture.source.width(), capture.source.height()],
+        parameters.source_bounds,
+    )?;
+    if !matches!(
+        capture.source.format(),
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+    ) || capture.source.dimension() != wgpu::TextureDimension::D2
+        || capture.source.sample_count() != 1
+        || capture.source.depth_or_array_layers() != 1
+        || capture.source.mip_level_count() != 1
+        || !capture
+            .source
+            .usage()
+            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
+    {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
+    let bytes = u64::from(capture.source.width()) * u64::from(capture.source.height()) * 4;
+    if bytes > parameters.scratch_budget_bytes {
+        return Err(EffectPrepareError::ScratchBudgetExceeded);
+    }
+    let definition = parameters.definition;
+    Ok(Uniform {
+        control: [
+            definition.progress() as f32,
+            definition.softness() as f32,
+            parameters.scope_opacity,
+            0.0,
+        ],
+        domain,
+        seed: [definition.seed(), 0, 0, 0],
+    })
+}
+
+pub(super) fn validate_input(
+    capture: GaussianBlurCapture<'_>,
+    parameters: DissolveParameters,
+) -> Result<(), EffectPrepareError> {
+    checked_uniform(capture, parameters).map(|_| ())
+}
+
 impl DissolveFilter {
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_encode(
@@ -75,78 +162,14 @@ impl DissolveFilter {
         capture: GaussianBlurCapture<'_>,
         parameters: DissolveParameters,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
-        let bounds = parameters.source_bounds;
-        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
-        {
-            return Err(EffectPrepareError::InvalidScopeOpacity);
-        }
-        if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite)
-            || (0..2).any(|a| bounds.min[a] >= bounds.max[a])
-        {
-            return Err(EffectPrepareError::InvalidSourceBounds);
-        }
-        let domain = [
-            bounds.min[0],
-            bounds.min[1],
-            1.0 / (bounds.max[0] - bounds.min[0]),
-            1.0 / (bounds.max[1] - bounds.min[1]),
-        ];
-        if domain.into_iter().any(|v| !(v as f32).is_finite())
-            || (0..2).any(|a| (f64::from(domain[a] as f32) - domain[a]).abs() > 1.0 / 256.0)
-            || domain[2..].iter().any(|v| (*v as f32) <= 0.0)
-        {
-            return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
-        }
-        // Keep normalized lattice coordinates finite, integer-addressable and
-        // within the declared 1/256-cell coordinate precision before GPU writes.
-        for (axis, size) in [capture.source.width(), capture.source.height()]
-            .into_iter()
-            .enumerate()
-        {
-            for pixel in [0.5, f64::from(size) - 0.5] {
-                let exact = (pixel - domain[axis]) * domain[axis + 2] * 16.0;
-                let encoded =
-                    ((pixel as f32 - domain[axis] as f32) * domain[axis + 2] as f32) * 16.0;
-                if !encoded.is_finite()
-                    || exact.abs() > 65536.0
-                    || (f64::from(encoded) - exact).abs() > 1.0 / 256.0
-                {
-                    return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
-                }
-            }
-        }
-        if !matches!(
-            capture.source.format(),
-            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
-        ) || capture.source.dimension() != wgpu::TextureDimension::D2
-            || capture.source.sample_count() != 1
-            || capture.source.depth_or_array_layers() != 1
-            || capture.source.mip_level_count() != 1
-            || !capture
-                .source
-                .usage()
-                .contains(wgpu::TextureUsages::TEXTURE_BINDING)
-            || scope
-                .output()
-                .is_some_and(|output| output == capture.source)
+        if scope
+            .output()
+            .is_some_and(|output| output == capture.source)
         {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
+        let uniform = checked_uniform(capture, parameters)?;
         let bytes = u64::from(capture.source.width()) * u64::from(capture.source.height()) * 4;
-        if bytes > parameters.scratch_budget_bytes {
-            return Err(EffectPrepareError::ScratchBudgetExceeded);
-        }
-        let definition = parameters.definition;
-        let uniform = Uniform {
-            control: [
-                definition.progress() as f32,
-                definition.softness() as f32,
-                parameters.scope_opacity,
-                0.0,
-            ],
-            domain: domain.map(|v| v as f32),
-            seed: [definition.seed(), 0, 0, 0],
-        };
         let mut stats = EffectRasterStats {
             scratch_bytes: bytes,
             ..Default::default()

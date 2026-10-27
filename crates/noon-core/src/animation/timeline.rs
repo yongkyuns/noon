@@ -456,6 +456,8 @@ pub enum Property {
     EffectRadius,
     EffectIntensity,
     EffectOffset,
+    EffectProgress,
+    EffectSoftness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -478,9 +480,12 @@ impl Property {
     }
     pub const fn value_kind(self) -> ValueKind {
         match self {
-            Self::EffectColor | Self::EffectRadius | Self::EffectIntensity | Self::EffectOffset => {
-                ValueKind::Effect
-            }
+            Self::EffectColor
+            | Self::EffectRadius
+            | Self::EffectIntensity
+            | Self::EffectOffset
+            | Self::EffectProgress
+            | Self::EffectSoftness => ValueKind::Effect,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -500,6 +505,9 @@ impl Property {
     pub const fn is_instant(self) -> bool {
         matches!(self, Self::Presence | Self::ZIndex)
     }
+    pub const fn is_effect(self) -> bool {
+        matches!(self.value_kind(), ValueKind::Effect)
+    }
 }
 
 /// A typed endpoint for a single glow channel. Radius and intensity retain f64
@@ -510,6 +518,8 @@ pub enum EffectTrackValue {
     Radius(crate::EffectRadius),
     Intensity(f64),
     Offset(crate::EffectOffset),
+    Progress(f64),
+    Softness(f64),
 }
 
 impl EffectTrackValue {
@@ -521,7 +531,13 @@ impl EffectTrackValue {
         match property {
             Property::EffectColor => definition.color().map(Self::Color),
             Property::EffectOffset => definition.as_shadow().map(|v| Self::Offset(v.offset())),
-            Property::EffectRadius => Some(Self::Radius(definition.radius())),
+            Property::EffectRadius => definition.radius().map(Self::Radius),
+            Property::EffectProgress => definition
+                .as_noise_dissolve()
+                .map(|v| Self::Progress(v.progress())),
+            Property::EffectSoftness => definition
+                .as_noise_dissolve()
+                .map(|v| Self::Softness(v.softness())),
             Property::EffectIntensity => definition
                 .as_glow()
                 .map(|effect| Self::Intensity(effect.intensity())),
@@ -535,6 +551,8 @@ impl EffectTrackValue {
             Self::Radius(_) => Property::EffectRadius,
             Self::Intensity(_) => Property::EffectIntensity,
             Self::Offset(_) => Property::EffectOffset,
+            Self::Progress(_) => Property::EffectProgress,
+            Self::Softness(_) => Property::EffectSoftness,
         }
     }
 
@@ -544,6 +562,8 @@ impl EffectTrackValue {
             Self::Radius(value) => crate::EffectUpdate::default().radius(value),
             Self::Intensity(value) => crate::EffectUpdate::default().intensity(value),
             Self::Offset(value) => crate::EffectUpdate::default().offset(value),
+            Self::Progress(value) => crate::EffectUpdate::default().progress(value),
+            Self::Softness(value) => crate::EffectUpdate::default().softness(value),
         }
     }
 
@@ -571,6 +591,8 @@ impl EffectTrackValue {
                 Self::Radius(a.interpolate(b, alpha))
             }
             (Self::Intensity(a), Self::Intensity(b)) => Self::Intensity(mix(a, b, alpha)),
+            (Self::Progress(a), Self::Progress(b)) => Self::Progress(mix(a, b, alpha)),
+            (Self::Softness(a), Self::Softness(b)) => Self::Softness(mix(a, b, alpha)),
             (Self::Offset(a), Self::Offset(b)) if a.same_unit(b) => {
                 Self::Offset(a.interpolate(b, alpha))
             }

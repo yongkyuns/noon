@@ -10,10 +10,18 @@ fn parameters() -> EffectStackParameters {
         world_view_height: 8.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 16 * 1024 * 1024,
+        source_bounds: None,
     }
 }
 fn blur(sigma: f64) -> EffectDefinition {
     Blur::new(EffectUpdate::default().radius(Pixels(sigma)))
+        .unwrap()
+        .into()
+}
+fn dissolve(seed: u32, softness: f64, progress: f64) -> EffectDefinition {
+    noon_core::NoiseDissolve::new(seed, softness)
+        .unwrap()
+        .with_progress(progress)
         .unwrap()
         .into()
 }
@@ -343,6 +351,18 @@ fn late_invalid_pass_preserves_the_previous_coherent_stack_and_earlier_parameter
         ..capture
     };
     for (capture, effects, params, error) in [
+        (
+            capture,
+            vec![blur(4.0), dissolve(7, 0.08, 0.5)],
+            EffectStackParameters {
+                source_bounds: Some(EffectPixelBounds {
+                    min: [0.0; 2],
+                    max: [0.0, 29.0],
+                }),
+                ..parameters()
+            },
+            EffectPrepareError::InvalidSourceBounds,
+        ),
         (
             capture,
             vec![blur(4.0), blur(65.0)],

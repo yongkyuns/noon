@@ -1155,13 +1155,7 @@ impl SceneInstance {
                 groups_evaluated: evaluation.groups_evaluated,
                 ..RuntimePatchStats::default()
             };
-            if matches!(
-                channel.property,
-                Property::EffectColor
-                    | Property::EffectRadius
-                    | Property::EffectIntensity
-                    | Property::EffectOffset
-            ) {
+            if channel.property.is_effect() {
                 self.changes.insert(channel.object_index as usize);
             } else {
                 self.mark_changed(channel.object_index as usize);
@@ -1476,7 +1470,9 @@ impl SceneInstance {
                 Property::EffectColor
                 | Property::EffectRadius
                 | Property::EffectIntensity
-                | Property::EffectOffset => {
+                | Property::EffectOffset
+                | Property::EffectProgress
+                | Property::EffectSoftness => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
                     if let (Some(base), Some(stack), Some(attachment)) = (
@@ -2015,7 +2011,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 19] = [
+const PROPERTY_ORDER: [Property; 21] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -2035,6 +2031,8 @@ const PROPERTY_ORDER: [Property; 19] = [
     Property::EffectRadius,
     Property::EffectIntensity,
     Property::EffectOffset,
+    Property::EffectProgress,
+    Property::EffectSoftness,
 ];
 
 /// Ordinary channels can have derived drivers without explicit tracks (camera
@@ -2044,14 +2042,9 @@ fn evaluation_property_channels(
     object_index: u32,
     property: Property,
 ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
-    let attachments = matches!(
-        property,
-        Property::EffectColor
-            | Property::EffectRadius
-            | Property::EffectIntensity
-            | Property::EffectOffset
-    )
-    .then(|| compiled.channels_for_object_property(object_index, property));
+    let attachments = property
+        .is_effect()
+        .then(|| compiled.channels_for_object_property(object_index, property));
     std::iter::once(CompiledChannelKey::new(object_index, property))
         .chain(attachments.into_iter().flatten())
 }
@@ -2495,13 +2488,7 @@ fn apply_group_to_row(
     base_style: Style,
     path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
 ) -> bool {
-    if matches!(
-        group.channel.property,
-        Property::EffectColor
-            | Property::EffectRadius
-            | Property::EffectIntensity
-            | Property::EffectOffset
-    ) {
+    if group.channel.property.is_effect() {
         let Some(attachment) = group.channel.attachment() else {
             return false;
         };
@@ -2766,6 +2753,8 @@ fn apply_group_to_row(
             | Property::EffectRadius
             | Property::EffectIntensity
             | Property::EffectOffset
+            | Property::EffectProgress
+            | Property::EffectSoftness
             | Property::Presence
             | Property::ZIndex
             | Property::Transform => None,

@@ -93,7 +93,7 @@ pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{
         Blur, EffectDefinition, EffectOffset, EffectParameterError, EffectRadius, EffectUpdate,
-        Glow, GlowSource, Pixels, Shadow,
+        Glow, GlowSource, NoiseDissolve, NoiseDissolveError, Pixels, Shadow,
     };
 }
 mod drawing;

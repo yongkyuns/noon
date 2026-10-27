@@ -417,6 +417,11 @@ impl SceneInstance {
             .as_ref()
             .and_then(|stack| stack.get(base.attachment))
             .unwrap_or(base);
+        effective.definition = base
+            .definition
+            .discrete_parameters()
+            .apply_to(effective.definition)
+            .expect("validated surviving schema");
         // Persistent edits own only the authored parameters they change. Preserve
         // another parameter's effective driver, including an input-owned pulse.
         for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
@@ -433,12 +438,7 @@ impl SceneInstance {
                 }
             }
         }
-        for property in [
-            Property::EffectColor,
-            Property::EffectRadius,
-            Property::EffectIntensity,
-            Property::EffectOffset,
-        ] {
+        for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
             let channel = noon_compile::CompiledChannelKey::effect(
                 object_index as u32,
                 property,

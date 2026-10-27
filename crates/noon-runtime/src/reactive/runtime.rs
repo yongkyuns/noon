@@ -602,6 +602,8 @@ const fn property_slot(property: Property) -> u8 {
         Property::EffectRadius => 16,
         Property::EffectIntensity => 17,
         Property::EffectOffset => 18,
+        Property::EffectProgress => 19,
+        Property::EffectSoftness => 20,
     }
 }
 

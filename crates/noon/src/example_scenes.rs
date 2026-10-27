@@ -51,6 +51,7 @@ pub mod mixed_scalar_composition;
 pub mod moving_around;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod moving_zoomed_scene_around;
+pub mod noise_dissolve;
 pub mod noise_paint;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;

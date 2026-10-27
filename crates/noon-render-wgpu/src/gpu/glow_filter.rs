@@ -188,6 +188,7 @@ impl EffectCaptureTile {
                 world_view_height: parameters.world_view_height,
                 scope_opacity: parameters.scope_opacity,
                 scratch_budget_bytes: memory_budget_bytes,
+                source_bounds: None,
             },
             maximum_texture_dimension,
             memory_budget_bytes,
@@ -375,6 +376,7 @@ impl EffectCaptureParameters {
         let sigma = self
             .definition
             .radius()
+            .unwrap_or(noon_core::EffectRadius::Pixels(0.0))
             .to_output_pixels(self.output_height, self.world_view_height)
             .map_err(EffectPrepareError::Parameter)?;
         if sigma > MAX_SIGMA {
@@ -403,6 +405,7 @@ impl EffectCaptureParameters {
     }
     pub(crate) fn filter_bytes_per_pixel(self) -> u64 {
         match self.definition {
+            noon_core::EffectDefinition::NoiseDissolve(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
             noon_core::EffectDefinition::Blur(_) => 28,
             noon_core::EffectDefinition::Shadow(_) => 32,

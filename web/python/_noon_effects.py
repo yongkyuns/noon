@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -43,6 +43,9 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     pixels = isinstance(radius, Pixels)
     radius = None if radius is None else _number(radius.value if pixels else radius, "radius")
     intensity = None if intensity is None else _number(intensity, "intensity")
+    progress = None if progress is None else _number(progress, "progress")
+    softness = None if softness is None else _number(softness, "softness")
+    seed = None if seed is None else _number(seed, "seed")
     if source is not None and not isinstance(source, str):
         raise TypeError("glow source must be a string")
     try:
@@ -55,7 +58,7 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     packed_offset = [] if raw_offset is None else [_number(v, "offset coordinate") for v in raw_offset]
     if raw_offset is not None and len(packed_offset) != 2:
         raise ValueError("effect offset requires two coordinates")
-    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels)
+    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels, progress, softness, seed)
     try:
         yield request
     finally:
@@ -182,6 +185,45 @@ class Shadow:
         return Pixels(value) if bool(self._definition.offsetPixels) else value
 
 
+class NoiseDissolve:
+    """Immutable seeded alpha mask over normalized source bounds.
+
+    Progress zero preserves the input; one is transparent. Softness is the
+    threshold feather width. Rust validates values and owns parameter animation.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, seed=None, softness=None, progress=None):
+        with _update(seed=seed, softness=softness, progress=progress) as update:
+            from js import noonNoiseDissolve
+            self._definition = engine_call(noonNoiseDissolve, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def progress(self):
+        return float(self._definition.progress)
+
+    @property
+    def softness(self):
+        return float(self._definition.softness)
+
+    @property
+    def seed(self):
+        return int(self._definition.seed)
+
+
 class GlowPulse:
     """Temporarily animate one leaf's canonical glow intensity in shared Rust.
 
@@ -233,7 +275,7 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur, "shadow": Shadow}[str(definition.kind)]._from_definition(definition)
+        return {"glow": Glow, "blur": Blur, "shadow": Shadow, "noise_dissolve": NoiseDissolve}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -289,8 +331,8 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, Shadow)):
-        raise TypeError("this effect profile supports Glow, Blur and Shadow definitions")
+    if not isinstance(definition, (Glow, Blur, Shadow, NoiseDissolve)):
+        raise TypeError("this effect profile supports Glow, Blur, Shadow and NoiseDissolve definitions")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)
@@ -305,9 +347,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

@@ -197,8 +197,8 @@ mod tests {
             assert_eq!(frame.objects.len(), 3);
             let stack = frame.objects[2].effects.as_ref().unwrap();
             assert_eq!(stack.len(), 4);
-            assert_eq!(stack.definitions()[0].radius(), Pixels(first).into());
-            assert_eq!(stack.definitions()[3].radius(), Pixels(last).into());
+            assert_eq!(stack.definitions()[0].radius(), Some(Pixels(first).into()));
+            assert_eq!(stack.definitions()[3].radius(), Some(Pixels(last).into()));
             assert_eq!(
                 stack.definitions().iter().all(|effect| effect.is_neutral()),
                 neutral

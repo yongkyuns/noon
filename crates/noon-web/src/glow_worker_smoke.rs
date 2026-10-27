@@ -424,7 +424,7 @@ fn fixture() -> Fixture {
             frames.push(Sample {
                 delta,
                 references,
-                sigma: effect.radius().value(),
+                sigma: effect.as_glow().unwrap().radius().value(),
                 intensity: effect.as_glow().unwrap().intensity(),
                 tint: [color.red, color.green, color.blue, color.alpha],
                 opacity: frame.objects[1].style.opacity,

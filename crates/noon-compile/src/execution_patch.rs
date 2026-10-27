@@ -255,7 +255,9 @@ impl CompiledScene {
 
 /// Value updates must not rebind compiled track endpoints to another generation
 /// or silently reinterpret radius/source channels. Definition fields are validated
-/// by Glow's typed construction before this boundary.
+/// by each effect's typed construction before this boundary. Discrete fields
+/// without a driver may have a checked persistent-update policy distinct from
+/// interpolation (for example, a dissolve seed).
 pub(crate) fn validate_effect_values(
     object: ObjectId,
     previous: Option<&crate::CompiledEffectStack>,
@@ -266,7 +268,7 @@ pub(crate) fn validate_effect_values(
         return Err(crate::CompilePatchError::InvalidEffectUpdate { object });
     }
     for (old, new) in previous.iter().zip(next.iter()) {
-        noon_core::EffectValue::validate_effect_transition(old.definition, new.definition)
+        noon_core::EffectValue::validate_effect_value_update(old.definition, new.definition)
             .map_err(|_| crate::CompilePatchError::InvalidEffectUpdate { object })?;
     }
     Ok(())
