@@ -589,7 +589,7 @@ jobs:
           path: browser-backend-parity-report
           if-no-files-found: error
           retention-days: 3
-      - name: Preserve ordered and composed effect pixel evidence
+      - name: Preserve finite effect pixel evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -597,5 +597,8 @@ jobs:
           path: |
             browser-smoke-artifacts/ordered-effects
             browser-smoke-artifacts/composed-effects
+            browser-smoke-artifacts/scope-opacity
+            browser-smoke-artifacts/dissolve
+            browser-smoke-artifacts/noise-dissolve
           if-no-files-found: warn
           retention-days: 3

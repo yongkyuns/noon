@@ -1239,6 +1239,19 @@ Rust Scene/LiveSession capture regression separately checks leaf and family
 Dissolve under an ancestor silhouette, including exact empty output and rewind.
 These native checks do not establish browser or physical-device pacing support.
 
+The paired `scope_opacity` creator programme additionally animates child and
+ancestor opacity, including a returning rate, then dissolves and restores the
+child beneath an ancestor silhouette. `scope-opacity-qualification.mjs` samples
+50 authored times through the normal direct Rust/WASM and Python-worker paths
+on WebGPU and WebGL2. Literal rectangles, independently evaluated seeded fields
+and full two-dimensional Gaussian composition define its whole-frame reference,
+with a predeclared two-byte bound. Empty endpoints are exact; returning samples
+and completed restoration compare byte-for-byte with their earlier same-backend
+frames. The same Rust programme runs through native fixed-time export. The
+composed, scope-opacity, Dissolve and named NoiseDissolve browser scripts retain
+raw images and reports in CI. These are correctness and reuse checks; the
+physical-device frame-pacing gate remains separate.
+
 ## RGBA Gaussian raster prerequisite
 
 The reusable renderer's `GaussianBlurFilter` consumes an encoded-premultiplied
