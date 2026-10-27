@@ -150,6 +150,39 @@ for path, before, after in normalizations:
     git("add", path, cwd=work)
     decisions.append({"file":path, "auto_merged_stale_field":before,
                       "modern_effect_field":after})
+# Prepared history must retain the modern SemanticPaint Arc and effect field,
+# not the obsolete gradient-only/glow fields. Keep the existing two assertions-
+# rich gradient materialization/rewind regressions and their Arc identity check.
+storage = work / "crates/noon-runtime/src/replay/prefix/storage.rs"
+old_storage = storage.read_text()
+assert old_storage.count("fill_gradient") == 10
+assert old_storage.count("glow: None,") == 1
+assert old_storage.count("Option<Arc<LinearGradient>>") == 1
+new_storage = old_storage.replace("fill_gradient", "fill_paint").replace(
+    "glow: None,", "effect: None,"
+)
+fixes = [
+    ("Color, GeometryRef, GradientStop, LinearGradient, ObjectId, Style, Transform2D,",
+     "Color, GeometryRef, GradientStop, LinearGradient, ObjectId, SemanticPaint, Style, Transform2D,"),
+    ("fn gradient(start: Color, end: Color) -> Arc<LinearGradient> {",
+     "fn gradient(start: Color, end: Color) -> Arc<SemanticPaint> {"),
+    ("        Arc::new(\n            LinearGradient::new(",
+     "        Arc::new(SemanticPaint::LinearGradient(Arc::new(\n            LinearGradient::new("),
+    ("            .unwrap(),\n        )\n    }\n\n    fn object(",
+     "            .unwrap(),\n        )))\n    }\n\n    fn object("),
+    ("paint: Option<Arc<LinearGradient>>", "paint: Option<Arc<SemanticPaint>>"),
+]
+for old, new in fixes:
+    assert new_storage.count(old) == 1, ("unexpected stored paint source", old)
+    new_storage = new_storage.replace(old, new)
+assert new_storage.count("fill_gradient") == 0
+assert new_storage.count("fn prefix_storage_") == old_storage.count("fn prefix_storage_") == 2
+storage.write_text(new_storage)
+git("add", str(storage.relative_to(work)), cwd=work)
+decisions.append({"file":str(storage.relative_to(work)),
+                  "migration":"preserve saved SemanticPaint, effect admission, two gradient regression cases",
+                  "before_sha256":hashlib.sha256(old_storage.encode()).hexdigest(),
+                  "after_sha256":hashlib.sha256(new_storage.encode()).hexdigest()})
 assert not output("ls-files", "-u", cwd=work)
 git("diff", "--cached", "--check", cwd=work)
 resolved_tree = output("write-tree", cwd=work)
