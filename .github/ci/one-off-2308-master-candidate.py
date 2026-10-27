@@ -141,6 +141,12 @@ normalizations = [
      "|| object.glow.is_some()", "|| object.effect.is_some()"),
     ("crates/noon-compile/src/transaction_preflight.rs",
      "glow: row.glow.clone(),", "effect: row.effect.clone(),"),
+    # Compiled ExecutionPatch::SetStyle was generalized to SemanticPaint.
+    # Both old tests deliberately use None; no assertion or fixture intent changes.
+    ("crates/noon-runtime/tests/prefix_interactions.rs",
+     "fill_gradient: None,", "fill_paint: None,"),
+    ("crates/noon-runtime/tests/prefix_bindings.rs",
+     "fill_gradient: None,", "fill_paint: None,"),
 ]
 for path, before, after in normalizations:
     file = work / path
