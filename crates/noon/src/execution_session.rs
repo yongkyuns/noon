@@ -1495,6 +1495,7 @@ impl ExecutionSession {
 
     fn sync_spatial_index(&mut self) {
         let changes = self.runtime.take_spatial_changes();
+        let nonspatial = self.runtime.take_nonspatial_changes();
         let family_animation = !self.runtime.active_family_animation_indices().is_empty();
         // Retained glyph/member animation can alter presentation beyond the
         // ordinary row's indexed envelope. Its activity/retirement requires a
@@ -1508,6 +1509,7 @@ impl ExecutionSession {
         self.pointer_frame_had_family_animation = family_animation;
         if changes.is_empty() {
             self.last_spatial_update = SpatialIndexUpdateStats::default();
+            self.record_nonspatial_pointer_damage(&nonspatial, &changes);
             return;
         }
         if changes.is_all() {
@@ -1583,6 +1585,45 @@ impl ExecutionSession {
             }
         }
         self.last_spatial_update = stats;
+        self.record_nonspatial_pointer_damage(&nonspatial, &changes);
+    }
+
+    fn record_nonspatial_pointer_damage(
+        &mut self,
+        nonspatial: &FrameChanges,
+        spatial: &FrameChanges,
+    ) {
+        if nonspatial.is_all() {
+            self.pointer_frame_damage.invalidate();
+            return;
+        }
+        for &index in nonspatial.object_indices() {
+            // Spatial changes already journaled this row's previous and new
+            // envelope; do not consume another history slot for the same write.
+            if spatial.is_all() || spatial.object_indices().binary_search(&index).is_ok() {
+                continue;
+            }
+            let Some(object) = self.runtime.frame().objects.get(index) else {
+                self.pointer_frame_damage.invalidate();
+                continue;
+            };
+            if Some(object.id) == self.camera_object {
+                self.pointer_frame_damage.invalidate();
+                continue;
+            }
+            // Paint and other appearance writes can change precise picking
+            // inside identical bounds. Reuse the existing indexed envelope
+            // without requiring a redundant spatial update or a scene scan.
+            let bounds = self
+                .slots
+                .slot_for_object(object.id)
+                .and_then(|slot| self.spatial_index.bounds_for_slot(slot));
+            if let Some(bounds) = bounds {
+                self.pointer_frame_damage.record(bounds, bounds);
+            } else {
+                self.pointer_frame_damage.invalidate();
+            }
+        }
     }
 
     /// Read runtime-owned presentation dirtiness and timeline cadence without

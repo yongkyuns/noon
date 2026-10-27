@@ -336,6 +336,50 @@ fn fill_change_is_damage_even_when_bounds_and_transform_are_identical() {
 }
 
 #[test]
+fn nonspatial_fill_damage_survives_renderer_dirtiness_consumption() {
+    let mut fixture = tracked_fixture(
+        vec![button()],
+        0,
+        SemanticObjectTrackProperty::Fill,
+        SemanticObjectTrackValues::Color {
+            from: Some(Color::WHITE),
+            to: Some(Color::rgba(1.0, 1.0, 1.0, 0.0)),
+        },
+        RateFunction::Linear,
+    );
+    let session = &mut fixture.session;
+    let frame = capture(session);
+    session.advance_to(1.0).unwrap();
+    // Renderer publication can consume its own dirty list before an input
+    // arrives. That must not erase the independent picking-damage journal.
+    assert!(session.take_frame_changes().has_stable_changes());
+    assert_current_position_rejected(&frame, session, CENTER);
+}
+
+#[test]
+fn distant_fill_change_keeps_collected_point_compatible_without_spatial_reindex() {
+    let mut fixture = tracked_fixture(
+        vec![button(), circle(8.0)],
+        1,
+        SemanticObjectTrackProperty::Fill,
+        SemanticObjectTrackValues::Color {
+            from: Some(Color::WHITE),
+            to: Some(Color::rgba(1.0, 1.0, 1.0, 0.0)),
+        },
+        RateFunction::Linear,
+    );
+    let session = &mut fixture.session;
+    let frame = capture(session);
+    session.advance_to(1.0).unwrap();
+    let current_view = view(session);
+    frame
+        .validate_position(session, current_view, CENTER)
+        .unwrap();
+    assert!(frame.input_token_at(session, current_view, CENTER).is_ok());
+    assert_eq!(session.last_spatial_update_stats().leaves_upserted, 0);
+}
+
+#[test]
 fn reveal_change_is_damage_even_when_bounds_and_transform_are_identical() {
     let mut fixture = tracked_fixture(
         vec![button()],
