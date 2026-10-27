@@ -6,6 +6,7 @@ on:
     paths:
       - .github/ci/one-off-2308-reconcile.py
       - .github/ci/one-off-2308-gradient.patch
+      - .github/ci/one-off-2308-pointer.patch
       - .github/workflows/one-off-2308-reconcile.yml
 
 permissions:
@@ -22,6 +23,9 @@ jobs:
       EXPECTED_TREE: 5c5ac2f6a5eed63d62ca926a5585de3a7bc2a80e
       CORRECTED_TREE: 698155b1065bd9bcaf6ae0e7f08d618d70aba735
       GRADIENT_PATCH_SHA256: 1b5cb7e5bfd8538b524338747313f0c9307fbfeb550d083ded1d63e78cb4295e
+      POINTER_BASE_TREE: 7e013a89ae337057da48271673c290d2409859dc
+      POINTER_TREE: 8fa147e38714f16776330dde85abfb29b6feec0f
+      POINTER_PATCH_SHA256: 3c8e958b916c136bae146d2382fcf26e67569574d35c1804042374011c526226
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -158,6 +162,36 @@ jobs:
       - name: Install native audio dependencies
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
         run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Authenticate failed source tree and apply pointer-owner repair
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          cargo fmt --all 2>&1 | tee "$EVIDENCE/pointer-baseline-format.log"
+          git add --all
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          baseline = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert baseline == os.environ['POINTER_BASE_TREE'], baseline
+          patch = Path(os.environ['GITHUB_WORKSPACE']) / '.github/ci/one-off-2308-pointer.patch'
+          payload = patch.read_bytes()
+          digest = hashlib.sha256(payload).hexdigest()
+          assert digest == os.environ['POINTER_PATCH_SHA256'], digest
+          subprocess.run(['git', 'apply', '--check', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check', os.environ['PIN_MASTER']], check=True)
+          tree = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert tree == os.environ['POINTER_TREE'], tree
+          manifest = json.loads((out / 'manifest.json').read_text())
+          manifest['pointer_baseline_tree'] = baseline
+          manifest['pointer_corrected_unformatted_tree'] = tree
+          manifest['pointer_patch_sha256'] = digest
+          manifest['pointer_repair_scope'] = 'Reuse existing owner adapters and source-free presentation seam; preserve 78 existing tests and add missing-owner receipt regression'
+          (out / 'pointer-repair.patch').write_bytes(payload)
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print('Authenticated pointer-owner candidate tree:', tree)
+          PY
       - name: Format isolated candidate and freeze its actual tested source
         id: formatted
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
@@ -165,9 +199,9 @@ jobs:
           set -euo pipefail
           cargo fmt --all 2>&1 | tee "$EVIDENCE/format.log"
           git add --all
-          git diff --cached --binary "$CORRECTED_TREE" > "$EVIDENCE/formatter.patch"
+          git diff --cached --binary "$POINTER_TREE" > "$EVIDENCE/formatter.patch"
           git diff --cached --check "$PIN_MASTER"
-          git commit -m 'Reconcile prepared playback and preserve gradient frame storage for isolated qualification'
+          git commit -m 'Reconcile prepared playback gradient storage and pointer ownership for isolated qualification'
           python3 - <<'PY'
           import hashlib, json, os, subprocess
           from pathlib import Path
@@ -234,6 +268,19 @@ jobs:
               (out / 'gradient-outcomes.json').write_text(json.dumps(outcomes, indent=2) + '\n')
           subprocess.run(['git', 'diff', '--exit-code'], check=True)
           PY
+      - name: Qualify source-free history and paired pointer presentation
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/pointer-tests.exit"; exit "$code"' EXIT
+          cargo test --locked -p noon --lib historical_pointer_identity_ 2>&1 | tee "$EVIDENCE/pointer-history-default.log"
+          cargo test --locked -p noon --features prepared-prefix --lib historical_pointer_identity_ 2>&1 | tee "$EVIDENCE/pointer-history-prepared.log"
+          cargo test --locked -p noon-web --all-features --lib direct_pointer_presentation::tests 2>&1 | tee "$EVIDENCE/pointer-direct.log"
+          cargo test --locked -p noon-web --all-features --lib semantic_execution_player::pointer_input::presentation_tests 2>&1 | tee "$EVIDENCE/pointer-worker.log"
+          grep -F 'pointer_receipt_lifecycle_requires_the_existing_semantic_owner ... ok' "$EVIDENCE/pointer-worker.log"
       - name: Run canonical fast gate without changing assertions
         if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
@@ -287,7 +334,7 @@ jobs:
           manifest = json.loads((out / 'manifest.json').read_text())
           assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip() == manifest['tested_candidate']['tree']
           manifest['command_exit_codes'] = {name: int(path.read_text()) if path.exists() else None
-              for name in ('gradient', 'fast', 'prepared-input', 'wasm', 'web-preflight')
+              for name in ('gradient', 'pointer-tests', 'fast', 'prepared-input', 'wasm', 'web-preflight')
               for path in [out / (name + '.exit')]}
           manifest['tracked_source_unchanged'] = True
           (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
