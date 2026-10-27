@@ -1,6 +1,36 @@
-//! Explicit storage maintenance for append-only historical object slots.
-use super::CompiledScene;
-use crate::CompiledObject;
+//! Explicit storage accounting and maintenance for historical execution.
+use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
+use crate::{CompiledChannelKey, CompiledObject};
+use noon_core::TrackId;
+
+/// The three Vec backing stores only. Inline headers are charged by the outer
+/// revision index; indirect/shared allocations require separate accounting.
+fn revision_payload_bytes(rows: usize, channels: usize, tracks: usize) -> Option<usize> {
+    rows.checked_mul(std::mem::size_of::<SavedRow>())?
+        .checked_add(channels.checked_mul(std::mem::size_of::<CompiledChannelKey>())?)?
+        .checked_add(tracks.checked_mul(std::mem::size_of::<(TrackId, Option<CompiledTrack>)>())?)
+}
+
+impl CompiledReplayRevision {
+    /// Required row/channel/track backing bytes for a clone or forward revision.
+    /// These operations preserve occupied lengths, not source spare capacity.
+    /// This is a pre-allocation request, not a bound on allocator over-allocation.
+    pub fn prefix_clone_payload_bytes(&self) -> Option<usize> {
+        revision_payload_bytes(self.rows.len(), self.channels.len(), self.tracks.len())
+    }
+
+    /// Reported row/channel/track Vec capacity times the target's inline sizes.
+    /// Revision exchange only swaps elements; it cannot resize these buffers.
+    /// Excludes the outer index, object/track storage in the active projection,
+    /// indirect Box/Arc payloads, allocator overhead and temporary allocations.
+    pub fn prefix_payload_bytes(&self) -> Option<usize> {
+        revision_payload_bytes(
+            self.rows.capacity(),
+            self.channels.capacity(),
+            self.tracks.capacity(),
+        )
+    }
+}
 
 impl CompiledScene {
     /// Named O(existing storage) capacity barrier. Never called implicitly from
@@ -33,5 +63,62 @@ impl CompiledScene {
             self.family_ranks.push(None);
             self.painter_ranks.push(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noon_core::Property;
+
+    #[test]
+    fn revision_payload_accounting_distinguishes_clone_lengths_from_capacity() {
+        let mut revision = CompiledReplayRevision {
+            rows: Vec::with_capacity(3),
+            channels: Vec::with_capacity(4),
+            tracks: Vec::with_capacity(5),
+            camera_motion_payloads: 0,
+            path_motion_commands: 0,
+        };
+        assert_eq!(revision.prefix_clone_payload_bytes(), Some(0));
+        let reserved = revision_payload_bytes(
+            revision.rows.capacity(),
+            revision.channels.capacity(),
+            revision.tracks.capacity(),
+        )
+        .unwrap();
+        assert!(reserved > 0);
+        assert_eq!(revision.prefix_payload_bytes(), Some(reserved));
+        revision.rows.push(SavedRow {
+            index: 0,
+            object: None,
+            order: Some(None),
+        });
+        revision
+            .channels
+            .push(CompiledChannelKey::new(0, Property::Opacity));
+        assert_eq!(
+            revision.prefix_clone_payload_bytes(),
+            revision_payload_bytes(1, 1, 0)
+        );
+        assert_eq!(revision.prefix_payload_bytes(), Some(reserved));
+        // An absent saved object still occupies its entire inline row slot.
+        assert!(revision.prefix_clone_payload_bytes().unwrap() > 0);
+    }
+
+    #[test]
+    fn revision_payload_accounting_rejects_multiplication_and_addition_overflow() {
+        assert_eq!(revision_payload_bytes(0, 0, 0), Some(0));
+        assert_eq!(revision_payload_bytes(usize::MAX, 0, 0), None);
+        assert_eq!(revision_payload_bytes(0, usize::MAX, 0), None);
+        assert_eq!(revision_payload_bytes(0, 0, usize::MAX), None);
+        assert_eq!(
+            revision_payload_bytes(
+                usize::MAX / std::mem::size_of::<SavedRow>(),
+                usize::MAX / std::mem::size_of::<CompiledChannelKey>(),
+                0,
+            ),
+            None
+        );
     }
 }
