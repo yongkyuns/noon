@@ -24,9 +24,13 @@ fn field(uv: vec2<f32>) -> f32 {
                mix(lattice(base+vec2<i32>(0,1)), lattice(base+vec2<i32>(1,1)), w.x), w.y);
 }
 // WGSL integer division truncates toward zero; source padding needs floor.
+fn grid_floor_axis(value: i32, divisor: i32) -> i32 {
+    var quotient = value/divisor;
+    if value%divisor < 0 { quotient = quotient-1; }
+    return quotient;
+}
 fn grid_floor(value: vec2<i32>, divisor: i32) -> vec2<i32> {
-    let d = vec2<i32>(divisor);
-    return value/d - select(vec2<i32>(0),vec2<i32>(1),value%d < vec2<i32>(0));
+    return vec2<i32>(grid_floor_axis(value.x,divisor),grid_floor_axis(value.y,divisor));
 }
 @fragment fn fs_sample(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     if mask.control.w == 1.0 {

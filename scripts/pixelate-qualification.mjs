@@ -33,7 +33,7 @@ function reference(image,time) {
 const times=[0.25,0.5,0.6,0.625,0.75,0.9,1,1.1,1.25,1.375,1.4,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5];
 await qualifyPairedAuthoring({
   cases:times.map(sampleTime=>({id:`pixelate-${sampleTime}`,file:"pixelate.py",factory:"createDirectPixelateSmokeRenderer",duration:3.5,sampleTime,playback:"live",canvasSize:[640,360],
-    directHeldSampleTime:sampleTime===3.5?undefined:sampleTime>=0.5&&sampleTime<1.5?0.5:Math.floor(sampleTime*2)/2,
+    directHeldSampleTime:sampleTime===3.5||(sampleTime>=0.5&&sampleTime<1.5)?undefined:Math.floor(sampleTime*2)/2,
     boundaries:[0.5,1.5,2,2.5,3],stopAtSourceCompletion:sampleTime===3.5})),
   artifactDirectory:"browser-smoke-artifacts/pixelate",prepareContext:disableAuthoringJspi,
   qualifyPixels({fixture,rust,python}) {return {rust:reference(rust,fixture.sampleTime),python:reference(python,fixture.sampleTime)};},
