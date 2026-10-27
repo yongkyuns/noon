@@ -396,21 +396,39 @@ fn family_effect_target_edit_rejects_atomically_instead_of_being_silently_ignore
     let before = session.frame().clone();
     let revision = scene.revision();
     let context = session.publication_context();
-    let result = scene.live(&mut session).declare_and_activate_composition(
-        &AnimationCompositionRequest::FamilyMethodTargetTo {
+    for request in [
+        AnimationCompositionRequest::FamilyMethodTargetTo {
             source: &family,
             target_state: target.root(),
             options: AnimationOptions::new(),
         },
-        AnimationOptions::new(),
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("composed-scope animation lowering"));
-    assert_eq!(session.frame(), &before);
-    assert_eq!(scene.revision(), revision);
-    assert_eq!(session.publication_context(), context);
+        AnimationCompositionRequest::FamilyTransformTo {
+            source: &family,
+            target_state: target.root(),
+            options: AnimationOptions::new(),
+        },
+        AnimationCompositionRequest::MatchingFamilyTransformTo {
+            source: &family,
+            target_state: target.root(),
+            options: AnimationOptions::new(),
+        },
+        AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+            source: &family,
+            target_state: target.root(),
+            options: AnimationOptions::new(),
+        },
+    ] {
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("composed-scope animation lowering"));
+        assert_eq!(session.frame(), &before);
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(session.publication_context(), context);
+    }
 }
 
 #[test]

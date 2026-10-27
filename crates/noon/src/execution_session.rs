@@ -2389,6 +2389,7 @@ impl ExecutionSession {
                 target_state,
                 options,
             } => {
+                family_effect_target::validate(store, *source, *target_state, false)?;
                 if !self.callback_schedule.is_empty() {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "matching family Transform does not yet support required host callbacks"
