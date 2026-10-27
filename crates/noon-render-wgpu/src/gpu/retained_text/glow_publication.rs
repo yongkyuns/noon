@@ -104,10 +104,20 @@ impl RetainedEffectPublication {
         index: usize,
         view: (Camera2D, [u32; 2]),
     ) -> Result<bool, EffectPrepareError> {
-        if !self.composed.scopes.contains_key(&index) {
+        if !self.composed.scopes.contains_key(&index)
+            && frame.objects[index]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.visibility())
+                .is_none()
+        {
             return Ok(false);
         }
-        for parent in self.composed.ancestors(index) {
+        for parent in self
+            .composed
+            .dependents(index)
+            .chain(self.composed.ancestors(index))
+        {
             if Self::has_original_mask(frame, parent) && Self::active_source(frame, parent, view)? {
                 return Ok(true);
             }
@@ -700,6 +710,11 @@ impl GpuRenderer {
                         request,
                         observation,
                         demand,
+                        frame.objects[index]
+                            .effects
+                            .as_ref()
+                            .and_then(|stack| stack.visibility())
+                            .and_then(|effect| effect.definition.as_noise_dissolve()),
                     )?
                 } else {
                     self.prepare_draw_source_effect(
@@ -718,6 +733,11 @@ impl GpuRenderer {
                             .map(|scope| scope.source.clone()),
                         self.retained_effects.capture_dirty.contains(&index),
                         demand,
+                        frame.objects[index]
+                            .effects
+                            .as_ref()
+                            .and_then(|stack| stack.visibility())
+                            .and_then(|effect| effect.definition.as_noise_dissolve()),
                     )?
                 };
                 stats.accumulate(value);

@@ -37,9 +37,9 @@ fn mask(session: &ExecutionSession, owner: SemanticNodeId) -> NoiseDissolve {
         .effects
         .as_ref()
         .unwrap()
-        .definitions()
-        .last()
-        .unwrap()
+        .visibility()
+        .expect("shared lowering preserves the private Visibility role")
+        .definition
         .as_noise_dissolve()
         .unwrap()
 }

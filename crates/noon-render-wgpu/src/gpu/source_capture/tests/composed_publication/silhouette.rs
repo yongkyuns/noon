@@ -19,32 +19,87 @@ fn glow(source: GlowSource, intensity: f64) -> Arc<CompiledEffectStack> {
     )
 }
 
+fn mask_layers(images: &[Vec<u8>; 2], silhouette: bool, large_first: bool) -> [Vec<u8>; 3] {
+    let mut layers = reference_layers(images, silhouette);
+    if large_first {
+        layers[0].fill(0);
+        for y in 15..45 {
+            for x in 15..55 {
+                // A binary-exact quarter-scale image covers 40x30 pixels.
+                // Resolve nearest sampling using rational pixel centers.
+                let tx = (2 * (x - 15) + 1) * IMAGE_SIZE[0] / 80;
+                let ty = (2 * (y - 15) + 1) * IMAGE_SIZE[1] / 60;
+                let pixel = &images[0][(ty * IMAGE_SIZE[0] + tx) * 4..][..4];
+                let alpha = f64::from(pixel[3]) / 255.0 * if silhouette { 0.25 } else { 0.125 };
+                let at = (y * SIZE[0] as usize + x) * 4;
+                over(
+                    &mut layers[0][at..at + 4],
+                    [
+                        f64::from(pixel[0]) / 255.0 * alpha,
+                        f64::from(pixel[1]) / 255.0 * alpha,
+                        f64::from(pixel[2]) / 255.0 * alpha,
+                        alpha,
+                    ],
+                );
+            }
+        }
+    }
+    layers
+}
+
 fn reference(
     images: &[Vec<u8>; 2],
     silhouette: bool,
     intensity: f64,
     child_opacity: f64,
     child_blur: bool,
+    child_mask: Option<(noon_core::NoiseDissolve, bool)>,
+    large_first: bool,
 ) -> Vec<u8> {
+    let apply_mask = |pixels: Vec<u8>, original: bool| {
+        if let Some((definition, _)) = child_mask.filter(|(_, private)| !original || *private) {
+            crate::gpu::dissolve_filter::tests::reference(
+                &pixels,
+                crate::DissolveParameters {
+                    definition,
+                    // Quarter-scale image: [15,15]..[55,45]. Six pixels of
+                    // Blur support plus one coverage fringe give this exact,
+                    // even-aligned source domain; no GPU tile data is an input.
+                    source_bounds: crate::EffectPixelBounds {
+                        min: [8.0, 8.0],
+                        max: [62.0, 52.0],
+                    },
+                    scope_opacity: 1.0,
+                    scratch_budget_bytes: u64::MAX,
+                },
+                SIZE,
+            )
+        } else {
+            pixels
+        }
+    };
     let apply_opacity = |pixels: Vec<u8>| {
         pixels
             .into_iter()
             .map(|value| (f64::from(value) * child_opacity).round() as u8)
             .collect::<Vec<_>>()
     };
-    let mut layers = reference_layers(images, false);
+    let mut layers = mask_layers(images, false, large_first);
     layers[0] = blur_with_opacity(&layers[0], 1.0);
     let inner = nested::source_over_layers(&layers[..2]);
-    let inner = apply_opacity(if child_blur {
-        blur_with_opacity(&inner, 1.0)
-    } else {
-        inner
-    });
+    let inner = apply_opacity(apply_mask(
+        if child_blur {
+            blur_with_opacity(&inner, 1.0)
+        } else {
+            inner
+        },
+        false,
+    ));
     let source = nested::source_over_layers(&[inner, layers[2].clone()]);
     let mask = if silhouette {
-        let original = reference_layers(images, true);
+        let original = mask_layers(images, true, large_first);
         nested::source_over_layers(&[
-            apply_opacity(nested::source_over_layers(&original[..2])),
+            apply_opacity(apply_mask(nested::source_over_layers(&original[..2]), true)),
             original[2].clone(),
         ])
     } else {
@@ -113,7 +168,10 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     let mut warm_bytes = 0;
-    for step in 0..14 {
+    let mut mask_warm_bytes = 0;
+    let mut partial_private = None;
+    let mut empty_private = None;
+    for step in 0..24 {
         let silhouette = step > 0;
         let intensity = if step == 10 || step == 11 {
             0.0
@@ -129,7 +187,7 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
             3 | 5 => 0.5,
             4 => 0.0,
             8..=10 => 0.25,
-            11..=13 => 0.75,
+            11..=23 => 0.75,
             _ => 1.0,
         };
         if step >= 3 {
@@ -155,6 +213,70 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
                 .apply_execution_patch(&ExecutionPatch::SetEffectStack {
                     object: ObjectId::new(70),
                     expected: vec![ATTACHMENT].into_boxed_slice(),
+                    effects: None,
+                })
+                .unwrap();
+        }
+        if step == 14 {
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetTransform {
+                    object: ObjectId::new(1),
+                    transform: Transform2D {
+                        translation: Vec2::new(-0.5, 0.0),
+                        scale: Vec2::new(0.25, 0.25),
+                        ..Transform2D::IDENTITY
+                    },
+                })
+                .unwrap();
+        }
+        let child_mask = match step {
+            14..=19 | 22..=23 => {
+                let progress = match step {
+                    14 | 19 => 0.0,
+                    15 | 18 | 22 => 0.5,
+                    17 => 0.25,
+                    _ => 1.0,
+                };
+                Some((
+                    noon_core::NoiseDissolve::new(7, 0.2)
+                        .unwrap()
+                        .with_progress(progress)
+                        .unwrap(),
+                    step < 20,
+                ))
+            }
+            _ => None,
+        };
+        if let Some((definition, private)) = child_mask {
+            let attachment = SemanticNodeId::new(if private { 95 } else { 96 }, 1);
+            let stack = Arc::new(
+                CompiledEffectStack::new_with_visibility(
+                    [CompiledEffect {
+                        attachment,
+                        definition: definition.into(),
+                    }],
+                    private.then_some(attachment),
+                )
+                .unwrap(),
+            );
+            let patch = if step == 14 || step == 22 {
+                ExecutionPatch::SetEffectStack {
+                    object: ObjectId::new(70),
+                    expected: Box::new([]),
+                    effects: Some(stack),
+                }
+            } else {
+                ExecutionPatch::SetEffects {
+                    object: ObjectId::new(70),
+                    effects: stack,
+                }
+            };
+            runtime.apply_execution_patch(&patch).unwrap();
+        } else if step == 20 {
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                    object: ObjectId::new(70),
+                    expected: vec![SemanticNodeId::new(95, 1)].into_boxed_slice(),
                     effects: None,
                 })
                 .unwrap();
@@ -212,8 +334,21 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
         eprintln!("nested work step={step}: {work:?}");
         assert_eq!(
             work.source_passes,
-            [3, 4, 0, 2, 2, 4, 2, 0, 4, 0, 0, 1, 4, 0][step]
+            [3, 4, 0, 2, 2, 4, 2, 0, 4, 0, 0, 1, 4, 0, 5, 2, 2, 2, 2, 2, 0, 0, 2, 2][step]
         );
+        if step == 15 {
+            mask_warm_bytes = work.retained_texture_bytes;
+        }
+        if (16..=19).contains(&step) {
+            assert_eq!(work.texture_allocations, 0);
+            assert_eq!(work.retained_texture_bytes, mask_warm_bytes);
+        }
+        if step == 20 {
+            // Both pointwise destinations cover at least the literal 54x44
+            // source domain. Retiring the last effect releases both while
+            // the child's independent group-opacity capture stays active.
+            assert!(mask_warm_bytes - work.retained_texture_bytes >= 2 * 54 * 44 * 4);
+        }
         if step == 1 {
             warm_bytes = work.retained_texture_bytes;
         }
@@ -221,7 +356,7 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
             assert_eq!(work.texture_allocations, 0);
             assert_eq!(work.retained_texture_bytes, warm_bytes);
         }
-        if step == 7 || step == 13 {
+        if step == 7 || step == 13 || step == 21 {
             assert_eq!(
                 (
                     work.sources_prepared,
@@ -255,12 +390,31 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
             )
             .unwrap();
         queue.submit([encoder.finish()]);
-        let expected = reference(&images, silhouette, intensity, child_opacity, child_blur);
+        let expected = reference(
+            &images,
+            silhouette,
+            intensity,
+            child_opacity,
+            child_blur,
+            child_mask,
+            step >= 14,
+        );
         let witness = maximum_error(
             &expected,
-            &reference(&images, !silhouette, intensity, child_opacity, child_blur),
+            &reference(
+                &images,
+                !silhouette,
+                intensity,
+                child_opacity,
+                child_blur,
+                child_mask,
+                step >= 14,
+            ),
         );
-        if child_opacity == 0.0 || intensity == 0.0 {
+        if child_opacity == 0.0
+            || intensity == 0.0
+            || child_mask.is_some_and(|(mask, private)| private && mask.progress() == 1.0)
+        {
             assert_eq!(
                 witness, 0,
                 "zero contribution has identical rendered mask references"
@@ -271,16 +425,45 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
                 "original-mask and filtered-alpha oracles must disagree"
             );
         }
-        if child_opacity != 1.0 {
+        if child_opacity != 1.0
+            && !child_mask.is_some_and(|(mask, private)| private && mask.progress() == 1.0)
+        {
             assert!(
                 maximum_error(
                     &expected,
-                    &reference(&images, silhouette, intensity, 1.0, child_blur)
+                    &reference(
+                        &images,
+                        silhouette,
+                        intensity,
+                        1.0,
+                        child_blur,
+                        child_mask,
+                        step >= 14
+                    )
                 ) > 5,
                 "ignoring child opacity must change the independent reference"
             );
         }
-        let error = maximum_error(&read(&device, &queue, &output), &expected);
+        let actual = read(&device, &queue, &output);
+        match step {
+            15 => partial_private = Some(actual.clone()),
+            16 => empty_private = Some(actual.clone()),
+            18 => assert_eq!(
+                Some(&actual),
+                partial_private.as_ref(),
+                "same-time reverse progress is byte-identical"
+            ),
+            22 => assert!(
+                maximum_error(&actual, partial_private.as_ref().unwrap()) > 5,
+                "named and private masks have distinct ancestor coverage"
+            ),
+            23 => assert!(
+                maximum_error(&actual, empty_private.as_ref().unwrap()) > 5,
+                "named paint filtering must preserve original coverage"
+            ),
+            _ => {}
+        }
+        let error = maximum_error(&actual, &expected);
         assert!(
             error <= 2,
             "nested mask step={step}: max byte error {error}"

@@ -970,17 +970,22 @@ fn lower_effect_stack(
     }
     validate_effect_source_profile(owner, state, store)?;
     let mut lowered = Vec::with_capacity(effects.len());
+    let mut visibility = None;
     for &attachment in effects {
         let effect = store.semantic_effect_state(attachment)?;
         if effect.owner() != owner {
             return Err(unsupported());
+        }
+        if effect.attachment_name().is_visibility() {
+            visibility = Some(attachment);
         }
         lowered.push(crate::CompiledEffect {
             attachment,
             definition: effect.definition(),
         });
     }
-    let stack = crate::CompiledEffectStack::new(lowered).map_err(|_| unsupported())?;
+    let stack = crate::CompiledEffectStack::new_with_visibility(lowered, visibility)
+        .map_err(|_| unsupported())?;
     Ok(Some(std::sync::Arc::new(stack)))
 }
 

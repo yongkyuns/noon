@@ -254,7 +254,7 @@ pub struct EffectStackFilter {
     glow: GlowFilter,
     blur: GaussianBlurFilter,
     shadow: ShadowFilter,
-    dissolve: DissolveFilter,
+    pub(super) dissolve: DissolveFilter,
 }
 
 impl EffectStackFilter {

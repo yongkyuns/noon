@@ -149,10 +149,16 @@ pub(super) fn prepare_initial(
             None
         } else {
             Some(Arc::new(
-                CompiledEffectStack::new(effects.into_iter().map(|effect| CompiledEffect {
-                    attachment: effect.attachment,
-                    definition: effect.definition,
-                }))
+                CompiledEffectStack::new_with_visibility(
+                    effects.iter().map(|effect| CompiledEffect {
+                        attachment: effect.attachment,
+                        definition: effect.definition,
+                    }),
+                    effects
+                        .iter()
+                        .find(|effect| effect.name.is_visibility())
+                        .map(|effect| effect.attachment),
+                )
                 .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?,
             ))
         };

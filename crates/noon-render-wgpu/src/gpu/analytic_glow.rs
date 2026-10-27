@@ -183,6 +183,8 @@ struct ResidentEffect {
     source_instance: SourceInstance,
     source: CaptureImage,
     silhouette: Option<CaptureImage>,
+    original_mask: super::DissolveScope,
+    original_masked: bool,
     source_buffer: wgpu::Buffer,
     silhouette_buffer: Option<wgpu::Buffer>,
     source_image_bindings: Vec<super::raster_image_gpu::CapturedImageBinding>,
@@ -283,7 +285,7 @@ impl GpuRenderer {
         {
             return Err(EffectPrepareError::PublicationMismatch);
         }
-        self.prepare_effect_capture(
+        self.prepare_observed_effect_capture_input(
             device,
             queue,
             encoder,
@@ -293,6 +295,11 @@ impl GpuRenderer {
                 definitions: effect.definitions(),
                 texture_budget_bytes: request.texture_budget_bytes,
             },
+            observation,
+            super::glow_filter::CaptureDemand::default(),
+            effect
+                .visibility()
+                .and_then(|effect| effect.definition.as_noise_dissolve()),
         )
     }
 
@@ -337,6 +344,7 @@ impl GpuRenderer {
             request,
             observation,
             super::glow_filter::CaptureDemand::default(),
+            None,
         )
     }
 
@@ -350,6 +358,7 @@ impl GpuRenderer {
         request: EffectCaptureRequest<'_>,
         observation: crate::PreparedGeometryObjectObservation,
         demand: super::glow_filter::CaptureDemand,
+        visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
@@ -416,6 +425,7 @@ impl GpuRenderer {
             observation.style.opacity,
             None,
             demand,
+            visibility,
         )
     }
 
@@ -433,6 +443,7 @@ impl GpuRenderer {
         composed: Option<Arc<noon_core::ComposedSource>>,
         recapture: bool,
         demand: super::glow_filter::CaptureDemand,
+        visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         if !matches!(
             self.target_format,
@@ -583,6 +594,7 @@ impl GpuRenderer {
                 isolate: composed.is_some() && opacity != 1.0,
                 ..demand
             },
+            visibility,
         )
     }
 
@@ -601,6 +613,7 @@ impl GpuRenderer {
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
         demand: super::glow_filter::CaptureDemand,
+        visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let parameters = EffectStackParameters {
             output_height: self.viewport_size[1],
@@ -655,11 +668,20 @@ impl GpuRenderer {
                             } else {
                                 0
                             });
-                    let retained =
-                        source_bytes + scope.filter.retained_profile_bytes(request.definitions);
+                    let retained = source_bytes
+                        + scope.filter.retained_profile_bytes(request.definitions)
+                        + if request.definitions.is_empty() {
+                            0
+                        } else {
+                            scope.original_mask.scratch_bytes()
+                        };
                     let total = glows.bytes - scope.tile.capture_and_scratch_bytes + retained;
                     if total > request.texture_budget_bytes {
                         return Err(EffectPrepareError::ScratchBudgetExceeded);
+                    }
+                    if request.definitions.is_empty() {
+                        scope.original_mask.clear();
+                        scope.original_masked = false;
                     }
                     scope.filter.deactivate_profile(request.definitions);
                     scope.placement_binding = None;
@@ -680,8 +702,25 @@ impl GpuRenderer {
                 f64::from(tile.origin[axis]) + f64::from(tile.size[axis])
             }),
         };
-        let cost_per_pixel =
+        let mut cost_per_pixel =
             tile.capture_and_scratch_bytes / (u64::from(tile.size[0]) * u64::from(tile.size[1]));
+        let old_original_mask = self
+            .effect_captures
+            .as_deref()
+            .and_then(|cache| cache.scopes.get(&key))
+            .is_some_and(|scope| scope.original_mask.scratch_bytes() > 0);
+        let retains_original = demand.original_by_parent
+            || request.definitions.iter().any(|definition| {
+                definition
+                    .as_glow()
+                    .is_some_and(|glow| glow.source() == GlowSource::Silhouette)
+            });
+        let retain_original_mask = retains_original
+            && !request.definitions.is_empty()
+            && (old_original_mask || (demand.original_by_parent && visibility.is_some()));
+        if retain_original_mask {
+            cost_per_pixel += 4;
+        }
         let old = self
             .effect_captures
             .as_deref()
@@ -824,6 +863,8 @@ impl GpuRenderer {
                         source_instance: source_instance.clone(),
                         source,
                         silhouette,
+                        original_mask: super::DissolveScope::default(),
+                        original_masked: false,
                         source_buffer,
                         silhouette_buffer,
                         source_image_bindings: Vec::new(),
@@ -876,6 +917,9 @@ impl GpuRenderer {
                 glows.scopes.remove(&previous_key);
             }
             let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
+            if !retain_original_mask {
+                scope.original_mask.clear();
+            }
             scope.original_bounds = bounds;
             let source_changed = scope.invalidated
                 || !scope.source_instance.same_source(&source_instance)
@@ -1010,6 +1054,11 @@ impl GpuRenderer {
                 queue.write_buffer(&scope.placement_buffer, 0, bytemuck::bytes_of(&placement));
                 stats.placement_bytes_uploaded = size_of::<Placement>();
             }
+            // Private Visibility clips the original stream independently of
+            // authored paint filters. It shares the painted mask's source domain
+            // and operator; final scope opacity still belongs to placement.
+            scope.original_masked = demand.original_by_parent
+                && visibility.is_some_and(|definition| !definition.is_neutral());
             let upload = glows.filter.prepare_encode(
                 device,
                 queue,
@@ -1031,7 +1080,40 @@ impl GpuRenderer {
                     source_bounds: Some(source_bounds),
                 },
             )?;
+            // The authored stack checks every later pass, including the same
+            // Visibility domain/profile, before this additional mask draw.
+            let original_work = if scope.original_masked {
+                let image = scope
+                    .silhouette
+                    .as_ref()
+                    .ok_or(EffectPrepareError::MissingSilhouette)?;
+                glows.filter.dissolve.prepare_encode(
+                    device,
+                    queue,
+                    encoder,
+                    &mut scope.original_mask,
+                    super::GaussianBlurCapture {
+                        source: &image.texture,
+                        revision: scope.revision,
+                    },
+                    super::DissolveParameters {
+                        definition: visibility.expect("active private visibility"),
+                        source_bounds,
+                        scope_opacity: 1.0,
+                        scratch_budget_bytes: u64::from(tile.size[0]) * u64::from(tile.size[1]) * 4,
+                    },
+                )?
+            } else {
+                EffectRasterStats::default()
+            };
             stats.filter = upload;
+            stats.filter.composite_passes += original_work.composite_passes;
+            stats.filter.bytes_uploaded += original_work.bytes_uploaded;
+            stats.filter.texture_allocations += original_work.texture_allocations;
+            stats.filter.buffer_allocations += original_work.buffer_allocations;
+            stats.filter.bind_group_creations += original_work.bind_group_creations;
+            stats.filter.pipeline_compiles += original_work.pipeline_compiles;
+            stats.filter.scratch_bytes += scope.original_mask.scratch_bytes();
             let output = scope
                 .filter
                 .output()
@@ -1108,6 +1190,7 @@ impl GpuRenderer {
             for scope in glows.scopes.values_mut() {
                 scope.invalidated = true;
                 scope.filter.invalidate();
+                scope.original_mask.invalidate();
             }
         }
     }

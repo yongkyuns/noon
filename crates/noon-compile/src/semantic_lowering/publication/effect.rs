@@ -38,10 +38,16 @@ pub(super) fn lower_prepared_attachment(
             }
         }
     }
-    let stack = CompiledEffectStack::new(effects.into_iter().map(|effect| CompiledEffect {
-        attachment: effect.attachment,
-        definition: effect.definition,
-    }))
+    let stack = CompiledEffectStack::new_with_visibility(
+        effects.iter().map(|effect| CompiledEffect {
+            attachment: effect.attachment,
+            definition: effect.definition,
+        }),
+        effects
+            .iter()
+            .find(|effect| effect.name.is_visibility())
+            .map(|effect| effect.attachment),
+    )
     .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner: semantic })?;
     Ok(Some(Arc::new(stack)))
 }
@@ -107,10 +113,16 @@ pub(super) fn lower_changes(
             None
         } else {
             Some(
-                CompiledEffectStack::new(original.into_iter().map(|effect| CompiledEffect {
-                    attachment: effect.attachment,
-                    definition: effect.definition,
-                }))
+                CompiledEffectStack::new_with_visibility(
+                    original.iter().map(|effect| CompiledEffect {
+                        attachment: effect.attachment,
+                        definition: effect.definition,
+                    }),
+                    original
+                        .iter()
+                        .find(|effect| effect.name.is_visibility())
+                        .map(|effect| effect.attachment),
+                )
                 .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?,
             )
         };

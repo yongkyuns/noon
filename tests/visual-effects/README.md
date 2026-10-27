@@ -1218,6 +1218,27 @@ transparent input, fractional signed shadows, scene/pixel units, sigma 64, final
 opacity, clean exact repeat and invalidation recovery. These tests qualify the
 operator contract; they do not assert public group or animation-stack support.
 
+### Nested original coverage and private Visibility
+
+Nested capture keeps painted output and original coverage separate. An ancestor
+silhouette consumes the child's original coverage before authored Blur/Glow,
+with child scope opacity applied once after that child is composed. Dissolve's
+private Visibility binding clips both streams using the same normalized source
+domain and seeded mask. An ordinary named NoiseDissolve remains a painted filter;
+it does not acquire the private lifecycle role or clip original coverage.
+
+The immutable compiled attachment column preserves the exact trailing private
+binding generation through initial, prepared and target lowering. Parameter
+updates cannot change that role. The genuine worker boundary carries it in
+protocol 27; direct native and Rust/WASM execution remain typed in process.
+
+The nested native raster corpus checks partial masks, empty/full endpoints,
+reverse progress, cleanup, ordinary named-filter witnesses and clean reuse
+against scalar noise and full two-dimensional convolution references. The normal
+Rust Scene/LiveSession capture regression separately checks leaf and family
+Dissolve under an ancestor silhouette, including exact empty output and rewind.
+These native checks do not establish browser or physical-device pacing support.
+
 ## RGBA Gaussian raster prerequisite
 
 The reusable renderer's `GaussianBlurFilter` consumes an encoded-premultiplied

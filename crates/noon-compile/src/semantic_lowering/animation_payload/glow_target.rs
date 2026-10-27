@@ -292,8 +292,14 @@ pub(super) fn prepared_effective(
             return Err(EffectTargetLoweringError::MissingEffectiveValue);
         }
     }
-    let stack = crate::CompiledEffectStack::new(values)
-        .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
+    let stack = crate::CompiledEffectStack::new_with_visibility(
+        values,
+        source
+            .iter()
+            .find(|effect| effect.name.is_visibility())
+            .map(|effect| effect.attachment),
+    )
+    .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
     Ok(Some(std::sync::Arc::new(stack)))
 }
 

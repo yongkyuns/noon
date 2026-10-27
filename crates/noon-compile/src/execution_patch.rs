@@ -264,7 +264,10 @@ pub(crate) fn validate_effect_values(
     next: &crate::CompiledEffectStack,
 ) -> Result<(), crate::CompilePatchError> {
     let previous = previous.ok_or(crate::CompilePatchError::InvalidEffectUpdate { object })?;
-    if previous.attachments() != next.attachments() {
+    if previous.attachments() != next.attachments()
+        || previous.visibility().map(|value| value.attachment)
+            != next.visibility().map(|value| value.attachment)
+    {
         return Err(crate::CompilePatchError::InvalidEffectUpdate { object });
     }
     for (old, new) in previous.iter().zip(next.iter()) {

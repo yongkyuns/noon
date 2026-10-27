@@ -4754,12 +4754,16 @@ impl ExecutionSession {
                     .execution_object_id(owner)
                     .filter(|object| self.runtime.contains_object(*object))
                 {
-                    staged_effects.entry(object).or_insert_with(Vec::new).push(
-                        noon_compile::CompiledEffect {
-                            attachment,
-                            definition: *definition,
-                        },
-                    );
+                    let entry = staged_effects
+                        .entry(object)
+                        .or_insert_with(|| (Vec::new(), None));
+                    entry.0.push(noon_compile::CompiledEffect {
+                        attachment,
+                        definition: *definition,
+                    });
+                    if name.is_visibility() {
+                        entry.1 = Some(attachment);
+                    }
                 } else if name.is_visibility()
                     && prepared.store().node(owner).is_some_and(|node| {
                         matches!(node.kind(), noon_core::SemanticNodeKind::Family(_))
@@ -4774,8 +4778,18 @@ impl ExecutionSession {
         }
         let staged_effects = staged_effects
             .into_iter()
-            .map(|(object, effects)| {
-                noon_compile::CompiledEffectStack::new(effects)
+            .map(|(object, (mut effects, visibility))| {
+                // Candidate mutation order need not put private enrollment last;
+                // the canonical role remains trailing in this derived column.
+                if let Some(visibility) = visibility {
+                    let index = effects
+                        .iter()
+                        .position(|effect| effect.attachment == visibility)
+                        .expect("staged visibility enrollment");
+                    let mask = effects.remove(index);
+                    effects.push(mask);
+                }
+                noon_compile::CompiledEffectStack::new_with_visibility(effects, visibility)
                     .map(|effects| (object, effects))
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())

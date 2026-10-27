@@ -25,7 +25,7 @@ use composed::PublishedComposedSource;
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
 // V26 carries ordered effects, composed source plans, seeded masks and checked
 // HatchPaint at the genuine execution/render worker boundary. Older envelopes reject.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 26;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 27;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -441,6 +441,9 @@ pub struct RetainedTransportObjectState {
     pub object: ObjectId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<TransportEffectState>,
+    /// Exact trailing private Visibility binding, distinct from named filters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<SemanticNodeId>,
     /// Effective layer of this published row, not its painter rank.
     pub z_index: f64,
     pub content: TransportObjectContent,
@@ -2041,6 +2044,11 @@ fn transport_object(
         },
         order: slot_index,
         object: object.id,
+        visibility: object
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.visibility())
+            .map(|effect| effect.attachment),
         effects: object
             .effects
             .as_ref()
@@ -2310,6 +2318,11 @@ fn frame_object(
         fill_paint,
         draw_enabled: object.draw_enabled,
         effects: if object.effects.is_empty() {
+            if object.visibility.is_some() {
+                return Err(RetainedExecutionTransportError::InvalidEffectState(
+                    object.slot,
+                ));
+            }
             None
         } else {
             let bindings =
@@ -2323,9 +2336,10 @@ fn frame_object(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
             Some(Arc::new(
-                noon_compile::CompiledEffectStack::new(bindings).map_err(|_| {
-                    RetainedExecutionTransportError::InvalidEffectState(object.slot)
-                })?,
+                noon_compile::CompiledEffectStack::new_with_visibility(bindings, object.visibility)
+                    .map_err(|_| {
+                        RetainedExecutionTransportError::InvalidEffectState(object.slot)
+                    })?,
             ))
         },
         spatial: spatial.map(Box::new),
@@ -2679,6 +2693,68 @@ mod tests {
     }
 
     #[test]
+    fn private_visibility_role_roundtrips_and_invalid_suffix_is_atomic() {
+        let mut frame = mixed_frame();
+        let attachment = SemanticNodeId::new(77, 3);
+        frame.objects[0].effects = Some(Arc::new(
+            noon_compile::CompiledEffectStack::new_with_visibility(
+                [noon_compile::CompiledEffect {
+                    attachment,
+                    definition: noon_core::NoiseDissolve::new(7, 0.2)
+                        .unwrap()
+                        .with_progress(0.5)
+                        .unwrap()
+                        .into(),
+                }],
+                Some(attachment),
+            )
+            .unwrap(),
+        ));
+        let snapshot = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            json["objects"][0]["visibility"],
+            serde_json::to_value(attachment).unwrap()
+        );
+        let mut mirror = test_mirror();
+        for invalid in [SemanticNodeId::new(77, 4), SemanticNodeId::new(78, 3)] {
+            let mut bad = snapshot.clone();
+            bad.objects[0].visibility = Some(invalid);
+            assert!(matches!(
+                mirror.apply(bad),
+                Err(RetainedExecutionTransportError::InvalidEffectState(_))
+            ));
+            assert!(mirror.frame().is_none());
+        }
+        mirror.apply(serde_json::from_value(json).unwrap()).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+        let before = mirror.frame().unwrap().clone();
+        let mut bad = snapshot.clone();
+        bad.snapshot = false;
+        bad.sequence = 1;
+        bad.objects[0].style.opacity = 0.25;
+        bad.objects[1].visibility = Some(attachment);
+        assert!(matches!(
+            mirror.apply(bad),
+            Err(RetainedExecutionTransportError::InvalidEffectState(_))
+        ));
+        assert_eq!(*mirror.frame().unwrap(), before);
+        let mut next = snapshot;
+        next.snapshot = false;
+        next.sequence = 1;
+        mirror.apply(next).unwrap();
+    }
+
+    #[test]
     fn tagged_mask_preserves_seed_and_precision_and_rejects_foreign_fields() {
         let mut frame = mixed_frame();
         let definition = noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
@@ -2698,7 +2774,7 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(value["protocol_version"], 26);
+        assert_eq!(value["protocol_version"], 27);
         let mask = &value["objects"][0]["effects"][0];
         assert_eq!(mask["kind"], "noise_dissolve");
         assert_eq!(mask["seed"], u32::MAX);
@@ -2907,7 +2983,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 26);
+        assert_eq!(snapshot.protocol_version, 27);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -2980,7 +3056,7 @@ mod tests {
         // Every predecessor, including the former single-binding schema,
         // rejects rather than silently discarding ordered effects.
         let next_sequence = mirror.next_sequence;
-        for version in 14..26 {
+        for version in 14..27 {
             let mut old = snapshot.clone();
             old.protocol_version = version;
             assert_eq!(

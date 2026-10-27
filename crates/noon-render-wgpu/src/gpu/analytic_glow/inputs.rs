@@ -44,7 +44,11 @@ impl GpuRenderer {
             return Err(EffectPrepareError::PublicationMismatch);
         }
         let texture = if original {
-            scope.silhouette.as_ref().map(|image| &image.texture)
+            if scope.original_masked {
+                scope.original_mask.output()
+            } else {
+                scope.silhouette.as_ref().map(|image| &image.texture)
+            }
         } else {
             scope.placement_output.as_ref()
         }
@@ -124,7 +128,14 @@ impl GpuRenderer {
             } else {
                 (
                     if original {
-                        None
+                        if self
+                            .retained_input(index, object)
+                            .is_some_and(|scope| scope.original_masked)
+                        {
+                            self.filtered_input(index, object, true)?
+                        } else {
+                            None
+                        }
                     } else {
                         self.filtered_input(index, object, false)?
                     },

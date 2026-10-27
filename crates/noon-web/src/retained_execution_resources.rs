@@ -1033,6 +1033,7 @@ mod tests {
                 order: 0,
                 object: ObjectId::new(90),
                 effects: vec![crate::TransportEffectState::from(&compiled_glow)],
+                visibility: None,
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -1250,6 +1251,7 @@ mod tests {
                     order: 0,
                     object: ObjectId::new(90),
                     effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -1297,6 +1299,7 @@ mod tests {
                     order: slot,
                     object: ObjectId::new(object),
                     effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1434,6 +1437,7 @@ mod tests {
                         order: 0,
                         object: ObjectId::new(90),
                         effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1518,6 +1522,7 @@ mod tests {
                         order: 0,
                         object: ObjectId::new(90),
                         effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),
