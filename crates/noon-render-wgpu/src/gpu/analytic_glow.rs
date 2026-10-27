@@ -173,6 +173,9 @@ impl CaptureImage {
 struct ResidentEffect {
     object: ObjectId,
     tile: EffectCaptureTile,
+    // Raster projection depends on the requested footprint, never on spare
+    // high-water texture capacity retained from an earlier effect profile.
+    capture_viewport: [u32; 2],
     // Finite contribution before capacity rounding/high-water reuse. Ancestor
     // bounds must never feed retained transparent storage back into capture size.
     contribution_bounds: EffectPixelBounds,
@@ -645,7 +648,9 @@ impl GpuRenderer {
                     // Drop obsolete child-output leases even while this scope is
                     // neutral. Its warmed source image is reusable only when its
                     // normalized inputs still describe that captured image.
-                    effective.set_capture_region(scope.tile)?;
+                    let mut source_tile = scope.tile;
+                    source_tile.size = scope.capture_viewport;
+                    effective.set_capture_region(source_tile)?;
                     let mut source_instance = effective.clone();
                     if key.0 != 2 {
                         source_instance.style_mut().opacity = 1.0;
@@ -696,6 +701,7 @@ impl GpuRenderer {
                 ..Default::default()
             });
         };
+        let mut source_tile = tile;
         let contribution_bounds = EffectPixelBounds {
             min: tile.origin.map(f64::from),
             max: std::array::from_fn(|axis| {
@@ -736,6 +742,9 @@ impl GpuRenderer {
                 .saturating_add(1)
                 .next_multiple_of(16)
                 .min(device.limits().max_texture_dimension_2d);
+            // Preserve the existing profile-local block rounding, while
+            // keeping a previous larger allocation out of the raster camera.
+            source_tile.size[axis] = reserved;
             tile.size[axis] = reserved.max(previous);
         }
         tile.refresh_visible_region(self.viewport_size);
@@ -786,7 +795,7 @@ impl GpuRenderer {
         if total > request.texture_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        effective.set_capture_region(tile)?;
+        effective.set_capture_region(source_tile)?;
         let mut source_instance = effective.clone();
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
@@ -797,8 +806,8 @@ impl GpuRenderer {
                     .as_glow()
                     .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
             });
-        let capture_camera = tile_camera(self.camera, self.viewport_size, tile)?;
-        let camera_uniform = capture_camera.uniform(tile.size);
+        let capture_camera = tile_camera(self.camera, self.viewport_size, source_tile)?;
+        let camera_uniform = capture_camera.uniform(source_tile.size);
         let placement = Placement {
             origin: tile.origin,
             size: tile.size,
@@ -855,6 +864,7 @@ impl GpuRenderer {
                     ResidentEffect {
                         object,
                         tile,
+                        capture_viewport: source_tile.size,
                         contribution_bounds,
                         original_bounds: bounds,
                         camera: self.camera,
@@ -924,6 +934,7 @@ impl GpuRenderer {
             let source_changed = scope.invalidated
                 || !scope.source_instance.same_source(&source_instance)
                 || scope.tile.origin != tile.origin
+                || scope.capture_viewport != source_tile.size
                 || scope.camera != self.camera
                 || scope.viewport != self.viewport_size;
             if source_changed {
@@ -964,6 +975,7 @@ impl GpuRenderer {
                                 &scope.source_buffer,
                                 &scope.source_image_bindings,
                                 Some((&programs.multisampled, &scope.source_filtered_bindings)),
+                                source_tile.size,
                             )
                             .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         stats.source_passes = 1;
@@ -1004,6 +1016,7 @@ impl GpuRenderer {
                                         &programs.multisampled,
                                         &scope.silhouette_filtered_bindings,
                                     )),
+                                    source_tile.size,
                                 )
                                 .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             stats.source_passes += 1;
@@ -1025,6 +1038,7 @@ impl GpuRenderer {
                             &scope.camera_binding,
                             &self.quad_buffer,
                             &scope.source_buffer,
+                            source_tile.size,
                         );
                         stats.source_passes = 1;
                         if let (Some(image), Some(buffer)) =
@@ -1038,6 +1052,7 @@ impl GpuRenderer {
                                 &scope.camera_binding,
                                 &self.quad_buffer,
                                 buffer,
+                                source_tile.size,
                             );
                             stats.source_bytes_uploaded += source_instance.bytes().len();
                             stats.source_passes += 1;
@@ -1154,6 +1169,7 @@ impl GpuRenderer {
             scope.effective = effective;
             scope.source_instance = source_instance;
             scope.tile = tile;
+            scope.capture_viewport = source_tile.size;
             scope.contribution_bounds = contribution_bounds;
             scope.camera = self.camera;
             scope.viewport = self.viewport_size;
@@ -1411,6 +1427,7 @@ fn capture_source(
     camera: &wgpu::BindGroup,
     quad: &wgpu::Buffer,
     instance: &wgpu::Buffer,
+    viewport: [u32; 2],
 ) {
     let attachments = [Some(wgpu::RenderPassColorAttachment {
         view,
@@ -1429,6 +1446,7 @@ fn capture_source(
         occlusion_query_set: None,
         multiview_mask: None,
     });
+    pass.set_viewport(0.0, 0.0, viewport[0] as f32, viewport[1] as f32, 0.0, 1.0);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, camera, &[]);
     pass.set_vertex_buffer(0, quad.slice(..));

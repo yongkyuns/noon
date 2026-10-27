@@ -436,6 +436,7 @@ impl PreparedSource {
         instances: &wgpu::Buffer,
         images: &[CapturedImageBinding],
         filtered: Option<(&wgpu::RenderPipeline, &[FilteredBinding])>,
+        viewport: [u32; 2],
     ) -> Result<(), RetainedDrawError> {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: multisampled,
@@ -454,6 +455,7 @@ impl PreparedSource {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        pass.set_viewport(0.0, 0.0, viewport[0] as f32, viewport[1] as f32, 0.0, 1.0);
         let mut binding = None;
         let mut images = images.iter();
         let mut filtered_index = 0;

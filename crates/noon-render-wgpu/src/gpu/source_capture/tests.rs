@@ -386,6 +386,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
                 &buffer,
                 &bindings,
                 None,
+                SIZE,
             )
             .unwrap();
         let mut filter = super::super::EffectStackFilter::default();

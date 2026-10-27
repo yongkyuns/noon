@@ -23,6 +23,7 @@ pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod dissolve;
 pub mod draw_border_then_fill;
+pub mod effect_restore;
 pub mod exact_property_tracks;
 pub mod family_affine;
 pub mod family_arrangement;

@@ -815,6 +815,15 @@ pub async fn create_direct_dissolve_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Save/restore uses the same live Rust programme as native export.
+#[wasm_bindgen(js_name = createDirectEffectRestoreSmokeRenderer)]
+pub async fn create_direct_effect_restore_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::effect_restore::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 #[wasm_bindgen(js_name = createDirectScopeOpacitySmokeRenderer)]
 pub async fn create_direct_scope_opacity_smoke_renderer(
     canvas: OffscreenCanvas,

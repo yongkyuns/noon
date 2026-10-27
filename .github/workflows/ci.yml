@@ -69,6 +69,7 @@ on:
       - "scripts/dissolve-qualification.mjs"
       - "scripts/dissolve-mask-*.mjs"
       - "scripts/scope-opacity-qualification.mjs"
+      - "scripts/effect-restore-qualification.mjs"
       - "crates/noon-export/tests/scope_opacity.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
@@ -537,6 +538,8 @@ jobs:
         run: node scripts/composed-effects-qualification.mjs
       - name: Qualify animated nested opacity and ancestor Visibility
         run: node scripts/scope-opacity-qualification.mjs
+      - name: Qualify ordered and composed appearance save/restore
+        run: node scripts/effect-restore-qualification.mjs
       - name: Qualify private visibility lifecycle through Rust and Python
         run: node scripts/dissolve-qualification.mjs
       - name: Qualify composed seeded masks through Rust and Python
@@ -598,6 +601,7 @@ jobs:
             browser-smoke-artifacts/ordered-effects
             browser-smoke-artifacts/composed-effects
             browser-smoke-artifacts/scope-opacity
+            browser-smoke-artifacts/effect-restore
             browser-smoke-artifacts/dissolve
             browser-smoke-artifacts/noise-dissolve
           if-no-files-found: warn

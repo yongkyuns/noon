@@ -7,6 +7,7 @@ pub(crate) struct PreparedPathEdits {
     paths: Vec<VectorPath>,
     property_edits: Vec<(SemanticNodeId, SemanticObjectState, SemanticObjectState)>,
     initial_families: Vec<SemanticNodeId>,
+    retirements: Vec<SemanticNodeId>,
     transaction: SemanticMutationTransaction,
 }
 
@@ -20,6 +21,7 @@ impl PreparedPathEdits {
             paths: Vec::new(),
             property_edits: Vec::new(),
             initial_families: Vec::new(),
+            retirements: Vec::new(),
             transaction: SemanticMutationTransaction::new(),
         };
         for (node, captured, path) in replacements {
@@ -52,6 +54,7 @@ impl PreparedPathEdits {
             paths: Vec::new(),
             property_edits: Vec::new(),
             initial_families: Vec::new(),
+            retirements: Vec::new(),
             transaction: SemanticMutationTransaction::new(),
         };
         for (node, after, path) in replacements {
@@ -70,6 +73,13 @@ impl PreparedPathEdits {
 
     pub(crate) fn with_transaction(mut self, transaction: SemanticMutationTransaction) -> Self {
         self.transaction = transaction;
+        self
+    }
+
+    /// Structural retirement remains the terminal suffix of the same atomic
+    /// transaction, after any deferred geometry/property writes are materialized.
+    pub(crate) fn with_node_retirements(mut self, retirements: Vec<SemanticNodeId>) -> Self {
+        self.retirements = retirements;
         self
     }
 
@@ -137,6 +147,9 @@ impl PreparedPathEdits {
             }
             for (node, handle) in self.initial_families.into_iter().zip(initial_handles) {
                 transaction.replace_content(node, StoredGeometry::Resource(*handle));
+            }
+            for node in self.retirements {
+                transaction.remove_node(node);
             }
             publish(store, transaction)
         })

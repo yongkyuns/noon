@@ -184,11 +184,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::EffectOwnerMismatch { .. } => {
                 Self::new("foreign_handle", "effect.foreign_owner", message)
             }
-            AuthoringError::EffectStateReplacementUnavailable => Self::new(
-                "unsupported_operation",
-                "effect.state_replacement_unavailable",
-                message,
-            ),
+            AuthoringError::EffectCaptureMismatch { .. } => {
+                Self::new("stale_publication", "effect.capture_mismatch", message)
+            }
             AuthoringError::ForeignStore => {
                 Self::new("foreign_handle", "authoring.foreign_store", message)
             }

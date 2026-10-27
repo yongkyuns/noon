@@ -220,21 +220,21 @@ fn remove_absent_glow_is_an_idempotent_authoring_operation() {
 }
 
 #[test]
-fn state_only_replacement_fails_before_losing_attachment_correspondence() {
+fn state_replacement_retires_an_old_binding_when_the_target_has_no_effects() {
     let mut scene = Scene::new();
     let mut source = scene.circle(0.08).unwrap();
     let target = scene.circle(1.0).unwrap();
     source.set_glow(EffectUpdate::default()).unwrap();
-    let before = source.state().unwrap();
-    let revision = scene.revision();
-    let result = source.become_handle(&target, crate::ManimBecomeOptions::default());
-    assert!(matches!(
-        result,
-        Err(AuthoringError::EffectStateReplacementUnavailable)
-    ));
-    assert_eq!(source.state().unwrap(), before);
-    assert_eq!(scene.revision(), revision);
-    assert!(source.get_effect("glow").is_ok());
+    let old = source.get_effect("glow").unwrap();
+    source
+        .become_handle(&target, crate::ManimBecomeOptions::default())
+        .unwrap();
+    assert_eq!(
+        source.state().unwrap().content,
+        target.state().unwrap().content
+    );
+    assert!(source.get_effect("glow").is_err());
+    assert!(old.authored_definition().is_err());
 }
 
 mod contract;

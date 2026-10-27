@@ -595,21 +595,12 @@ linear in that owner's effect count, not total scene size. Nodes without effects
 allocate no attachment collection. The store maintains an allocator-derived count
 for constant-time capability rejection, not a second collection/identity authority.
 
-**Current unsupported boundary:** the M0 compiler rejects execution of an
-**effect-bearing store**, even for neutral attachments or detached target copies.
-This deliberately conservative O(1) guard prevents appearance from being silently
-discarded; M1 must replace it with real effect lowering rather than remove it
-without implementation. Live setters use the ordinary publication path and reject
-new effect requests before changing either semantic or runtime publication.
-State-only `become`/replacement is also rejected while effect declarations exist;
-its capture currently has no attachment correspondence. Those conservative gates
-are explicit limitations, not claims of supported live animation or restoration.
-
-The actual attachment slice is leaf-only and named. Family propagation, composed
-filters, unnamed attachments, effective effect queries, GlowPulse, ordinary effect
-animation/channel ownership, and effective Python queries remain future integration work.
-The leaf declaration adapter is implemented below; effect execution remains gated.
-No native or browser setter silently skips unavailable rendering.
+**Historical M0 boundary:** the initial declaration-only checkpoint rejected
+execution of an effect-bearing store rather than silently discarding appearance.
+The execution, live mutation, animation and composed-scope integration described
+in the subsequent qualification sections replaces that early gate. Unsupported
+profiles still fail before publication; state replacement now carries its checked
+attachment values through the ordinary semantic transaction.
 
 ### Parameter-addressed authored transactions
 
@@ -1251,6 +1242,34 @@ frames. The same Rust programme runs through native fixed-time export. The
 composed, scope-opacity, Dissolve and named NoiseDissolve browser scripts retain
 raw images and reports in CI. These are correctness and reuse checks; the
 physical-device frame-pacing gate remains separate.
+
+### Appearance replacement and saved state
+
+Ordinary object/family `become` replaces ordered attachment values while retaining
+receiver object identity. A saved copy is an independent semantic snapshot;
+restoration creates fresh receiver-owned effect generations, retires the old
+bindings and leaves the saved copy unchanged. An exact self replacement retains
+its bindings. Nested and unequal families reuse the existing topology/alias
+reconciliation; target object IDs never transfer to the receiver.
+
+Live replacement captures coherent effective effect parameters and composed
+opacity, including after completion and rewind when authored endpoint values
+differ. Private Visibility remains a distinct trailing role beside named mask
+filters. Driver/callback/segment publication barriers still apply; copying a value
+does not copy animation ownership. A stale attachment-column capture produces the
+typed `effect.capture_mismatch` diagnostic. Deferred geometry/property writes and
+terminal attachment retirements publish as one transaction, so late isolation
+failure retains the original scene, resources, handles and runtime frame. Stack
+admission checks the final eight-binding profile after retirement.
+
+The paired `effect_restore` programme saves an ordered leaf stack and a composed
+family, changes parameters, removes attachments, restores, edits the saved copies
+without changing displayed output, restores those edited values, and cleans up.
+Native fixed-time export and `effect-restore-qualification.mjs` compare complete
+restored frames exactly with the earlier same-backend frame and check independent
+interior alpha witnesses. Existing operator references separately qualify the
+filters. Capture raster viewports follow the current logical footprint; retained
+texture capacity may grow without changing that projection or restored pixels.
 
 ## RGBA Gaussian raster prerequisite
 

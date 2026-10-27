@@ -1053,6 +1053,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(target)?;
         self.require_mobject(other)?;
+        self.require_target_capture()?;
         let source = self.capture_mobject_state(target)?;
         let candidate = self.capture_mobject_state(other)?;
         let prepared = prepare_become(
@@ -1062,6 +1063,7 @@ impl<'a> LiveSession<'a> {
             &source,
             candidate,
             options,
+            Some(self.session),
         )?;
         self.publish_path_edits(prepared)
     }
@@ -1077,10 +1079,13 @@ impl<'a> LiveSession<'a> {
         self.require_family(source)?;
         self.require_family(target)?;
         self.require_target_capture()?;
-        let prepared =
-            crate::state_replacement::prepare_family_become(source, target, options, |object| {
-                self.capture_mobject_state(object)
-            })?;
+        let prepared = crate::state_replacement::prepare_family_become(
+            source,
+            target,
+            options,
+            Some(self.session),
+            |object| self.capture_mobject_state(object),
+        )?;
         self.publish_path_edits(prepared)
     }
 

@@ -1086,6 +1086,7 @@ impl Mobject {
             &source,
             target,
             options,
+            None,
         )?;
         prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
             transaction
