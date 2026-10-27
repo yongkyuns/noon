@@ -1,0 +1,361 @@
+diff --git a/crates/noon-web/src/direct_pointer_presentation/tests.rs b/crates/noon-web/src/direct_pointer_presentation/tests.rs
+index 598fe51..6f0f5db 100644
+--- a/crates/noon-web/src/direct_pointer_presentation/tests.rs
++++ b/crates/noon-web/src/direct_pointer_presentation/tests.rs
+@@ -68,7 +68,7 @@ impl Fixture {
+         let frame = self
+             .host
+             .capture(
+-                self.execution.session(),
++                &self.execution,
+                 self.execution.session().camera().unwrap(),
+             )
+             .unwrap();
+@@ -99,7 +99,7 @@ fn capture_alone_never_authorizes_input_or_consumes_publication() {
+     let captured = f
+         .host
+         .capture(
+-            f.execution.session(),
++            &f.execution,
+             f.execution.session().camera().unwrap(),
+         )
+         .unwrap();
+@@ -292,7 +292,7 @@ fn hidden_view_retires_receipt_and_preserves_revision_high_watermark() {
+     assert!(f
+         .host
+         .capture(
+-            f.execution.session(),
++            &f.execution,
+             f.execution.session().camera().unwrap()
+         )
+         .unwrap()
+@@ -365,7 +365,7 @@ fn manual_camera_mismatch_cannot_mint_a_receipt_or_spin_forever() {
+     };
+     assert!(f
+         .host
+-        .capture(f.execution.session(), camera)
++        .capture(&f.execution, camera)
+         .unwrap()
+         .is_none());
+     f.host.did_present(None);
+@@ -450,7 +450,7 @@ fn binding_reset_is_revalidated_before_positional_admission() {
+     let mut host = DirectPointerPresentation::default();
+     host.set_view(1, SIZE).unwrap();
+     let frame = host
+-        .capture(execution.session(), execution.session().camera().unwrap())
++        .capture(&execution, execution.session().camera().unwrap())
+         .unwrap();
+     host.did_present(frame);
+     let mut binding = None;
+@@ -630,12 +630,12 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
+     let mut host = DirectPointerPresentation::default();
+     host.set_view(1, SIZE).unwrap();
+     let frame = host
+-        .capture(execution.session(), execution.session().camera().unwrap())
++        .capture(&execution, execution.session().camera().unwrap())
+         .unwrap();
+     execution.session_mut().take_renderer_publication();
+     host.did_present(frame);
+     let displayed = execution.session().publication_context();
+-    assert!(!host.needs_refresh(execution.session()));
++    assert!(!host.needs_refresh(&execution));
+     execution
+         .session_mut()
+         .set_native_state_input(source, NativeInputValue::Scalar(1.0))
+@@ -648,7 +648,7 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
+         .is_empty());
+     assert!(!execution.session().wake_state().frame_pending());
+     for _ in 0..128 {
+-        assert!(!host.needs_refresh(execution.session()));
++        assert!(!host.needs_refresh(&execution));
+         assert!(
+             !execution.session().wake_state().frame_pending(),
+             "a dormant pointer view must not request receipt-only refreshes"
+@@ -686,7 +686,7 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
+     let mut host = DirectPointerPresentation::default();
+     host.set_view(1, SIZE).unwrap();
+     let frame = host
+-        .capture(execution.session(), execution.session().camera().unwrap())
++        .capture(&execution, execution.session().camera().unwrap())
+         .unwrap();
+     execution.session_mut().take_renderer_publication();
+     host.did_present(frame);
+@@ -705,7 +705,7 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
+         .take_renderer_publication()
+         .changes()
+         .is_empty());
+-    assert!(host.needs_refresh(execution.session()));
++    assert!(host.needs_refresh(&execution));
+ 
+     // A stale occurrence triggers cancellation and a fresh presentation; it
+     // must never be silently replayed against the newly published receipt.
+@@ -736,7 +736,7 @@ fn callback_barrier_does_not_create_a_receipt_only_redraw_loop() {
+         .session_mut()
+         .begin_required_callback_phase(0.0, [f.target])
+         .unwrap();
+-    assert!(!f.host.needs_refresh(f.execution.session()));
++    assert!(!f.host.needs_refresh(&f.execution));
+     f.execution
+         .session_mut()
+         .commit_required_callback_phase(phase.finish())
+@@ -760,6 +760,6 @@ fn direct_static_pointer_motion_observes_hover_without_a_redraw() {
+     assert!(f.send(outside).unwrap());
+     assert_eq!(f.execution.session().hovered_pointer_target(), None);
+     assert_eq!(f.execution.session().publication_context(), publication);
+-    assert!(!f.host.needs_refresh(f.execution.session()));
++    assert!(!f.host.needs_refresh(&f.execution));
+     assert_eq!(f.execution.session().frame().time, 0.0);
+ }
+diff --git a/crates/noon-web/src/direct_pointer_presentation/tests/inspection.rs b/crates/noon-web/src/direct_pointer_presentation/tests/inspection.rs
+index dd9b327..80a4e4d 100644
+--- a/crates/noon-web/src/direct_pointer_presentation/tests/inspection.rs
++++ b/crates/noon-web/src/direct_pointer_presentation/tests/inspection.rs
+@@ -12,7 +12,7 @@ fn present(f: &mut Fixture) {
+     let frame = f
+         .host
+         .capture(
+-            f.execution.session(),
++            &f.execution,
+             f.execution.session().inspection_camera().unwrap(),
+         )
+         .unwrap();
+@@ -99,7 +99,7 @@ fn direct_inspection_burst_does_not_relabel_or_queue_unpresented_samples() {
+     assert_eq!(f.execution.session().inspection_view_revision(), revision);
+     assert_eq!(f.execution.session().inspection_camera().unwrap(), camera);
+     present(&mut f);
+-    assert!(!f.host.needs_refresh(f.execution.session()));
++    assert!(!f.host.needs_refresh(&f.execution));
+     assert!(f.execution.session().wake_state().is_quiescent());
+ }
+ 
+@@ -123,7 +123,7 @@ fn direct_inspection_aba_and_old_surface_geometry_do_not_authorize_zoom() {
+     let frame = f
+         .host
+         .capture(
+-            f.execution.session(),
++            &f.execution,
+             f.execution.session().inspection_camera().unwrap(),
+         )
+         .unwrap();
+@@ -224,7 +224,7 @@ fn direct_inspection_and_real_indicate_restore_independently() {
+     host.set_view(1, SIZE).unwrap();
+     let frame = host
+         .capture(
+-            execution.session(),
++            &execution,
+             execution.session().inspection_camera().unwrap(),
+         )
+         .unwrap();
+diff --git a/crates/noon-web/src/semantic_execution_player.rs b/crates/noon-web/src/semantic_execution_player.rs
+index 8061984..20406d8 100644
+--- a/crates/noon-web/src/semantic_execution_player.rs
++++ b/crates/noon-web/src/semantic_execution_player.rs
+@@ -4227,9 +4227,20 @@ impl SemanticExecutionPlayer {
+             .inspection_camera()
+             .map_err(|e| e.to_string())?;
+         #[cfg(any(target_arch = "wasm32", test))]
+-        let pointer_frame = self.worker_pointer_presentation.capture(&self.session)?;
+-        #[cfg(any(target_arch = "wasm32", test))]
+-        let pointer_refresh = self.worker_pointer_presentation.needs_delta(&self.session);
++        let (pointer_frame, pointer_refresh) = {
++            let target = pointer_input::PlayerPointerTarget {
++                session: &mut self.session,
++                semantics: self
++                    .semantics
++                    .as_ref()
++                    .ok_or("execution player lost its semantic store")?,
++                translation_drag_undo: &mut self.translation_drag_undo,
++            };
++            (
++                self.worker_pointer_presentation.capture(&target)?,
++                self.worker_pointer_presentation.needs_delta(&target),
++            )
++        };
+         #[cfg(not(any(target_arch = "wasm32", test)))]
+         let pointer_refresh = false;
+         let inset_2d_views = self.session.inset_2d_views().map_err(|e| e.to_string())?;
+@@ -5801,8 +5812,16 @@ impl SemanticExecutionPlayer {
+     pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+         let receipt =
+             serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
++        let mut target = pointer_input::PlayerPointerTarget {
++            session: &mut self.session,
++            semantics: self
++                .semantics
++                .as_ref()
++                .ok_or("execution player lost its semantic store")?,
++            translation_drag_undo: &mut self.translation_drag_undo,
++        };
+         self.worker_pointer_presentation
+-            .note_presented(&mut self.session, receipt)
++            .note_presented(&mut target, receipt)
+     }
+ 
+     #[cfg(any(target_arch = "wasm32", test))]
+diff --git a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+index 6758dc0..ee2f78e 100644
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests.rs
+@@ -185,7 +185,14 @@ fn surface_invalidation_still_cancels_when_newer_delta_is_in_flight() {
+     let (mut p, a) = ready();
+     assert!(input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
+     // Issue a presentation-only delta without mutating the session gesture.
+-    let snapshot = p.worker_pointer_presentation.capture(&p.session).unwrap();
++    let snapshot = {
++        let target = PlayerPointerTarget {
++            session: &mut p.session,
++            semantics: p.semantics.as_ref().unwrap(),
++            translation_drag_undo: &mut p.translation_drag_undo,
++        };
++        p.worker_pointer_presentation.capture(&target).unwrap()
++    };
+     p.worker_pointer_presentation
+         .issue(7, a.sequence + 1, snapshot);
+     assert!(invalidate(&mut p, a));
+@@ -889,3 +896,42 @@ fn renderer_receipt_refreshes_stationary_hover_without_synthesizing_input() {
+     assert!(input(&mut p, "cancel", 1, None, 1, 0.0).unwrap());
+     assert_eq!(p.session.hovered_pointer_target(), None);
+ }
++
++#[test]
++fn pointer_receipt_lifecycle_requires_the_existing_semantic_owner() {
++    let mut p = player();
++    register(&mut p, 1);
++    let frame = p.session.frame().clone();
++    let publication = p.session.publication_context();
++    let sequence = p.next_native_event_sequence;
++    let owner = p.semantics.take().unwrap();
++    assert_eq!(
++        p.initial_delta_json().unwrap_err(),
++        "execution player lost its semantic store"
++    );
++    assert!(!p.snapshot_sent);
++    assert_eq!(p.session.frame(), &frame);
++    assert_eq!(p.session.publication_context(), publication);
++    assert_eq!(p.next_native_event_sequence, sequence);
++
++    // Restoring the same owner permits normal issuance, not forged feedback.
++    p.semantics = Some(owner);
++    let r = receipt(&delta(&mut p), 1);
++    let owner = p.semantics.take().unwrap();
++    assert_eq!(
++        p.note_pointer_presentation_json(&serde_json::to_string(&r).unwrap())
++            .unwrap_err(),
++        "execution player lost its semantic store"
++    );
++    assert_eq!(p.session.frame(), &frame);
++    assert_eq!(p.session.publication_context(), publication);
++    assert_eq!(p.next_native_event_sequence, sequence);
++    assert!(p.browser_pointer_binding.is_none());
++
++    // Rejected feedback did not consume the receipt or acknowledge an input.
++    p.semantics = Some(owner);
++    assert!(acknowledge(&mut p, r));
++    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
++    assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
++    assert!(p.session.selected_pointer_target().is_some());
++}
+diff --git a/crates/noon/src/execution_session/input.rs b/crates/noon/src/execution_session/input.rs
+index 0b6b1cf..1242368 100644
+--- a/crates/noon/src/execution_session/input.rs
++++ b/crates/noon/src/execution_session/input.rs
+@@ -388,7 +388,7 @@ impl ExecutionSession {
+ 
+     /// The historical reader admits only presentation effects. Preparation and
+     /// metadata commit are the ordinary pointer lane; no producer arena is borrowed.
+-    #[cfg(feature = "prepared-prefix")]
++    #[cfg(any(feature = "prepared-prefix", test))]
+     pub(super) fn submit_prepared_pointer_presentation(
+         &mut self,
+         token: &NativePointerInputToken,
+diff --git a/crates/noon/src/execution_session/picking/identity/tests.rs b/crates/noon/src/execution_session/picking/identity/tests.rs
+index 4e196d2..b710e71 100644
+--- a/crates/noon/src/execution_session/picking/identity/tests.rs
++++ b/crates/noon/src/execution_session/picking/identity/tests.rs
+@@ -95,6 +95,8 @@ impl Fixture {
+         self.session.seal_replay().unwrap();
+         configure(&mut self.session);
+         // The authored store and its deleted node are not needed by playback.
++        // Input below uses PrefixReader's existing presentation-only admission;
++        // Indicate ticks use the same storeless runtime path as PrefixReader.
+         self.session
+     }
+ }
+@@ -140,7 +142,7 @@ fn submit(
+ ) -> NativePointerInputPublication {
+     let token = session.native_pointer_input_token().unwrap();
+     session
+-        .submit_native_pointer_input(&token, input(&token, sequence, press))
++        .submit_prepared_pointer_presentation(&token, input(&token, sequence, press))
+         .unwrap()
+ }
+ 
+@@ -159,8 +161,9 @@ fn exercise_action(
+     let history = session.replay_stats();
+     let context = session.publication_context();
+     assert!(session.interactions_active());
+-    session.advance_interactions(wall_time).unwrap();
++    session.runtime.advance_interactions(wall_time).unwrap();
+     session
++        .runtime
+         .advance_interactions(wall_time + binding.run_time() * 0.5)
+         .unwrap();
+     let index = session.runtime.frame_index_for_object(object).unwrap();
+@@ -172,6 +175,7 @@ fn exercise_action(
+     );
+     assert_eq!(session.frame().time, baseline.time);
+     session
++        .runtime
+         .advance_interactions(wall_time + binding.run_time())
+         .unwrap();
+     assert!(!session.interactions_active());
+@@ -282,7 +286,7 @@ fn historical_pointer_identity_seek_cancels_gestures_and_stale_input_is_atomic()
+     let context = session.publication_context();
+     let history = session.replay_stats();
+     assert!(matches!(
+-        session.submit_native_pointer_input(&stale, input(&stale, 1, false)),
++        session.submit_prepared_pointer_presentation(&stale, input(&stale, 1, false)),
+         Err(ExecutionSessionInputError::StalePointerPublication { .. })
+     ));
+     assert_eq!(session.frame(), &baseline);
+@@ -349,13 +353,13 @@ fn historical_pointer_identity_forward_removal_retires_selection_and_effect() {
+     let mut session = fixture.seal();
+     session.seek(0.5).unwrap();
+     click(&mut session, 0);
+-    session.advance_interactions(10.0).unwrap();
++    session.runtime.advance_interactions(10.0).unwrap();
+     session.advance_to(0.75).unwrap();
+-    session.advance_interactions(10.125).unwrap();
++    session.runtime.advance_interactions(10.125).unwrap();
+     assert_eq!(session.selected_pointer_target(), Some(node));
+     assert!(session.interactions_active());
+     session.advance_to(1.5).unwrap();
+-    session.advance_interactions(10.25).unwrap();
++    session.runtime.advance_interactions(10.25).unwrap();
+     assert_eq!(session.interaction_semantic_object_id(object), None);
+     assert_eq!(session.selected_pointer_target(), None);
+     assert!(session.pointer_selection_highlight().is_none());
+@@ -374,8 +378,8 @@ fn historical_pointer_identity_discard_returns_to_current_source_membership() {
+     configure(&mut fixture.session);
+     fixture.session.seek(0.5).unwrap();
+     click(&mut fixture.session, 0);
+-    fixture.session.advance_interactions(10.0).unwrap();
+-    fixture.session.advance_interactions(10.25).unwrap();
++    fixture.session.runtime.advance_interactions(10.0).unwrap();
++    fixture.session.runtime.advance_interactions(10.25).unwrap();
+     fixture.session.discard_replay_retention();
+     assert!(!fixture.session.replay_scope_active());
+     assert!(!fixture.session.interactions_active());
+diff --git a/crates/noon/src/execution_session/picking/identity/tests/hover.rs b/crates/noon/src/execution_session/picking/identity/tests/hover.rs
+index d3e9981..1ba2fe1 100644
+--- a/crates/noon/src/execution_session/picking/identity/tests/hover.rs
++++ b/crates/noon/src/execution_session/picking/identity/tests/hover.rs
+@@ -60,7 +60,7 @@ fn historical_pointer_identity_stationary_hover_tracks_deletion_and_reused_slot(
+         NativeInputModifiers::default(),
+         NativePointerInputKind::Move(displayed.position(Vec2::new(100.0, 100.0)).unwrap()),
+     );
+-    session.submit_native_pointer_input(&token, motion).unwrap();
++    session.submit_prepared_pointer_presentation(&token, motion).unwrap();
+     // Capture after admission, as a host does for the publication it presents.
+     // This tests the shared observation contract, not GPU presentation itself.
+     let old = observe(&mut session, view, None, Some(node));
