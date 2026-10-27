@@ -1,0 +1,12 @@
+diff --git a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests/inspection.rs b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests/inspection.rs
+index 2d4f6ba..be8fc75 100644
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests/inspection.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input/presentation_tests/inspection.rs
+@@ -277,6 +277,7 @@ fn worker_scroll_does_not_bypass_a_pending_callback_and_retries_after_completion
+         session: &mut p.session,
+         semantics: p.semantics.as_ref().unwrap(),
+         translation_drag_undo: &mut p.translation_drag_undo,
++        control_publication: None,
+     };
+     p.worker_pointer_presentation
+         .set_view(
