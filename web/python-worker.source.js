@@ -8,6 +8,7 @@ import initNoonWeb, {
   WasmLinearGradient,
   WasmRadialGradient,
   WasmNoisePaint,
+  WasmHatchPaint,
   WasmImageMapping,
   WasmImagePaintOptions,
   WasmAuthoringVectorPath,
@@ -210,6 +211,7 @@ async function initializePyodide() {
   self.noonLinearGradient = (...args) => new WasmLinearGradient(...args);
   self.noonRadialGradient = (...args) => new WasmRadialGradient(...args);
   self.noonNoisePaint = (...args) => new WasmNoisePaint(...args);
+  self.noonHatchPaint = (...args) => new WasmHatchPaint(...args);
   self.noonImageMapping = (...args) => new WasmImageMapping(...args);
   self.noonImagePaintOptions = WasmImagePaintOptions;
   self.noonAuthoringImageOptions = WasmImageMobjectOptions;

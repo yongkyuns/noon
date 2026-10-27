@@ -33,6 +33,18 @@ struct PaintUniform {
 }
 
 impl PaintUniform {
+    fn set_colors(&mut self, colors: [noon_core::Color; 2]) {
+        for (index, color) in colors.into_iter().enumerate() {
+            self.stops[index].color = [
+                color.red * color.alpha,
+                color.green * color.alpha,
+                color.blue * color.alpha,
+                color.alpha,
+            ];
+            self.stops[index].position[0] = index as f32;
+        }
+    }
+
     fn set_stops(&mut self, stops: &[noon_core::GradientStop]) {
         self.metadata[0] = stops.len() as u32;
         for (target, stop) in self.stops.iter_mut().zip(stops) {
@@ -96,15 +108,15 @@ impl PaintUniform {
                     fraction[0] as f32,
                     fraction[1] as f32,
                 ];
-                for (index, color) in noise.colors().into_iter().enumerate() {
-                    result.stops[index].color = [
-                        color.red * color.alpha,
-                        color.green * color.alpha,
-                        color.blue * color.alpha,
-                        color.alpha,
-                    ];
-                    result.stops[index].position[0] = index as f32;
-                }
+                result.set_colors(noise.colors());
+            }
+            noon_core::SemanticPaint::Hatch(hatch) => {
+                let rows = noon_compile::project_hatch_mapping(hatch)
+                    .expect("checked local hatch mapping");
+                result.metadata = [2, 4, u32::from(hatch.cross()), 0];
+                result.image_u = rows[0];
+                result.image_v = rows[1];
+                result.set_colors(hatch.colors());
             }
             noon_core::SemanticPaint::Image(image) => {
                 let dimensions = images

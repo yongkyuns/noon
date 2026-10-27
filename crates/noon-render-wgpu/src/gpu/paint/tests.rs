@@ -24,6 +24,17 @@ fn gradient(first: Color) -> Arc<noon_core::SemanticPaint> {
     )))
 }
 
+fn hatch(options: noon_core::HatchPaintOptions) -> Arc<noon_core::SemanticPaint> {
+    Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
+        noon_core::HatchPaint::new(
+            Color::rgba(1.0, 0.0, 0.0, 0.5),
+            Color::rgba(0.0, 0.0, 1.0, 0.0),
+            options,
+        )
+        .unwrap(),
+    )))
+}
+
 fn runtime(geometry: GeometryRef) -> SceneInstance {
     SceneInstance::new(
         CompiledScene::compile_objects(
@@ -92,7 +103,7 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
 }
 
 #[test]
-fn path_gradient_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
+fn path_paint_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
     let objects = (0..1024)
         .map(|index| {
             let r = 1.0 + index as f32 / 2048.0;
@@ -121,6 +132,12 @@ fn path_gradient_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
     for paint in [
         Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
         Some(gradient(Color::rgb(0.0, 1.0, 0.0))),
+        Some(hatch(noon_core::HatchPaintOptions::default())),
+        Some(hatch(noon_core::HatchPaintOptions {
+            phase: [0.3, -0.7],
+            cross: true,
+            ..Default::default()
+        })),
         None,
     ] {
         runtime
@@ -139,6 +156,114 @@ fn path_gradient_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
         assert_eq!(prepared.stats.path_indices_repacked, 0);
         assert!(prepared.stats.render_order_positions_visited <= 256);
     }
+}
+
+#[test]
+fn hatch_parameters_update_one_uniform_among_100k_rows_then_settle_and_retire() {
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let objects = (0..100_000)
+        .map(|index| {
+            CompiledObject::new(
+                ObjectId::new(index),
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    let mut runtime = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
+    let mut preparer = FramePreparer::new();
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()));
+    runtime.take_frame_changes();
+    assert!(renderer.fill_paints.is_none());
+    let id = ObjectId::new(50_000);
+    let options = [
+        noon_core::HatchPaintOptions::default(),
+        noon_core::HatchPaintOptions {
+            phase: [0.375, -0.25],
+            ..Default::default()
+        },
+        noon_core::HatchPaintOptions {
+            spacing: 0.5,
+            width: 0.1,
+            angle: 0.3,
+            cross: true,
+            ..Default::default()
+        },
+    ];
+    let mut first_program = std::ptr::null();
+    for (iteration, options) in options.into_iter().enumerate() {
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: id,
+                style: runtime.frame().objects[50_000].style,
+                fill_paint: Some(hatch(options)),
+            })
+            .unwrap();
+        let changes = runtime.take_frame_changes();
+        assert_eq!(changes.object_indices(), &[50_000]);
+        let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+        assert_eq!(prepared.paint_changes, &[id]);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 0);
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.render_order_positions_visited, 0);
+        assert_eq!(
+            prepared
+                .paint_indices(RenderPrimitive::Circle, 0..100_000)
+                .unwrap()
+                .copied()
+                .collect::<Vec<_>>(),
+            [50_000]
+        );
+        let upload = renderer.upload(&device, &queue, &prepared);
+        assert_eq!(upload.bytes_uploaded, size_of::<PaintUniform>());
+        assert_eq!(upload.buffer_reallocations, usize::from(iteration == 0));
+        let program = renderer.fill_paints.as_deref().unwrap();
+        assert_eq!(program.residents.len(), 1);
+        assert_eq!(program.residents[&id].value.stops[0].color, [0.0; 4]);
+        assert_eq!(
+            program.residents[&id].value.stops[1].color,
+            [0.5, 0.0, 0.0, 0.5]
+        );
+        if iteration == 0 {
+            first_program = std::ptr::from_ref(program);
+        } else {
+            assert_eq!(std::ptr::from_ref(program), first_program);
+        }
+        let prepared = preparer.prepare_incremental(runtime.frame(), &FrameChanges::default());
+        assert!(prepared.paint_changes.is_empty());
+        assert_eq!(
+            renderer.upload(&device, &queue, &prepared),
+            UploadStats::default()
+        );
+    }
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetStyle {
+            object: id,
+            style: runtime.frame().objects[50_000].style,
+            fill_paint: None,
+        })
+        .unwrap();
+    let changes = runtime.take_frame_changes();
+    let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+    assert!(prepared
+        .paint_indices(RenderPrimitive::Circle, 0..100_000)
+        .unwrap()
+        .next()
+        .is_none());
+    assert_eq!(
+        renderer.upload(&device, &queue, &prepared),
+        UploadStats::default()
+    );
+    assert!(renderer
+        .fill_paints
+        .as_deref()
+        .unwrap()
+        .residents
+        .is_empty());
 }
 
 #[test]
