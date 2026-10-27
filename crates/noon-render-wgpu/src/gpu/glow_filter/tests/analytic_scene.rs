@@ -240,7 +240,7 @@ fn retained_painter_glow_pixels() {
         .unwrap();
         let request = EffectCaptureRequest {
             object_index: 1,
-            definition: (effect).into(),
+            definitions: &[effect.into()],
             texture_budget_bytes: 1_000_000,
         };
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -294,11 +294,11 @@ fn retained_painter_glow_pixels() {
                 &mut encoder,
                 &prepared,
                 EffectCaptureRequest {
-                    definition: (EffectUpdate::default()
+                    definitions: &[(EffectUpdate::default()
                         .intensity(0.0)
                         .apply_to(effect)
                         .unwrap())
-                    .into(),
+                    .into()],
                     ..request
                 },
             )
@@ -357,8 +357,12 @@ pub(super) fn semantic_runtime(source: &FrameState, effect: Glow) -> SceneInstan
     let projection = index.lower_scene(&store).unwrap();
     let compiled = CompiledScene::from_semantic_projection(&projection).unwrap();
     assert_eq!(
-        compiled.objects()[1].effect.as_ref().unwrap().attachment,
-        attachment
+        compiled.objects()[1]
+            .effects
+            .as_ref()
+            .unwrap()
+            .attachments(),
+        &[attachment]
     );
     let mut runtime = SceneInstance::new(compiled);
     // Ordinary runtime translation channel and seek, not an effects clock.
@@ -425,10 +429,7 @@ fn semantic_static_glow_publication_pixels() {
             runtime.seek(time).unwrap();
             let publication = runtime.take_renderer_publication();
             assert_eq!(
-                publication.frame().objects[1]
-                    .effect
-                    .as_ref()
-                    .unwrap()
+                super::only_effect(publication.frame().objects[1].effects.as_ref().unwrap())
                     .definition,
                 (effect).into()
             );

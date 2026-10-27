@@ -302,7 +302,7 @@ mod tests {
             objects: vec![FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 spatial: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,

@@ -149,7 +149,7 @@ impl SceneInstance {
             &[],
             EffectiveAnimationProperties {
                 fill_paint: row.fill_paint.clone(),
-                effect: row.effect.as_deref().copied(),
+                effects: row.effects.clone(),
                 z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,
@@ -265,8 +265,12 @@ impl SceneInstance {
             .filter(|&index| self.object_slot_is_live(index))
             .ok_or("interaction target is not live")?;
         let row = &self.frame.objects[index];
-        match row.effect.as_deref() {
-            Some(current) if *current == glow => {}
+        match row
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(glow.attachment))
+        {
+            Some(current) if current == glow => {}
             None if temporary && definition.intensity() == 0.0 => {}
             _ => return Err("foreign or stale click glow attachment".into()),
         }
@@ -275,6 +279,7 @@ impl SceneInstance {
             index,
             [Property::EffectIntensity],
             self.frame.time,
+            Some(glow.attachment),
         ) {
             return Ok(None);
         }
@@ -316,17 +321,21 @@ impl SceneInstance {
                     let row = &self.frame.objects[index];
                     self.object_slot_is_live(index)
                         && if let Some(pulse) = prepared.glow {
-                            row.effect.as_deref().is_some_and(|glow| {
-                                glow.attachment == pulse.attachment
-                                    && glow.definition.as_glow().is_some_and(|definition| {
+                            row.effects
+                                .as_ref()
+                                .and_then(|stack| stack.get(pulse.attachment))
+                                .is_some_and(|glow| {
+                                    glow.definition.as_glow().is_some_and(|definition| {
                                         definition.intensity() == pulse.source
                                     })
-                            }) && !self.interaction_properties_conflict(
-                                prepared.object,
-                                index,
-                                [Property::EffectIntensity],
-                                prepared.authored_time,
-                            )
+                                })
+                                && !self.interaction_properties_conflict(
+                                    prepared.object,
+                                    index,
+                                    [Property::EffectIntensity],
+                                    prepared.authored_time,
+                                    Some(pulse.attachment),
+                                )
                         } else {
                             prepared
                                 .channels
@@ -418,14 +427,15 @@ impl SceneInstance {
                 .filter(|&index| self.object_slot_is_live(index));
             if let Some(pulse) = driver.glow {
                 let exact = index
-                    .and_then(|index| self.frame.objects[index].effect.as_deref())
-                    .is_some_and(|glow| glow.attachment == pulse.attachment);
+                    .and_then(|index| self.frame.objects[index].effects.as_ref())
+                    .is_some_and(|stack| stack.get(pulse.attachment).is_some());
                 let conflict = index.is_some_and(|index| {
                     self.interaction_properties_conflict(
                         object,
                         index,
                         [Property::EffectIntensity],
                         driver.authored_time,
+                        Some(pulse.attachment),
                     )
                 });
                 let elapsed = wall_time - driver.origin.unwrap_or(wall_time);
@@ -676,6 +686,7 @@ impl SceneInstance {
                         index,
                         [Property::EffectIntensity],
                         self.frame.time,
+                        None,
                     )
             })
     }
@@ -756,6 +767,7 @@ impl SceneInstance {
             index,
             channels.iter().map(|channel| channel.property),
             since,
+            None,
         )
     }
 
@@ -765,6 +777,7 @@ impl SceneInstance {
         index: usize,
         properties: impl IntoIterator<Item = Property>,
         since: f64,
+        attachment: Option<SemanticNodeId>,
     ) -> bool {
         if self.effective_driver_rows.contains(&index)
             || !self.active_family_animation_indices.is_empty()
@@ -783,16 +796,10 @@ impl SceneInstance {
                     | Property::EffectRadius
                     | Property::EffectIntensity
                     | Property::EffectOffset => {
-                        self.frame.objects[index].effect.as_ref().map_or_else(
-                            || CompiledChannelKey::new(index as u32, property),
-                            |effect| {
-                                CompiledChannelKey::effect(
-                                    index as u32,
-                                    property,
-                                    effect.attachment,
-                                )
-                            },
-                        )
+                        let Some(attachment) = attachment else {
+                            return false;
+                        };
+                        CompiledChannelKey::effect(index as u32, property, attachment)
                     }
                     _ => CompiledChannelKey::new(index as u32, property),
                 };

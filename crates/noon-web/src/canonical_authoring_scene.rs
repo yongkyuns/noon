@@ -14968,8 +14968,14 @@ mod tests {
                 .iter()
                 .find(|row| row.id == id)
                 .unwrap()
-                .effect
+                .effects
                 .as_ref()
+                .and_then(|stack| {
+                    object
+                        .get_effect("glow")
+                        .ok()
+                        .and_then(|effect| stack.get(effect.node_id()))
+                })
                 .map(|effect| effect.definition.as_glow().unwrap().intensity())
         };
         for (time, expected) in [(0.125, 1.5), (0.375, 0.5), (0.5, 0.0)] {

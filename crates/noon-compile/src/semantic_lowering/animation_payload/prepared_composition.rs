@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::{btree_map::Entry, HashMap, HashSet};
 
 use noon_core::{
     validate_track_definition, AnimationOptions, CompositionTimeMapError, CompositionTimeMapStep,
@@ -331,7 +331,7 @@ where
         }
     }
     let mut captures = super::scheduled_captures::ScheduledCaptures::default();
-    let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
+    let mut driven = super::affine::DriverMap::<SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
     let mut admitted = HashSet::new();
     for member in prepared
@@ -623,7 +623,7 @@ where
                     .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 if snapshot.is_some()
-                    || from.effect.is_some()
+                    || from.effects.is_some()
                     || !source_effects.is_empty()
                     || !target_effects.is_empty()
                 {
@@ -647,30 +647,18 @@ where
                 // Newly admitted detached sources likewise start from their
                 // canonical authored attachment. Existing runtime rows must use
                 // their effective generation/value; no stale-generation fallback.
-                let effective_glow = from.effect.or_else(|| {
-                    let [source_effect] = source_effects.as_slice() else {
-                        return None;
-                    };
-                    let newly_admitted = admitted.contains(&leaf.target);
-                    if prepared.store().node(source_effect.attachment).is_some() && !newly_admitted
-                    {
-                        return None;
-                    }
-                    let definition = source_effect.definition;
-                    (newly_admitted
-                        || definition
-                            .as_glow()
-                            .is_some_and(|effect| effect.intensity() == 0.0))
-                    .then_some(crate::CompiledEffect {
-                        attachment: source_effect.attachment,
-                        definition,
-                    })
-                });
+                let effective_glow = super::glow_target::prepared_effective(
+                    from.effects.clone(),
+                    &source_effects,
+                    admitted.contains(&leaf.target),
+                    |attachment| prepared.store().node(attachment).is_none(),
+                )
+                .map_err(glow_error)?;
                 let glow_channels = super::glow_target::channels(
                     snapshot,
                     &source_effects,
                     &target_effects,
-                    effective_glow,
+                    effective_glow.as_deref(),
                     complete_priority,
                     &temporary_attachments,
                 )
@@ -691,6 +679,7 @@ where
                         &mut driven,
                         leaf.execution_object_id,
                         property,
+                        &values,
                         leaf.animation,
                     )
                     .map_err(|first_animation| {
@@ -844,23 +833,14 @@ where
                     .animation_effect_snapshot(leaf.target)
                     .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
-                if from.effect.is_none() {
-                    if let [attachment] = attachments.as_slice() {
-                        let definition = attachment.definition;
-                        if admitted.contains(&leaf.target)
-                            || (prepared.store().node(attachment.attachment).is_none()
-                                && definition
-                                    .as_glow()
-                                    .is_some_and(|effect| effect.intensity() == 0.0))
-                        {
-                            from.effect = Some(crate::CompiledEffect {
-                                attachment: attachment.attachment,
-                                definition,
-                            });
-                            captures.insert(leaf.execution_object_id, from.clone());
-                        }
-                    }
-                }
+                from.effects = super::glow_target::prepared_effective(
+                    from.effects.clone(),
+                    &attachments,
+                    admitted.contains(&leaf.target),
+                    |attachment| prepared.store().node(attachment).is_none(),
+                )
+                .map_err(glow_error)?;
+                captures.insert(leaf.execution_object_id, from.clone());
                 let values = super::glow_pulse::values(
                     prepared.store(),
                     prepared
@@ -868,7 +848,7 @@ where
                         .expect("validated pulse target"),
                     source,
                     &attachments,
-                    from.effect,
+                    from.effects.as_deref(),
                     intensity,
                 )
                 .map_err(glow_error)?;
@@ -876,6 +856,7 @@ where
                     &mut driven,
                     leaf.execution_object_id,
                     Property::EffectIntensity,
+                    &values,
                     leaf.animation,
                 )
                 .map_err(|first_animation| {
@@ -1407,7 +1388,7 @@ where
     } else if admitted {
         EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
@@ -1457,7 +1438,7 @@ fn source_camera_profile(
 fn push_prepared_channel(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
     channel: super::affine::LoweredAffineChannel,
-    driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
+    driven: &mut super::affine::DriverMap<SemanticTransactionNodeRef>,
     tracks: &mut Vec<PreparedSemanticAnimationTrack>,
 ) -> Result<(), PreparedSemanticAnimationLoweringError> {
     let umbrella_conflict = super::affine::transform_driver_conflict(
@@ -1645,7 +1626,7 @@ mod tests {
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation,
@@ -2198,7 +2179,7 @@ mod tests {
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
             fill_paint: None,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(3.0, 2.0),

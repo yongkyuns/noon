@@ -21,9 +21,9 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V21 carries the shared tagged fill paint in the genuine execution/render
-// worker envelope. Older readers reject instead of discarding a paint kind.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 23;
+// V24 carries ordered, generation-checked leaf effect bindings across the
+// genuine execution/render worker boundary. Older envelopes reject.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -399,6 +399,7 @@ impl From<&ObjectContentRef> for TransportObjectContent {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetainedTransportObjectState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
@@ -406,8 +407,8 @@ pub struct RetainedTransportObjectState {
     pub slot: TransportSlotId,
     pub order: u32,
     pub object: ObjectId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effect: Option<TransportEffectState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<TransportEffectState>,
     /// Effective layer of this published row, not its painter rank.
     pub z_index: f64,
     pub content: TransportObjectContent,
@@ -554,7 +555,7 @@ impl std::fmt::Display for RetainedExecutionTransportError {
         match self {
             Self::InvalidEffectState(slot) => write!(
                 formatter,
-                "retained worker slot {}:{} contains invalid or unsupported glow",
+                "retained worker slot {}:{} contains invalid or unsupported effect stack",
                 slot.slot, slot.generation
             ),
             Self::InvalidSpatialState(slot) => write!(
@@ -1900,7 +1901,16 @@ fn transport_object(
         },
         order: slot_index,
         object: object.id,
-        effect: object.effect.as_deref().map(TransportEffectState::from),
+        effects: object
+            .effects
+            .as_ref()
+            .map(|stack| {
+                stack
+                    .iter()
+                    .map(|effect| TransportEffectState::from(&effect))
+                    .collect()
+            })
+            .unwrap_or_default(),
         z_index: object.z_index,
         content: (&object.content).into(),
         transform: object.transform,
@@ -1950,10 +1960,14 @@ fn validate_object_fields(
 ) -> Result<(), RetainedExecutionTransportError> {
     noon_compile::validate_fill_paint(object.object, object.fill_paint.as_deref())
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
-    if object
-        .effect
-        .is_some_and(|effect| effect.to_compiled().is_none())
-        || (object.effect.is_some()
+    if object.effects.len() > noon_core::MAX_EFFECT_STACK_LEN
+        || object.effects.iter().enumerate().any(|(index, effect)| {
+            effect.to_compiled().is_none()
+                || object.effects[..index]
+                    .iter()
+                    .any(|previous| previous.attachment == effect.attachment)
+        })
+        || (!object.effects.is_empty()
             && (!glow_content_is_supported(&object.content)
                 || (matches!(&object.content, TransportObjectContent::Image { .. })
                     && !noon_core::SemanticImageContent::supports_render_style(&object.style))
@@ -2117,14 +2131,25 @@ fn frame_object(
     Ok(FrameObjectState {
         fill_paint,
         draw_enabled: object.draw_enabled,
-        effect: object
-            .effect
-            .map(|value| {
-                value.to_compiled().map(Arc::new).ok_or(
-                    RetainedExecutionTransportError::InvalidEffectState(object.slot),
-                )
-            })
-            .transpose()?,
+        effects: if object.effects.is_empty() {
+            None
+        } else {
+            let bindings =
+                object
+                    .effects
+                    .iter()
+                    .map(|value| {
+                        value.to_compiled().ok_or(
+                            RetainedExecutionTransportError::InvalidEffectState(object.slot),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+            Some(Arc::new(
+                noon_compile::CompiledEffectStack::new(bindings).map_err(|_| {
+                    RetainedExecutionTransportError::InvalidEffectState(object.slot)
+                })?,
+            ))
+        },
         spatial: spatial.map(Box::new),
         z_index: object.z_index,
         id: object.object,
@@ -2198,7 +2223,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
@@ -2211,7 +2236,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(12),
@@ -2231,6 +2256,12 @@ mod tests {
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
         }
+    }
+
+    fn effect_stack(
+        effect: &noon_compile::CompiledEffect,
+    ) -> Arc<noon_compile::CompiledEffectStack> {
+        Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
     }
 
     #[test]
@@ -2292,6 +2323,119 @@ mod tests {
     }
 
     #[test]
+    fn ordered_effects_roundtrip_full_profile_and_reject_invalid_suffix_atomically() {
+        use noon_compile::{CompiledEffect, CompiledEffectStack};
+        let bindings: Vec<_> = (0..noon_core::MAX_EFFECT_STACK_LEN)
+            .map(|index| CompiledEffect {
+                attachment: SemanticNodeId::new(90 + index as u32, u32::MAX - index as u32),
+                definition: match index % 3 {
+                    0 => noon_core::Blur::new(
+                        EffectUpdate::default().radius(noon_core::Pixels(1.25 + index as f64)),
+                    )
+                    .unwrap()
+                    .into(),
+                    1 => Glow::new(
+                        EffectUpdate::default()
+                            .radius(noon_core::Pixels(2.5))
+                            .intensity(0.75),
+                    )
+                    .unwrap()
+                    .into(),
+                    _ => noon_core::Shadow::new(
+                        EffectUpdate::default()
+                            .offset(noon_core::EffectOffset::Pixels([-2.25, 3.75])),
+                    )
+                    .unwrap()
+                    .into(),
+                },
+            })
+            .collect();
+        let mut frame = mixed_frame();
+        frame.objects[0].effects = Some(Arc::new(
+            CompiledEffectStack::new(bindings.clone()).unwrap(),
+        ));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(27);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            json["objects"][0]["effects"].as_array().unwrap().len(),
+            noon_core::MAX_EFFECT_STACK_LEN
+        );
+        assert!(json["objects"][0].get("effect").is_none());
+        assert!(json["objects"][1].get("effects").is_none());
+        let mut legacy = json.clone();
+        legacy["objects"][0]["effect"] = legacy["objects"][0]["effects"][0].clone();
+        assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(legacy).is_err());
+        let mut mirror = test_mirror();
+        mirror.apply(serde_json::from_value(json).unwrap()).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+        let mut changed = bindings;
+        changed.swap(0, 7);
+        changed[1].definition = EffectUpdate::default()
+            .intensity(1.25)
+            .apply_to(changed[1].definition)
+            .unwrap();
+        frame.objects[0].effects = Some(Arc::new(CompiledEffectStack::new(changed).unwrap()));
+        let delta = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(delta.objects.len(), 1);
+        let before = mirror.frame().unwrap().clone();
+        let sequence = mirror.next_sequence;
+        let context = mirror.publication_context;
+        for failure in 0..3 {
+            let mut bad = delta.clone();
+            // A valid first row must not publish before a bad later binding.
+            let mut suffix = snapshot.objects[1].clone();
+            suffix.effects = snapshot.objects[0].effects.clone();
+            match failure {
+                0 => {
+                    suffix.effects[7].attachment = suffix.effects[0].attachment;
+                }
+                1 => {
+                    suffix.effects.push(suffix.effects[0]);
+                }
+                _ => {
+                    suffix.effects[7].definition = TransportEffectDefinition::Blur {
+                        radius: EffectRadius::Pixels(-1.0),
+                    };
+                }
+            }
+            bad.objects.push(suffix);
+            assert!(matches!(
+                mirror.apply(bad),
+                Err(RetainedExecutionTransportError::InvalidEffectState(_))
+            ));
+            assert_eq!(mirror.frame().unwrap(), &before);
+            assert_eq!(mirror.next_sequence, sequence);
+            assert_eq!(mirror.publication_context, context);
+        }
+        mirror
+            .apply(serde_json::from_str(&serde_json::to_string(&delta).unwrap()).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+        assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
+    }
+
+    #[test]
     fn tagged_blur_reaches_the_worker_and_rejects_unsupported_fields() {
         let mut frame = mixed_frame();
         let effect = Arc::new(noon_compile::CompiledEffect {
@@ -2302,7 +2446,7 @@ mod tests {
             .unwrap()
             .into(),
         });
-        frame.objects[0].effect = Some(effect.clone());
+        frame.objects[0].effects = Some(effect_stack(&effect));
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let snapshot = encoder
             .encode_snapshot_with_context(
@@ -2312,17 +2456,20 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(value["objects"][0]["effect"]["kind"], "blur");
+        assert_eq!(value["objects"][0]["effects"][0]["kind"], "blur");
         let mut invalid = value.clone();
-        invalid["objects"][0]["effect"]["intensity"] = serde_json::json!(1.0);
+        invalid["objects"][0]["effects"][0]["intensity"] = serde_json::json!(1.0);
         assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(invalid).is_err());
         let mut mirror = test_mirror();
         mirror
             .apply(serde_json::from_value(value).unwrap())
             .unwrap();
         assert_eq!(
-            mirror.frame().unwrap().objects[0].effect.as_deref(),
-            Some(effect.as_ref())
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(effect.attachment)),
+            Some(*effect)
         );
     }
 
@@ -2339,7 +2486,7 @@ mod tests {
             .unwrap()
             .into(),
         });
-        frame.objects[0].effect = Some(effect.clone());
+        frame.objects[0].effects = Some(effect_stack(&effect));
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let snapshot = encoder
             .encode_snapshot_with_context(
@@ -2349,10 +2496,10 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(snapshot).unwrap();
-        assert_eq!(value["objects"][0]["effect"]["kind"], "shadow");
+        assert_eq!(value["objects"][0]["effects"][0]["kind"], "shadow");
         for field in ["intensity", "source"] {
             let mut invalid = value.clone();
-            invalid["objects"][0]["effect"][field] = serde_json::json!(0.0);
+            invalid["objects"][0]["effects"][0][field] = serde_json::json!(0.0);
             assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(invalid).is_err());
         }
         let mut mirror = test_mirror();
@@ -2360,8 +2507,11 @@ mod tests {
             .apply(serde_json::from_value(value).unwrap())
             .unwrap();
         assert_eq!(
-            mirror.frame().unwrap().objects[0].effect.as_deref(),
-            Some(effect.as_ref())
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(effect.attachment)),
+            Some(*effect)
         );
     }
 
@@ -2380,22 +2530,19 @@ mod tests {
             .unwrap())
             .into(),
         });
-        frame.objects[0].effect = Some(effect.clone());
+        frame.objects[0].effects = Some(effect_stack(&effect));
         let camera = Camera2DState::default();
         let context = noon_core::PublicationContext::default();
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 23);
-        assert_eq!(
-            snapshot.objects[0].effect.unwrap().attachment,
-            effect.attachment
-        );
-        assert!(snapshot.objects[1].effect.is_none());
+        assert_eq!(snapshot.protocol_version, 24);
+        assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
+        assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();
         assert_eq!(
-            json.matches("\"effect\"").count(),
+            json.matches("\"effects\"").count(),
             1,
             "no-effect rows omit the wire field"
         );
@@ -2406,10 +2553,13 @@ mod tests {
             RetainedTransportApplyOutcome::Applied
         );
         assert_eq!(
-            mirror.frame().unwrap().objects[0].effect.as_deref(),
-            Some(effect.as_ref())
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(effect.attachment)),
+            Some(*effect)
         );
-        assert!(mirror.frame().unwrap().objects[1].effect.is_none());
+        assert!(mirror.frame().unwrap().objects[1].effects.is_none());
 
         // A parameter-only publication keeps the same generational attachment.
         let changed = Arc::new(noon_compile::CompiledEffect {
@@ -2419,7 +2569,7 @@ mod tests {
                 .apply_to(effect.definition)
                 .unwrap(),
         });
-        frame.objects[0].effect = Some(changed.clone());
+        frame.objects[0].effects = Some(effect_stack(&changed));
         let delta = encoder
             .encode_incremental_with_context(
                 &frame,
@@ -2435,13 +2585,16 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&delta).unwrap()).unwrap();
         mirror.apply(wire).unwrap();
         assert_eq!(
-            mirror.frame().unwrap().objects[0].effect.as_deref(),
-            Some(changed.as_ref())
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(changed.attachment)),
+            Some(*changed)
         );
 
         // Removing the exact effect clears its renderer-derived scope; the old
         // generation is not recycled or replaced by a transport allocator.
-        frame.objects[0].effect = None;
+        frame.objects[0].effects = None;
         let removed = encoder
             .encode_incremental_with_context(
                 &frame,
@@ -2452,12 +2605,12 @@ mod tests {
             .unwrap()
             .unwrap();
         mirror.apply(removed).unwrap();
-        assert!(mirror.frame().unwrap().objects[0].effect.is_none());
+        assert!(mirror.frame().unwrap().objects[0].effects.is_none());
 
-        // Both independently evolved predecessors must fail closed: V15 glow
-        // and V16 geometry retirement are not the combined V17 schema.
+        // Every predecessor, including the former single-binding schema,
+        // rejects rather than silently discarding ordered effects.
         let next_sequence = mirror.next_sequence;
-        for version in [14, 15, 16] {
+        for version in 14..24 {
             let mut old = snapshot.clone();
             old.protocol_version = version;
             assert_eq!(
@@ -2475,7 +2628,7 @@ mod tests {
             attachment: SemanticNodeId::new(99, 7),
             definition: (Glow::default()).into(),
         });
-        frame.objects[0].effect = Some(valid.clone());
+        frame.objects[0].effects = Some(effect_stack(&valid));
         let camera = Camera2DState::default();
         let context = PublicationContext::default();
         let mut encoder = RetainedExecutionDeltaEncoder::new(9);
@@ -2488,7 +2641,7 @@ mod tests {
             {
                 let mut corrupt = snapshot.clone();
                 if let TransportEffectDefinition::Glow { intensity, .. } =
-                    &mut corrupt.objects[0].effect.as_mut().unwrap().definition
+                    &mut corrupt.objects[0].effects[0].definition
                 {
                     *intensity = 9.0;
                 } else {
@@ -2499,7 +2652,7 @@ mod tests {
             {
                 let mut corrupt = snapshot.clone();
                 if let TransportEffectDefinition::Glow { radius, .. } =
-                    &mut corrupt.objects[0].effect.as_mut().unwrap().definition
+                    &mut corrupt.objects[0].effects[0].definition
                 {
                     *radius = EffectRadius::Scene(-1.0);
                 } else {
@@ -2510,7 +2663,7 @@ mod tests {
             {
                 let mut corrupt = snapshot.clone();
                 if let TransportEffectDefinition::Glow { color, .. } =
-                    &mut corrupt.objects[0].effect.as_mut().unwrap().definition
+                    &mut corrupt.objects[0].effects[0].definition
                 {
                     color.red = f32::NAN;
                 } else {
@@ -2541,7 +2694,7 @@ mod tests {
             let bad_slot = corrupt
                 .objects
                 .iter()
-                .find(|row| row.effect.is_some() && validate_object_fields(row).is_err())
+                .find(|row| !row.effects.is_empty() && validate_object_fields(row).is_err())
                 .unwrap()
                 .slot;
             assert_eq!(
@@ -2556,8 +2709,11 @@ mod tests {
 
         mirror.apply(snapshot).unwrap();
         assert_eq!(
-            mirror.frame().unwrap().objects[0].effect.as_deref(),
-            Some(valid.as_ref())
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(valid.attachment)),
+            Some(*valid)
         );
         let next_sequence = mirror.next_sequence;
         let mut delta = encoder
@@ -2570,7 +2726,7 @@ mod tests {
             .unwrap()
             .unwrap();
         if let TransportEffectDefinition::Glow { intensity, .. } =
-            &mut delta.objects[0].effect.as_mut().unwrap().definition
+            &mut delta.objects[0].effects[0].definition
         {
             *intensity = f64::INFINITY;
         } else {
@@ -2587,11 +2743,14 @@ mod tests {
         );
         assert_eq!(mirror.next_sequence, next_sequence);
         assert_eq!(
-            mirror.frame().unwrap().objects[0].effect.as_deref(),
-            Some(valid.as_ref())
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(valid.attachment)),
+            Some(*valid)
         );
 
-        frame.objects[1].effect = Some(valid.clone());
+        frame.objects[1].effects = Some(effect_stack(&valid));
         frame.reveals[1] = 0.5;
         frame.objects[1].style = Style {
             stroke: Some(Color::WHITE),
@@ -2690,7 +2849,7 @@ mod tests {
                     attachment: SemanticNodeId::new(99, 7),
                     definition: (Glow::new(EffectUpdate::default().source(source)).unwrap()).into(),
                 });
-                frame.objects[0].effect = Some(effect.clone());
+                frame.objects[0].effects = Some(effect_stack(&effect));
                 let camera = Camera2DState::default();
                 let context = PublicationContext::default();
                 let mut encoder = RetainedExecutionDeltaEncoder::new(9);
@@ -2710,7 +2869,13 @@ mod tests {
                 mirror.apply(snapshot).unwrap();
                 let installed = &mirror.frame().unwrap().objects[0];
                 assert_eq!(installed.content.image(), Some(image));
-                assert_eq!(installed.effect.as_deref(), Some(effect.as_ref()));
+                assert_eq!(
+                    installed
+                        .effects
+                        .as_ref()
+                        .and_then(|stack| stack.get(effect.attachment)),
+                    Some(*effect)
+                );
                 assert_eq!(installed.style, frame.objects[0].style);
 
                 let changed = Arc::new(noon_compile::CompiledEffect {
@@ -2720,7 +2885,7 @@ mod tests {
                         .apply_to(effect.definition)
                         .unwrap(),
                 });
-                frame.objects[0].effect = Some(changed.clone());
+                frame.objects[0].effects = Some(effect_stack(&changed));
                 let delta = encoder
                     .encode_incremental_with_context(
                         &frame,
@@ -2758,8 +2923,11 @@ mod tests {
                     Some(image)
                 );
                 assert_eq!(
-                    mirror.frame().unwrap().objects[0].effect.as_deref(),
-                    Some(changed.as_ref())
+                    mirror.frame().unwrap().objects[0]
+                        .effects
+                        .as_ref()
+                        .and_then(|stack| stack.get(changed.attachment)),
+                    Some(*changed)
                 );
                 assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
             }
@@ -3569,7 +3737,7 @@ mod tests {
         replaced.objects.push(FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
@@ -3691,7 +3859,7 @@ mod tests {
         replaced.objects.push(FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),

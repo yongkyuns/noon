@@ -27,11 +27,14 @@ fn text_objects(source: Option<&FrameState>, effect: Option<Glow>) -> SceneInsta
                 let mut object =
                     CompiledObject::new(row.id, row.content.clone(), row.transform, row.style);
                 if i == 1 {
-                    object.effect = effect.map(|definition| {
-                        Arc::new(CompiledEffect {
-                            attachment: SemanticNodeId::new(900, 1),
-                            definition: definition.into(),
-                        })
+                    object.effects = effect.map(|definition| {
+                        Arc::new(
+                            noon_compile::CompiledEffectStack::new([CompiledEffect {
+                                attachment: SemanticNodeId::new(900, 1),
+                                definition: definition.into(),
+                            }])
+                            .unwrap(),
+                        )
                     });
                 }
                 object
@@ -184,15 +187,15 @@ fn composite(dst: &mut [u8], src: &[u8]) {
 }
 fn edit_intensity(runtime: &mut SceneInstance, intensity: f64) {
     let row = &runtime.frame().objects[1];
-    let mut effect = **row.effect.as_ref().unwrap();
+    let mut effect = super::only_effect(row.effects.as_ref().unwrap());
     effect.definition = EffectUpdate::default()
         .intensity(intensity)
         .apply_to(effect.definition)
         .unwrap();
     runtime
-        .apply_execution_patch(&ExecutionPatch::SetEffect {
+        .apply_execution_patch(&ExecutionPatch::SetEffects {
             object: row.id,
-            effect: Arc::new(effect),
+            effects: Arc::new(noon_compile::CompiledEffectStack::new([effect]).unwrap()),
         })
         .unwrap();
 }
@@ -274,11 +277,8 @@ fn automatic_retained_host_glow_pixels() {
             }
             edit_intensity(&mut runtime, 0.5);
             let (edited_image, edit) = host.render(&device, &queue, &mut runtime, offscreen);
-            let edited_definition = runtime.frame().objects[1]
-                .effect
-                .as_ref()
-                .unwrap()
-                .definition;
+            let edited_definition =
+                super::only_effect(runtime.frame().objects[1].effects.as_ref().unwrap()).definition;
             let mut edited_reference = expected(
                 &device,
                 &queue,

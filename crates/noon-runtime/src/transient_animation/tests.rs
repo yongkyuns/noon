@@ -179,7 +179,9 @@ fn glow_runtime(intensity: f64) -> (SceneInstance, ObjectId, noon_compile::Compi
             ..Style::default()
         },
     );
-    compiled.effect = Some(std::sync::Arc::new(glow));
+    compiled.effects = Some(std::sync::Arc::new(
+        noon_compile::CompiledEffectStack::new([glow]).unwrap(),
+    ));
     (
         SceneInstance::new(CompiledScene::compile_objects(vec![compiled], &[]).unwrap()),
         object,
@@ -244,8 +246,10 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
         runtime
             .effective_object(object)
             .unwrap()
-            .effect
+            .effects
             .as_ref()
+            .unwrap()
+            .get(glow.attachment)
             .unwrap()
             .definition
             .as_glow()
@@ -257,12 +261,15 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
         .color(Color::BLUE)
         .radius(noon_core::EffectRadius::Scene(0.3));
     runtime
-        .apply_execution_patch(&noon_compile::ExecutionPatch::SetEffect {
+        .apply_execution_patch(&noon_compile::ExecutionPatch::SetEffects {
             object,
-            effect: std::sync::Arc::new(noon_compile::CompiledEffect {
-                attachment: glow.attachment,
-                definition: edited.apply_to(glow.definition).unwrap(),
-            }),
+            effects: std::sync::Arc::new(
+                noon_compile::CompiledEffectStack::new([noon_compile::CompiledEffect {
+                    attachment: glow.attachment,
+                    definition: edited.apply_to(glow.definition).unwrap(),
+                }])
+                .unwrap(),
+            ),
         })
         .unwrap();
     runtime.advance_interactions(0.6).unwrap();
@@ -271,8 +278,10 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
     let final_glow = runtime
         .effective_object(object)
         .unwrap()
-        .effect
+        .effects
         .as_ref()
+        .unwrap()
+        .get(glow.attachment)
         .unwrap()
         .definition;
     assert_eq!(final_glow.as_glow().unwrap().color(), Color::BLUE);

@@ -337,7 +337,7 @@ impl SemanticExecutionIndex {
                 // not the shared value-lowering helper. Prepared transactions also
                 // lower provisional IDs which intentionally do not exist in the
                 // committed store yet.
-                lowered.effect = lower_glow_attachment(semantic_id, state, store)?;
+                lowered.effects = lower_effect_stack(semantic_id, state, store)?;
                 pending.push((semantic_id, lowered));
             }
         }
@@ -357,7 +357,7 @@ impl SemanticExecutionIndex {
             .map(|(semantic_id, state)| SemanticExecutionObject {
                 fill_paint: state.fill_paint,
                 semantic_id,
-                effect: state.effect,
+                effects: state.effects,
                 execution_id: self.ensure_object(semantic_id),
                 content: state.content,
                 base_transform: state.base_transform,
@@ -457,7 +457,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 pub struct SemanticExecutionObject {
     pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
-    pub effect: Option<std::sync::Arc<crate::CompiledEffect>>,
+    pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
@@ -601,7 +601,7 @@ impl std::fmt::Display for SemanticLoweringError {
             ),
             Self::UnsupportedEffectProfile { owner } => write!(
                 formatter,
-                "effect on {}:{} requires one attachment on ordinary planar 2D content",
+                "effect on {}:{} requires the finite effect stack profile on ordinary planar 2D content",
                 owner.slot(),
                 owner.generation()
             ),
@@ -874,7 +874,7 @@ fn lower_graph_dependencies(
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
     pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
-    pub(super) effect: Option<std::sync::Arc<crate::CompiledEffect>>,
+    pub(super) effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
     pub(super) base_style: Style,
@@ -911,11 +911,11 @@ pub(super) fn object_requires_spatial_lowering(
         )
 }
 
-fn lower_glow_attachment(
+fn lower_effect_stack(
     owner: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,
-) -> Result<Option<std::sync::Arc<crate::CompiledEffect>>, SemanticLoweringError> {
+) -> Result<Option<std::sync::Arc<crate::CompiledEffectStack>>, SemanticLoweringError> {
     let effects = store
         .node(owner)
         .ok_or(SemanticStoreError::UnknownNode(owner))?
@@ -924,19 +924,23 @@ fn lower_glow_attachment(
         return Ok(None);
     }
     let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner };
-    let [attachment] = effects else {
-        return Err(unsupported());
-    };
-    validate_effect_source_profile(owner, state, store)?;
-    let effect = store.semantic_effect_state(*attachment)?;
-    if effect.owner() != owner {
+    if effects.len() > noon_core::MAX_EFFECT_STACK_LEN {
         return Err(unsupported());
     }
-    let definition = effect.definition();
-    Ok(Some(std::sync::Arc::new(crate::CompiledEffect {
-        attachment: *attachment,
-        definition,
-    })))
+    validate_effect_source_profile(owner, state, store)?;
+    let mut lowered = Vec::with_capacity(effects.len());
+    for &attachment in effects {
+        let effect = store.semantic_effect_state(attachment)?;
+        if effect.owner() != owner {
+            return Err(unsupported());
+        }
+        lowered.push(crate::CompiledEffect {
+            attachment,
+            definition: effect.definition(),
+        });
+    }
+    let stack = crate::CompiledEffectStack::new(lowered).map_err(|_| unsupported())?;
+    Ok(Some(std::sync::Arc::new(stack)))
 }
 
 pub(super) fn validate_effect_source_profile(
@@ -1089,7 +1093,7 @@ pub(super) fn lower_object_state(
     };
     Ok(LoweredObjectState {
         fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
-        effect: None,
+        effects: None,
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
@@ -1549,10 +1553,7 @@ mod tests {
                     .get(image.resource())
                     .is_some());
                 assert_eq!(
-                    row.effect
-                        .as_ref()
-                        .unwrap()
-                        .definition
+                    row.effects.as_ref().unwrap().definitions()[0]
                         .as_glow()
                         .unwrap()
                         .source(),

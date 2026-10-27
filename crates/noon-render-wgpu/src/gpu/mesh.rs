@@ -1756,7 +1756,7 @@ mod tests {
                 .map(|index| noon_runtime::FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     id: noon_core::ObjectId::new(index + 1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
                     text_bounds: None,

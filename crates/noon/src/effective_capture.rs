@@ -192,15 +192,17 @@ pub(crate) fn stage_effect_copy(
     let node = store
         .node(source)
         .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.effect.as_deref()) {
+    match (node.effect_ids(), observed.object.effects.as_deref()) {
         ([], None) => Ok(()),
-        ([attachment], Some(effect)) if *attachment == effect.attachment => {
-            store.copy_effect_into_with_definition(
-                *attachment,
-                target,
-                effect.definition,
-                transaction,
-            )?;
+        (attachments, Some(effects)) if attachments == effects.attachments() => {
+            for effect in effects.iter() {
+                store.copy_effect_into_with_definition(
+                    effect.attachment,
+                    target,
+                    effect.definition,
+                    transaction,
+                )?;
+            }
             Ok(())
         }
         // Never rebind a stale generation by name or silently lose an effect.

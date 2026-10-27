@@ -939,7 +939,7 @@ mod tests {
         let first = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -952,7 +952,7 @@ mod tests {
         let second = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -986,7 +986,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: first.id,
@@ -999,7 +999,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: second.id,

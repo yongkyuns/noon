@@ -55,6 +55,7 @@ pub mod noise_paint;
 pub mod numeric_decimal;
 pub mod object_membership;
 pub mod object_membership_queries;
+pub mod ordered_effects;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;

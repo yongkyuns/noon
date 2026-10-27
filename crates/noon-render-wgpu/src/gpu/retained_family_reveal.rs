@@ -253,7 +253,7 @@ mod tests {
         let text = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -266,7 +266,7 @@ mod tests {
         let circle = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -301,7 +301,7 @@ mod tests {
         let first_object = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
@@ -314,7 +314,7 @@ mod tests {
         let second_object = noon_runtime::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(21),
@@ -342,7 +342,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(20),
@@ -355,7 +355,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(21),
@@ -448,7 +448,7 @@ mod tests {
         let object = FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),

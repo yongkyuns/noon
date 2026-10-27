@@ -15,7 +15,7 @@ fn static_geometry_frame() -> FrameState {
         .map(|index| FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(index as u64),
@@ -108,7 +108,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
             .map(|index| FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),
@@ -285,7 +285,7 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     frame.objects.push(FrameObjectState {
         fill_paint: None,
         draw_enabled: true,
-        effect: None,
+        effects: None,
         spatial: None,
         z_index: 0.0,
         id: ObjectId::new(STATIC_OBJECTS as u64),
@@ -384,7 +384,7 @@ fn one_text_update_stays_local_in_ten_thousand_glyph_mixed_scene() {
         frame.objects.push(FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new((STATIC_OBJECTS + index) as u64),

@@ -299,7 +299,7 @@ fn mixed_text_path_image_and_nested_alias_copy_preserve_leaf_effect_meaning() {
             .find(|row| row.id == id)
             .unwrap();
         let effect = leaf.get_effect("accent").unwrap();
-        let compiled_effect = row.effect.as_ref().unwrap();
+        let compiled_effect = row.effects.as_ref().unwrap().get(effect.node_id()).unwrap();
         assert_eq!(compiled_effect.attachment, effect.node_id());
         assert_eq!(compiled_effect.definition, (value(&effect)).into());
         let copied = copy.mobject(leaf).unwrap();

@@ -797,6 +797,15 @@ pub async fn create_direct_blur_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Ordered leaf appearance through a normal shared Rust live program.
+#[wasm_bindgen(js_name = createDirectOrderedEffectsSmokeRenderer)]
+pub async fn create_direct_ordered_effects_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordered_effects::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct shared Rust/WASM shadow program, paired with the ordinary Python scene.
 #[wasm_bindgen(js_name = createDirectShadowSmokeRenderer)]
 pub async fn create_direct_shadow_smoke_renderer(

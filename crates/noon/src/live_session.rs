@@ -6339,14 +6339,13 @@ mod recursive_composition_tests {
                     live.advance_segment_to(segment, 0.5).unwrap();
                     assert_eq!(live.session.frame().objects.len(), 1);
                     assert_eq!(
-                        live.session.frame().objects[0]
-                            .effect
-                            .as_ref()
-                            .unwrap()
-                            .definition
-                            .as_glow()
-                            .unwrap()
-                            .intensity(),
+                        crate::effect_authoring::only_effect(
+                            live.session.frame().objects[0].effects.as_ref().unwrap()
+                        )
+                        .definition
+                        .as_glow()
+                        .unwrap()
+                        .intensity(),
                         midpoint
                     );
                     live.advance_segment_to(segment, 1.0).unwrap();
@@ -6362,14 +6361,13 @@ mod recursive_composition_tests {
                     let rewind = live.session.seek(0.5).unwrap();
                     assert_eq!(rewind.objects.len(), 1);
                     assert_eq!(
-                        rewind.objects[0]
-                            .effect
-                            .as_ref()
-                            .unwrap()
-                            .definition
-                            .as_glow()
-                            .unwrap()
-                            .intensity(),
+                        crate::effect_authoring::only_effect(
+                            rewind.objects[0].effects.as_ref().unwrap()
+                        )
+                        .definition
+                        .as_glow()
+                        .unwrap()
+                        .intensity(),
                         midpoint
                     );
                 }

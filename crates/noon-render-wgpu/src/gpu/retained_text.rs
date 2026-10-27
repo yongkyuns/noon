@@ -2650,7 +2650,7 @@ fn validate_visible_object_indices(
 }
 
 fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
-    object.effect.is_some()
+    object.effects.is_some()
         && !(matches!(
             object.geometry(),
             Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
@@ -2822,7 +2822,7 @@ impl RetainedFramePreparer {
         self.scratch.objects.push(FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: scratch_id,
@@ -4627,7 +4627,7 @@ mod tests {
                     FrameObjectState {
                         fill_paint: None,
                         draw_enabled: true,
-                        effect: None,
+                        effects: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4640,7 +4640,7 @@ mod tests {
                     FrameObjectState {
                         fill_paint: None,
                         draw_enabled: true,
-                        effect: None,
+                        effects: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4683,7 +4683,7 @@ mod tests {
                     FrameObjectState {
                         fill_paint: None,
                         draw_enabled: true,
-                        effect: None,
+                        effects: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4696,7 +4696,7 @@ mod tests {
                     FrameObjectState {
                         fill_paint: None,
                         draw_enabled: true,
-                        effect: None,
+                        effects: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -5010,7 +5010,7 @@ mod tests {
             FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(id),
@@ -5783,7 +5783,7 @@ mod tests {
         frame.objects.push(FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(3),

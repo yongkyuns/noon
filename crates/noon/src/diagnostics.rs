@@ -187,7 +187,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                 "stroke_join": object.style.stroke_join, "stroke_cap": object.style.stroke_cap,
                 "style_opacity": object.style.opacity, "appearance": object.appearance,
                 "reveal": frame.reveal(index), "morph": frame.morph(index),
-                "effect": object.effect.as_deref().map(effect_json),
+                "effects": object.effects.as_ref().map(|stack|stack.iter().map(|effect|effect_json(&effect)).collect::<Vec<_>>()).unwrap_or_default(),
             })
         })
         .collect::<Vec<_>>();
@@ -233,6 +233,16 @@ mod tests {
         source
             .set_glow(crate::effects::EffectUpdate::default().intensity(0.5))
             .unwrap();
+        source
+            .add_effect(
+                crate::effects::Blur::new(
+                    crate::effects::EffectUpdate::default().radius(crate::effects::Pixels(2.0)),
+                )
+                .unwrap(),
+                "soften",
+            )
+            .unwrap();
+        let soften = source.get_effect("soften").unwrap().node_id();
         scene.add(&source).unwrap();
         let attachment = source.get_effect("glow").unwrap().node_id();
         let mut execution = scene.into_execution().unwrap();
@@ -246,12 +256,25 @@ mod tests {
         let capture = execution_frame_value(session);
         assert_eq!(capture["interactions_active"], false);
         assert_eq!(
-            capture["objects"][0]["effect"]["attachment"],
+            capture["objects"][0]["effects"].as_array().unwrap().len(),
+            2
+        );
+        assert!(capture["objects"][0].get("effect").is_none());
+        assert_eq!(
+            capture["objects"][0]["effects"][0]["attachment"],
             json!(attachment)
         );
         assert_eq!(
-            capture["objects"][0]["effect"]["definition"]["intensity"],
+            capture["objects"][0]["effects"][0]["definition"]["intensity"],
             1.25
+        );
+        assert_eq!(
+            capture["objects"][0]["effects"][1]["attachment"],
+            json!(soften)
+        );
+        assert_eq!(
+            capture["objects"][0]["effects"][1]["definition"]["kind"],
+            "blur"
         );
         let authored = source
             .get_effect("glow")

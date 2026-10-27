@@ -260,8 +260,10 @@ mod tests {
                 .iter()
                 .find(|row| row.id == object)
                 .unwrap()
-                .effect
+                .effects
                 .as_ref()
+                .unwrap()
+                .get(attachment.node_id())
                 .unwrap()
                 .definition
                 .as_glow()
@@ -282,7 +284,7 @@ mod tests {
             .iter()
             .find(|row| row.id == object)
             .unwrap()
-            .effect
+            .effects
             .is_none());
         execution.with_store_and_session(|store, session| {
             assert!(store.node(attachment.node_id()).is_none());

@@ -1324,7 +1324,7 @@ fn lower_prepared_entry(
         lowered.base_transform,
         lowered.base_style,
     );
-    compiled.effect = effect::lower_prepared_attachment(prepared, object)?;
+    compiled.effects = effect::lower_prepared_attachment(prepared, object)?;
     if let Some(paint) = lowered.fill_paint.as_deref() {
         resource_additions
             .capture_paint_from_arena(prepared.store().raster_image_resources(), paint)

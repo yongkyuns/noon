@@ -7,24 +7,24 @@ use noon_core::{
 };
 
 use super::super::PreparedSemanticScheduledAnimationLeaf;
-use super::affine::{driver_key, EffectiveAnimationProperties, SemanticAnimationCompletion};
+use super::affine::{
+    channel_driver_key, driver_key, object_drivers, DriverMap, EffectiveAnimationProperties,
+    SemanticAnimationCompletion,
+};
 use super::prepared_composition::PreparedSemanticAnimationTrack;
 
 #[derive(Default)]
 pub(super) struct ScheduledCaptures {
     base: HashMap<ObjectId, EffectiveAnimationProperties>,
-    completed: HashMap<(u64, u8), (Property, TrackValues, bool)>,
-    latest_tracks: HashMap<(u64, u8), usize>,
+    completed: DriverMap<(Property, TrackValues, bool)>,
+    latest_tracks: DriverMap<usize>,
     recorded_tracks: usize,
 }
 
 impl ScheduledCaptures {
     pub fn get(&self, object: ObjectId) -> Option<EffectiveAnimationProperties> {
         let mut value = self.base.get(&object)?.clone();
-        for slot in 0..=driver_key(object, Property::EffectOffset).1 {
-            let Some((property, values, at_end)) = self.completed.get(&(object.get(), slot)) else {
-                continue;
-            };
+        for (_, (property, values, at_end)) in object_drivers(&self.completed, object) {
             apply_effective_track_endpoint(&mut value, *property, values, *at_end)?;
         }
         Some(value)
@@ -37,14 +37,16 @@ impl ScheduledCaptures {
     pub fn begin_leaf(
         &mut self,
         leaf: &PreparedSemanticScheduledAnimationLeaf,
-        driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
+        driven: &mut DriverMap<SemanticTransactionNodeRef>,
         tracks: &[PreparedSemanticAnimationTrack],
         intervals: &HashMap<SemanticTransactionNodeRef, (f64, f64)>,
         allow_sequential_capture: bool,
     ) {
         for (index, track) in tracks.iter().enumerate().skip(self.recorded_tracks) {
-            self.latest_tracks
-                .insert(driver_key(track.execution_object_id, track.property), index);
+            self.latest_tracks.insert(
+                channel_driver_key(track.execution_object_id, track.property, &track.values),
+                index,
+            );
         }
         self.recorded_tracks = tracks.len();
         if !allow_sequential_capture {
@@ -68,11 +70,10 @@ impl ScheduledCaptures {
         {
             return;
         }
-        for slot in 0..=driver_key(object, Property::EffectOffset).1 {
-            let key = (object.get(), slot);
-            let Some(owner) = driven.get(&key).copied() else {
-                continue;
-            };
+        let local_drivers: Vec<_> = object_drivers(driven, object)
+            .map(|(&key, &owner)| (key, owner))
+            .collect();
+        for (key, owner) in local_drivers {
             let Some((_, end)) = intervals.get(&owner) else {
                 continue;
             };
@@ -198,12 +199,11 @@ fn apply_effective_track_endpoint(
                 ..
             },
         ) => {
-            let effect = value.effect.as_mut()?;
-            if effect.attachment != *attachment {
-                return None;
-            }
+            let stack = value.effects.as_mut()?;
+            let mut effect = stack.get(*attachment)?;
             let endpoint = if at_end { *to } else { *from };
             effect.definition = endpoint.update().apply_to(effect.definition).ok()?;
+            assert!(std::sync::Arc::make_mut(stack).replace(effect));
         }
         (Property::ZIndex, TrackValues::ZIndex { from, to }) => {
             value.z_index = if at_end { *to } else { *from };
@@ -358,17 +358,20 @@ mod tests {
         let peak = 2.0;
         let source = EffectiveAnimationProperties {
             fill_paint: None,
-            effect: Some(CompiledEffect {
-                attachment,
-                definition: (Glow::new(
-                    EffectUpdate::default()
-                        .color(Color::BLUE)
-                        .radius(Pixels(3.25))
-                        .intensity(0.35),
-                )
-                .unwrap())
-                .into(),
-            }),
+            effects: Some(std::sync::Arc::new(
+                crate::CompiledEffectStack::new([CompiledEffect {
+                    attachment,
+                    definition: (Glow::new(
+                        EffectUpdate::default()
+                            .color(Color::BLUE)
+                            .radius(Pixels(3.25))
+                            .intensity(0.35),
+                    )
+                    .unwrap())
+                    .into(),
+                }])
+                .unwrap(),
+            )),
             z_index: 4.5,
             transform: Transform2D {
                 translation: Vec2::new(2.0, -1.0),
@@ -443,16 +446,18 @@ mod tests {
                 )]),
             };
             let mut expected = source.clone();
-            let effect = expected.effect.as_mut().unwrap();
+            let stack = expected.effects.as_mut().unwrap();
+            let mut effect = stack.get(attachment).unwrap();
             effect.definition = EffectUpdate::default()
                 .intensity(expected_intensity)
                 .apply_to(effect.definition)
                 .unwrap();
+            std::sync::Arc::make_mut(stack).replace(effect);
             let tracks = [track];
             let mut captures = ScheduledCaptures::default();
             captures.insert(object, source.clone());
-            let mut driven = HashMap::from([(
-                driver_key(object, Property::EffectIntensity),
+            let mut driven = DriverMap::from([(
+                channel_driver_key(object, Property::EffectIntensity, &tracks[0].values),
                 first_animation,
             )]);
 

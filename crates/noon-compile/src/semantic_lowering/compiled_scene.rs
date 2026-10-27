@@ -215,7 +215,7 @@ fn materialize_semantic_projection(
         objects.push(CompiledObject {
             fill_paint: object.fill_paint.clone(),
             draw_enabled: object.presentation.draw_enabled,
-            effect: object.effect.clone(),
+            effects: object.effects.clone(),
             id: object.execution_id,
             content,
             text_bounds,

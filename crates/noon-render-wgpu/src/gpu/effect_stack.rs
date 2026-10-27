@@ -14,7 +14,7 @@ use super::{
 };
 
 /// The fixed-quality finite operator profile; no silent truncation of a stack.
-pub const MAX_EFFECT_STACK_LEN: usize = 8;
+pub use noon_core::MAX_EFFECT_STACK_LEN;
 
 #[derive(Clone, Copy, Debug)]
 pub struct EffectStackParameters {
@@ -120,13 +120,24 @@ impl EffectStackScope {
             pass.filter.invalidate();
         }
     }
-    pub(super) fn matches(&self, effects: &[EffectDefinition]) -> bool {
-        self.passes.len() == effects.len()
-            && self
-                .passes
-                .iter()
-                .zip(effects)
-                .all(|(pass, &effect)| pass.filter.matches(effect))
+    pub(super) fn retained_profile_bytes(&self, effects: &[EffectDefinition]) -> u64 {
+        self.passes
+            .iter()
+            .zip(effects)
+            .filter(|(pass, effect)| pass.filter.matches(**effect))
+            .map(|(pass, _)| pass.filter.scratch_bytes())
+            .sum()
+    }
+    /// An invisible/neutral capture still retires removed or replaced slots.
+    /// Surviving warm resources remain charged; no GPU work is necessary.
+    pub(super) fn deactivate_profile(&mut self, effects: &[EffectDefinition]) {
+        self.passes.truncate(effects.len());
+        for (pass, &effect) in self.passes.iter_mut().zip(effects) {
+            if !pass.filter.matches(effect) {
+                pass.filter = PassFilter::new(effect);
+            }
+        }
+        self.output = None;
     }
 }
 
@@ -375,11 +386,7 @@ fn preflight(
             {
                 return Err(EffectPrepareError::RevisionExhausted);
             }
-            let cost = match effect {
-                EffectDefinition::Glow(_) => 12,
-                EffectDefinition::Blur(_) => 28,
-                EffectDefinition::Shadow(_) => 32,
-            };
+            let cost = values.filter_bytes_per_pixel();
             budgets[index] = pixels
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;

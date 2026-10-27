@@ -46,6 +46,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/linear-gradient-qualification.mjs
   node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/noise-paint-qualification.mjs
+  node --check scripts/ordered-effects-qualification.mjs
   node --check scripts/noise-paint-reference.mjs
   node --test scripts/noise-paint-reference.test.mjs
   node --check scripts/image-fill-qualification.mjs

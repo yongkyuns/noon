@@ -21,21 +21,18 @@ pub(super) fn values(
     target: SemanticNodeId,
     state: &SemanticObjectState,
     attachments: &[SemanticAnimationEffectSnapshot],
-    effective: Option<crate::CompiledEffect>,
+    effective: Option<&crate::CompiledEffectStack>,
     intensity: f64,
 ) -> Result<TrackValues, EffectTargetLoweringError> {
     super::super::projection::validate_effect_source_profile(target, state, store)
         .map_err(EffectTargetLoweringError::Profile)?;
-    let [attachment] = attachments else {
-        return Err(EffectTargetLoweringError::UnsupportedTopology);
-    };
-    if attachment.name.as_ref() != "glow" {
-        return Err(EffectTargetLoweringError::UnsupportedTopology);
-    }
-    let effective = effective.ok_or(EffectTargetLoweringError::MissingEffectiveValue)?;
-    if effective.attachment != attachment.attachment {
-        return Err(EffectTargetLoweringError::StaleAttachment);
-    }
+    let attachment = attachments
+        .iter()
+        .find(|effect| effect.name.as_ref() == "glow")
+        .ok_or(EffectTargetLoweringError::UnsupportedTopology)?;
+    let effective = effective
+        .and_then(|stack| stack.get(attachment.attachment))
+        .ok_or(EffectTargetLoweringError::MissingEffectiveValue)?;
     EffectUpdate::default()
         .intensity(intensity)
         .prepare(effective.definition)

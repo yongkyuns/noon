@@ -20,9 +20,9 @@ use crate::{CircleInstance, PackedStyle, PreparedFrame, RectangleInstance, Rende
 /// One effective renderer request. Object identity/attachment values and animation
 /// phase must come from the normal runtime publication, not a host-owned store.
 #[derive(Clone, Copy, Debug)]
-pub struct EffectCaptureRequest {
+pub struct EffectCaptureRequest<'a> {
     pub object_index: usize,
-    pub definition: EffectDefinition,
+    pub definitions: &'a [EffectDefinition],
     /// Total retained capture + filter texture budget for this renderer, not just
     /// the current object. Source buffers and shared pipeline metadata are separate.
     /// Resources retained by already-submitted frames require an additional host
@@ -145,6 +145,7 @@ struct ResidentEffect {
     placement: Placement,
     placement_buffer: wgpu::Buffer,
     placement_binding: Option<wgpu::BindGroup>,
+    placement_output: Option<wgpu::Texture>,
     filter: EffectStackScope,
     revision: u64,
     invalidated: bool,
@@ -202,7 +203,7 @@ impl GpuRenderer {
             return Err(EffectPrepareError::PublicationMismatch);
         }
         let Some(effect) = row
-            .effect
+            .effects
             .as_ref()
             .filter(|_| frame.is_drawable(request.object_index))
         else {
@@ -237,7 +238,7 @@ impl GpuRenderer {
             prepared,
             EffectCaptureRequest {
                 object_index: request.object_index,
-                definition: effect.definition,
+                definitions: effect.definitions(),
                 texture_budget_bytes: request.texture_budget_bytes,
             },
         )
@@ -258,7 +259,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
-        request: EffectCaptureRequest,
+        request: EffectCaptureRequest<'_>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let observation = prepared
             .observe_object(request.object_index)
@@ -273,7 +274,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
-        request: EffectCaptureRequest,
+        request: EffectCaptureRequest<'_>,
         observation: crate::PreparedGeometryObjectObservation,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let kind = match observation.primitive {
@@ -351,7 +352,7 @@ impl GpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         prepared: &super::retained_text::PreparedRetainedGpuFrame<'_>,
         text: &super::retained_text::RetainedTextGpuState,
-        request: EffectCaptureRequest,
+        request: EffectCaptureRequest<'_>,
         object: ObjectId,
         opacity: f32,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
@@ -368,11 +369,11 @@ impl GpuRenderer {
             false,
         )
         .ok_or(EffectPrepareError::UnsupportedCapture)?;
-        let silhouette = if request
-            .definition
-            .as_glow()
-            .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
-        {
+        let silhouette = if request.definitions.iter().any(|definition| {
+            definition
+                .as_glow()
+                .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
+        }) {
             Some(
                 super::source_capture::PreparedSource::prepare(
                     prepared,
@@ -446,7 +447,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
-        request: EffectCaptureRequest,
+        request: EffectCaptureRequest<'_>,
         key: (u8, usize),
         object: ObjectId,
         mut effective: SourceInstance,
@@ -454,15 +455,16 @@ impl GpuRenderer {
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
-        let parameters = super::EffectCaptureParameters {
-            definition: request.definition,
+        let parameters = EffectStackParameters {
             output_height: self.viewport_size[1],
             world_view_height: f64::from(self.camera.world_size.y),
             scope_opacity: opacity,
+            scratch_budget_bytes: request.texture_budget_bytes,
         };
-        let tile = EffectCaptureTile::prepare(
+        let tile = EffectCaptureTile::prepare_stack(
             bounds,
             self.viewport_size,
+            request.definitions,
             parameters,
             device.limits().max_texture_dimension_2d,
             request.texture_budget_bytes,
@@ -471,7 +473,33 @@ impl GpuRenderer {
             // Retain warmed storage for neutral fades; exact ordinary submission
             // is restored. Absent neutral requests allocate no glow cache.
             if let Some(glows) = self.effect_captures.as_deref_mut() {
-                if let Some(scope) = glows.scopes.get_mut(&key).filter(|s| s.object == object) {
+                // Repacking can change `key` before an active prepare relocates
+                // this source's warmed scope. Its owner mapping remains exact.
+                let owned_key = glows.owners.get(&object).copied();
+                if let Some(scope) = owned_key
+                    .and_then(|owned_key| glows.scopes.get_mut(&owned_key))
+                    .filter(|s| s.object == object)
+                {
+                    let source_bytes = u64::from(scope.tile.size[0])
+                        * u64::from(scope.tile.size[1])
+                        * 4
+                        * (1 + u64::from(scope.silhouette.is_some())
+                            + if scope.multisampled.is_some() {
+                                u64::from(PATH_SAMPLE_COUNT)
+                            } else {
+                                0
+                            });
+                    let retained =
+                        source_bytes + scope.filter.retained_profile_bytes(request.definitions);
+                    let total = glows.bytes - scope.tile.capture_and_scratch_bytes + retained;
+                    if total > request.texture_budget_bytes {
+                        return Err(EffectPrepareError::ScratchBudgetExceeded);
+                    }
+                    scope.filter.deactivate_profile(request.definitions);
+                    scope.placement_binding = None;
+                    scope.placement_output = None;
+                    scope.tile.capture_and_scratch_bytes = retained;
+                    glows.bytes = total;
                     scope.enabled = false;
                 }
             }
@@ -480,6 +508,8 @@ impl GpuRenderer {
                 ..Default::default()
             });
         };
+        let cost_per_pixel =
+            tile.capture_and_scratch_bytes / (u64::from(tile.size[0]) * u64::from(tile.size[1]));
         let old = self
             .effect_captures
             .as_deref()
@@ -503,7 +533,7 @@ impl GpuRenderer {
             .checked_mul(u64::from(tile.size[1]))
             .and_then(|pixels| {
                 pixels.checked_mul(
-                    parameters.bytes_per_pixel()
+                    cost_per_pixel
                         + if key.0 == 2 {
                             4 * u64::from(PATH_SAMPLE_COUNT)
                         } else {
@@ -542,10 +572,11 @@ impl GpuRenderer {
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
         } // apply final scope opacity once
-        let needs_silhouette = request
-            .definition
-            .as_glow()
-            .is_some_and(|effect| effect.source() == GlowSource::Silhouette);
+        let needs_silhouette = request.definitions.iter().any(|definition| {
+            definition
+                .as_glow()
+                .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
+        });
         let capture_camera = tile_camera(self.camera, self.viewport_size, tile)?;
         let camera_uniform = capture_camera.uniform(tile.size);
         let placement = Placement {
@@ -562,7 +593,6 @@ impl GpuRenderer {
                 .get_or_insert_with(|| PlacementPrograms::new(device, self.target_format));
             let replace = glows.scopes.get(&key).is_none_or(|s| {
                 s.object != object
-                    || !s.filter.matches(&[request.definition])
                     || s.tile.size != tile.size
                     || s.silhouette.is_some() != needs_silhouette
                     || s.source_buffer.size() < source_instance.bytes().len() as u64
@@ -635,6 +665,7 @@ impl GpuRenderer {
                         placement,
                         placement_buffer,
                         placement_binding: None,
+                        placement_output: None,
                         filter: EffectStackScope::default(),
                         revision: 0,
                         invalidated: true,
@@ -780,7 +811,7 @@ impl GpuRenderer {
                     silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
                     revision: scope.revision,
                 },
-                &[request.definition],
+                request.definitions,
                 EffectStackParameters {
                     output_height: parameters.output_height,
                     world_view_height: parameters.world_view_height,
@@ -789,7 +820,9 @@ impl GpuRenderer {
                 },
             )?;
             stats.filter = upload;
-            if replace || upload.texture_allocations != 0 || scope.placement_binding.is_none() {
+            if scope.placement_output.as_ref() != scope.filter.output()
+                || scope.placement_binding.is_none()
+            {
                 scope.placement_binding =
                     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("Noon composed glow tile binding"),
@@ -807,6 +840,7 @@ impl GpuRenderer {
                             },
                         ],
                     }));
+                scope.placement_output = scope.filter.output().cloned();
             }
             glows.bytes = total;
             scope.effective = effective;

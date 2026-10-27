@@ -139,20 +139,21 @@ mod tests {
             let status = program.drive_to(&mut callbacks, time).unwrap();
             let frame = program.session().frame();
             assert_eq!(frame.objects.len(), 3);
-            let left = frame.objects[1].effect.as_ref().unwrap().definition;
+            let left =
+                crate::effect_authoring::only_effect(frame.objects[1].effects.as_ref().unwrap())
+                    .definition;
             if time == 1.3 {
                 assert!((left.as_glow().unwrap().intensity() - 2.0).abs() < 1e-12);
                 assert_eq!(left.radius(), noon_core::EffectRadius::Pixels(11.0));
                 assert!((frame.render_transform(1).translation.y - 0.2).abs() < 1e-6);
                 assert!(
-                    (frame.objects[2]
-                        .effect
-                        .as_ref()
-                        .unwrap()
-                        .definition
-                        .as_glow()
-                        .unwrap()
-                        .intensity()
+                    (crate::effect_authoring::only_effect(
+                        frame.objects[2].effects.as_ref().unwrap()
+                    )
+                    .definition
+                    .as_glow()
+                    .unwrap()
+                    .intensity()
                         - 2.0)
                         .abs()
                         < 1e-12
@@ -164,7 +165,7 @@ mod tests {
                 assert!((frame.render_transform(1).translation.y - 0.4).abs() < 1e-6);
             }
             if [1.6, 2.5, 3.25, 3.5].contains(&time) {
-                assert!(frame.objects[2].effect.is_none());
+                assert!(frame.objects[2].effects.is_none());
             }
             let expected = if [2.125, 3.125].contains(&time) {
                 Some(0.375)
@@ -175,14 +176,13 @@ mod tests {
             };
             if let Some(expected) = expected {
                 assert_eq!(
-                    frame.objects[2]
-                        .effect
-                        .as_ref()
-                        .unwrap()
-                        .definition
-                        .as_glow()
-                        .unwrap()
-                        .intensity(),
+                    crate::effect_authoring::only_effect(
+                        frame.objects[2].effects.as_ref().unwrap()
+                    )
+                    .definition
+                    .as_glow()
+                    .unwrap()
+                    .intensity(),
                     expected
                 );
             }

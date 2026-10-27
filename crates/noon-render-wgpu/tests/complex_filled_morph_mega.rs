@@ -76,7 +76,7 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
             FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 id: ObjectId::new(0),
                 spatial: None,
                 z_index: 0.0,
@@ -95,7 +95,7 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
             FrameObjectState {
                 fill_paint: None,
                 draw_enabled: true,
-                effect: None,
+                effects: None,
                 id: ObjectId::new(1),
                 spatial: None,
                 z_index: 0.0,

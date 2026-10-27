@@ -1,6 +1,11 @@
 use super::*;
 use noon_core::{Color, EffectUpdate, Pixels};
 
+fn only_effect(stack: &noon_compile::CompiledEffectStack) -> noon_compile::CompiledEffect {
+    assert_eq!(stack.len(), 1, "single-effect reference fixture");
+    stack.iter().next().unwrap()
+}
+
 fn parameters(sigma: f64) -> GlowParameters {
     GlowParameters {
         definition: Glow::new(EffectUpdate::default().radius(Pixels(sigma))).unwrap(),
@@ -341,6 +346,134 @@ fn padded_capture_preserves_offscreen_halo_and_skips_truly_invisible_source() {
         EffectCaptureTile::prepare(far, [100, 80], parameters(2.0), 4096, 1_000_000),
         Ok(None)
     );
+}
+
+#[test]
+fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
+    let definitions = [
+        noon_core::Blur::new(EffectUpdate::default().radius(Pixels(2.0)))
+            .unwrap()
+            .into(),
+        noon_core::Blur::new(EffectUpdate::default().radius(Pixels(3.0)))
+            .unwrap()
+            .into(),
+    ];
+    let values = super::super::EffectStackParameters {
+        output_height: 100,
+        world_view_height: 10.0,
+        scope_opacity: 0.5,
+        scratch_budget_bytes: 1_000_000,
+    };
+    let bounds = EffectPixelBounds {
+        min: [-16.0, 50.0],
+        max: [-14.0, 52.0],
+    };
+    assert!(EffectCaptureTile::prepare_stack(
+        bounds,
+        [100, 100],
+        &definitions[..1],
+        values,
+        4096,
+        1_000_000
+    )
+    .unwrap()
+    .is_none());
+    let tile =
+        EffectCaptureTile::prepare_stack(bounds, [100, 100], &definitions, values, 4096, 1_000_000)
+            .unwrap()
+            .unwrap();
+    assert_eq!(tile.origin, [-32, 34]);
+    assert_eq!(tile.size, [34, 34]);
+    assert_eq!(tile.support_radius, 15);
+    assert_eq!(tile.capture_and_scratch_bytes, 34 * 34 * (4 + 28 + 28));
+    assert_eq!(tile.visible_size, [2, 34]);
+    assert_eq!(
+        EffectCaptureTile::prepare_stack(
+            bounds,
+            [100, 100],
+            &definitions,
+            values,
+            4096,
+            tile.capture_and_scratch_bytes - 1
+        ),
+        Err(EffectPrepareError::ScratchBudgetExceeded)
+    );
+    let invalid_suffix = [
+        definitions[0],
+        noon_core::Blur::new(EffectUpdate::default().radius(Pixels(65.0)))
+            .unwrap()
+            .into(),
+    ];
+    assert_eq!(
+        EffectCaptureTile::prepare_stack(
+            bounds,
+            [100, 100],
+            &invalid_suffix,
+            values,
+            4096,
+            1_000_000
+        ),
+        Err(EffectPrepareError::RadiusExceedsProfile)
+    );
+    assert_eq!(
+        EffectCaptureTile::prepare_stack(
+            bounds,
+            [100, 100],
+            &[definitions[0]; noon_core::MAX_EFFECT_STACK_LEN + 1],
+            values,
+            4096,
+            1_000_000
+        ),
+        Err(EffectPrepareError::StackExceedsProfile)
+    );
+}
+
+#[test]
+fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
+    let a: noon_core::EffectDefinition = Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
+        .unwrap()
+        .into();
+    let b = EffectUpdate::default()
+        .radius(Pixels(1.0))
+        .source(GlowSource::Silhouette)
+        .apply_to(a)
+        .unwrap();
+    let bounds = EffectPixelBounds {
+        min: [20.0, 20.0],
+        max: [24.0, 24.0],
+    };
+    let values = super::super::EffectStackParameters {
+        output_height: 100,
+        world_view_height: 10.0,
+        scope_opacity: 1.0,
+        scratch_budget_bytes: 1_000_000,
+    };
+    let silhouette =
+        EffectCaptureTile::prepare_stack(bounds, [100, 100], &[a, b], values, 4096, 1_000_000)
+            .unwrap()
+            .unwrap();
+    assert_eq!(silhouette.origin, [10, 10]);
+    assert_eq!(silhouette.size, [24, 24]);
+    assert_eq!(
+        silhouette.capture_and_scratch_bytes,
+        24 * 24 * (4 + 4 + 12 + 12)
+    );
+    let painted = EffectUpdate::default()
+        .source(GlowSource::Painted)
+        .apply_to(b)
+        .unwrap();
+    let painted = EffectCaptureTile::prepare_stack(
+        bounds,
+        [100, 100],
+        &[a, painted],
+        values,
+        4096,
+        1_000_000,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(painted.origin, [6, 6]);
+    assert_eq!(painted.size, [31, 31]);
 }
 
 #[test]

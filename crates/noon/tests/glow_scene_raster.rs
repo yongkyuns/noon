@@ -1919,6 +1919,156 @@ fn expected_rgba_blur(source: &[u8], sigma: f64, opacity: f64) -> Vec<u8> {
     expected_rgba_blur_in_extent(source, sigma, opacity, SIZE)
 }
 
+#[test]
+#[ignore = "requires a native raster adapter; absence fails qualification"]
+fn public_ordered_leaf_stack_matches_independent_source_operators_and_neutral_restoration() {
+    use noon::effects::{Blur, EffectOffset, Shadow};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let fixture = |opacity: f64| {
+        let mut scene = Scene::new();
+        let mut source = scene.rectangle(1.1, 0.7).unwrap();
+        source.disable_stroke().unwrap();
+        source.set_fill(0.2, 0.7, 0.3, 0.65).unwrap();
+        source.set_object_opacity(opacity).unwrap();
+        scene.add(&source).unwrap();
+        (scene, source)
+    };
+    let (plain_scene, _) = fixture(1.0);
+    let ordinary = Surface::new(&device, &queue).render_on(
+        &device,
+        &queue,
+        &mut plain_scene.execution_session().unwrap(),
+        wgpu::Color::TRANSPARENT,
+    );
+    let glow =
+        |pixels: &[u8]| expected_image_glow(pixels, pixels, 0.0, 1.0, wgpu::Color::TRANSPARENT);
+    let shadow = |pixels: &[u8], opacity| {
+        expected_shadow(pixels, 1.75, [8.0, -4.0], [0.15, 0.25, 0.95, 0.7], opacity)
+    };
+    let correct = expected_rgba_blur(&shadow(&glow(&ordinary), 1.0), 0.75, 0.37);
+    let wrong_order = expected_rgba_blur(&glow(&shadow(&ordinary, 1.0)), 0.75, 0.37);
+    assert!(
+        error(&correct, &wrong_order) > 2,
+        "fixture must distinguish noncommuting order within the predeclared two-byte bound"
+    );
+    let mut maximum_error = 0;
+    for reversed in [false, true] {
+        for opacity in [1.0, 0.37] {
+            let (mut scene, source) = fixture(opacity);
+            let add_glow = |scene: &mut Scene| {
+                scene
+                    .set_glow(
+                        &source,
+                        EffectUpdate::default()
+                            .color(Color::RED)
+                            .radius(Pixels(3.25))
+                            .intensity(START),
+                    )
+                    .unwrap()
+            };
+            let add_shadow = |scene: &mut Scene| {
+                scene
+                    .add_effect(
+                        &source,
+                        Shadow::new(
+                            EffectUpdate::default()
+                                .color(Color::rgba(0.15, 0.25, 0.95, 0.7))
+                                .radius(Pixels(1.75))
+                                .offset(EffectOffset::Pixels([8.0, -4.0])),
+                        )
+                        .unwrap(),
+                        "shadow",
+                    )
+                    .unwrap()
+            };
+            if reversed {
+                add_shadow(&mut scene);
+                add_glow(&mut scene);
+            } else {
+                add_glow(&mut scene);
+                add_shadow(&mut scene);
+            }
+            scene
+                .add_effect(
+                    &source,
+                    Blur::new(EffectUpdate::default().radius(Pixels(0.75))).unwrap(),
+                    "soften",
+                )
+                .unwrap();
+            let mut session = scene.execution_session().unwrap();
+            let mut surface = Surface::new(&device, &queue);
+            let expected = if reversed {
+                expected_rgba_blur(&glow(&shadow(&ordinary, 1.0)), 0.75, opacity)
+            } else {
+                expected_rgba_blur(&shadow(&glow(&ordinary), 1.0), 0.75, opacity)
+            };
+            let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            let delta = error(&actual, &expected);
+            maximum_error = maximum_error.max(delta);
+            assert!(
+                delta <= 2,
+                "ordered public stack reversed={reversed} opacity={opacity} error={delta}"
+            );
+            let clean = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            assert_eq!(actual, clean);
+            assert_eq!(
+                surface.effect_stats.source_passes
+                    + surface.effect_stats.blur_passes
+                    + surface.effect_stats.composite_passes
+                    + surface.effect_stats.bytes_uploaded
+                    + surface.effect_stats.texture_allocations,
+                0
+            );
+            scene
+                .live(&mut session)
+                .set_glow(&source, EffectUpdate::default().intensity(0.0))
+                .unwrap();
+            scene
+                .live(&mut session)
+                .set_effect(
+                    &source,
+                    "shadow",
+                    EffectUpdate::default().color(Color::rgba(0.15, 0.25, 0.95, 0.0)),
+                )
+                .unwrap();
+            scene
+                .live(&mut session)
+                .set_effect(
+                    &source,
+                    "soften",
+                    EffectUpdate::default().radius(Pixels(0.0)),
+                )
+                .unwrap();
+            let (plain_scene, _) = fixture(opacity);
+            let plain = Surface::new(&device, &queue).render_on(
+                &device,
+                &queue,
+                &mut plain_scene.execution_session().unwrap(),
+                wgpu::Color::TRANSPARENT,
+            );
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                plain
+            );
+            for name in ["glow", "shadow", "soften"] {
+                scene
+                    .live(&mut session)
+                    .remove_effect(&source, name)
+                    .unwrap();
+            }
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                plain
+            );
+            assert_eq!(surface.effect_stats.retained_texture_bytes, 0);
+        }
+    }
+    eprintln!("ordered public leaf: 4 three-pass images, exact clean/neutral/removal, max byte error {maximum_error}");
+}
+
 fn expected_rgba_blur_in_extent(
     source: &[u8],
     sigma: f64,

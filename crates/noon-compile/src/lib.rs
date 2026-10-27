@@ -9,6 +9,7 @@ mod audio;
 pub use audio::CompiledAudioClip;
 mod compaction;
 mod effect_attachment;
+pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};
 mod execution_patch;
 mod graph_dependencies;
 pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
@@ -128,7 +129,7 @@ pub struct CompiledObject {
     /// Whether this object can draw; its query geometry remains available.
     pub draw_enabled: bool,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
-    pub effect: Option<Arc<CompiledEffect>>,
+    pub effects: Option<Arc<CompiledEffectStack>>,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
@@ -259,7 +260,7 @@ impl CompiledObject {
             content: content.into(),
             text_bounds: None,
             base_transform,
-            effect: None,
+            effects: None,
             spatial: None,
             base_style,
             base_z_index: 0.0,
@@ -1485,14 +1486,24 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
-            let resident_glow = self.objects[object_index as usize].effect.as_deref();
+            let resident_glow = self.objects[object_index as usize].effects.as_deref();
             let staged = staged_glow.get(&track.object);
-            if staged.is_some() && resident_glow.is_some() {
+            if staged.is_some_and(|staged| {
+                resident_glow.is_some_and(|stack| stack.get(staged.attachment).is_some())
+            }) {
                 return Err(CompilePatchError::InvalidEffectAttachmentChange {
                     object: track.object,
                 });
             }
-            validate_effect_track_attachment(track, staged.or(resident_glow))
+            let effect = if let TrackValues::Effect { attachment, .. } = track.values {
+                staged
+                    .copied()
+                    .filter(|effect| effect.attachment == attachment)
+                    .or_else(|| resident_glow.and_then(|stack| stack.get(attachment)))
+            } else {
+                None
+            };
+            validate_effect_track_attachment(track, effect)
                 .map_err(CompilePatchError::InvalidTrack)?;
             validate_paint_track_profile(
                 track,
@@ -2082,29 +2093,29 @@ impl CompiledScene {
                 self.objects[index as usize].base_style != *style
                     || self.objects[index as usize].fill_paint != *fill_paint
             }),
-            ExecutionPatch::SetEffect { object, effect } => {
+            ExecutionPatch::SetEffects { object, effects } => {
                 self.object_index(*object).is_none_or(|index| {
-                    self.objects[index as usize].effect.as_deref() != Some(effect.as_ref())
+                    self.objects[index as usize].effects.as_deref() != Some(effects.as_ref())
                 })
             }
-            ExecutionPatch::SetEffectAttachment {
+            ExecutionPatch::SetEffectStack {
                 object,
                 expected,
-                effect,
+                effects,
             } => {
                 self.object_index(*object).is_none_or(|index| {
                     // Invalid redundant changes must still reach validation. Only
                     // the exact absent -> absent case is an idempotent no-op.
-                    let previous = self.objects[index as usize].effect.as_deref();
+                    let previous = self.objects[index as usize].effects.as_deref();
                     effect_attachment::validate_change(
                         *object,
                         previous,
-                        *expected,
-                        effect.as_deref(),
+                        expected,
+                        effects.as_deref(),
                     )
                     .is_err()
                         || previous.is_some()
-                        || effect.is_some()
+                        || effects.is_some()
                 })
             }
             ExecutionPatch::SetInset2DView { object, view } => {
@@ -2481,23 +2492,23 @@ impl CompiledScene {
                 self.objects[index as usize].base_style = *style;
                 self.objects[index as usize].fill_paint = fill_paint.clone();
             }
-            ExecutionPatch::SetEffect { object, effect } => {
+            ExecutionPatch::SetEffects { object, effects } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                execution_patch::validate_effect_replacement(
+                execution_patch::validate_effect_values(
                     *object,
-                    self.objects[index as usize].effect.as_deref(),
-                    effect,
+                    self.objects[index as usize].effects.as_deref(),
+                    effects,
                 )?;
-                self.objects[index as usize].effect = Some(Arc::clone(effect));
+                self.objects[index as usize].effects = Some(Arc::clone(effects));
             }
-            ExecutionPatch::SetEffectAttachment {
+            ExecutionPatch::SetEffectStack {
                 object,
                 expected,
-                effect,
+                effects,
             } => {
-                self.apply_effect_attachment(*object, *expected, effect.clone(), &mut stats)?;
+                self.apply_effect_stack(*object, expected, effects.clone(), &mut stats)?;
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if self.object_index(*object).is_none() {
@@ -2894,12 +2905,20 @@ pub(crate) fn validate_effect_track(
     track: &TrackDefinition,
     object: &CompiledObject,
 ) -> Result<(), noon_core::TimelineError> {
-    validate_effect_track_attachment(track, object.effect.as_deref())
+    let effect = if let TrackValues::Effect { attachment, .. } = track.values {
+        object
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(attachment))
+    } else {
+        None
+    };
+    validate_effect_track_attachment(track, effect)
 }
 
 pub(crate) fn validate_effect_track_attachment(
     track: &TrackDefinition,
-    effect: Option<&CompiledEffect>,
+    effect: Option<CompiledEffect>,
 ) -> Result<(), noon_core::TimelineError> {
     if let TrackValues::Effect {
         attachment,
@@ -4383,7 +4402,7 @@ mod tests {
             Transform2D::IDENTITY,
             Style::default(),
         );
-        compiled.effect = Some(Arc::new(effect));
+        compiled.effects = Some(Arc::new(CompiledEffectStack::new([effect]).unwrap()));
         let mut channels = vec![
             (
                 Property::Position,
