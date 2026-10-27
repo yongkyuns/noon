@@ -71,9 +71,16 @@ jobs:
           git apply ../workbench/integration/nonspatial-api-visibility.patch
           git diff --check
           git add -u
-          test "$(git write-tree)" = ee172be89722581c1331645423fc7f510da48e9e
-          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = 5
-          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341
+          actual_tree=$(git write-tree)
+          actual_count=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          actual_fixture=$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)
+          printf 'PIN_DIAGNOSTIC tree=%s expected_tree=%s\n' "$actual_tree" ee172be89722581c1331645423fc7f510da48e9e
+          printf 'PIN_DIAGNOSTIC changed_files=%s expected_changed_files=5\n' "$actual_count"
+          git diff --cached --name-only
+          printf 'PIN_DIAGNOSTIC audio_fixture=%s expected_audio_fixture=%s\n' "$actual_fixture" 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+          test "$actual_tree" = ee172be89722581c1331645423fc7f510da48e9e
+          test "$actual_count" = 5
+          test "$actual_fixture" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
       - name: Use repository-pinned Rust and WASM target
         run: |
           rustup install
