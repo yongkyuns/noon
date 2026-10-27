@@ -1,7 +1,7 @@
 name: Audio 2296 integration workbench
 
 # Temporary branch-local qualification for #2296. Never merge this workflow.
-# It may publish ONLY the explicitly named scratch branch, never master or #2296.
+# It may update ONLY the named scratch branch, never master or the PR branch.
 on:
   push:
     branches: [codex/audio-2296-integration-workbench]
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  integrate:
+  qualify:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -30,7 +30,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
       MASTER: f71a4c121bc29921133f790ae9783e89e962e7d9
-      EXPECTED_HEAD: 5cc7e16e2df651e62fe66e71b1b607e4e418f90e
+      CANDIDATE_PARENT: 33dfeb0acac81ae295322373d03bfeaca3d91932
       CANDIDATE_BRANCH: codex/audio-2296-integrated-5cc-f71
     defaults:
       run:
@@ -42,19 +42,31 @@ jobs:
         with:
           path: workbench
           persist-credentials: false
-      - name: Checkout exact product head and full original ancestry
+      - name: Checkout exact integrated candidate
         uses: actions/checkout@v7
         with:
-          ref: 5cc7e16e2df651e62fe66e71b1b607e4e418f90e
+          ref: 33dfeb0acac81ae295322373d03bfeaca3d91932
           fetch-depth: 0
           path: candidate
-      - name: Reconstruct and verify the reviewed integration tree
+      - name: Apply exact inspection-fixture initialization correction
         run: |
           set -euo pipefail
           mkdir -p ../evidence
           git config user.name 'Noon integration workbench'
           git config user.email 'noreply@example.invalid'
-          python3 ../workbench/integration/prepare_candidate.py ../workbench/integration/resolution.patch.gz ../evidence | tee ../evidence/preparation.log
+          test "$(git rev-parse HEAD^{tree})" = aeedb2aa752ea8aae1b26429362275c47f2554b2
+          test -z "$(git status --porcelain)"
+          python3 - <<'PY'
+          import hashlib, pathlib
+          path = pathlib.Path('../workbench/integration/inspection-initializer-fix.patch')
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == '1cf427f228187988a452244d8ec52aff2e760eb186f23e5d976ece889c5f6474'
+          PY
+          git apply --check ../workbench/integration/inspection-initializer-fix.patch
+          git apply ../workbench/integration/inspection-initializer-fix.patch
+          git diff --check
+          git diff > ../evidence/fixture-fix.patch
+          git add -u
+          test "$(git write-tree)" = abf2cf2adff928feffd09e0b054ff7d4510ef87e
       - name: Use repository-pinned Rust and WASM target
         run: |
           rustup install
@@ -78,43 +90,23 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Format and publish isolated candidate, with qualification pending
+      - name: Publish fixture fix only to isolated candidate
         run: |
           set -euo pipefail
-          cargo fmt --all
-          git diff --check
-          git diff --binary > ../evidence/format.patch
-          python3 - <<'PY'
-          import subprocess
-          paths = subprocess.check_output(['git', 'diff', '--name-only']).decode().splitlines()
-          if any(not path.endswith('.rs') for path in paths):
-              raise SystemExit('Formatter changed a non-Rust file')
-          PY
-          git add -u
+          cargo fmt --all -- --check
           tree=$(git write-tree)
-          commit=$(git commit-tree "$tree" -p "$EXPECTED_HEAD" -p "$MASTER" -m 'Merge current master into finite Python scene playback controls (#2263)')
+          commit=$(git commit-tree "$tree" -p "$CANDIDATE_PARENT" -m 'fix(tests): initialize control publication in paired inspection fixture')
           git checkout --detach "$commit"
           export tree commit
           python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          receipt = json.loads(pathlib.Path('../evidence/candidate-preformat.json').read_text())
-          receipt.update(formatted_tree=os.environ['tree'], candidate_commit=os.environ['commit'],
-                         branch=os.environ['CANDIDATE_BRANCH'], rust_validation='pending', published=False)
-          if subprocess.check_output(['git', 'status', '--porcelain']).strip():
-              raise SystemExit('Candidate source is dirty before publication')
+          import json, os, pathlib
+          receipt = dict(candidate_commit=os.environ['commit'], candidate_tree=os.environ['tree'],
+                         parent=os.environ['CANDIDATE_PARENT'], master=os.environ['MASTER'],
+                         branch=os.environ['CANDIDATE_BRANCH'], rust_validation='pending')
           pathlib.Path('../evidence/candidate.json').write_text(json.dumps(receipt, indent=2)+'\n')
           PY
-          current_head=$(git ls-remote --heads origin refs/heads/codex/python-scene-playback-controls-2263 | cut -f1)
-          test "$current_head" = "$EXPECTED_HEAD"
-          test -z "$(git ls-remote --heads origin "refs/heads/$CANDIDATE_BRANCH")"
+          test "$(git ls-remote --heads origin "refs/heads/$CANDIDATE_BRANCH" | cut -f1)" = "$CANDIDATE_PARENT"
           git push origin "$commit:refs/heads/$CANDIDATE_BRANCH"
-          python3 - <<'PY'
-          import json, pathlib
-          path = pathlib.Path('../evidence/candidate.json')
-          receipt = json.loads(path.read_text()); receipt['published'] = True
-          path.write_text(json.dumps(receipt, indent=2)+'\n')
-          PY
-          git diff --stat "$MASTER" HEAD | tee ../evidence/diff-stat.txt
       - name: Validate worker lifecycle regression suite
         run: |
           set -euo pipefail
