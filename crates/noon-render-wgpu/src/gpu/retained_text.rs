@@ -1703,9 +1703,15 @@ impl RetainedFramePreparer {
                 device.limits().max_texture_dimension_2d,
             )
             .map_err(RetainedPrepareError::Image)?;
+        // A new/recovering consumer can receive an otherwise empty runtime
+        // delta. Its image draw index must reset with the image rows, using the
+        // staged proof rather than assuming the source's delta was initial.
+        let reset_changes = rows.reset.then(FrameChanges::all);
+        let eligibility =
+            self.stage_image_draw_eligibility(frame, reset_changes.as_ref().unwrap_or(changes));
         Ok(PreparedImagePublication {
             rows,
-            eligibility: self.stage_image_draw_eligibility(frame, changes),
+            eligibility,
             object_count: frame.objects.len(),
         })
     }
@@ -2217,7 +2223,8 @@ impl RetainedFramePreparer {
         if self.geometry_only_classification != Some(false)
             || !self.scratch_ready
             || !self.prepared_generation_ready
-            || self.snapshot_metrics != Some(metrics)
+            || (self.snapshot_metrics != Some(metrics)
+                && self.snapshot_text_stats.text_objects != 0)
             || changes.is_all()
             || changes.is_structural()
             || changes.is_empty()

@@ -123,7 +123,7 @@ impl std::error::Error for RasterImagePrepareError {}
 /// An unpublished sparse change set. All fallible resource checks finish before
 /// this can replace renderer rows.
 pub(super) struct ImagePreparation {
-    reset: bool,
+    pub(super) reset: bool,
     updates: Vec<(usize, Option<PreparedImageObject>)>,
     paint_updates: Vec<(usize, Option<PreparedPaintImage>)>,
 }
