@@ -1,0 +1,165 @@
+diff --git a/crates/noon-runtime/src/replay/prefix/storage.rs b/crates/noon-runtime/src/replay/prefix/storage.rs
+index e8c1bb1..a60d16e 100644
+--- a/crates/noon-runtime/src/replay/prefix/storage.rs
++++ b/crates/noon-runtime/src/replay/prefix/storage.rs
+@@ -56,6 +56,7 @@ impl SceneInstance {
+             let object = &self.compiled.objects()[self.frame.objects.len()];
+             debug_assert!(!object.live);
+             self.frame.objects.push(FrameObjectState {
++                fill_gradient: object.fill_gradient.clone(),
+                 draw_enabled: object.draw_enabled,
+                 glow: None,
+                 id: object.id,
+@@ -78,3 +79,152 @@ impl SceneInstance {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{PrefixBatch, ReplayLimits};
++    use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
++    use noon_core::{
++        Color, GeometryRef, GradientStop, LinearGradient, ObjectId, Style, Transform2D,
++    };
++    use std::sync::Arc;
++
++    fn gradient(start: Color, end: Color) -> Arc<LinearGradient> {
++        Arc::new(
++            LinearGradient::new(
++                [0.0, 0.5],
++                [1.0, 0.5],
++                [
++                    GradientStop::new(0.0, start).unwrap(),
++                    GradientStop::new(1.0, end).unwrap(),
++                ],
++            )
++            .unwrap(),
++        )
++    }
++
++    fn object(id: u64, paint: Option<Arc<LinearGradient>>) -> CompiledObject {
++        let mut object = CompiledObject::new(
++            ObjectId::new(id),
++            GeometryRef::rectangle(2.0, 1.0),
++            Transform2D::IDENTITY,
++            Style::default(),
++        );
++        object.fill_gradient = paint;
++        object
++    }
++
++    fn source() -> SceneInstance {
++        let compiled = CompiledScene::compile_objects(vec![object(0, None)], &[]).unwrap();
++        let mut source = SceneInstance::new(compiled);
++        source.begin_replay_retention(ReplayLimits::default()).unwrap();
++        source.advance_to(1.0).unwrap();
++        source
++    }
++
++    fn append(receiver: &mut PrefixReceiver, runtime: &mut SceneInstance, batch: PrefixBatch) {
++        receiver
++            .reserve_object_capacity(runtime, batch.required_object_capacity())
++            .unwrap();
++        receiver.append(runtime, batch).unwrap();
++    }
++
++    #[test]
++    fn prefix_storage_materializes_gradient_and_solid_rows_without_publishing_the_future() {
++        let mut source = source();
++        let (mut publisher, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
++        receiver.prepare_seek(&mut runtime, 0.5).unwrap();
++        runtime.seek(0.5).unwrap();
++        let before = runtime.frame().clone();
++        let publication = runtime.publication_context();
++        let paint = gradient(Color::RED, Color::BLUE);
++        for object in [object(1, Some(paint.clone())), object(2, None)] {
++            source.apply_execution_patch(&ExecutionPatch::CreateObject(object)).unwrap();
++        }
++        source.advance_to(2.0).unwrap();
++        let batch = source.prepare_prefix_update(&mut publisher).unwrap();
++        append(&mut receiver, &mut runtime, batch);
++        assert_eq!(runtime.frame(), &before, "append must not materialize future rows");
++        assert_eq!(runtime.publication_context(), publication);
++
++        // Admission grows only dormant frame storage. Historical evaluation,
++        // not delivery or reservation, makes a future object visible.
++        receiver.prepare_seek(&mut runtime, 0.5).unwrap();
++        assert_eq!(runtime.frame().objects.len(), 3);
++        assert_eq!(runtime.frame().objects[0], before.objects[0]);
++        assert!(!runtime.frame().presences[1]);
++        assert!(!runtime.frame().presences[2]);
++        assert!(Arc::ptr_eq(
++            runtime.frame().objects[1].fill_gradient.as_ref().unwrap(),
++            &paint,
++        ));
++        assert!(runtime.frame().objects[2].fill_gradient.is_none());
++        assert_eq!(runtime.frame().time, before.time);
++        assert_eq!(runtime.publication_context(), publication);
++        receiver.prepare_seek(&mut runtime, 0.5).unwrap();
++        assert_eq!(runtime.frame().objects.len(), 3, "repeated admission must not add rows");
++    }
++
++    #[test]
++    fn prefix_storage_restores_gradient_revisions_after_source_drop_and_out_of_order_seek() {
++        let mut source = source();
++        let (mut publisher, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
++        receiver.prepare_seek(&mut runtime, 0.5).unwrap();
++        runtime.seek(0.5).unwrap();
++        let original = runtime.frame().clone();
++        let first_paint = gradient(Color::RED, Color::BLUE);
++        let second_paint = gradient(Color::BLUE, Color::RED);
++        source
++            .apply_execution_patch(&ExecutionPatch::CreateObject(object(1, Some(first_paint))))
++            .unwrap();
++        source.advance_to(1.5).unwrap();
++        let first = source.frame().objects[1].clone();
++        source.advance_to(2.0).unwrap();
++        let batch = source.prepare_prefix_update(&mut publisher).unwrap();
++        append(&mut receiver, &mut runtime, batch);
++        assert_eq!(runtime.frame(), &original);
++        source
++            .apply_execution_patch(&ExecutionPatch::SetStyle {
++                object: ObjectId::new(1),
++                style: Style::default(),
++                fill_gradient: Some(second_paint),
++            })
++            .unwrap();
++        source.advance_to(2.5).unwrap();
++        let second = source.frame().objects[1].clone();
++        assert_ne!(first.fill_gradient, second.fill_gradient);
++        source.advance_to(3.0).unwrap();
++        source
++            .apply_execution_patch(&ExecutionPatch::SetStyle {
++                object: ObjectId::new(1),
++                style: Style::default(),
++                fill_gradient: None,
++            })
++            .unwrap();
++        source.advance_to(3.5).unwrap();
++        let solid = source.frame().objects[1].clone();
++        assert!(solid.fill_gradient.is_none());
++        source.advance_to(4.0).unwrap();
++        source.seal_replay().unwrap();
++        let terminal = source.prepare_prefix_finish(&mut publisher).unwrap();
++        append(&mut receiver, &mut runtime, terminal);
++        assert_eq!(runtime.frame(), &original, "terminal delivery must not move the reader");
++        assert_eq!(receiver.end_time(), Some(4.0));
++        drop(source);
++        drop(publisher);
++
++        for (time, expected) in [
++            (3.5, &solid), (1.5, &first), (2.5, &second), (1.5, &first), (4.0, &solid),
++        ] {
++            receiver.prepare_seek(&mut runtime, time).unwrap();
++            runtime.seek(time).unwrap();
++            assert!(runtime.frame().presences[1]);
++            assert_eq!(&runtime.frame().objects[1], expected, "paint at {time}");
++            receiver.prepare_seek(&mut runtime, 0.5).unwrap();
++            runtime.seek(0.5).unwrap();
++            assert!(!runtime.frame().presences[1]);
++            assert_eq!(runtime.frame().objects[0], original.objects[0]);
++        }
++    }
++}
