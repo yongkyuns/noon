@@ -106,7 +106,7 @@ impl CompiledScene {
         for track in self.tracks.values().flatten() {
             let mut track = track.clone();
             track.object_index = remap(track.object_index);
-            let channel = CompiledChannelKey::new(track.object_index, track.property);
+            let channel = track.channel();
             track_locators.insert(track.id, CompiledTrackLocator::from_track(&track));
             tracks.entry(channel).or_default().push(track);
             track_rows_reindexed += 1;
@@ -207,6 +207,18 @@ impl CompiledScene {
         let mut font_keys = BTreeSet::new();
         let mut geometries = BTreeSet::new();
         let mut geometry_ids = BTreeSet::new();
+        for image in self
+            .objects
+            .iter()
+            .filter(|object| object.live)
+            .filter_map(|object| object.fill_paint.as_deref())
+            .filter_map(noon_core::SemanticPaint::as_image)
+        {
+            if !self.resources.images.contains_key(&image.resource()) {
+                return 0;
+            }
+            images.insert(image.resource());
+        }
         // A numeric-text declaration can select any authored token at runtime,
         // so all of its compiled token resources remain roots until the driver
         // is removed. Treat them as ordinary text content here to reuse the
@@ -287,6 +299,16 @@ impl CompiledScene {
         // endpoints and prepared morphs may name external geometry. Resolve
         // those IDs before pruning, just like live object content above.
         for track in self.tracks.values().flatten() {
+            if let TrackValues::Paint { transition } = &track.values {
+                for (paint, _) in transition.endpoints() {
+                    if let Some(image) = paint.and_then(noon_core::SemanticPaint::as_image) {
+                        if !self.resources.images.contains_key(&image.resource()) {
+                            return 0;
+                        }
+                        images.insert(image.resource());
+                    }
+                }
+            }
             let geometry_refs: &[&GeometryRef] = match &track.values {
                 TrackValues::Object { from, to } => &[&from.geometry, &to.geometry],
                 TrackValues::PreparedMorph { geometry, .. } => &[geometry],
@@ -554,6 +576,85 @@ mod tests {
                 .unwrap()
                 .resource_entries_reclaimed,
             0
+        );
+    }
+
+    #[test]
+    fn image_paint_and_timeline_endpoints_keep_only_their_resource_closure() {
+        use noon_core::{
+            ImageMapping, ImagePaint, PaintTransition, RasterImageResourceArena,
+            RasterImageSampling, SemanticPaint,
+        };
+        let mut arena = RasterImageResourceArena::new();
+        let live = arena.intern_rgba8(1, 1, [17, 31, 47, 255]).unwrap();
+        let timeline = arena.intern_rgba8(1, 1, [61, 73, 89, 128]).unwrap();
+        let obsolete = arena.intern_rgba8(1, 1, [101, 127, 139, 64]).unwrap();
+        let paint = |handle| {
+            SemanticPaint::Image(Arc::new(ImagePaint::new(
+                handle,
+                ImageMapping::default(),
+                RasterImageSampling::Linear,
+            )))
+        };
+        let transition = Arc::new(
+            PaintTransition::new(Some(paint(timeline)), 0.25, Some(paint(timeline)), 0.75).unwrap(),
+        );
+        let mut object = circle(1);
+        object.fill_paint = Some(Arc::new(paint(live)));
+        let mut compiled = CompiledScene::compile_objects(
+            vec![object],
+            &[TrackDefinition {
+                id: TrackId::new(1),
+                object: ObjectId::new(1),
+                property: Property::Fill,
+                values: TrackValues::Paint { transition },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .unwrap();
+        for handle in [live, timeline, obsolete] {
+            compiled
+                .resources
+                .capture_paint_from_arena(&arena, &paint(handle))
+                .unwrap();
+        }
+        let snapshot = compiled.clone();
+        assert_eq!(
+            compiled
+                .compact_retired_object_slots()
+                .unwrap()
+                .resource_entries_reclaimed,
+            1
+        );
+        assert!(compiled.resources.images.contains_key(&live));
+        assert!(compiled.resources.images.contains_key(&timeline));
+        assert!(!compiled.resources.images.contains_key(&obsolete));
+        compiled.objects[0].fill_paint = None;
+        assert_eq!(
+            compiled
+                .compact_retired_object_slots()
+                .unwrap()
+                .resource_entries_reclaimed,
+            1
+        );
+        assert_eq!(compiled.resources.images.len(), 1);
+        compiled.tracks.clear();
+        assert_eq!(
+            compiled
+                .compact_retired_object_slots()
+                .unwrap()
+                .resource_entries_reclaimed,
+            1
+        );
+        assert!(compiled.resources.images.is_empty());
+        assert_eq!(
+            snapshot.resources.images.get(&live).unwrap().rgba8(),
+            &[17, 31, 47, 255]
+        );
+        assert_eq!(
+            snapshot.resources.images.get(&timeline).unwrap().rgba8(),
+            &[61, 73, 89, 128]
         );
     }
 

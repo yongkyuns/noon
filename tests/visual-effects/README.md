@@ -10,7 +10,7 @@ intensity and defaults to one second with `there_and_back`. Its Rust counterpart
 Construction does not enroll an attachment or capture a source value.
 
 The shared compiler captures coherent effective intensity at activation and emits
-an ordinary `Property::GlowIntensity` track with `GlowTrackEndBehavior::RestoreSource`.
+an ordinary `Property::GlowIntensity` track with `EffectTrackEndBehavior::RestoreSource`.
 The existing composition time map runs before the leaf amplitude map. At the mapped
 child endpoint the channel restores its captured source, including when a Linear
 or other non-returning rate override makes that restoration discontinuous. A later
@@ -96,11 +96,197 @@ This qualifies filter/composition behavior, not independent image rasterization
 or physical-GPU speed. The existing browser authoring smoke executes the paired
 Python example and verifies completion and the retained ordinary image.
 
-Arbitrary image fills inside vector geometry, procedural paint, effect stacks,
-composed groups, backdrop capture and custom shaders remain separate
+The image-fill extension below covers supported planar vector geometry.
+Procedural paint, effect stacks, composed groups, backdrop capture and custom shaders remain separate
 work under [#1897](https://github.com/yongkyuns/noon/issues/1897). The following M0
 sections preserve the original design and declaration-stage evidence; their
 historical execution guards are not a current support matrix.
+
+## Image-painted planar geometry
+
+`ImagePaint` supplies immutable pixels inside an ordinary circle, rectangle or
+planar vector path. It uses the existing geometry coverage and solid stroke;
+intrinsic image alpha, fill opacity and final object opacity remain independent.
+The Rust counterpart is `ImagePaintOptions` with checked `ImageMapping` and
+`ImageUvTransform` values. Construction creates no scene object or GPU resource.
+
+```python
+from noon import ImageMapping, ImagePaint, Rectangle, Scene, linear
+
+class PaintedCard(Scene):
+    def construct(self):
+        card = Rectangle(width=4, height=2, stroke=None)
+        card.set_fill(ImagePaint("photo.png", mapping=ImageMapping(
+            fit="cover", scale=(-1, 1)
+        )), opacity=0.8)
+        self.add(card)
+        self.play(card.animate.set_fill_image_mapping(
+            ImageMapping(fit="cover", translation=(0.15, 0), scale=(-1, 1))
+        ), run_time=1, rate_func=linear)
+```
+
+The mirrored image keeps each scale's sign in its translated target. Animating
+from a positive scale to a negative scale is rejected because the interpolation
+would cross zero. Immediate replacement may change scale signs, fit, addressing,
+sampling or resource identity.
+
+Pixels may come from PNG/JPEG, a uint8 image array or an existing `ImageMobject`.
+An existing bitmap shares immutable pixels and preserves its sampling unless
+explicitly overridden; encoded/array inputs default to linear sampling. Nearest,
+linear (tent) and bicubic use the shared premultiplied image reconstruction, so
+hidden RGB in alpha-zero texels cannot bleed into visible paint.
+
+Mapping uses the lower-left normalized local geometry box. Image rows are
+top-first; positive rotation turns counterclockwise. `stretch` fills the box;
+`cover` preserves aspect ratio and crops; `contain` preserves aspect ratio and
+clips to its fitted rectangle, keeping empty margins. Alignment ranges from
+zero to one per axis. Addressing is `transparent`, `clamp` or `repeat`, applied
+per filter tap. Translation, rotation and signed scale place the fitted image
+about the local box center. Geometry motion, camera zoom and output resolution
+do not rewrite these authored values.
+
+Ordinary target animation interpolates mapping and fill opacity through the
+shared Fill channel. Endpoints require the same
+resource, sampling, fit and address modes and matching scale signs; exact
+endpoint samples preserve authored values. A mapping-only edit admits/uploads
+no pixels. Image fills share the existing bitmap texture pool, including when
+one resource also belongs to an `ImageMobject`. Resource roots include snapshots
+and timeline endpoints; retirement follows the existing publication lifecycle.
+
+Blur, Shadow and both Glow source modes reuse the painted geometry's isolated
+source capture. Image stroke/text paints, callback paint overlays, transient
+family presentations and cross-kind image crossfades remain outside this finite
+profile. Extreme mappings that cannot be represented safely by the GPU are
+rejected. This profile does not promise arbitrary f64 sampling precision or
+alias-free minification.
+
+Executable matching programs are `noon::example_scenes::image_fill`, native
+`image_fill`, and `web/python/examples/image_fill.py`. The actual native pixel
+oracle tests all fits, address modes and filters across transformed geometry,
+alpha/opacity and resource reuse; separate whole-image comparisons check source
+filters and unchanged solid strokes. The browser qualification script is
+`scripts/image-fill-qualification.mjs`: it compares direct Rust/WASM and Python
+on WebGPU/WebGL2 against an independent physical-fit/inverse-transform/filter
+reference, including inherited bitmap sampling and authored-time samples.
+Premultiplication/addressing shader mutations must fail that reference. Exact
+source/package identities, executed results and remaining gates live in #2330;
+these correctness checks do not establish physical-device frame pacing.
+
+## Seeded procedural noise paint
+
+`NoisePaint(low, high, seed=0, frequency=(8, 8), phase=(0, 0))` supplies a smooth
+two-color local field through ordinary `set_fill` and `.animate.set_fill`.
+Rust uses checked `NoisePaint::new` and `Mobject`/`LiveSession::set_fill_noise`.
+Complete paired scripts are `noon::example_scenes::noise_paint` and
+`web/python/examples/noise_paint.py`, with the native `noise_paint` example and
+direct Rust/WASM host. They animate frequency, phase, transparent colors and
+opacity, hold, change to solid paint and return. No per-frame callback or extra
+clock runs a static texture.
+
+Frequency counts lattice cells along each normalized local-box axis; phase
+shifts the lattice in cell coordinates. The lower-left box corner is zero.
+The fixed u32 hash, its upper sixteen output bits and quintic interpolation
+define seeded value noise; no platform random generator is involved. Lattice
+indices wrap every 65,536 cells. Late projection splits phase into an integer
+cell and fraction before f32 narrowing, including the rounded periodic seam.
+Authored phase stays f64 and may retain multiple unwrapped cycles.
+
+The renderer derives an axis-aligned lattice footprint from the physical pixel,
+camera and inverse object transform. Widths below 1/256 cell use point sampling;
+larger widths integrate the quintic field over a lattice-aligned box using at
+most nine lattice values. Beyond one cell, a cubic fade reaches the seed
+ensemble mean at two cells. This is the finite minification profile, rather
+than a claim of arbitrary alias-free reconstruction. Centers clamp to the local
+box before mapping; the filter window may extend beyond that center. The GPU
+profile accepts positive representable frequencies up to 256 per axis.
+
+Color interpolation uses encoded-premultiplied RGBA. Intrinsic color alpha,
+fill opacity and final object opacity remain independent. Same-seed targets
+interpolate frequency, phase and colors through the shared Fill channel;
+solid/absent endpoints promote during interior samples. Exact endpoints retain
+kind, seed and authored values. Changing seed is an immediate edit; attempting
+to animate it rejects atomically. Existing stroke/text, callback-paint and
+transient-family restrictions remain. Geometry, layout and picking stay intact.
+
+The native `noise_paint_raster` oracle uses separate masked integer arithmetic
+and piecewise Gauss quadrature over the point polynomial, without production
+axis integrals or uniforms. It covers transformed primitives and concave paths,
+detail/box/coarse profiles, authored times and exact rewind. A separate native
+period-seam regression prevents phase packing from retargeting the other axis.
+Existing whole-image oracles verify Blur/Shadow/both Glow modes and unchanged
+geometry/strokes. Actual WGSL mutations ignoring seed and disabling filtering
+must fail, then exact restored source must pass. Browser qualification is
+`scripts/noise-paint-qualification.mjs`, with an independent BigInt/quadrature
+reference, full u32 seed, phase-wrap and minification profiles on WebGPU/WebGL2.
+Executed source/build evidence and unfinished promotion gates belong to the
+owning PR/#1897; these are correctness/resource checks, not frame-pacing claims.
+
+## Radial paint authoring and qualification
+
+`RadialGradient(stops, center=(0.5, 0.5), radii=(0.5, 0.5))` uses the same
+ordinary `set_fill`, `.animate.set_fill` and independent opacity grammar as linear
+paint. Rust uses `RadialGradient::new` and `set_fill_radial_gradient` on `Mobject`
+or `LiveSession`. Complete paired scripts are
+`noon::example_scenes::radial_gradient` and
+`web/python/examples/radial_gradient.py`; native `radial_gradient` and the direct
+Rust/WASM host run that same Rust program. The scripts animate an elliptical
+field's center, radii, transparent stops and opacity, then transition to solid
+paint and back, using ordinary play/hold completion.
+
+Center is in the normalized local box, from lower-left zero to upper-right one.
+Radii are positive lengths along those normalized axes. Equal radii form an
+ellipse on a nonsquare box. The field coordinate is
+`hypot((x-center.x)/radii.x, (y-center.y)/radii.y)`, with pad extension and the
+shared right-continuous, encoded-premultiplied stop interpolation. These are
+object-local coordinates, rather than effect radii in scene/output-pixel units.
+Geometry transforms carry paint with the object; camera zoom does not edit it.
+
+The finite planar circle/rectangle/path profile admits at most 16 stops and
+radii/stop intervals representable by its GPU arithmetic. Center, radii, colors,
+positions and fill opacity interpolate; matching stop counts are required.
+Solid/absent endpoints promote to the radial topology during the interior of an
+animation; exact endpoints preserve their original kind. Linear/radial kind
+changes require immediate replacement. Invalid profiles reject atomically.
+Stroke/text paints, transient family presentation and callback paint edits keep
+the existing continuous-paint exclusions.
+
+The native `radial_gradient_raster` oracle independently computes the ellipse,
+premultiplied stop/time vectors and LDR quantization across transformed primitive
+and path draws, with same-time/rewind and clean-upload checks. Replacing the
+actual WGSL elliptical distance by a one-axis field must fail it; restoring the
+shader must pass. `scripts/radial-gradient-qualification.mjs` exercises both
+Rust/WASM and Python on WebGPU/WebGL2 against a separate temporal field formula.
+These tests establish only the executed finite correctness profile; owning PR
+evidence records exact revisions and promotion gates.
+
+## Continuous gradient source capture
+
+Ordinary planar circle, rectangle and retained path linear fills can carry the
+same named glow attachment. Paint edits and glow parameter edits use their
+ordinary independent channels, with the existing authored clock, target capture,
+pulse ownership and completion. Gradient text/strokes, groups and
+effect stacks remain outside this profile.
+
+Painted capture includes interpolated stop alpha and fill opacity. Silhouette
+capture ignores paint while preserving the same geometry and stroke coverage.
+Final object opacity applies once. The retained gradient binding is shared with
+the ordinary draw; its immutable value invalidates source capture on paint-only
+edits. Clean frames upload nothing; warmed intensity edits reuse capture and blur.
+
+The native `gradient_glow_preserves_paint_alpha_seek_and_local_capture` oracle
+uses separate no-effect renders and a slow full 2-D Gaussian, comparing every
+RGBA channel within two bytes. It covers circles, rectangles and stroked paths,
+reflection/rotation/nonuniform scale, both source modes, animated alpha/stops,
+transparent and colored backgrounds, exact seek, neutral/removal output and
+resource reuse. Temporarily disabling the actual gradient capture route must
+make it fail. This qualifies filtering/composition; the separate linear-paint
+oracle qualifies paint rasterization. Neither establishes physical GPU speed.
+
+`linear_gradient::glow_program`, the native `gradient_glow` example and
+`web/python/examples/gradient_glow.py` author the same paint/effect lifecycle.
+`scripts/linear-gradient-qualification.mjs` checks real Rust/WASM–Python image
+pairs on WebGPU and WebGL2, independent interior paint values, a visible halo
+and exact removal. Existing CI owns both native and browser qualification.
 
 ## Historical M0 contract and evidence
 
@@ -126,27 +312,121 @@ cross-host binding execution or physical-performance result follows from declara
 The separate leaf-adapter section records implemented binding source and its
 validation boundary without reclassifying the future-feature review programs.
 
+## Linear-gradient values and reference boundary
+
+The first paint prerequisite for #1897 defines checked inert Rust `GradientStop`
+and `LinearGradient` values in `noon-core::object_state`. The integration now
+carries these immutable definitions through semantic fill, checked planar
+lowering, compiled/effective rows, atomic style publication, the genuine worker
+codec, and retained analytic/path draws. No placeholder Scene setter or Python
+class is exported. This remains **an integration prerequisite, not a supported
+cross-language paint/animation feature or M3 completion**.
+
+The finite GPU definition admits at most 16 stops, distinct endpoints after f32
+conversion, and no distinct stop positions that collapse to one GPU position.
+Text, images and spatial paint are rejected by semantic lowering. Gradient source
+capture with glow and transient derived-display packing are explicitly rejected
+until their shared integration is implemented. Ordinary gradient animation,
+effective target capture, paired public authoring, actual browser execution and
+the broader coverage/quality/performance gates remain outstanding.
+
+The native `continuous_gradient_pixels_match_literal_encoded_ldr_reference`
+test checks analytic circles/rectangles, convex paths and tessellated concave
+paths against literal encoded-LDR interior references. Its eight profiles cover
+solid baseline, local paint edits, transparent-stop premultiplication,
+right-continuous coincident stops, diagonal axes, separate fill/object opacity
+and affine transforms. It requests a real adapter and fails if none is available;
+it is not a software/noop pixel test. Retained structural tests check no paint
+program on an ordinary frame, one reused uniform per changed paint, zero clean
+uploads, unchanged path meshes and bounded painter-chunk rebuilding. A 100,000
+object runtime test checks atomic, sparse paint-only publication and idempotence.
+These component tests do not qualify coverage edges, temporal paint interpolation,
+export equivalence, physical-device performance or browser/backend parity.
+
+For the first encoded-LDR profile:
+
+- Endpoints are distinct finite points in the normalized local geometry box.
+  `(0, 0)` is its lower-left corner and `(1, 1)` its upper-right. Motion, camera
+  zoom and object scale do not rewrite the paint definition.
+- At least two stops are explicitly ordered by finite positions in `[0, 1]`.
+  Repeated positions are hard edges; the last coincident stop wins exactly at
+  the edge. Positions are not silently sorted or deduplicated. Before the first
+  stop, pad uses the first color; after the last, it uses the last color. In
+  particular, sampling before a repeated stop at zero differs from sampling
+  exactly at zero. Do not clamp the projected coordinate before stop selection.
+- Sample by projecting the local point onto the endpoint axis. Interpolate
+  **premultiplied encoded-sRGB RGBA**, preventing invisible RGB from leaking into
+  partially transparent samples. This profile introduces no linear-light/HDR
+  transfer. Coverage, fill opacity and final object opacity multiply the result
+  once each at their existing owners; they are not baked into stop colors.
+- Definition clones share immutable stop storage. Invalid values fail before a
+  definition exists. A valid short axis must not divide by an underflowed squared
+  length; renderer lowering must separately qualify representable GPU inputs.
+
+`reference.linear_gradient_pixel` uses exact rational arithmetic from decimal
+input spellings, independent of Rust's rescaled f64 projection and binary stop
+lookup. Both implementations check the 25 specification-derived samples in
+`linear-gradient-vectors.txt`; the Python oracle independently recomputes their
+expected values. Literal vectors and seeded defects cover projection, units, hard edges,
+transparent color, and double-applied opacity. The existing `test_reference.py`
+entrypoint includes these tests. These component tests do not establish geometry
+rasterization, GPU pixels, temporal behavior, cross-host parity or performance.
+
+The next authoring slice exposes `Mobject::set_fill_gradient` and
+`LiveSession::set_fill_gradient` with an immutable checked `LinearGradient`.
+Python uses the ordinary `obj.set_fill(LinearGradient(stops, start=..., end=...))`
+and `obj.animate.set_fill(...)` operations. Omitted opacity preserves its multiplier.
+The paired executable examples are `noon::example_scenes::linear_gradient`,
+`crates/noon-native/examples/linear_gradient.rs`, and
+`web/python/examples/linear_gradient.py`; the same Rust program has a direct
+WASM host. Python owns argument coercion only.
+
+Paint interpolation uses the existing Fill channel and authored clock. Matching
+stop counts, ordered positions and axes interpolate with premultiplied encoded-sRGB
+colors; solids/absent paint promote to the other endpoint's mapping. Exact endpoint
+paint kinds, immutable definitions and authored f64 opacity survive reconciliation.
+The compiler rejects axis collapse anywhere in the interval, GPU precision loss,
+opening/closing subpixel stop gaps, overshooting leaf rates and unsupported sources
+before publication. Immediate edits may change stop count. Native reactive fill
+drivers retain existing conflict admission. Initial support is planar positive-area
+circle/rectangle/path fills. Strokes, text/image fills, content morphs,
+derived displays, callback paint edits and group fills remain explicitly unsupported.
+Scalar color queries reject continuous paint; fill opacity reports its multiplier.
+
+`paint-transition-vectors.txt` supplies 12 literal temporal/spatial/opacity cases.
+The independent rational Python oracle recomputes them and seeded-defect tests reject
+straight-alpha temporal mixing, frozen time and repeated opacity. Shared Rust
+sampling checks the same literals. `linear_gradient_raster` qualifies public Rust
+animation through the retained native renderer with 80 interior RGBA comparisons
+(maximum byte error 1), including analytic/path coverage routes and clean uploads.
+`scripts/linear-gradient-qualification.mjs` runs the paired program through real
+Rust/WASM and Python browser hosts on WebGPU and WebGL2; it requires identical host
+pixels and independently checks 30 interior samples per time/backend. These commands
+are qualification gates, not claims of a pass on every physical device.
+
 ## Implemented shared Rust boundary
 
-`crates/noon-core/src/object_state/glow.rs` contains production, renderer-independent
-values: `Glow`, `GlowUpdate`, `GlowRadius`, `Pixels`, `GlowSource`, typed parameter
-errors, and `PreparedGlowUpdate`. The existing object-state module exports them.
+`crates/noon-core/src/object_state/glow.rs` contains the production,
+renderer-independent `Glow` and `GlowSource` values. Its sibling
+`effect_parameters.rs` owns `EffectUpdate`, `EffectRadius`, `Pixels`, typed
+parameter errors and `PreparedEffectUpdate`, shared with `Blur`. The existing
+object-state module exports them.
 They use Noon's existing `Color`, not a parallel color type or Python validator.
 No new crate, dependency, identity allocator, scene store, timeline or shader exists.
 
-`Glow` is a complete validated value with private fields. `GlowUpdate::default()`
+`Glow` is a complete validated value with private fields. `EffectUpdate::default()`
 is an empty partial request, not a reset to appearance defaults. A whole request
 is validated before a replacement value is returned. The following is actual Rust
 API, also covered by a compilable rustdoc example:
 
 ```rust
-use noon_core::{Glow, GlowParameterError, GlowUpdate, Pixels};
+use noon_core::{Glow, EffectParameterError, EffectUpdate, Pixels};
 
-fn parameters() -> Result<(), GlowParameterError> {
+fn parameters() -> Result<(), EffectParameterError> {
     let halo = Glow::new(
-        GlowUpdate::default().radius(Pixels(12.0)).intensity(0.25),
+        EffectUpdate::default().radius(Pixels(12.0)).intensity(0.25),
     )?;
-    let brighter = GlowUpdate::default().intensity(1.4).apply_to(halo)?;
+    let brighter = EffectUpdate::default().intensity(1.4).apply_to(halo)?;
     assert_eq!(brighter.radius(), halo.radius());
     assert_eq!(halo.intensity(), 0.25);
     Ok(())
@@ -156,7 +436,7 @@ fn parameters() -> Result<(), GlowParameterError> {
 These are inert shared inputs, not wrapper-owned mutable attachment state.
 `request.prepare(captured)` accepts an explicit coherent activation-time value;
 it does not obtain that value from a store, activate a driver, or check a lease.
-`PreparedGlowUpdate::sample(mapped_alpha)` returns a **partial update**, never an
+`PreparedEffectUpdate::sample(mapped_alpha)` returns a **partial update**, never an
 old complete appearance snapshot. Intensity-only sampling therefore cannot write
 radius/color/source. An explicitly supplied unchanged parameter still has a write
 channel; omitted parameters do not. Callers remain responsible for real attachment
@@ -179,6 +459,14 @@ preflight validates names, owner references, values and duplicate writes before
 commit. Removing an owner retires its attachments through the retained reverse
 reference index. Removing/re-adding a name never revives a stale handle.
 
+Compiled effect channels retain that exact attachment generation alongside the
+object slot and parameter property. Track lookup, scheduler events, edits,
+completion, replay and retirement use the captured address; an object/property
+query without an attachment cannot alias an effect channel. Explicit slot
+compaction relocates the derived object address and preserves semantic identity.
+This execution prerequisite does not promote multiple attachments or group
+filtering: the qualified public profile still admits one attachment per leaf.
+
 `Scene::set_glow`, `add_effect`, `get_effect`, `set_effect`, `remove_effect` and
 `remove_glow` now exist. Mobject target/pre-execution edits use the same checked
 preparation. Names and exact handles are distinct selectors; a foreign or stale
@@ -192,16 +480,16 @@ mock scene. Its complete source is `crates/noon/examples/effect_authoring_contra
 
 ```rust
 use noon::{AnimationOptions, Scene};
-use noon::effects::GlowUpdate;
+use noon::effects::EffectUpdate;
 
 fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08)?;
     scene.add(&dot)?;
-    scene.set_glow(&dot, GlowUpdate::default().intensity(0.25))?;
+    scene.set_glow(&dot, EffectUpdate::default().intensity(0.25))?;
     let mut target = dot.target_editor()?;
     target.shift(2.0, 0.0)?;
-    target.set_effect("glow", GlowUpdate::default().intensity(1.4))?;
+    target.set_effect("glow", EffectUpdate::default().intensity(1.4))?;
     let movement = scene.declare_transform_to(
         &dot, &target, AnimationOptions::new().run_time(1.5),
     )?;
@@ -246,7 +534,7 @@ writers to the same parameter fail atomically even when they request equal value
 Empty patches own no channels but still validate the attachment handle. Scalar,
 color, radius, and source writes retain the same typed validation rules.
 
-`GlowUpdate::parameters()` enumerates only explicitly supplied channels without
+`EffectUpdate::parameters()` enumerates only explicitly supplied channels without
 allocation. Preflight composes disjoint updates against the staged value. Commit
 emits `SemanticMutationImpact::EffectParameter` only for changed parameters;
 unchanged explicit values still participate in conflict admission without dirtying
@@ -315,7 +603,7 @@ kind of animated scene object or introduce `play_effect`, `GlowTo` or `AnimateGl
 
 | Intent | Python design | Rust design / existing owner |
 | --- | --- | --- |
-| Persistent canonical glow | `obj.set_glow(**patch) -> obj` | Scene/live `set_glow(&obj, GlowUpdate)`, fallible coherent publication |
+| Persistent canonical glow | `obj.set_glow(**patch) -> obj` | Scene/live `set_glow(&obj, EffectUpdate)`, fallible coherent publication |
 | Add a named treatment | `obj.add_effect(Glow(...), name="accent") -> obj` | Scene/live attachment creation through the same semantic transaction |
 | Inspect a binding | `obj.get_effect("accent") -> bound handle` | typed generational lookup, not a copied state object |
 | Update one binding | `obj.set_effect("accent", **patch) -> obj` | Scene/live typed parameter update; no whole-object ownership |
@@ -339,7 +627,7 @@ already defined them. The leaf declaration exports/bindings below are implemente
 `Glow` describes values; `GlowPulse` describes a timed action. Python appearance
 parameters are keyword-only. On setters, `None` means omitted/preserve, like
 ordinary style setters; on initial construction it selects the documented default.
-Rust's `GlowUpdate` expresses the same distinction with `Option`. Boolean, string
+Rust's `EffectUpdate` expresses the same distinction with `Option`. Boolean, string
 numbers, nonfinite numbers and unknown keys are rejected, not coerced permissively.
 The operator reference's narrow scalar parser is not the shipping wrapper parser.
 Names are required, case-sensitive nonempty strings. The first slice has no
@@ -716,8 +1004,8 @@ successful plain wait is not evidence that a glow was rendered.
 A useful mutation control bypasses `_noon_effects._call`'s live context and calls
 the raw authored handle instead. The fixture's post-wait unsupported-operation
 assertion must fail; restore the exact source and require it to pass. Separately,
-removing the exact `WasmGlow` class export must make `check-web-package.mjs` fail
-without confusing `WasmGlowUpdate` for that missing class. Preserve red/green logs
+removing the exact `WasmEffectDefinition` class export must make `check-web-package.mjs` fail
+without confusing `WasmEffectUpdate` for that missing class. Preserve red/green logs
 and source/package hashes; these are correctness controls, not performance runs.
 
 ## Qualification baseline and implementation handoff
@@ -775,7 +1063,7 @@ performance evidence establishes a current-head merge pass.
 
 ### M1 ordinary parameter-channel integration (still guarded at Scene orchestration)
 
-`CompiledGlow::parameter_channels` derives only requested color, radius and
+`CompiledEffect::parameter_channels` derives only requested color, radius and
 intensity endpoints from a coherent activation-time runtime value. These become
 ordinary `TrackDefinition` values with the existing TrackIds, timing, nested time
 maps and scheduler. Attachment generation travels with each track; the compiler
@@ -806,3 +1094,186 @@ automatic host preparation and worker serialization. The source-alpha oracle sti
 uses production primitive rasterization; GPU timing and physical-hardware
 performance are separate acceptance requirements. Pixel tolerances remain 2
 RGBA8 bytes and mask error remains 1e-5.
+
+## Retained ordered raster operators
+
+`EffectStackFilter` composes up to eight finite Glow, Blur and Shadow operators
+over one caller-owned padded RGBA8 capture. Existing single-effect capture uses
+this same implementation. Each active pass consumes the preceding premultiplied
+encoded-LDR result. Painted glow uses its alpha; silhouette glow uses the original
+declared geometry mask. Intermediate outputs quantize to RGBA8. Final scope
+opacity applies once, on the last non-neutral pass. An entirely neutral stack
+returns ordinary source submission without copying or allocating GPU images.
+If unit conversion underflows a positive Blur radius to exact output sigma zero,
+that Blur is also an identity; it cannot claim a nonexistent filtered output or
+take final opacity away from the preceding active pass.
+
+The caller must supply the complete cumulative padded extent, original mask,
+source-content revision, and normal submission/abandoned-encoder lifecycle.
+These are renderer operators, not public authored-stack or composed-group
+admission. Ordered semantic target activation, capture bounds, painter isolation,
+paired creator examples and their publication/lifecycle qualification remain M3.
+
+Programs are shared; per-pass uniforms and intermediates are independent. A
+parameter edit leaves earlier passes intact and invalidates its actual suffix.
+Retained filters charge 12/28/32 bytes per pixel for Glow/Blur/Shadow, excluding
+source/mask, MSAA and host in-flight resources. Warm neutral slots remain charged;
+truncation/clear retires them. Every later-pass profile/capability/budget rejection
+precedes prefix mutation or queue writes. Clean calls upload/encode/allocate
+nothing. No physical-device performance guarantee follows from these counters.
+
+`gpu::effect_stack::tests` includes literal CPU witnesses, sparse invalidation,
+aggregate budget, neutral, retirement and late-failure tests. Its ignored native
+pixel test uses a separate direct 2-D convolution/compositor and checks every
+prefix and RGBA channel, with a predeclared two-byte bound for up to three
+mixed quantized operators and four bytes for the eight-Gaussian boundary witness
+(successive RGBA8 quantization can accumulate). It covers repeated kinds, both orders, original silhouettes,
+transparent input, fractional signed shadows, scene/pixel units, sigma 64, final
+opacity, clean exact repeat and invalidation recovery. These tests qualify the
+operator contract; they do not assert public group or animation-stack support.
+
+## RGBA Gaussian raster prerequisite
+
+The reusable renderer's `GaussianBlurFilter` consumes an encoded-premultiplied
+RGBA8 capture, before final scope opacity. Sigma uses physical output pixels,
+is bounded to [0, 64], and has square support `ceil(3*sigma)` in each axis.
+Normalize the complete kernel once and treat pixels beyond the capture as zero;
+do not clamp edges or renormalize at borders. The caller owns padded capture,
+painter placement, submission and in-flight retirement. Exact zero radius uses
+the ordinary source path. This operator alone does not enable Scene/Python Blur,
+shadow, stacks, group isolation or an additional semantic scope model.
+
+Three portable RGBA8 attachments retain 24 bits per premultiplied component
+between horizontal and vertical passes. No float render-target extension or
+color transfer is assumed. The seven retained textures cost 28 bytes per tile
+pixel, excluding source capture and in-flight resources. Three programs are
+lazy/shared across scopes; clean calls allocate/upload/encode nothing. An
+opacity-only edit uploads 16 bytes and reuses the blurred color. Invalid
+preparation preserves the prior valid scope; abandoned encoding requires
+invalidation. A reduced neutral budget can retire the disposable texture cache.
+
+The native ignored test
+`gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions`
+compares all channels and packed intermediates against a full independent 2-D
+convolution, including asymmetric color/alpha, faint edges and maximum sigma.
+Replacing actual shader RGB with alpha must make it fail. The JS oracle has a
+literal rational 7x7 impulse witness. `scripts/gaussian-blur-qualification.mjs`
+borrows the normal browser host's device for explicit test readback on WebGPU
+and WebGL2; the maximum-radius field has independent full-support point probes.
+These are raster correctness/resource checks, not public animation, source
+capture/placement, group semantics or physical-device performance evidence.
+
+### Shared Blur authoring and capture
+
+`Blur` is an immutable finite built-in with a checked `radius`. It uses the same
+`EffectDefinition`, generational attachment, `EffectUpdate`, ordinary radius
+channel, completion and replay publication as Glow. `EffectRadius::Scene` resolves
+against the full output view; `Pixels` uses final physical output pixels. Radius
+is Gaussian standard deviation, independent of object scale. The retained LDR
+profile supports sigma through 64 pixels with full square support `ceil(3*sigma)`
+and transparent extension. Zero radius restores the ordinary source submission.
+
+```rust
+use noon::effects::{Blur, EffectUpdate, Pixels};
+// Given a shared Rust Scene and its ordinary Mobject:
+let soften = Blur::new(EffectUpdate::default().radius(Pixels(10.0)))?;
+scene.add_effect(&image, soften, "soften")?;
+let mut target = image.target_editor()?;
+target.set_effect("soften", EffectUpdate::default().radius(Pixels(20.0)))?;
+```
+
+The equivalent Python declaration is
+`image.add_effect(Blur(radius=Pixels(10)), name="soften")`, with
+`image.animate.set_effect("soften", radius=Pixels(20))` using the ordinary target
+builder. Complete paired scenes are `noon::example_scenes::blur::program` and
+`web/python/examples/blur.py`; the direct WASM factory is
+`createDirectBlurSmokeRenderer`. Glow-only fields on Blur fail in shared Rust,
+including explicit same-valued writes. Glow conveniences also reject a Blur
+attachment named `glow`. Attachment kind changes require a new generation.
+
+The existing isolated source capture and painter placement now accept both
+finite definitions. Glow retains its alpha-mask operator; Blur filters all four
+encoded-premultiplied RGBA channels through the qualified Gaussian operator.
+Common capture accounting includes 32 bytes per pixel for Blur's source and
+seven filter textures, plus source MSAA where required. Each warmed scope retains
+one boxed finite filter state. Clean publications upload and encode nothing.
+The same sparse row publication supplies native and direct Rust/WASM hosts.
+The genuine Python worker envelope is generation 20 and carries a checked tagged
+effect definition; unsupported fields are rejected at that external boundary.
+No compatibility aliases, semantic identity allocator or effect clock is added.
+
+`public_scene_blur_rgba_pixels_seek_neutral_and_removal` compares normal public
+Scene output against an independent direct two-dimensional RGBA convolution of
+separately rendered ordinary sources. Circle, rectangle, asymmetric image,
+mirrored stroked path, alpha gradient, text and math profiles cover scene/pixel
+units, partial opacity, forward/backward seek, neutral
+submission, exact removal and zero-work clean frames. Local Apple M6/Metal
+qualification produced 70 full-image samples across 14 profiles with maximum
+RGBA8 error 1. Browser parity and merge qualification remain separate gates;
+`scripts/blur-qualification.mjs` requires identical real Rust/WASM and Python
+pixels on WebGPU and WebGL2, including a visible outside-source Blur witness.
+
+This slice admits one finite attachment per qualified 2D leaf. Composed groups,
+ordered stacks, shadows, backdrops, HDR/bloom and custom WGSL remain owned by
+#1897 and are not implied by the Blur operator.
+
+### Shared colored soft shadow
+
+`Shadow` attaches through the same finite definition, identity, parameter update,
+ordinary timeline channels, completion and publication as Glow/Blur. Its default
+is black with alpha 0.5, sigma 0.15 scene units and offset (0.1, -0.1) scene units.
+Color alpha controls shadow opacity. `radius` is Gaussian standard deviation;
+zero sigma is a hard shadow, while zero color alpha is neutral. Shadow rejects
+Glow intensity/source fields; Glow and Blur reject offsets. A Shadow named
+`glow` cannot be activated by GlowPulse or edited with Glow conveniences.
+
+```rust
+use noon::effects::{Shadow, EffectOffset, EffectUpdate, Pixels};
+let depth = Shadow::new(EffectUpdate::default()
+    .radius(Pixels(4.0)).offset(EffectOffset::Pixels([12.0, -10.0])))?;
+image.add_effect(depth, "depth")?;
+let mut target = image.target_editor()?;
+target.set_effect("depth", EffectUpdate::default()
+    .offset(EffectOffset::Pixels([-12.0, 12.0])))?;
+```
+
+Python uses `image.add_effect(Shadow(radius=Pixels(4), offset=Pixels((12,-10))),
+name="depth")` and `image.animate.set_effect("depth", offset=Pixels((-12,12)))`.
+A plain offset pair uses scene units. Both unit modes use +X/right and +Y/up in
+the view, independent of object rotation/scale. Unit changes are discrete and
+cannot interpolate. Fractional offsets use transparent bilinear extension;
+the backend rejects offsets that lose more than 1/256 pixel on f32 conversion.
+
+The renderer convolves painted alpha using the existing RGBA Gaussian, then
+composites the original encoded-premultiplied source over its offset colored
+mask. The RGBA8 Gaussian output alpha is quantized before bilinear translation.
+Paint alpha belongs in the captured mask. Final object opacity is removed from
+capture and applied once to the complete result; `set_object_opacity` exercises
+this distinct operation, while `set_opacity` edits paint alpha. Visual padding
+does not change layout or picking. Source/translated Gaussian support use one
+conservative local capture tile, including geometry outside the viewport.
+
+Shadow adds one RGBA8 composition image to Gaussian's seven filter textures.
+Common capture charges 36 bytes per tile pixel, plus MSAA for general sources.
+Programs are lazy/shared. Warm color edits only upload the 32-byte composition
+uniform and reuse source/convolution; clean calls encode/upload/allocate nothing.
+Removal retires the derived resources. Queue submission/recovery remain with
+the normal host; no GPU readback runs during ordinary playback.
+
+`public_shadow_pixels_offset_animation_hard_shadow_and_retirement` compares
+public Scene output with direct 2-D convolution, independent bilinear translation
+and source-over composition. The corpus includes analytic shapes, asymmetric
+image, mirrored stroke, alpha gradient, text/math, scene/pixel units, partial
+object opacity, seek, hard shadows, neutral/removal and retained counters.
+`offscreen_shadow_support_and_foreground_painter_order_match_extended_field`
+uses an independently generated extended RGBA field: entirely offscreen sources
+cast into the viewport behind foreground geometry on a colored background.
+Real RGB-from-alpha and reversed-offset WGSL negative controls must fail this
+oracle before the exact restored shader is requalified.
+
+Paired programs: `noon::example_scenes::shadow::program`, the native `shadow`
+example and `web/python/examples/shadow.py`. `scripts/shadow-qualification.mjs`
+requires identical direct Rust/WASM and Python images on actual WebGPU/WebGL2,
+visible outside-source shadow, animated radius/color/offset, exact neutral/removal
+and idle source completion. These are qualification commands, not a claim of
+physical-device pacing or completion of the remaining M0–M5 scope.

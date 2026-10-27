@@ -5,6 +5,10 @@ import math
 from pathlib import Path
 import unittest
 
+# check.sh runs this file directly. Import the paint contract TestCase so the
+# existing reference gate also executes the independently specified paint cases.
+from test_linear_gradient_reference import LinearGradientReference
+
 from reference import (
     assert_field, convolve, glow_pixel, number, over, radius_pixels, restore, sample, smooth,
 )
@@ -204,7 +208,7 @@ class NegativeControls(unittest.TestCase):
 
     def test_oracle_has_no_product_imports(self):
         tree = ast.parse((HERE / "reference.py").read_text())
-        allowed = {"__future__", "math", "collections.abc"}
+        allowed = {"__future__", "math", "collections.abc", "fractions"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 self.assertTrue(all(alias.name in allowed for alias in node.names))

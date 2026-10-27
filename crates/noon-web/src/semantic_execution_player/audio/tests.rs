@@ -28,6 +28,7 @@ fn player(action: PlaybackControl, audio: bool, canonical: bool) -> SemanticExec
             )
             .unwrap();
     }
+    let navigation = scene.section_navigation();
     let session = scene.execution_session().unwrap();
     let mut p = if canonical {
         SemanticExecutionPlayer::from_live_session(
@@ -39,9 +40,14 @@ fn player(action: PlaybackControl, audio: bool, canonical: bool) -> SemanticExec
         )
         .unwrap()
     } else {
-        SemanticExecutionPlayer::from_session(session, 6.0, 7).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(
+            scene.into_execution_with_session(session).unwrap(),
+            6.0,
+            7,
+        )
+        .unwrap()
     };
-    p.set_section_navigation(scene.section_navigation());
+    p.set_section_navigation(navigation);
     p.pause();
     p.set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
         .unwrap();
@@ -303,9 +309,13 @@ fn scene_controls_reject_a_finite_plan_with_live_drag_ownership() {
         .set_translation_drag_targets([button.node_id()])
         .unwrap();
     assert!(session.finite_timeline_end_time().is_some());
-    let error = SemanticExecutionPlayer::from_session(session, 6.0, 7)
-        .err()
-        .expect("finite duration does not admit a live mutation owner");
+    let error = SemanticExecutionPlayer::from_scene_execution(
+        scene.into_execution_with_session(session).unwrap(),
+        6.0,
+        7,
+    )
+    .err()
+    .expect("finite duration does not admit a live mutation owner");
     assert!(error.contains("finite immutable"));
     assert!(error.contains("#2263"));
 }

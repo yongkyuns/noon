@@ -217,6 +217,7 @@ fn delayed_click_keeps_collected_contexts_while_a_distant_region_animates() {
         assert_eq!(down_token.context().publication, down_frame.publication());
         let down = session
             .submit_native_pointer_input(
+                &mut fixture.store,
                 &down_token,
                 record(&down_token, 10, edge(&down_frame, CENTER, true)),
             )
@@ -242,6 +243,7 @@ fn delayed_click_keeps_collected_contexts_while_a_distant_region_animates() {
             .unwrap();
         let up = session
             .submit_native_pointer_input(
+                &mut fixture.store,
                 &up_token,
                 record(&up_token, 11, edge(&up_frame, CENTER, false)),
             )
@@ -410,14 +412,18 @@ fn a_point_qualified_token_cannot_be_substituted_at_picking_or_commit() {
             .pick_native_pointer_fill(&token, occurrence, |_| true)
             .is_err());
         assert!(session
-            .submit_native_pointer_input(&token, occurrence)
+            .submit_native_pointer_input(&mut fixture.store, &token, occurrence)
             .is_err());
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.last_native_event_sequence, None);
     }
     // Failed substitution cannot consume the sequence or poison a valid proof.
     let receipt = session
-        .submit_native_pointer_input(&token, record(&token, 20, edge(&frame, CENTER, true)))
+        .submit_native_pointer_input(
+            &mut fixture.store,
+            &token,
+            record(&token, 20, edge(&frame, CENTER, true)),
+        )
         .unwrap();
     assert_eq!(receipt.input().context().publication, frame.publication());
     assert_eq!(session.last_native_event_sequence, Some(20));
@@ -437,13 +443,14 @@ fn advancing_after_point_validation_requires_a_new_proof_even_for_distant_damage
         .pick_native_pointer_fill(&old_token, occurrence, |_| true)
         .is_err());
     assert!(session
-        .submit_native_pointer_input(&old_token, occurrence)
+        .submit_native_pointer_input(&mut fixture.store, &old_token, occurrence)
         .is_err());
     assert_eq!(session.last_native_event_sequence, None);
     let fresh_proof = frame.input_token_at(session, current_view, CENTER).unwrap();
     assert_eq!(fresh_proof.context().publication, frame.publication());
     let receipt = session
         .submit_native_pointer_input(
+            &mut fixture.store,
             &fresh_proof,
             record(&fresh_proof, 30, edge(&frame, CENTER, true)),
         )
@@ -690,7 +697,11 @@ fn changing_selection_policy_retires_the_collected_proof() {
     session.enable_pointer_fill_selection(8.0).unwrap();
     assert_position_rejected(&frame, session, current_view, CENTER);
     assert!(session
-        .submit_native_pointer_input(&token, record(&token, 40, edge(&frame, CENTER, true)))
+        .submit_native_pointer_input(
+            &mut fixture.store,
+            &token,
+            record(&token, 40, edge(&frame, CENTER, true))
+        )
         .is_err());
     assert_eq!(session.last_native_event_sequence, None);
 }
@@ -707,7 +718,7 @@ fn a_point_proof_cannot_cross_a_runtime_or_pointer_owner_replacement() {
     let mut foreign = session.clone();
     assert_position_rejected(&frame, &mut foreign, current_view, CENTER);
     assert!(foreign
-        .submit_native_pointer_input(&token, occurrence)
+        .submit_native_pointer_input(&mut fixture.store, &token, occurrence)
         .is_err());
     session
         .configure_native_pointer_input(
@@ -719,7 +730,7 @@ fn a_point_proof_cannot_cross_a_runtime_or_pointer_owner_replacement() {
         )
         .unwrap();
     assert!(session
-        .submit_native_pointer_input(&token, occurrence)
+        .submit_native_pointer_input(&mut fixture.store, &token, occurrence)
         .is_err());
     assert_eq!(session.last_native_event_sequence, None);
 }

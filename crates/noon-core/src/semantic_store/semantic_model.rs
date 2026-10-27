@@ -235,14 +235,54 @@ impl SemanticTransform {
     }
 }
 
-/// Paint representation is intentionally extensible before gradients/text enter
-/// the public API. The renderer may specialize solid colors aggressively.
+/// Immutable authored paint values. The renderer may specialize solids while
+/// retaining the same value definition for continuous and resource paints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticPaint {
     Solid(Color),
-    /// Stable resource identity for a future gradient/pattern paint resource.
-    Resource(u64),
+    /// Continuous local paint; opacity remains on the owning semantic style.
+    LinearGradient(std::sync::Arc<crate::LinearGradient>),
+    /// Elliptical radial paint in the same normalized local geometry box.
+    RadialGradient(std::sync::Arc<crate::RadialGradient>),
+    /// Seeded stateless procedural color field.
+    Noise(std::sync::Arc<crate::NoisePaint>),
+    /// Local image mapping over an existing immutable raster resource.
+    Image(std::sync::Arc<crate::ImagePaint>),
+}
+
+impl SemanticPaint {
+    pub fn as_linear_gradient(&self) -> Option<&std::sync::Arc<crate::LinearGradient>> {
+        match self {
+            Self::LinearGradient(gradient) => Some(gradient),
+            Self::Solid(_) | Self::RadialGradient(_) | Self::Noise(_) | Self::Image(_) => None,
+        }
+    }
+
+    pub fn as_radial_gradient(&self) -> Option<&std::sync::Arc<crate::RadialGradient>> {
+        match self {
+            Self::RadialGradient(gradient) => Some(gradient),
+            Self::Solid(_) | Self::LinearGradient(_) | Self::Noise(_) | Self::Image(_) => None,
+        }
+    }
+
+    pub fn as_noise(&self) -> Option<&std::sync::Arc<crate::NoisePaint>> {
+        match self {
+            Self::Noise(noise) => Some(noise),
+            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) | Self::Image(_) => {
+                None
+            }
+        }
+    }
+
+    pub fn as_image(&self) -> Option<&crate::ImagePaint> {
+        match self {
+            Self::Image(image) => Some(image),
+            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) | Self::Noise(_) => {
+                None
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +346,80 @@ impl Default for SemanticStyle {
 }
 
 impl SemanticStyle {
+    pub fn image_resources(&self) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        [
+            self.fill.as_ref(),
+            self.stroke.as_ref(),
+            self.background_stroke.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(SemanticPaint::as_image)
+        .map(|image| image.resource())
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        mut remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        for paint in [
+            &mut self.fill,
+            &mut self.stroke,
+            &mut self.background_stroke,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let SemanticPaint::Image(image) = paint {
+                let handle = remap(image.resource());
+                std::sync::Arc::make_mut(image).remap_resource(handle);
+            }
+        }
+    }
+    /// Capture a lowered effective fill, retaining authored precision exactly
+    /// when its value still lowers to the same paint and alpha.
+    pub fn capture_effective_fill(
+        &self,
+        fill: Option<Color>,
+        paint: Option<&std::sync::Arc<crate::SemanticPaint>>,
+    ) -> (Option<SemanticPaint>, f64) {
+        if let Some(paint) = paint {
+            let alpha = fill.map_or(0.0, |color| color.alpha);
+            let unchanged =
+                self.fill.as_ref() == Some(paint.as_ref()) && self.fill_opacity as f32 == alpha;
+            return (
+                Some(paint.as_ref().clone()),
+                if unchanged {
+                    self.fill_opacity
+                } else {
+                    f64::from(alpha)
+                },
+            );
+        }
+        let lowered = match &self.fill {
+            Some(SemanticPaint::Solid(color)) => {
+                let mut color = *color;
+                color.alpha = (f64::from(color.alpha) * self.fill_opacity) as f32;
+                Some(color)
+            }
+            _ => None,
+        };
+        if lowered == fill
+            && !matches!(
+                self.fill,
+                Some(
+                    SemanticPaint::LinearGradient(_)
+                        | SemanticPaint::RadialGradient(_)
+                        | SemanticPaint::Noise(_)
+                        | SemanticPaint::Image(_)
+                )
+            )
+        {
+            (self.fill.clone(), self.fill_opacity)
+        } else {
+            (fill.map(SemanticPaint::Solid), 1.0)
+        }
+    }
     /// Validate all numeric paint and style fields before publishing authored state.
     pub fn is_finite(&self) -> bool {
         let paint = |paint: Option<&SemanticPaint>| match paint {
@@ -315,7 +429,13 @@ impl SemanticStyle {
                     && color.blue.is_finite()
                     && color.alpha.is_finite()
             }
-            Some(SemanticPaint::Resource(_)) | None => true,
+            Some(
+                SemanticPaint::LinearGradient(_)
+                | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Noise(_)
+                | SemanticPaint::Image(_),
+            )
+            | None => true,
         };
         paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
@@ -388,7 +508,10 @@ impl SemanticStyle {
         }?;
         match paint {
             SemanticPaint::Solid(color) => Some(*color),
-            SemanticPaint::Resource(_) => None,
+            SemanticPaint::LinearGradient(_)
+            | SemanticPaint::RadialGradient(_)
+            | SemanticPaint::Noise(_)
+            | SemanticPaint::Image(_) => None,
         }
     }
 

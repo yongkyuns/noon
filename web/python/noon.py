@@ -1184,9 +1184,9 @@ class Mobject:
         from _noon_effects import get_effect
         return get_effect(self, name)
 
-    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None) -> Mobject:
+    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None) -> Mobject:
         from _noon_effects import set_effect
-        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source)
+        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset)
 
     def remove_effect(self, selector) -> Mobject:
         from _noon_effects import remove_effect
@@ -1195,6 +1195,11 @@ class Mobject:
     def remove_glow(self) -> Mobject:
         from _noon_effects import remove_glow
         return remove_glow(self)
+
+    def set_fill_image_mapping(self, mapping, opacity=None):
+        """Edit local image UVs through shared Rust publication without reading pixels."""
+        from _noon_paints import set_image_mapping
+        return set_image_mapping(self, mapping, opacity)
 
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
         return _callback_operations()._canonical_set_fill(self, color, opacity)
@@ -1617,10 +1622,12 @@ class Scene:
         return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
 
     def on_click(self, target: Mobject, animation: object) -> Scene:
-        """Run Indicate(target) in Rust on a primary click of a filled circle/rectangle.
+        """Bind Indicate(target), GlowPulse(target), or None to a primary click.
 
-        Clicks during that target's indication are ignored. Completion restores
-        its appearance; script time stays unchanged. No Python callback is kept.
+        Filled circles and rectangles use the shared Rust input path. None clears
+        the action; registration does not start it. Clicks during that target's
+        effect are ignored. Completion restores its owned channels while script
+        time stays unchanged. No Python callback or captured attachment is kept.
         """
         return _scene_operations()._on_click(self, target, animation)
 
@@ -1937,6 +1944,13 @@ _PUBLIC_EXPORTS = {
     "SVGMobject": "_manim_svg",
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
+    "Blur": "_noon_effects",
+    "Shadow": "_noon_effects",
+    "LinearGradient": "_noon_paints",
+    "RadialGradient": "_noon_paints",
+    "NoisePaint": "_noon_paints",
+    "ImagePaint": "_noon_paints",
+    "ImageMapping": "_noon_paints",
     "GlowPulse": "_noon_effects",
     "Pixels": "_noon_effects",
     "EffectHandle": "_noon_effects",
@@ -2041,6 +2055,7 @@ __all__ = [
     "PackageNotFoundError",
     "version",
     "Glow",
+    "Blur",
     "GlowPulse",
     "Pixels",
     "EffectHandle",

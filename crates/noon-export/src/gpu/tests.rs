@@ -20,10 +20,10 @@ fn native_capture_spatial_depth_and_device_loss() {
     let mut session = noon::example_scenes::spatial_mesh::session().unwrap();
     for (time, front_is_red) in [(0.0, true), (2.0, false)] {
         session.seek(time).unwrap();
-        let view = CaptureView::new(&session, &options).unwrap();
-        let query = session.query_viewports(&view.bounds);
-        let visible = session.renderer_viewport_query(query).unwrap();
-        let publication = session.take_renderer_publication();
+        let view = CaptureView::new(session.session(), &options).unwrap();
+        let query = session.session_mut().query_viewports(&view.bounds);
+        let visible = session.session().renderer_viewport_query(query).unwrap();
+        let publication = session.session_mut().take_renderer_publication();
         gpu.render(&publication, &view, visible.object_indices(), true)
             .unwrap();
         let center = &gpu.pixels()[(64 * 257 + 128) * 4..][..4];
@@ -44,10 +44,10 @@ fn native_capture_spatial_depth_and_device_loss() {
     // A lost device must not return the last successful frame as new output.
     gpu.device.destroy();
     let _ = gpu.device.poll(wgpu::PollType::Poll);
-    let view = CaptureView::new(&session, &options).unwrap();
-    let query = session.query_viewports(&view.bounds);
-    let visible = session.renderer_viewport_query(query).unwrap();
-    let publication = session.take_renderer_publication();
+    let view = CaptureView::new(session.session(), &options).unwrap();
+    let query = session.session_mut().query_viewports(&view.bounds);
+    let visible = session.session().renderer_viewport_query(query).unwrap();
+    let publication = session.session_mut().take_renderer_publication();
     assert!(gpu
         .render(&publication, &view, visible.object_indices(), true)
         .is_err());

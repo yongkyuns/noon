@@ -17,5 +17,5 @@ pub async fn create_direct_recovery_smoke_renderer(
         _ => Err(format!("unknown recovery fixture: {fixture}")),
     }
     .map_err(|error| JsValue::from_str(&error))?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

@@ -52,7 +52,7 @@ fn press(frame: &PointerFrameSnapshot) -> NativePointerInputKind {
     }
 }
 
-fn moving_fixture() -> ExecutionSession {
+fn moving_fixture() -> (SemanticStore, ExecutionSession) {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
@@ -78,7 +78,7 @@ fn moving_fixture() -> ExecutionSession {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    session
+    (store, session)
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn widened_projection_avoids_intermediate_overflow_for_a_finite_result() {
 
 #[test]
 fn a_stale_display_cannot_issue_a_token_for_the_newer_execution() {
-    let mut session = moving_fixture();
+    let (_, mut session) = moving_fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     session.advance_to(1.0).unwrap();
     let before = session.frame().clone();
@@ -273,7 +273,7 @@ fn a_stale_display_cannot_issue_a_token_for_the_newer_execution() {
 
 #[test]
 fn advancing_after_token_capture_is_rejected_by_both_picking_and_admission() {
-    let mut session = moving_fixture();
+    let (mut store, mut session) = moving_fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let token = frame.input_token(&session, view()).unwrap();
     let occurrence = input(&token, 8, press(&frame));
@@ -284,7 +284,7 @@ fn advancing_after_token_capture_is_rejected_by_both_picking_and_admission() {
         Err(ExecutionSessionInputError::StalePointerPublication { .. })
     ));
     assert!(matches!(
-        session.submit_native_pointer_input(&token, occurrence),
+        session.submit_native_pointer_input(&mut store, &token, occurrence),
         Err(ExecutionSessionInputError::StalePointerPublication { .. })
     ));
     assert_eq!(session.frame(), &before);
@@ -293,7 +293,7 @@ fn advancing_after_token_capture_is_rejected_by_both_picking_and_admission() {
     let fresh = session.capture_pointer_frame(view()).unwrap();
     let token = fresh.input_token(&session, view()).unwrap();
     session
-        .submit_native_pointer_input(&token, input(&token, 8, press(&fresh)))
+        .submit_native_pointer_input(&mut store, &token, input(&token, 8, press(&fresh)))
         .unwrap();
     assert_eq!(session.last_native_event_sequence, Some(8));
 }
@@ -338,14 +338,18 @@ fn a_reconfigured_view_invalidates_the_old_receipt_even_with_unchanged_frame() {
 
 #[test]
 fn same_view_source_rebinding_does_not_reanimate_an_old_contact_token() {
-    let (_, _, mut session) = fixture();
+    let (scene, _, mut session) = fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let old = frame.input_token(&session, view()).unwrap();
     session
         .configure_native_pointer_input(POINTER, VIEW)
         .unwrap();
     assert_eq!(
-        session.submit_native_pointer_input(&old, input(&old, 0, press(&frame))),
+        session.submit_native_pointer_input(
+            &mut scene.integration_store().borrow_mut(),
+            &old,
+            input(&old, 0, press(&frame))
+        ),
         Err(ExecutionSessionInputError::StalePointerBinding)
     );
     // The unchanged displayed image may serve a new contact, but never its old token.
@@ -370,15 +374,16 @@ fn moving_execution_preserves_receipts_but_cloning_never_does() {
 
 #[test]
 fn cancellation_can_retire_a_pressed_contact_after_execution_outpaces_the_display() {
-    let mut session = moving_fixture();
+    let (mut store, mut session) = moving_fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let token = frame.input_token(&session, view()).unwrap();
     session
-        .submit_native_pointer_input(&token, input(&token, 0, press(&frame)))
+        .submit_native_pointer_input(&mut store, &token, input(&token, 0, press(&frame)))
         .unwrap();
     session.advance_to(1.0).unwrap();
     let receipt = session
         .submit_native_pointer_input(
+            &mut store,
             &token,
             input(
                 &token,
@@ -396,7 +401,7 @@ fn cancellation_can_retire_a_pressed_contact_after_execution_outpaces_the_displa
     };
     assert_eq!(
         session
-            .submit_native_pointer_input(&token, input(&token, 2, release))
+            .submit_native_pointer_input(&mut store, &token, input(&token, 2, release))
             .unwrap()
             .selection_click(),
         None
@@ -405,16 +410,21 @@ fn cancellation_can_retire_a_pressed_contact_after_execution_outpaces_the_displa
 
 #[test]
 fn frame_qualified_click_uses_the_existing_session_selection_and_local_picker() {
-    let (_, target, mut session) = fixture();
+    let (scene, target, mut session) = fixture();
     session.take_frame_changes();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let before = session.frame().clone();
     let token = frame.input_token(&session, view()).unwrap();
     let down = session
-        .submit_native_pointer_input(&token, input(&token, 0, press(&frame)))
+        .submit_native_pointer_input(
+            &mut scene.integration_store().borrow_mut(),
+            &token,
+            input(&token, 0, press(&frame)),
+        )
         .unwrap();
     let up = session
         .submit_native_pointer_input(
+            &mut scene.integration_store().borrow_mut(),
             &token,
             input(
                 &token,
@@ -446,7 +456,7 @@ fn frame_qualified_click_uses_the_existing_session_selection_and_local_picker() 
 
 #[test]
 fn snapshot_is_neither_a_pending_callback_bypass_nor_an_input_acknowledgement() {
-    let (_, target, mut session) = fixture();
+    let (scene, target, mut session) = fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let token = frame.input_token(&session, view()).unwrap();
     let overlay = session
@@ -460,6 +470,7 @@ fn snapshot_is_neither_a_pending_callback_bypass_nor_an_input_acknowledgement() 
     );
     assert_eq!(
         session.submit_native_pointer_input(
+            &mut scene.integration_store().borrow_mut(),
             &token,
             input(
                 &token,
@@ -510,7 +521,7 @@ fn finished_program_accepts_frame_qualified_input_without_advancing_time() {
 
 #[test]
 fn returning_to_the_same_image_does_not_revive_a_historical_frame() {
-    let mut session = moving_fixture();
+    let (_, mut session) = moving_fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     session.advance_to(1.0).unwrap();
     session.seek(0.0).unwrap();
@@ -525,7 +536,7 @@ fn returning_to_the_same_image_does_not_revive_a_historical_frame() {
 
 #[test]
 fn cancellation_cannot_use_a_frame_token_from_a_retired_binding() {
-    let (_, _, mut session) = fixture();
+    let (scene, _, mut session) = fixture();
     let frame = session.capture_pointer_frame(view()).unwrap();
     let token = frame.input_token(&session, view()).unwrap();
     session
@@ -539,6 +550,7 @@ fn cancellation_cannot_use_a_frame_token_from_a_retired_binding() {
         .unwrap();
     assert_eq!(
         session.submit_native_pointer_input(
+            &mut scene.integration_store().borrow_mut(),
             &token,
             input(
                 &token,

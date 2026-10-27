@@ -1,8 +1,8 @@
 //! Filled morph and reveal-continuity examples shared by native and direct WASM.
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, ExecutionSession,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticPaint,
-    SemanticStyle, TransformToRequest, Vec2, VectorPath, BLUE, PINK, PURPLE, WHITE,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
+    LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticPaint, SemanticStyle,
+    TransformToRequest, Vec2, VectorPath, BLUE, PINK, PURPLE, WHITE,
 };
 
 fn style(fill: Option<Color>, stroke: Color, width: f64) -> SemanticStyle {
@@ -79,7 +79,7 @@ fn star(outer: f32, inner: f32, phase: f32) -> VectorPath {
 }
 
 /// Pair: `web/python/examples/ordinary_filled_path_transform.py`.
-pub fn filled_path_transform() -> Result<ExecutionSession, String> {
+pub fn filled_path_transform() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let shape = scene
         .path(rounded_loop(1.35), style(Some(BLUE), WHITE, 0.08))
@@ -102,7 +102,9 @@ pub fn filled_path_transform() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// One retained path concurrently follows point correspondence and Create reveal.
@@ -183,7 +185,7 @@ impl LiveContinuation for MorphReveal {
 }
 
 /// Pair: `web/python/examples/ordinary_create_shapes.py`.
-pub fn create_shapes() -> Result<ExecutionSession, String> {
+pub fn create_shapes() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.9).map_err(|error| error.to_string())?;
     circle
@@ -222,12 +224,14 @@ pub fn create_shapes() -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// Mixed Text and analytic Circle family Create used by renderer qualifications.
 #[cfg(feature = "native-text")]
-pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
+pub fn mixed_family_reveal() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut text = scene.text("AB").map_err(|error| error.to_string())?;
     text.set_translation(-1.5, 0.0)
@@ -255,13 +259,15 @@ pub fn mixed_family_reveal() -> Result<ExecutionSession, String> {
                 .rate_func(RateFunction::Linear),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 /// A bounded, repeated path-morph workload. Python uses 96 objects in the shared
 /// authoring gate; the native/WASM renderer gate uses 1,000 with the same semantics.
 /// Pair: `web/python/examples/ordinary_morph_stress.py`.
-pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
+pub fn morph_stress(count: usize) -> Result<crate::SceneExecution, String> {
     if !(12..=10_000).contains(&count) {
         return Err("morph object count must be between 12 and 10000".into());
     }
@@ -339,7 +345,9 @@ pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -382,7 +390,7 @@ mod tests {
     fn renderer_fixtures_advance_seek_and_keep_static_frames_clean() {
         for (build, count) in [
             (
-                filled_path_transform as fn() -> Result<ExecutionSession, String>,
+                filled_path_transform as fn() -> Result<crate::SceneExecution, String>,
                 1,
             ),
             (create_shapes, 4),
@@ -391,13 +399,13 @@ mod tests {
             let mut forward = build().unwrap();
             let mut direct = build().unwrap();
             for time in [0.0, 0.8, 1.6, 3.199, 3.2, 3.4] {
-                forward.advance_to(time).unwrap();
+                forward.session_mut().advance_to(time).unwrap();
                 direct.seek(time).unwrap();
-                assert_eq!(forward.frame(), direct.frame());
-                assert_eq!(forward.painter_order().len(), count);
-                forward.take_frame_changes();
-                forward.advance_to(time).unwrap();
-                assert!(forward.take_frame_changes().is_empty());
+                assert_eq!(forward.session().frame(), direct.session().frame());
+                assert_eq!(forward.session().painter_order().len(), count);
+                forward.session_mut().take_frame_changes();
+                forward.session_mut().advance_to(time).unwrap();
+                assert!(forward.session_mut().take_frame_changes().is_empty());
             }
         }
     }

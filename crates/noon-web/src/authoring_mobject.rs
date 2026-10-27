@@ -2101,7 +2101,10 @@ mod wasm {
                         noon_core::SemanticPaint::Solid(color) => {
                             Some(WasmManimColor::from_color(color))
                         }
-                        noon_core::SemanticPaint::Resource(_) => None,
+                        noon_core::SemanticPaint::LinearGradient(_)
+                        | noon_core::SemanticPaint::RadialGradient(_)
+                        | noon_core::SemanticPaint::Noise(_)
+                        | noon_core::SemanticPaint::Image(_) => None,
                     })
                 })
                 .map_err(js_error)
@@ -2116,7 +2119,10 @@ mod wasm {
                         noon_core::SemanticPaint::Solid(color) => {
                             Some(WasmManimColor::from_color(color))
                         }
-                        noon_core::SemanticPaint::Resource(_) => None,
+                        noon_core::SemanticPaint::LinearGradient(_)
+                        | noon_core::SemanticPaint::RadialGradient(_)
+                        | noon_core::SemanticPaint::Noise(_)
+                        | noon_core::SemanticPaint::Image(_) => None,
                     })
                 })
                 .map_err(js_error)

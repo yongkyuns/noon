@@ -1384,10 +1384,10 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
 fn paired_path_editing_uses_the_shared_execution_session() {
     let mut session = noon::example_scenes::path_editing::session().unwrap();
     session.seek(0.).unwrap();
-    assert_eq!(session.frame().objects.len(), 3);
-    let start = session.frame().objects.clone();
+    assert_eq!(session.session().frame().objects.len(), 3);
+    let start = session.session().frame().objects.clone();
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, start);
+    assert_eq!(session.session().frame().objects, start);
 }
 
 #[test]

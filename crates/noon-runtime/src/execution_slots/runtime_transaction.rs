@@ -27,14 +27,14 @@ pub(super) fn final_value_writes(
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetGlow { object, .. } => {
+            | ExecutionPatch::SetEffect { object, .. } => {
                 let lane = match patch {
                     ExecutionPatch::SetContent { .. } => 0,
                     ExecutionPatch::SetTransform { .. }
                     | ExecutionPatch::SetSemanticTransform { .. } => 1,
                     ExecutionPatch::SetSpatialState { .. } => 1,
                     ExecutionPatch::SetStyle { .. } => 2,
-                    ExecutionPatch::SetGlow { .. } => 3,
+                    ExecutionPatch::SetEffect { .. } => 3,
                     _ => unreachable!(),
                 };
                 if !final_writes.insert((*object, lane)) {
@@ -62,6 +62,7 @@ pub enum AuthoredPublicationError {
     ExecutionRevisionExhausted(ExecutionRevision),
     FrameEpochExhausted(FrameEpoch),
     StaleEffectiveCarryForward,
+    InvalidTransientGlowLifecycle,
     Evaluation(crate::EvaluationError),
     PreparedFrame(PreparedFrameCommitError),
     Compile(CompilePatchError),
@@ -88,6 +89,12 @@ pub struct PreparedAuthoredReactivePlanChange {
     frame: PreparedFrameEvaluation,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExecutionPublicationPurpose {
+    Authored,
+    TransientGlowLifecycle,
+}
+
 impl std::fmt::Display for AuthoredPublicationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -107,6 +114,9 @@ impl std::fmt::Display for AuthoredPublicationError {
             }
             Self::StaleEffectiveCarryForward => formatter.write_str(
                 "effective carry-forward does not belong to the current runtime publication",
+            ),
+            Self::InvalidTransientGlowLifecycle => formatter.write_str(
+                "transient glow lifecycle requires neutral attachment enrollment or exact unadopted retirement",
             ),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::PreparedFrame(error) => error.fmt(formatter),
@@ -457,7 +467,118 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.apply_execution_transaction_with_frame(
+            ExecutionPublicationPurpose::Authored,
+            transaction,
+            resource_additions,
+            effective,
+            frame,
+            expected,
+            scene_revision,
+        )
+    }
+
+    /// Validate the narrow lifecycle classification before the semantic owner
+    /// commits. Ordinary transaction, revision, and prepared-frame preflights
+    /// still apply at the shared publication boundary.
+    pub fn preflight_transient_glow_lifecycle_transaction(
+        &self,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: &CompiledResources,
+    ) -> Result<(), AuthoredPublicationError> {
         self.require_replay_writable()?;
+        if resource_additions != &CompiledResources::default() {
+            return Err(AuthoredPublicationError::InvalidTransientGlowLifecycle);
+        }
+        let mut objects = HashSet::with_capacity(transaction.mutations().len());
+        for patch in transaction.mutations() {
+            let ExecutionPatch::SetEffectAttachment {
+                object,
+                expected,
+                effect: glow,
+            } = patch
+            else {
+                return Err(AuthoredPublicationError::InvalidTransientGlowLifecycle);
+            };
+            if !objects.insert(*object) {
+                // A remove/add pair is a replacement, not one lifetime suffix.
+                return Err(AuthoredPublicationError::InvalidTransientGlowLifecycle);
+            }
+            let index = self
+                .compiled
+                .object_index(*object)
+                .ok_or(CompilePatchError::UnknownObject(*object))? as usize;
+            let compiled = &self.compiled.objects()[index];
+            let current = compiled.effect.as_deref();
+            let effective = self.frame.objects[index].effect.as_deref();
+            let valid = match (expected, glow.as_deref()) {
+                (None, Some(next)) => {
+                    current.is_none()
+                        && effective.is_none()
+                        && !compiled.dynamic.effect
+                        && next
+                            .definition
+                            .as_glow()
+                            .is_some_and(|definition| definition.intensity() == 0.0)
+                }
+                (Some(attachment), None) => {
+                    current.is_some_and(|glow| {
+                        glow.attachment == *attachment
+                            && glow
+                                .definition
+                                .as_glow()
+                                .is_some_and(|definition| definition.intensity() == 0.0)
+                    }) && effective.is_some_and(|glow| glow.attachment == *attachment)
+                        && !compiled.dynamic.effect
+                        && self.transient_glow_attachment(*object) == Some((*attachment, true))
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(AuthoredPublicationError::InvalidTransientGlowLifecycle);
+            }
+        }
+        Ok(())
+    }
+
+    /// Publish only an already-admitted temporary glow attachment lifetime.
+    /// Classification is rechecked at the actual commit, so a caller cannot
+    /// preserve immutable admission by labelling an ordinary edit as transient.
+    pub fn apply_transient_glow_lifecycle_transaction_with_frame(
+        &mut self,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        frame: Option<PreparedFrameEvaluation>,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.apply_execution_transaction_with_frame(
+            ExecutionPublicationPurpose::TransientGlowLifecycle,
+            transaction,
+            resource_additions,
+            effective,
+            frame,
+            expected,
+            scene_revision,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_execution_transaction_with_frame(
+        &mut self,
+        purpose: ExecutionPublicationPurpose,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        frame: Option<PreparedFrameEvaluation>,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.require_replay_writable()?;
+        if purpose == ExecutionPublicationPurpose::TransientGlowLifecycle {
+            self.preflight_transient_glow_lifecycle_transaction(transaction, &resource_additions)?;
+        }
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -512,6 +633,15 @@ impl SceneInstance {
             None
         };
 
+        // This is input-time lifetime work, never an authored replay event.
+        // Do not invalidate an open history until every fallible check passed.
+        if purpose == ExecutionPublicationPurpose::TransientGlowLifecycle && !transaction.is_empty()
+        {
+            self.invalidate_replay_input();
+        }
+        let preserve_immutable_admission = purpose
+            == ExecutionPublicationPurpose::TransientGlowLifecycle
+            && current.execution_revision() == self.immutable_playback_revision;
         if let Some(frame) = frame {
             frame_changed |= self
                 .commit_prepared_frame_unpublished(frame, empty)
@@ -529,8 +659,8 @@ impl SceneInstance {
                     | ExecutionPatch::SetSemanticTransform { object, .. }
                     | ExecutionPatch::SetSpatialState { object, .. }
                     | ExecutionPatch::SetStyle { object, .. }
-                    | ExecutionPatch::SetGlow { object, .. }
-                    | ExecutionPatch::SetGlowAttachment { object, .. }
+                    | ExecutionPatch::SetEffect { object, .. }
+                    | ExecutionPatch::SetEffectAttachment { object, .. }
                     | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
                     _ => None,
                 };
@@ -592,6 +722,14 @@ impl SceneInstance {
                 next_frame.expect("changed authored publication reserved a frame epoch"),
             );
         }
+        if preserve_immutable_admission {
+            self.immutable_playback_revision = self.publication.execution_revision();
+        }
+        if purpose == ExecutionPublicationPurpose::TransientGlowLifecycle
+            && self.publication != current
+        {
+            self.rebase_transient_indicate_publication();
+        }
         Ok(&self.frame)
     }
 
@@ -651,6 +789,491 @@ mod tests {
         (instance, object)
     }
 
+    fn neutral_glow(attachment: noon_core::SemanticNodeId) -> Arc<noon_compile::CompiledEffect> {
+        Arc::new(noon_compile::CompiledEffect {
+            attachment,
+            definition: (noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
+                .unwrap())
+            .into(),
+        })
+    }
+
+    fn enroll_temporary_glow(
+        instance: &mut SceneInstance,
+        object: ObjectId,
+        attachment: noon_core::SemanticNodeId,
+    ) {
+        let glow = neutral_glow(attachment);
+        let before = instance.publication_context();
+        let proposed = PublicationContext::new(
+            before.scene_revision().checked_next().unwrap(),
+            before.execution_revision().checked_next().unwrap(),
+            before.frame_epoch().checked_next().unwrap(),
+        );
+        let action = instance
+            .prepare_click_glow_pulse(
+                object,
+                noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false),
+                *glow,
+                true,
+                proposed,
+            )
+            .unwrap()
+            .unwrap();
+        let transaction =
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffectAttachment {
+                object,
+                expected: None,
+                effect: Some(glow),
+            }]);
+        instance
+            .preflight_transient_glow_lifecycle_transaction(
+                &transaction,
+                &CompiledResources::default(),
+            )
+            .unwrap();
+        instance
+            .apply_transient_glow_lifecycle_transaction_with_frame(
+                &transaction,
+                CompiledResources::default(),
+                None,
+                None,
+                before,
+                proposed.scene_revision(),
+            )
+            .unwrap();
+        assert_eq!(instance.publication_context(), proposed);
+        instance.start_transient_animation(action).unwrap();
+    }
+
+    fn retire_temporary_glow(instance: &mut SceneInstance, object: ObjectId) {
+        let advance = instance.prepare_interaction_retirement().unwrap();
+        publish_glow_retirement(instance, object, advance);
+    }
+
+    fn publish_glow_retirement(
+        instance: &mut SceneInstance,
+        object: ObjectId,
+        advance: crate::PreparedInteractionAdvance,
+    ) {
+        let attachment = instance.transient_glow_attachment(object).unwrap().0;
+        assert_eq!(
+            advance.retirements(),
+            &[crate::TransientGlowRetirement { object, attachment }]
+        );
+        instance.preflight_interaction_advance(&advance).unwrap();
+        let (effective, metadata) = advance.into_publication_parts();
+        let before = instance.publication_context();
+        instance
+            .apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::from_mutations([
+                    ExecutionPatch::SetEffectAttachment {
+                        object,
+                        expected: Some(attachment),
+                        effect: None,
+                    },
+                ]),
+                CompiledResources::default(),
+                Some(effective),
+                None,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            )
+            .unwrap();
+        instance.finish_interaction_advance_after_publication(metadata);
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_preserves_an_unrelated_indicate_clock_and_source() {
+        let (mut instance, [pulsed, indicated]) = semantic_instances([1.0, 0.5]);
+        let source = instance.effective_object(indicated).unwrap().clone();
+        let indicate = instance
+            .prepare_click_indicate(
+                indicated,
+                noon_core::SemanticClickIndicate::new(1.2, noon_core::YELLOW, 3.0),
+            )
+            .unwrap()
+            .unwrap();
+        instance.start_transient_animation(indicate).unwrap();
+        instance.advance_interactions(0.0).unwrap();
+        instance.advance_interactions(0.25).unwrap();
+        enroll_temporary_glow(&mut instance, pulsed, noon_core::SemanticNodeId::new(90, 1));
+        instance.advance_interactions(0.5).unwrap();
+        assert!(
+            instance
+                .effective_object(indicated)
+                .unwrap()
+                .transform
+                .scale
+                .x
+                > source.transform.scale.x,
+            "attachment enrollment cancelled the unrelated indication"
+        );
+        let ending = instance.prepare_interactions(1.5).unwrap();
+        publish_glow_retirement(&mut instance, pulsed, ending);
+        assert!(instance.interactions_active());
+        let midpoint = instance.effective_object(indicated).unwrap();
+        assert!(
+            (midpoint.transform.scale.x - source.transform.scale.x * 1.2).abs() < 1e-6,
+            "glow retirement restarted or rebased the indication's clock"
+        );
+        // A detached target's semantic effect can retire without an execution
+        // patch. That classified scene-only revision must preserve the same
+        // unrelated indication proof too.
+        let before = instance.publication_context();
+        instance
+            .apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
+                None,
+                None,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            instance.publication_context().execution_revision(),
+            before.execution_revision()
+        );
+        instance.advance_interactions(2.25).unwrap();
+        assert!(
+            instance
+                .effective_object(indicated)
+                .unwrap()
+                .transform
+                .scale
+                .x
+                > source.transform.scale.x,
+            "glow retirement cancelled the remaining indication"
+        );
+        instance.advance_interactions(3.0).unwrap();
+        assert!(!instance.interactions_active());
+        let restored = instance.effective_object(indicated).unwrap();
+        assert_eq!(restored.transform, source.transform);
+        assert_eq!(restored.style, source.style);
+        assert!(instance.supports_immutable_playback());
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_preserves_initial_immutable_admission() {
+        let (mut instance, object) = semantic_instance();
+        assert!(instance.supports_immutable_playback());
+        for generation in [1, 2] {
+            enroll_temporary_glow(
+                &mut instance,
+                object,
+                noon_core::SemanticNodeId::new(90, generation),
+            );
+            assert!(instance.supports_immutable_playback());
+            assert!(instance.interactions_active());
+            retire_temporary_glow(&mut instance, object);
+            assert!(instance.supports_immutable_playback());
+            assert!(!instance.interactions_active());
+            assert!(instance.effective_object(object).unwrap().effect.is_none());
+        }
+        assert_ne!(
+            instance.publication_context().execution_revision(),
+            ExecutionRevision::default()
+        );
+        assert!(
+            instance.clone().supports_immutable_playback(),
+            "clone must retain the proven watermark"
+        );
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_never_restores_lost_immutable_admission() {
+        let (mut instance, object) = semantic_instance();
+        instance
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object,
+                fill_paint: None,
+                style: Style {
+                    opacity: 0.5,
+                    ..Style::default()
+                },
+            })
+            .unwrap();
+        assert!(!instance.supports_immutable_playback());
+        enroll_temporary_glow(&mut instance, object, noon_core::SemanticNodeId::new(90, 1));
+        assert!(!instance.supports_immutable_playback());
+        retire_temporary_glow(&mut instance, object);
+        assert!(!instance.supports_immutable_playback());
+        let before = instance.publication_context();
+        instance
+            .apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
+                None,
+                None,
+                before,
+                before.scene_revision(),
+            )
+            .unwrap();
+        assert!(
+            !instance.supports_immutable_playback(),
+            "empty cleanup cannot reset admission"
+        );
+        assert!(!instance.clone().supports_immutable_playback());
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_rejects_mixed_or_non_neutral_edits_atomically() {
+        let (mut instance, object) = semantic_instance();
+        let attachment = noon_core::SemanticNodeId::new(90, 1);
+        let add = ExecutionPatch::SetEffectAttachment {
+            object,
+            expected: None,
+            effect: Some(neutral_glow(attachment)),
+        };
+        let style = ExecutionPatch::SetStyle {
+            object,
+            fill_paint: None,
+            style: Style {
+                opacity: 0.25,
+                ..Style::default()
+            },
+        };
+        let non_neutral = ExecutionPatch::SetEffectAttachment {
+            object,
+            expected: None,
+            effect: Some(Arc::new(noon_compile::CompiledEffect {
+                attachment,
+                definition: (noon_core::Glow::default()).into(),
+            })),
+        };
+        let remove = ExecutionPatch::SetEffectAttachment {
+            object,
+            expected: Some(attachment),
+            effect: None,
+        };
+        instance.take_frame_changes();
+        for transaction in [
+            ExecutionMutationTransaction::from_mutations([style.clone()]),
+            ExecutionMutationTransaction::from_mutations([non_neutral]),
+            ExecutionMutationTransaction::from_mutations([add.clone(), style]),
+            ExecutionMutationTransaction::from_mutations([add, remove]),
+        ] {
+            let before = instance.publication_context();
+            let before_frame = instance.frame().clone();
+            let frame = instance.prepare_advance_to(0.25).unwrap();
+            assert!(matches!(
+                instance.preflight_transient_glow_lifecycle_transaction(
+                    &transaction,
+                    &CompiledResources::default(),
+                ),
+                Err(AuthoredPublicationError::InvalidTransientGlowLifecycle)
+            ));
+            assert!(matches!(
+                instance.apply_transient_glow_lifecycle_transaction_with_frame(
+                    &transaction,
+                    CompiledResources::default(),
+                    None,
+                    Some(frame),
+                    before,
+                    before.scene_revision().checked_next().unwrap(),
+                ),
+                Err(AuthoredPublicationError::InvalidTransientGlowLifecycle)
+            ));
+            assert_eq!(instance.publication_context(), before);
+            assert_eq!(instance.frame(), &before_frame);
+            assert!(instance.take_frame_changes().is_empty());
+            assert!(instance.supports_immutable_playback());
+        }
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_rejects_resource_side_effects() {
+        let (mut instance, _) = semantic_instance();
+        let mut arena = noon_core::RasterImageResourceArena::new();
+        let handle = arena.intern_rgba8(1, 1, vec![255; 4]).unwrap();
+        let mut resources = CompiledResources::default();
+        resources
+            .capture_image_from_arena(&arena, noon_core::SemanticImageContent::new(handle))
+            .unwrap();
+        let before = instance.publication_context();
+        assert!(matches!(
+            instance.apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::default(),
+                resources,
+                None,
+                None,
+                before,
+                before.scene_revision(),
+            ),
+            Err(AuthoredPublicationError::InvalidTransientGlowLifecycle)
+        ));
+        assert_eq!(instance.publication_context(), before);
+        assert!(noon_core::RasterImageResourceLookup::get(&instance, handle).is_none());
+        assert!(instance.supports_immutable_playback());
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_requires_exact_unadopted_retirement() {
+        let (mut instance, object) = semantic_instance();
+        let attachment = noon_core::SemanticNodeId::new(90, 1);
+        enroll_temporary_glow(&mut instance, object, attachment);
+        let before = instance.publication_context();
+        let before_frame = instance.frame().clone();
+        for patch in [
+            ExecutionPatch::SetEffectAttachment {
+                object,
+                expected: Some(noon_core::SemanticNodeId::new(90, 2)),
+                effect: None,
+            },
+            ExecutionPatch::SetEffectAttachment {
+                object,
+                expected: Some(attachment),
+                effect: Some(neutral_glow(noon_core::SemanticNodeId::new(91, 1))),
+            },
+        ] {
+            assert!(matches!(
+                instance.apply_transient_glow_lifecycle_transaction_with_frame(
+                    &ExecutionMutationTransaction::from_mutations([patch]),
+                    CompiledResources::default(),
+                    None,
+                    None,
+                    before,
+                    before.scene_revision().checked_next().unwrap(),
+                ),
+                Err(AuthoredPublicationError::InvalidTransientGlowLifecycle)
+            ));
+            assert_eq!(instance.publication_context(), before);
+            assert_eq!(instance.frame(), &before_frame);
+        }
+        instance.commit_transient_glow_edit(object, attachment, true, false);
+        assert!(matches!(
+            instance.apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::from_mutations([
+                    ExecutionPatch::SetEffectAttachment {
+                        object,
+                        expected: Some(attachment),
+                        effect: None,
+                    }
+                ]),
+                CompiledResources::default(),
+                None,
+                None,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            ),
+            Err(AuthoredPublicationError::InvalidTransientGlowLifecycle)
+        ));
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(instance.frame(), &before_frame);
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_cannot_retire_ordinary_glow_channels() {
+        let (mut instance, object) = semantic_instance();
+        let attachment = noon_core::SemanticNodeId::new(90, 1);
+        enroll_temporary_glow(&mut instance, object, attachment);
+        let (property, values) = neutral_glow(attachment)
+            .parameter_channels(noon_core::EffectUpdate::default().radius(0.3))
+            .unwrap()
+            .pop()
+            .unwrap();
+        instance
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(99),
+                object,
+                property,
+                values,
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        let before = instance.publication_context();
+        let before_frame = instance.frame().clone();
+        assert!(matches!(
+            instance.apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::from_mutations([
+                    ExecutionPatch::SetEffectAttachment {
+                        object,
+                        expected: Some(attachment),
+                        effect: None,
+                    }
+                ]),
+                CompiledResources::default(),
+                None,
+                None,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            ),
+            Err(AuthoredPublicationError::InvalidTransientGlowLifecycle)
+        ));
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(instance.frame(), &before_frame);
+        assert!(instance
+            .compiled
+            .channel_for_track(TrackId::new(99))
+            .is_some());
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_is_unrecorded_input_and_keeps_sealed_replay_guard() {
+        let (mut instance, object) = semantic_instance();
+        instance
+            .begin_replay_retention(crate::ReplayLimits::default())
+            .unwrap();
+        enroll_temporary_glow(&mut instance, object, noon_core::SemanticNodeId::new(90, 1));
+        assert_eq!(
+            instance.seal_replay(),
+            Err(crate::ReplayError::UnrecordedInput)
+        );
+        assert!(!instance.supports_immutable_playback());
+        assert_eq!(instance.replay_stats().revisions_retained, 0);
+
+        let (mut sealed, object) = semantic_instance();
+        sealed
+            .begin_replay_retention(crate::ReplayLimits::default())
+            .unwrap();
+        sealed.seal_replay().unwrap();
+        let before = sealed.publication_context();
+        let before_frame = sealed.frame().clone();
+        assert!(matches!(
+            sealed.apply_transient_glow_lifecycle_transaction_with_frame(
+                &ExecutionMutationTransaction::from_mutations([
+                    ExecutionPatch::SetEffectAttachment {
+                        object,
+                        expected: None,
+                        effect: Some(neutral_glow(noon_core::SemanticNodeId::new(90, 1))),
+                    }
+                ]),
+                CompiledResources::default(),
+                None,
+                None,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            ),
+            Err(AuthoredPublicationError::Compile(
+                CompilePatchError::ReplaySealed
+            ))
+        ));
+        assert_eq!(sealed.publication_context(), before);
+        assert_eq!(sealed.frame(), &before_frame);
+    }
+
+    #[test]
+    fn transient_glow_lifecycle_cannot_be_trapped_by_new_replay_retention() {
+        let (mut instance, object) = semantic_instance();
+        enroll_temporary_glow(&mut instance, object, noon_core::SemanticNodeId::new(90, 1));
+        let before = instance.publication_context();
+        assert_eq!(
+            instance.begin_replay_retention(crate::ReplayLimits::default()),
+            Err(crate::ReplayError::UnrecordedInput),
+        );
+        assert!(!instance.replay_scope_active());
+        assert_eq!(instance.publication_context(), before);
+        assert!(instance.interactions_active());
+        retire_temporary_glow(&mut instance, object);
+        assert!(instance.effective_object(object).unwrap().effect.is_none());
+        instance
+            .begin_replay_retention(crate::ReplayLimits::default())
+            .unwrap();
+        instance.seal_replay().unwrap();
+    }
+
     #[test]
     fn effective_transform_uses_the_stable_compiled_object_slot() {
         let (mut instance, object) = semantic_instance();
@@ -683,6 +1306,7 @@ mod tests {
                 },
             },
             ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: missing,
                 style: Style::default(),
             },
@@ -736,6 +1360,7 @@ mod tests {
         };
         let transaction = ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object,
                 style: changed_style,
             },
@@ -774,6 +1399,7 @@ mod tests {
             .unwrap();
         let transaction =
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: authored,
                 style: Style {
                     opacity: 0.25,
@@ -816,6 +1442,7 @@ mod tests {
         let before_frame = instance.frame().clone();
         let frame = instance.prepare_advance_to(0.5).unwrap();
         let invalid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+            fill_paint: None,
             object,
             style: Style {
                 opacity: f32::NAN,
@@ -938,6 +1565,7 @@ mod tests {
         let before = instance.publication_context();
         let transaction =
             ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object,
                 style: Style {
                     opacity: 0.25,
@@ -1023,6 +1651,7 @@ mod tests {
                 },
             },
             ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: missing,
                 style: Style::default(),
             },
@@ -1148,6 +1777,7 @@ mod tests {
                 transform: original.transform,
             },
             ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object,
                 style: original.style,
             },

@@ -3,7 +3,7 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 use noon_core::{
     validate_track_definition, AnimationOptions, CompositionTimeMapError, CompositionTimeMapStep,
     GeometryResource, ObjectId, PreparedSemanticMutationTransaction, Property, RateFunction,
-    SemanticLoweringError, SemanticObjectProperty, SemanticTransactionNodeRef,
+    SemanticLoweringError, SemanticNodeId, SemanticObjectProperty, SemanticTransactionNodeRef,
     SemanticTransactionReadError, StoredGeometry, TimelineError, TrackDefinition, TrackId,
     TrackTiming, TrackValues,
 };
@@ -101,9 +101,9 @@ impl PreparedSemanticAnimationActivation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
-    GlowTarget {
+    EffectTarget {
         animation: SemanticTransactionNodeRef,
-        error: super::glow_target::GlowTargetLoweringError,
+        error: super::glow_target::EffectTargetLoweringError,
     },
     GlowDriverConflict {
         first_animation: SemanticTransactionNodeRef,
@@ -277,16 +277,19 @@ where
     let schedule =
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
-    lower_prepared_animation_activation(prepared, schedule, effective_properties)
+    lower_prepared_animation_activation(prepared, schedule, &HashSet::new(), effective_properties)
 }
 
 /// Lower payloads from the schedule of this prepared transaction without scheduling again.
 ///
 /// The caller may first extend that same transaction with its derived scalar tracks.
 /// Consuming the projection keeps timing and payloads together in the returned activation.
+/// `input_temporary_glow` contains exact generations proven to remain owned by
+/// active input invocations; it never identifies a persistent attachment by value.
 pub fn lower_prepared_animation_activation<F>(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     schedule: PreparedSemanticAnimationScheduleProjection,
+    input_temporary_glow: &HashSet<SemanticNodeId>,
     mut effective_properties: F,
 ) -> Result<PreparedSemanticAnimationActivation, PreparedSemanticAnimationLoweringError>
 where
@@ -296,7 +299,7 @@ where
     // Only allocator-proven neutral attachments for this activation's pulse
     // targets can coexist with an effect-free motion target. Never reinterpret
     // a stale, replaced or merely same-named persistent attachment as temporary.
-    let mut temporary_attachments = HashSet::new();
+    let mut temporary_attachments = input_temporary_glow.clone();
     let mut pulse_targets = HashSet::new();
     for leaf in schedule.leaves().iter().filter(|leaf| {
         matches!(
@@ -309,14 +312,18 @@ where
         }
         let attachments = prepared
             .animation_effect_snapshot(leaf.target)
-            .map_err(|error| PreparedSemanticAnimationLoweringError::GlowTarget {
-                animation: leaf.animation,
-                error: super::glow_target::GlowTargetLoweringError::Read(error),
-            })?;
+            .map_err(
+                |error| PreparedSemanticAnimationLoweringError::EffectTarget {
+                    animation: leaf.animation,
+                    error: super::glow_target::EffectTargetLoweringError::Read(error),
+                },
+            )?;
         if let [attachment] = attachments.as_slice() {
-            let noon_core::EffectDefinition::Glow(definition) = attachment.definition;
+            let definition = attachment.definition;
             if attachment.name.as_ref() == "glow"
-                && definition.intensity() == 0.0
+                && definition
+                    .as_glow()
+                    .is_some_and(|effect| effect.intensity() == 0.0)
                 && prepared.store().node(attachment.attachment).is_none()
             {
                 temporary_attachments.insert(attachment.attachment);
@@ -593,30 +600,30 @@ where
                     prepared.store(),
                     source,
                     target,
-                    from,
+                    from.clone(),
                     interpolation,
                     leaf.options.path_arc,
                     start,
                 )
                 .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
-                let glow_error = |error| PreparedSemanticAnimationLoweringError::GlowTarget {
+                let glow_error = |error| PreparedSemanticAnimationLoweringError::EffectTarget {
                     animation: leaf.animation,
                     error,
                 };
                 let source_effects = prepared
                     .animation_effect_snapshot(leaf.target)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 let target_effects = prepared
                     .animation_effect_snapshot(target_state)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 let snapshot = prepared
                     .transform_effect_snapshot(leaf.animation)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 if snapshot.is_some()
-                    || from.glow.is_some()
+                    || from.effect.is_some()
                     || !source_effects.is_empty()
                     || !target_effects.is_empty()
                 {
@@ -640,7 +647,7 @@ where
                 // Newly admitted detached sources likewise start from their
                 // canonical authored attachment. Existing runtime rows must use
                 // their effective generation/value; no stale-generation fallback.
-                let effective_glow = from.glow.or_else(|| {
+                let effective_glow = from.effect.or_else(|| {
                     let [source_effect] = source_effects.as_slice() else {
                         return None;
                     };
@@ -649,13 +656,15 @@ where
                     {
                         return None;
                     }
-                    let noon_core::EffectDefinition::Glow(definition) = source_effect.definition;
-                    (newly_admitted || definition.intensity() == 0.0).then_some(
-                        crate::CompiledGlow {
-                            attachment: source_effect.attachment,
-                            definition,
-                        },
-                    )
+                    let definition = source_effect.definition;
+                    (newly_admitted
+                        || definition
+                            .as_glow()
+                            .is_some_and(|effect| effect.intensity() == 0.0))
+                    .then_some(crate::CompiledEffect {
+                        attachment: source_effect.attachment,
+                        definition,
+                    })
                 });
                 let glow_channels = super::glow_target::channels(
                     snapshot,
@@ -815,7 +824,7 @@ where
             }
             PreparedSemanticScheduledAnimationPayload::GlowPulse { intensity } => {
                 super::glow_pulse::validate_options(leaf.options).map_err(|error| {
-                    PreparedSemanticAnimationLoweringError::GlowTarget {
+                    PreparedSemanticAnimationLoweringError::EffectTarget {
                         animation: leaf.animation,
                         error,
                     }
@@ -827,26 +836,28 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let glow_error = |error| PreparedSemanticAnimationLoweringError::GlowTarget {
+                let glow_error = |error| PreparedSemanticAnimationLoweringError::EffectTarget {
                     animation: leaf.animation,
                     error,
                 };
                 let attachments = prepared
                     .animation_effect_snapshot(leaf.target)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
-                if from.glow.is_none() {
+                if from.effect.is_none() {
                     if let [attachment] = attachments.as_slice() {
-                        let noon_core::EffectDefinition::Glow(definition) = attachment.definition;
+                        let definition = attachment.definition;
                         if admitted.contains(&leaf.target)
                             || (prepared.store().node(attachment.attachment).is_none()
-                                && definition.intensity() == 0.0)
+                                && definition
+                                    .as_glow()
+                                    .is_some_and(|effect| effect.intensity() == 0.0))
                         {
-                            from.glow = Some(crate::CompiledGlow {
+                            from.effect = Some(crate::CompiledEffect {
                                 attachment: attachment.attachment,
                                 definition,
                             });
-                            captures.insert(leaf.execution_object_id, from);
+                            captures.insert(leaf.execution_object_id, from.clone());
                         }
                     }
                 }
@@ -857,21 +868,21 @@ where
                         .expect("validated pulse target"),
                     source,
                     &attachments,
-                    from.glow,
+                    from.effect,
                     intensity,
                 )
                 .map_err(glow_error)?;
                 super::glow_target::reserve(
                     &mut driven,
                     leaf.execution_object_id,
-                    Property::GlowIntensity,
+                    Property::EffectIntensity,
                     leaf.animation,
                 )
                 .map_err(|first_animation| {
                     PreparedSemanticAnimationLoweringError::GlowDriverConflict {
                         first_animation,
                         next_animation: leaf.animation,
-                        property: Property::GlowIntensity,
+                        property: Property::EffectIntensity,
                     }
                 })?;
                 let mut timing = leaf.timing;
@@ -880,7 +891,7 @@ where
                     animation: leaf.animation,
                     target: leaf.target,
                     execution_object_id: leaf.execution_object_id,
-                    property: Property::GlowIntensity,
+                    property: Property::EffectIntensity,
                     completion: super::glow_target::completion(&values, timing)
                         .map_err(glow_error)?,
                     values,
@@ -1395,7 +1406,8 @@ where
         captured
     } else if admitted {
         EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
@@ -1632,7 +1644,8 @@ mod tests {
 
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation,
@@ -1699,16 +1712,17 @@ mod tests {
             AnimationOptions::new().run_time(6.0),
         )
         .unwrap();
-        let projection = lower_prepared_animation_activation(&prepared, schedule, |object| {
-            captures += 1;
-            (object == index.execution_object_id(left).unwrap())
-                .then_some(effective(Vec2::new(0.5, 0.0)))
-                .or_else(|| {
-                    (object == index.execution_object_id(right).unwrap())
-                        .then_some(effective(Vec2::new(-0.5, 0.0)))
-                })
-        })
-        .unwrap();
+        let projection =
+            lower_prepared_animation_activation(&prepared, schedule, &HashSet::new(), |object| {
+                captures += 1;
+                (object == index.execution_object_id(left).unwrap())
+                    .then_some(effective(Vec2::new(0.5, 0.0)))
+                    .or_else(|| {
+                        (object == index.execution_object_id(right).unwrap())
+                            .then_some(effective(Vec2::new(-0.5, 0.0)))
+                    })
+            })
+            .unwrap();
 
         assert_eq!(projection.root(), root.into());
         assert_eq!(projection.start_time(), 4.0);
@@ -2040,7 +2054,7 @@ mod tests {
             animation,
             0.0,
             AnimationOptions::new(),
-            |_| Some(captured),
+            |_| Some(captured.clone()),
         )
         .unwrap();
 
@@ -2183,7 +2197,8 @@ mod tests {
         );
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(3.0, 2.0),
@@ -2205,7 +2220,7 @@ mod tests {
             animation,
             4.0,
             AnimationOptions::new(),
-            |_| Some(effective),
+            |_| Some(effective.clone()),
         )
         .unwrap();
 
@@ -2383,7 +2398,7 @@ mod tests {
                 AnimationOptions::new(),
                 |_| {
                     captures += 1;
-                    Some(current)
+                    Some(current.clone())
                 },
             )
             .unwrap();

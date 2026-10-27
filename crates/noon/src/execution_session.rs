@@ -971,6 +971,18 @@ impl ExecutionSession {
         Ok(())
     }
 
+    pub(crate) fn require_scene_owner(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionPublicationError::UnknownObject(root));
+        }
+        Ok(())
+    }
+
     /// Lower one authoritative semantic snapshot and instantiate the existing runtime.
     pub fn from_semantic_store(
         store: &SemanticStore,
@@ -1674,6 +1686,34 @@ impl ExecutionSession {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
         self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Seek)
+    }
+
+    /// Seek with the canonical scene available for exact input-attachment cleanup.
+    /// All deterministic seek admission precedes retirement; a rejected request
+    /// keeps both the invocation and its semantic attachment unchanged.
+    pub fn seek_with_store(
+        &mut self,
+        store: &mut SemanticStore,
+        time: f64,
+    ) -> Result<&FrameState, ExecutionSessionInputError> {
+        if self.pending_callback.is_some() {
+            return Err(EvaluationError::RequiredCallbackPending.into());
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(EvaluationError::RequiredCallbackBarrier.into());
+        }
+        self.require_published_store(store)?;
+        if self.signal_timeline.is_empty() {
+            self.runtime.preflight_interaction_seek(time)?;
+        } else {
+            let preview = self.signal_timeline.preview_seek(time);
+            self.runtime.preflight_scalar_interaction_seek(&preview)?;
+        }
+        if self.interactions_active() {
+            self.retire_interactions(store)?;
+        }
+        self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Seek)
+            .map_err(ExecutionSessionInputError::Evaluation)
     }
 
     /// Advance to an absolute time, falling back to deterministic seek when time moves backward.
@@ -4032,10 +4072,13 @@ impl ExecutionSession {
         ) {
             (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
                 match target_effects.as_slice() {
-                    [effect] if effect.name.as_ref() == "glow" => {
-                        let noon_core::EffectDefinition::Glow(destination) = effect.definition;
+                    [effect]
+                        if effect.name.as_ref() == "glow"
+                            && effect.definition.as_glow().is_some() =>
+                    {
+                        let destination = effect.definition;
                         Some(
-                            noon_core::GlowUpdate::default()
+                            noon_core::EffectUpdate::default()
                                 .intensity(0.0)
                                 .apply_to(destination)
                                 .map_err(|error| {
@@ -4248,7 +4291,7 @@ impl ExecutionSession {
         let mut temporary_glow = std::collections::BTreeSet::new();
         if !missing_glow.is_empty() {
             let mut declaration = prepared.into_transaction();
-            let neutral = noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+            let neutral = noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
                 .expect("zero intensity is a valid neutral glow");
             let attachments = missing_glow
                 .into_iter()
@@ -4281,21 +4324,45 @@ impl ExecutionSession {
                 )
             })?;
 
-        let projection = lower_prepared_animation_activation(&prepared, schedule, |object| {
-            let index = self.runtime.frame_index_for_object(object)?;
-            let frame = self.runtime.frame();
-            let row = frame.objects.get(index)?;
-            Some(EffectiveAnimationProperties {
-                glow: row.glow.as_deref().copied(),
-                z_index: row.z_index,
-                transform: row.transform,
-                style: row.style,
-                appearance: row.appearance,
-                reveal: *frame.reveals.get(index)?,
-                world_transform: row.world_transform(),
-                camera_profile: row.camera_profile(),
+        let input_temporary_glow = schedule
+            .leaves()
+            .iter()
+            .filter_map(|leaf| {
+                let (attachment, temporary) = self
+                    .runtime
+                    .transient_glow_attachment(leaf.execution_object_id)?;
+                if !temporary {
+                    return None;
+                }
+                let effect = prepared.store().semantic_effect_state(attachment).ok()?;
+                let definition = effect.definition().as_glow()?;
+                (Some(effect.owner()) == leaf.target.existing()
+                    && effect.name() == "glow"
+                    && definition.intensity() == 0.0)
+                    .then_some(attachment)
             })
-        })?;
+            .collect::<HashSet<_>>();
+        let projection = lower_prepared_animation_activation(
+            &prepared,
+            schedule,
+            &input_temporary_glow,
+            |object| {
+                let index = self.runtime.frame_index_for_object(object)?;
+                let frame = self.runtime.frame();
+                let row = frame.objects.get(index)?;
+                Some(EffectiveAnimationProperties {
+                    fill_paint: row.fill_paint.clone(),
+                    effect: row.effect.as_deref().copied(),
+                    z_index: row.z_index,
+                    transform: row.transform,
+                    style: row.style,
+                    appearance: row.appearance,
+                    reveal: *frame.reveals.get(index)?,
+                    world_transform: row.world_transform(),
+                    camera_profile: row.camera_profile(),
+                })
+            },
+        )?;
         let schedule = projection.schedule();
 
         let mut activation_tracks = projection.tracks().to_vec();
@@ -4341,7 +4408,8 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
-                                glow: row.glow.as_deref().copied(),
+                                fill_paint: row.fill_paint.clone(),
+                                effect: row.effect.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4387,7 +4455,8 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
-                                glow: row.glow.as_deref().copied(),
+                                fill_paint: row.fill_paint.clone(),
+                                effect: row.effect.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4609,9 +4678,7 @@ impl ExecutionSession {
                 token,
                 creation:
                     SemanticNodeCreation::Effect {
-                        owner,
-                        definition: noon_core::EffectDefinition::Glow(definition),
-                        ..
+                        owner, definition, ..
                     },
             } = mutation
             else {
@@ -4623,7 +4690,7 @@ impl ExecutionSession {
                 if let Some(object) = self.execution_index.execution_object_id(owner) {
                     staged_glow.insert(
                         object,
-                        noon_compile::CompiledGlow {
+                        noon_compile::CompiledEffect {
                             attachment,
                             definition: *definition,
                         },

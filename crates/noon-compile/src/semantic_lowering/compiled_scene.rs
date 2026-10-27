@@ -198,9 +198,24 @@ fn materialize_semantic_projection(
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
         let (content, text_bounds) =
             lower_content(object.semantic_id, object.content, store, &mut resources)?;
+        if let Some(paint) = object.fill_paint.as_deref() {
+            if let Some(image) = paint.as_image() {
+                let store = store.ok_or(SemanticCompiledSceneError::Resource {
+                    node: object.semantic_id,
+                    error: CompiledResourceError::MissingImage(image.resource()),
+                })?;
+                resources
+                    .capture_paint_from_arena(store.raster_image_resources(), paint)
+                    .map_err(|error| SemanticCompiledSceneError::Resource {
+                        node: object.semantic_id,
+                        error,
+                    })?;
+            }
+        }
         objects.push(CompiledObject {
+            fill_paint: object.fill_paint.clone(),
             draw_enabled: object.presentation.draw_enabled,
-            glow: object.glow.clone(),
+            effect: object.effect.clone(),
             id: object.execution_id,
             content,
             text_bounds,

@@ -509,7 +509,11 @@ mod wasm {
 
             // Mark only validated, accepted source glow publications. Once seen,
             // keep the path active long enough to retire removed GPU scopes.
-            let received_glow = delta.retained.objects.iter().any(|row| row.glow.is_some());
+            let received_glow = delta
+                .retained
+                .objects
+                .iter()
+                .any(|row| row.effect.is_some());
             let pointer_view = delta.pointer_view;
             let mirror = &mut self.mirror;
             let preparer = &mut self.preparer;
@@ -591,7 +595,7 @@ mod wasm {
                             || self.preparer.last_applied_publication().is_some()
                         {
                             self.preparer.reset_publication_context();
-                            self.renderer.reset_retained_analytic_glow_publication();
+                            self.renderer.reset_retained_effect_publication();
                         }
                     }
                     self.selection_overlay = overlay;
@@ -851,7 +855,7 @@ mod wasm {
                 // augment. Updating the shared sparse source index is still
                 // required for live changes/removal before painter capture.
                 self.renderer
-                    .glow_source_visibility(publication, &[])
+                    .effect_source_visibility(publication, &[])
                     .map_err(js_error)?;
             }
             if self.pending_changes.is_all() {
@@ -973,14 +977,14 @@ mod wasm {
                 });
             if let Some(publication) = glow_publication.as_ref() {
                 self.renderer
-                    .prepare_retained_analytic_glows(
+                    .prepare_retained_effects(
                         &self.device,
                         &self.queue,
                         &mut encoder,
                         &prepared,
                         &self.text_gpu,
                         publication,
-                        noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                        noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;
             }
@@ -1033,8 +1037,8 @@ mod wasm {
             // Returning to no-effect content restores the original worker fast
             // path once the last old retained GPU scope has been retired.
             if self.glow_transport_seen
-                && !self.renderer.has_retained_analytic_glow_sources()
-                && self.renderer.analytic_glow_texture_bytes() == 0
+                && !self.renderer.has_retained_effect_sources()
+                && self.renderer.effect_capture_texture_bytes() == 0
             {
                 self.glow_transport_seen = false;
             }

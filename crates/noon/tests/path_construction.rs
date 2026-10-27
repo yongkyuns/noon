@@ -572,8 +572,8 @@ fn extending_a_closed_contour_keeps_its_closing_edge_and_earlier_subpaths() {
 fn paired_path_construction_runs_through_shared_runtime() {
     let mut session = noon::example_scenes::path_construction::session().unwrap();
     session.seek(0.).unwrap();
-    assert_eq!(session.frame().objects.len(), 2);
-    let start = session.frame().objects.clone();
+    assert_eq!(session.session().frame().objects.len(), 2);
+    let start = session.session().frame().objects.clone();
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, start);
+    assert_eq!(session.session().frame().objects, start);
 }

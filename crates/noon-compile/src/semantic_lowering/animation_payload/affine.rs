@@ -24,9 +24,10 @@ use super::transform_payload::{
 };
 
 /// The activation-time effective domains consumed by the shared animation lowerer.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
-    pub glow: Option<crate::CompiledGlow>,
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
+    pub effect: Option<crate::CompiledEffect>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -49,9 +50,9 @@ pub struct PathMotionActivationProperties {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
     /// Persist only the driven parameter at the actual terminal sample.
-    Glow {
+    Effect {
         attachment: SemanticNodeId,
-        value: noon_core::GlowTrackValue,
+        value: noon_core::EffectTrackValue,
     },
     /// Method completion copies exact priority even for returning interpolation.
     Priority { value: f64 },
@@ -174,9 +175,9 @@ impl SemanticAffineAnimationTrackProjection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAffineAnimationTrackError {
-    GlowTarget {
+    EffectTarget {
         animation: SemanticNodeId,
-        error: super::glow_target::GlowTargetLoweringError,
+        error: super::glow_target::EffectTargetLoweringError,
     },
     GlowDriverConflict {
         first_animation: SemanticNodeId,
@@ -296,7 +297,7 @@ pub enum SemanticAffineAnimationTrackError {
 impl std::fmt::Display for SemanticAffineAnimationTrackError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GlowTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
+            Self::EffectTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
             Self::GlowDriverConflict { first_animation, next_animation, property } => write!(formatter,
                 "glow channel {property:?} has conflicting drivers {first_animation:?} and {next_animation:?}"),
             Self::Animation(error) => error.fmt(formatter),
@@ -593,7 +594,7 @@ where
             continue;
         }
         if let SemanticScheduledAnimationPayload::WorldTransformTo { transform } = leaf.payload {
-            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
             } else {
                 let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -603,7 +604,7 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
             let from = from.world_transform.ok_or(
@@ -622,7 +623,7 @@ where
             continue;
         }
         if let SemanticScheduledAnimationPayload::CameraProfileTo { profile } = leaf.payload {
-            let captured = if let Some(captured) = captures.get(&leaf.execution_object_id).copied()
+            let captured = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned()
             {
                 captured
             } else {
@@ -633,7 +634,7 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
             let (from, near, far) = captured.camera_profile.ok_or(
@@ -661,13 +662,13 @@ where
         }
         if let SemanticScheduledAnimationPayload::GlowPulse { intensity } = leaf.payload {
             super::glow_pulse::validate_options(leaf.options).map_err(|error| {
-                SemanticAffineAnimationTrackError::GlowTarget {
+                SemanticAffineAnimationTrackError::EffectTarget {
                     animation: leaf.animation,
                     error,
                 }
             })?;
             let source = object_state(store, leaf, leaf.target)?;
-            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
             } else {
                 let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -677,37 +678,37 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
-            let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+            let glow_error = |error| SemanticAffineAnimationTrackError::EffectTarget {
                 animation: leaf.animation,
                 error,
             };
             let attachments = store
                 .animation_effect_snapshot(leaf.target)
-                .map_err(super::glow_target::GlowTargetLoweringError::Store)
+                .map_err(super::glow_target::EffectTargetLoweringError::Store)
                 .map_err(glow_error)?;
             let values = super::glow_pulse::values(
                 store,
                 leaf.target,
                 source,
                 &attachments,
-                from.glow,
+                from.effect,
                 intensity,
             )
             .map_err(glow_error)?;
             super::glow_target::reserve(
                 &mut driven,
                 leaf.execution_object_id,
-                Property::GlowIntensity,
+                Property::EffectIntensity,
                 leaf.animation,
             )
             .map_err(|first_animation| {
                 SemanticAffineAnimationTrackError::GlowDriverConflict {
                     first_animation,
                     next_animation: leaf.animation,
-                    property: Property::GlowIntensity,
+                    property: Property::EffectIntensity,
                 }
             })?;
             let mut timing = leaf.timing;
@@ -716,7 +717,7 @@ where
                 animation: leaf.animation,
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
-                property: Property::GlowIntensity,
+                property: Property::EffectIntensity,
                 completion: super::glow_target::completion(&values, timing).map_err(glow_error)?,
                 values,
                 timing,
@@ -741,7 +742,7 @@ where
                 });
             }
             let source = object_state(store, leaf, leaf.target)?;
-            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
             } else {
                 let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -751,7 +752,7 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
             let channels = lower_indicate_channels(source, from, scale_factor, color, scale_center)
@@ -768,7 +769,7 @@ where
         }
         if let SemanticScheduledAnimationPayload::Rotate { angle, hold_origin } = leaf.payload {
             let source = object_state(store, leaf, leaf.target)?;
-            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
             } else {
                 let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -778,7 +779,7 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
             let channels = lower_rotation_channels(source, from, angle, hold_origin)
@@ -790,7 +791,7 @@ where
         }
         if let SemanticScheduledAnimationPayload::PassingFlash { time_width } = leaf.payload {
             let source = object_state(store, leaf, leaf.target)?;
-            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
             } else {
                 let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -800,7 +801,7 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
             let phases = lower_passing_flash_phases(source, from, time_width)
@@ -852,7 +853,7 @@ where
                 }
             })?;
             let source = object_state(store, leaf, leaf.target)?;
-            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
             } else {
                 let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -862,7 +863,7 @@ where
                         execution_object_id: leaf.execution_object_id,
                     },
                 )?;
-                captures.insert(leaf.execution_object_id, captured);
+                captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
             let phases = lower_subset_display_phases(source, from, index, count, mode)
@@ -937,7 +938,7 @@ where
         let target = object_state(store, leaf, target_state)?;
         validate_affine_payload(source, target, leaf.options)
             .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
-        let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+        let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
             captured
         } else {
             let captured = effective_properties(leaf.execution_object_id).ok_or(
@@ -947,7 +948,7 @@ where
                     execution_object_id: leaf.execution_object_id,
                 },
             )?;
-            captures.insert(leaf.execution_object_id, captured);
+            captures.insert(leaf.execution_object_id, captured.clone());
             captured
         };
         let start = store
@@ -958,30 +959,30 @@ where
             store,
             source,
             target,
-            from,
+            from.clone(),
             interpolation,
             leaf.options.path_arc,
             start,
         )
         .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
-        let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+        let glow_error = |error| SemanticAffineAnimationTrackError::EffectTarget {
             animation: leaf.animation,
             error,
         };
         let source_effects = store
             .animation_effect_snapshot(leaf.target)
-            .map_err(super::glow_target::GlowTargetLoweringError::Store)
+            .map_err(super::glow_target::EffectTargetLoweringError::Store)
             .map_err(glow_error)?;
         let target_effects = store
             .animation_effect_snapshot(target_state)
-            .map_err(super::glow_target::GlowTargetLoweringError::Store)
+            .map_err(super::glow_target::EffectTargetLoweringError::Store)
             .map_err(glow_error)?;
         let snapshot = store
             .semantic_animation_state(leaf.animation)
             .map_err(SemanticAffineAnimationTrackError::Animation)?
             .transform_effect_snapshot();
         if snapshot.is_some()
-            || from.glow.is_some()
+            || from.effect.is_some()
             || !source_effects.is_empty()
             || !target_effects.is_empty()
         {
@@ -992,7 +993,7 @@ where
             snapshot,
             &source_effects,
             &target_effects,
-            from.glow,
+            from.effect,
             complete_priority,
             &Default::default(),
         )
@@ -1657,15 +1658,55 @@ pub(super) fn lower_affine_channels(
     let fill_changed = source.style.fill != target.style.fill
         || source.style.fill_opacity != target.style.fill_opacity
         || (from.style.fill != target_style.fill
+            && !has_binding(source, SemanticObjectProperty::FillOpacity))
+        || (from.fill_paint.as_deref()
+            != match target.style.fill.as_ref() {
+                Some(
+                    paint @ (noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Image(_)),
+                ) => Some(paint),
+                _ => None,
+            }
             && !has_binding(source, SemanticObjectProperty::FillOpacity));
+    let (from_paint, from_opacity) = source
+        .style
+        .capture_effective_fill(from.style.fill, from.fill_paint.as_ref());
+    let continuous_fill = from.fill_paint.is_some()
+        || matches!(
+            target.style.fill,
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Image(_)
+            )
+        );
+    let fill_values = if continuous_fill {
+        let transition = noon_core::PaintTransition::new(
+            from_paint,
+            from_opacity,
+            target.style.fill.clone(),
+            target.style.fill_opacity,
+        )
+        .map_err(|_| AffinePayloadIssue::UnsupportedStyleChange)?;
+        super::super::paint::validate_transition(&transition)
+            .map_err(AffinePayloadIssue::InvalidTargetStyle)?;
+        TrackValues::Paint {
+            transition: std::sync::Arc::new(transition),
+        }
+    } else {
+        TrackValues::Color {
+            from: from.style.fill,
+            to: target_style.fill,
+        }
+    };
     push_affine_channel(
         source,
         SemanticObjectProperty::FillOpacity,
         Property::Fill,
-        TrackValues::Color {
-            from: from.style.fill,
-            to: target_style.fill,
-        },
+        fill_values,
         SemanticAnimationCompletion::Fill {
             paint: target.style.fill.clone(),
             opacity: target.style.fill_opacity,
@@ -1740,11 +1781,21 @@ pub(super) fn lower_affine_lifecycle_channels(
     if endpoint.point_color.is_some()
         && (matches!(
             source.style.fill.as_ref(),
-            Some(noon_core::SemanticPaint::Resource(_))
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Image(_)
+            )
         ) || matches!(
             source.style.stroke.as_ref(),
-            Some(noon_core::SemanticPaint::Resource(_))
-        ))
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Image(_)
+            )
+        ) || from.fill_paint.is_some())
     {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
@@ -2087,6 +2138,9 @@ pub(super) fn lower_draw_border_then_fill_channels(
     stroke_width: f64,
     stroke_color: Option<noon_core::Color>,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if from.fill_paint.is_some() {
+        return Err(AffinePayloadIssue::UnsupportedStyleChange);
+    }
     if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
     }
@@ -2168,6 +2222,9 @@ pub(super) fn lower_subset_display_channels(
     source: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if from.fill_paint.is_some() {
+        return Err(AffinePayloadIssue::UnsupportedStyleChange);
+    }
     if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
     }
@@ -2350,6 +2407,9 @@ pub fn lower_indicate_channels_with_bindings(
     color: noon_core::Color,
     scale_center: noon_core::SemanticVec3,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if from.fill_paint.is_some() {
+        return Err(AffinePayloadIssue::UnsupportedStyleChange);
+    }
     if !transform_is_finite(from.transform) {
         return Err(AffinePayloadIssue::InvalidEffectiveTransform);
     }
@@ -2453,7 +2513,7 @@ pub(super) fn lower_transform_channels_with_start(
     };
     let mut state = source.clone();
     state.set_transform(start.into());
-    let mut captured = from;
+    let mut captured = from.clone();
     captured.transform = lower_semantic_transform_value(&state)
         .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
     let mut channels =
@@ -2583,6 +2643,19 @@ pub(super) fn lower_transform_channels(
             return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
         }
     }
+    if from.fill_paint.is_some()
+        || matches!(
+            target.style.fill,
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Image(_)
+            )
+        )
+    {
+        return Err(AffinePayloadIssue::UnsupportedStyleChange);
+    }
     if !point_transform && !is_supported_content_morph(source, target) {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
     }
@@ -2618,7 +2691,7 @@ pub(super) fn lower_transform_channels(
         target_transform,
     )
     .map_err(|_| AffinePayloadIssue::UnsupportedContentChange)?;
-    let mut channels = lower_affine_channels(source, target, from)?;
+    let mut channels = lower_affine_channels(source, target, from.clone())?;
     channels.push(LoweredAffineChannel {
         property: Property::Morph,
         conflict_property: SemanticObjectProperty::Translation,
@@ -2890,9 +2963,10 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     let (_, morph_slot) = driver_key(object, Property::Morph);
     let (object, transform_slot) = driver_key(object, Property::Transform);
     let glow_slots = [
-        Property::GlowColor,
-        Property::GlowRadius,
-        Property::GlowIntensity,
+        Property::EffectColor,
+        Property::EffectRadius,
+        Property::EffectIntensity,
+        Property::EffectOffset,
     ]
     .map(|property| driver_key(ObjectId::new(object), property).1);
     if property == Property::Morph {
@@ -2914,7 +2988,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             }
         })
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
-        (0..=driver_key(ObjectId::new(object), Property::GlowIntensity).1)
+        (0..=driver_key(ObjectId::new(object), Property::EffectOffset).1)
             .filter(|slot| *slot != reveal_slot)
             .find_map(|slot| {
                 driven
@@ -2924,7 +2998,10 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             })
     } else if matches!(
         property,
-        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
     ) {
         [
             Property::Transform,
@@ -3002,9 +3079,10 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::ZIndex => 12,
         Property::Presence => 13,
         Property::CameraProfile => 14,
-        Property::GlowColor => 15,
-        Property::GlowRadius => 16,
-        Property::GlowIntensity => 17,
+        Property::EffectColor => 15,
+        Property::EffectRadius => 16,
+        Property::EffectIntensity => 17,
+        Property::EffectOffset => 18,
     };
     (object.get(), slot)
 }
@@ -3044,7 +3122,8 @@ mod tests {
 
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: 0.0,
             transform,
             style: Style {
@@ -3327,7 +3406,8 @@ mod tests {
             end: Vec2::new(1.0, 0.5),
         });
         let from = EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(10.0, -20.0),
@@ -3343,7 +3423,7 @@ mod tests {
             world_transform: None,
             camera_profile: None,
         };
-        let phases = lower_passing_flash_phases(&source, from, 0.25).unwrap();
+        let phases = lower_passing_flash_phases(&source, from.clone(), 0.25).unwrap();
         assert_eq!(phases.len(), 3);
         assert_eq!((phases[0].start, phases[0].duration), (0.0, 0.2));
         assert_eq!(
@@ -3460,7 +3540,8 @@ mod tests {
         let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(-2.0, 1.0),
@@ -3528,7 +3609,8 @@ mod tests {
         };
 
         let fade_in =
-            lower_fade_channels(&source, from, SemanticFadeDirection::In, endpoint).unwrap();
+            lower_fade_channels(&source, from.clone(), SemanticFadeDirection::In, endpoint)
+                .unwrap();
         assert_eq!(
             fade_in[0].values,
             TrackValues::Vec2 {
@@ -3545,7 +3627,8 @@ mod tests {
         );
 
         let fade_out =
-            lower_fade_channels(&source, from, SemanticFadeDirection::Out, endpoint).unwrap();
+            lower_fade_channels(&source, from.clone(), SemanticFadeDirection::Out, endpoint)
+                .unwrap();
         assert_eq!(
             fade_out[0].values,
             TrackValues::Vec2 {
@@ -3659,7 +3742,8 @@ mod tests {
             &schedule(&store, &index, animation),
             |_| {
                 Some(EffectiveAnimationProperties {
-                    glow: None,
+                    fill_paint: None,
+                    effect: None,
                     z_index: 0.0,
                     transform: Transform2D::default(),
                     style: current,
@@ -3806,7 +3890,7 @@ mod tests {
         target.style.object_opacity = 0.5;
         let mut current = effective(Transform2D::default());
         current.style.stroke_width = 0.65;
-        let tracks = lower_affine_channels(source, &target, current).unwrap();
+        let tracks = lower_affine_channels(source, &target, current.clone()).unwrap();
         assert!(tracks
             .iter()
             .all(|track| track.property != Property::StrokeWidth));
@@ -3875,7 +3959,7 @@ mod tests {
             let existing = lower_semantic_affine_animation_tracks(
                 &store,
                 &schedule(&store, &index, animation),
-                |_| Some(current),
+                |_| Some(current.clone()),
             )
             .unwrap();
             assert_eq!(existing.len(), 1);
@@ -3899,7 +3983,8 @@ mod tests {
             .unwrap();
         let index = index(&store);
         let current = EffectiveAnimationProperties {
-            glow: None,
+            fill_paint: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D::default(),
             style: Style {
@@ -3919,7 +4004,7 @@ mod tests {
         let predeclared = lower_semantic_affine_animation_tracks(
             &store,
             &schedule(&store, &index, animation),
-            |_| Some(current),
+            |_| Some(current.clone()),
         )
         .unwrap();
         assert_eq!(predeclared.len(), 1);

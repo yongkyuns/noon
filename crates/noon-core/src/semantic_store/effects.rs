@@ -4,12 +4,29 @@
 use std::sync::Arc;
 
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
-use crate::{Glow, GlowParameter, GlowParameterError, GlowUpdate};
+use crate::{
+    Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Glow,
+    Shadow,
+};
 
 /// Finite built-in definitions; custom program/schema resources remain #1897 M4.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EffectDefinition {
     Glow(Glow),
+    Blur(Blur),
+    Shadow(Shadow),
+}
+
+impl From<Shadow> for EffectDefinition {
+    fn from(value: Shadow) -> Self {
+        Self::Shadow(value)
+    }
+}
+
+impl From<Blur> for EffectDefinition {
+    fn from(value: Blur) -> Self {
+        Self::Blur(value)
+    }
 }
 
 impl From<Glow> for EffectDefinition {
@@ -19,22 +36,103 @@ impl From<Glow> for EffectDefinition {
 }
 
 impl EffectDefinition {
+    pub const fn radius(self) -> EffectRadius {
+        match self {
+            Self::Glow(v) => v.radius(),
+            Self::Blur(v) => v.radius(),
+            Self::Shadow(v) => v.radius(),
+        }
+    }
+    pub fn is_neutral(self) -> bool {
+        match self {
+            Self::Glow(v) => v.is_neutral(),
+            Self::Blur(v) => v.is_neutral(),
+            Self::Shadow(v) => v.is_neutral(),
+        }
+    }
+    pub const fn as_shadow(self) -> Option<Shadow> {
+        if let Self::Shadow(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub const fn color(self) -> Option<crate::Color> {
+        match self {
+            Self::Glow(v) => Some(v.color()),
+            Self::Shadow(v) => Some(v.color()),
+            Self::Blur(_) => None,
+        }
+    }
+    pub const fn as_glow(self) -> Option<Glow> {
+        match self {
+            Self::Glow(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub const fn as_blur(self) -> Option<Blur> {
+        match self {
+            Self::Blur(v) => Some(v),
+            _ => None,
+        }
+    }
     /// Compare only the supplied write channels against the prepared result.
     /// Declaration identity and stack order are independent of parameter dirtiness.
-    pub(crate) fn parameter_changed(self, next: Self, parameter: GlowParameter) -> bool {
+    pub(crate) fn parameter_changed(self, next: Self, parameter: EffectParameter) -> bool {
         match (self, next) {
             (Self::Glow(previous), Self::Glow(next)) => match parameter {
-                GlowParameter::Color => previous.color() != next.color(),
-                GlowParameter::Radius => previous.radius() != next.radius(),
-                GlowParameter::Intensity => previous.intensity() != next.intensity(),
-                GlowParameter::Source => previous.source() != next.source(),
+                EffectParameter::Color => previous.color() != next.color(),
+                EffectParameter::Offset => false,
+                EffectParameter::Radius => previous.radius() != next.radius(),
+                EffectParameter::Intensity => previous.intensity() != next.intensity(),
+                EffectParameter::Source => previous.source() != next.source(),
             },
+            (Self::Shadow(previous), Self::Shadow(next)) => match parameter {
+                EffectParameter::Color => previous.color() != next.color(),
+                EffectParameter::Radius => previous.radius() != next.radius(),
+                EffectParameter::Offset => previous.offset() != next.offset(),
+                _ => false,
+            },
+            (Self::Blur(previous), Self::Blur(next)) => {
+                parameter == EffectParameter::Radius && previous.radius() != next.radius()
+            }
+            _ => true,
         }
     }
 
-    pub fn update(self, update: GlowUpdate) -> Result<Self, GlowParameterError> {
+    pub fn update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+        update.apply_to(self)
+    }
+}
+
+impl crate::object_state::effect_value_sealed::Sealed for EffectDefinition {}
+impl EffectValue for EffectDefinition {
+    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         match self {
-            Self::Glow(value) => update.apply_to(value).map(Self::Glow),
+            Self::Glow(v) => update.apply_to(v).map(Self::Glow),
+            Self::Blur(v) => update.apply_to(v).map(Self::Blur),
+            Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
+        }
+    }
+    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+        match (self, target) {
+            (Self::Glow(a), Self::Glow(b)) => a.validate_effect_transition(b),
+            (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
+            (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
+            _ => Err(EffectParameterError::IncompatibleDefinition),
+        }
+    }
+    fn sample_effect_parameters(
+        self,
+        target: Self,
+        request: EffectUpdate,
+        alpha: f64,
+    ) -> Result<EffectUpdate, EffectParameterError> {
+        match (self, target) {
+            (Self::Glow(a), Self::Glow(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::Blur(a), Self::Blur(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::Shadow(a), Self::Shadow(b)) => a.sample_effect_parameters(b, request, alpha),
+            _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
 }
@@ -71,11 +169,11 @@ impl SemanticEffectCopyProvenance {
     }
 
     /// Explicit same-valued writes retain their authored channel meaning.
-    pub const fn writes_parameter(self, parameter: GlowParameter) -> bool {
+    pub const fn writes_parameter(self, parameter: EffectParameter) -> bool {
         self.written_parameters & effect_parameter_bit(parameter) != 0
     }
 
-    fn with_update(mut self, update: GlowUpdate) -> Self {
+    fn with_update(mut self, update: EffectUpdate) -> Self {
         for parameter in update.parameters() {
             self.written_parameters |= effect_parameter_bit(parameter);
         }
@@ -83,12 +181,13 @@ impl SemanticEffectCopyProvenance {
     }
 }
 
-const fn effect_parameter_bit(parameter: GlowParameter) -> u8 {
+const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
     match parameter {
-        GlowParameter::Color => 1,
-        GlowParameter::Radius => 2,
-        GlowParameter::Intensity => 4,
-        GlowParameter::Source => 8,
+        EffectParameter::Color => 1,
+        EffectParameter::Radius => 2,
+        EffectParameter::Intensity => 4,
+        EffectParameter::Source => 8,
+        EffectParameter::Offset => 16,
     }
 }
 
@@ -124,7 +223,7 @@ impl SemanticEffectState {
         self.copy_provenance
     }
 
-    pub(crate) fn updated(&self, update: GlowUpdate) -> Result<Self, GlowParameterError> {
+    pub(crate) fn updated(&self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         let mut next = self.clone();
         next.definition = self.definition.update(update)?;
         next.copy_provenance = self.copy_provenance.map(|copy| copy.with_update(update));

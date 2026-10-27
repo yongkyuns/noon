@@ -105,6 +105,177 @@ function replyRender(render, request, type) {
   }));
 }
 
+// The real worker reports its admitted finite endpoint independently of the
+// requested loop duration. Ordinary looping/continuation replies omit it or
+// report null. Keep those endpoint observations in the test transport only.
+class DurationAuthoringClient extends FakeSemanticAuthoringClient {
+  constructor(readyState) {
+    super();
+    this.readyState = readyState;
+  }
+
+  async attachSemanticExecution(contextId, controlPort, renderPort, options) {
+    const post = controlPort.postMessage.bind(controlPort);
+    controlPort.postMessage = message => post(message.type === "ready"
+      ? { ...message, ...this.readyState } : message);
+    return super.attachSemanticExecution(contextId, controlPort, renderPort, options);
+  }
+}
+
+async function availableAudioDevice(t) {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const savedDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  const savedWindow = globalThis.window;
+  const available = Object.getOwnPropertyDescriptor(WorkerAudioDevice.prototype, "available");
+  globalThis.document = Object.assign(new EventTarget(), { hidden: false });
+  globalThis.window = Object.assign(new EventTarget(), { devicePixelRatio: 1 });
+  Object.defineProperty(WorkerAudioDevice.prototype, "available", { configurable: true, get: () => true });
+  t.after(() => {
+    if (savedDocument) Object.defineProperty(globalThis, "document", savedDocument);
+    else delete globalThis.document;
+    globalThis.window = savedWindow;
+    Object.defineProperty(WorkerAudioDevice.prototype, "available", available);
+  });
+  t.mock.method(WorkerAudioDevice.prototype, "install", async () => {});
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", () => {});
+}
+
+async function assertSeekRange(client, authoring, end) {
+  assert.equal((await client.seek(end)).time, end, "the admitted endpoint must be reachable");
+  const engine = authoring.attachments.at(-1).controlPort.peer;
+  const before = engine.messages.length;
+  await assert.rejects(client.seek(end + 1), /exceeds loop duration/);
+  assert.equal(engine.messages.length, before, "out-of-range input must not reach the worker");
+}
+
+for (const profile of [
+  { name: "finite audio with a device", hasAudio: true, device: true },
+  { name: "finite audio without an available device", hasAudio: true, device: false },
+  { name: "finite controls without audio", hasAudio: false, device: false },
+]) {
+  test(`${profile.name} uses the worker endpoint at startup and replacement`, async t => {
+    if (profile.device) await availableAudioDevice(t);
+    const client = new ExecutionWorkerClient(new FakeCanvas());
+    const authoring = new DurationAuthoringClient({ hasAudio: profile.hasAudio, durationSeconds: 30 });
+    const offset = FakeWorker.instances.length;
+    try {
+      const starting = client.startSemanticExecution("first", authoring, { transportMode: "transferable" });
+      const { render } = await finishStartup(starting, authoring, offset);
+      assert.equal(authoring.attachments.at(-1).options.loopDurationSeconds, 4);
+      await assertSeekRange(client, authoring, 30);
+
+      for (const [index, endpoint, requested] of [[1, 60, null], [2, 12, 10]]) {
+        const replacement = new DurationAuthoringClient({ hasAudio: profile.hasAudio, durationSeconds: endpoint });
+        const switching = client.switchToSemanticExecution(`replacement-${index}`, replacement,
+          { loopDurationSeconds: requested });
+        replyRender(render, await waitForRequest(render, "rebuild_engine", index), "engine_rebuilt");
+        const ready = await switching;
+        assert.equal(ready.engine.durationSeconds, endpoint);
+        assert.equal(replacement.attachments.at(-1).options.loopDurationSeconds, requested ?? 30);
+        await assertSeekRange(client, replacement, endpoint);
+      }
+    } finally { client.terminate(); }
+  });
+}
+
+for (const readyState of [{}, { durationSeconds: null }]) {
+  test(`nonfinite playback retains the requested loop when endpoint is ${readyState.durationSeconds}`, async () => {
+    const client = new ExecutionWorkerClient(new FakeCanvas());
+    const authoring = new DurationAuthoringClient(readyState);
+    const offset = FakeWorker.instances.length;
+    try {
+      const starting = client.startSemanticExecution("looping", authoring,
+        { transportMode: "transferable", loopDurationSeconds: 10 });
+      const { render } = await finishStartup(starting, authoring, offset);
+      await assertSeekRange(client, authoring, 10);
+      for (const [index, requested] of [[1, 6], [2, null]]) {
+        const replacement = new DurationAuthoringClient(readyState);
+        const switching = client.switchToSemanticExecution(`looping-${index}`, replacement,
+          { loopDurationSeconds: requested });
+        replyRender(render, await waitForRequest(render, "rebuild_engine", index), "engine_rebuilt");
+        await switching;
+        await assertSeekRange(client, replacement, 6);
+      }
+    } finally { client.terminate(); }
+  });
+}
+
+test("a rejected replacement cannot change the current seek range", async () => {
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const authoring = new DurationAuthoringClient({ durationSeconds: 30 });
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("current", authoring, { transportMode: "transferable" });
+    await finishStartup(starting, authoring, offset);
+    const rejected = new DurationAuthoringClient({ durationSeconds: 60 });
+    rejected.failContext = "rejected";
+    await assert.rejects(client.switchToSemanticExecution("rejected", rejected), /semantic context rejected/);
+    await assertSeekRange(client, authoring, 30);
+  } finally { client.terminate(); }
+});
+
+test("late audio preparation cannot install a retired scene's endpoint", async t => {
+  await availableAudioDevice(t);
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const authoring = new DurationAuthoringClient({ hasAudio: true, durationSeconds: 30 });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let preparationStarted;
+  const preparing = new Promise(resolve => { preparationStarted = resolve; });
+  try {
+    const offset = FakeWorker.instances.length;
+    const starting = client.startSemanticExecution("first", authoring, { transportMode: "transferable" });
+    const { render } = await finishStartup(starting, authoring, offset);
+    let preparations = 0;
+    t.mock.method(WorkerAudioDevice.prototype, "install", async () => {
+      if (preparations++ === 0) {
+        preparationStarted();
+        await held;
+      }
+    });
+    const retired = new DurationAuthoringClient({ hasAudio: true, durationSeconds: 60 });
+    const replacing = client.switchToSemanticExecution("retired", retired);
+    const cancelled = assert.rejects(replacing, /terminated during an asynchronous operation/);
+    replyRender(render, await waitForRequest(render, "rebuild_engine"), "engine_rebuilt");
+    await preparing;
+    client.terminate();
+
+    const fresh = new DurationAuthoringClient({ hasAudio: true, durationSeconds: 7 });
+    const nextOffset = FakeWorker.instances.length;
+    const restarting = client.startSemanticExecution("fresh", fresh, { transportMode: "transferable" });
+    await finishStartup(restarting, fresh, nextOffset);
+    release();
+    await cancelled;
+    await assertSeekRange(client, fresh, 7);
+  } finally {
+    release();
+    client.terminate();
+  }
+});
+
+for (const failedOwner of ["engine", "render"]) {
+  test(`${failedOwner} recovery retains the admitted finite endpoint`, async () => {
+    const client = new ExecutionWorkerClient(new FakeCanvas());
+    const authoring = new DurationAuthoringClient({ durationSeconds: 30 });
+    const offset = FakeWorker.instances.length;
+    try {
+      const starting = client.startSemanticExecution("finite", authoring, { transportMode: "transferable" });
+      const { render } = await finishStartup(starting, authoring, offset);
+      const before = FakeWorker.instances.length;
+      const restarting = client.restart({ failedOwner });
+      if (failedOwner === "engine") {
+        replyRender(render, await waitForRequest(render, "rebuild_engine"), "engine_rebuilt");
+        await restarting;
+      } else {
+        await finishStartup(restarting, authoring, before);
+      }
+      assert.equal(authoring.attachments.at(-1).options.loopDurationSeconds, 30);
+      await assertSeekRange(client, authoring, 30);
+    } finally { client.terminate(); }
+  });
+}
+
 async function startClient(errors = []) {
   const offset = FakeWorker.instances.length;
   const authoring = new FakeSemanticAuthoringClient();
@@ -305,6 +476,29 @@ test("engine and render requests use independent issuance spaces", async () => {
   });
   assert.deepEqual(errors, []);
   client.terminate();
+});
+
+test("retired source retains real renderer metrics without querying its released engine", async () => {
+  const { client, engine, render } = await startClient();
+  await client.retireExecutionSource();
+  assert.equal(engine.closed, true);
+  assert.equal(render.terminated, false);
+  await assert.rejects(client.state(), /has not been started/);
+  await assert.rejects(client.seek(0), /has not been started/);
+  const engineMessages = engine.messages.length;
+  const reportPromise = client.metrics();
+  reportPromise.catch(() => {});
+  const request = await waitForRequest(render, "metrics");
+  render.emitMessage(renderMessage("metrics", {
+    requestId: request.requestId,
+    metrics: { ready: true, presentedFrames: 17, objectCount: 2 },
+  }));
+  const report = await reportPromise;
+  assert.deepEqual(report.metrics, { ready: true, presentedFrames: 17, objectCount: 2 });
+  assert.equal(report.engineMetrics, null, "released engine observations are unavailable");
+  assert.equal(engine.messages.length, engineMessages);
+  client.terminate();
+  await assert.rejects(client.metrics(), /has not been started/);
 });
 
 test("render metrics options, including one-shot GPU identity, are explicit", async () => {

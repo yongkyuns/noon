@@ -16,13 +16,18 @@ class EffectFacadeTests(unittest.TestCase):
     def setUp(self):
         self.request = Mock()
         self.definition = types.SimpleNamespace(
-            radius=12.0, pixels=True, intensity=0.25, source="painted",
+            kind="glow", radius=12.0, pixels=True, intensity=0.25, source="painted",
             red=0.25, green=0.5, blue=1.0, alpha=1.0,
         )
         self.make_update = Mock(return_value=self.request)
         self.make_glow = Mock(return_value=self.definition)
         js = types.ModuleType("js")
-        js.noonGlowUpdate, js.noonGlow = self.make_update, self.make_glow
+        js.noonEffectUpdate, js.noonGlow = self.make_update, self.make_glow
+        self.make_blur = Mock(return_value=types.SimpleNamespace(kind="blur", radius=4.5, pixels=True))
+        js.noonBlur = self.make_blur
+        self.make_shadow = Mock(return_value=types.SimpleNamespace(kind="shadow", radius=4.5, pixels=True,
+            red=0.2, green=0.4, blue=0.6, alpha=0.5, offsetX=-3.25, offsetY=4.5, offsetPixels=True))
+        js.noonShadow = self.make_shadow
         ffi = types.ModuleType("pyodide.ffi")
         ffi.to_js = tuple
         self.enter(patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}))
@@ -41,7 +46,7 @@ class EffectFacadeTests(unittest.TestCase):
 
     def test_constructor_defers_defaults_and_validation_to_rust(self):
         glow = noon.Glow()
-        self.make_update.assert_called_once_with((), None, False, None, None)
+        self.make_update.assert_called_once_with((), None, False, None, None, (), False)
         self.make_glow.assert_called_once_with(self.request)
         self.request.free.assert_called_once_with()
         self.assertEqual(glow.radius, noon.Pixels(12.0))
@@ -52,6 +57,43 @@ class EffectFacadeTests(unittest.TestCase):
         self.assertIs(copy.deepcopy(glow), glow)
         with self.assertRaises(AttributeError):
             glow.intensity = 1.0
+
+    def test_blur_uses_the_same_rust_definition_attachment_and_update_handles(self):
+        blur = noon.Blur(radius=noon.Pixels(4.5))
+        self.make_update.assert_called_once_with((), 4.5, True, None, None, (), False)
+        self.make_blur.assert_called_once_with(self.request)
+        self.assertEqual(blur.radius, noon.Pixels(4.5))
+        self.assertIs(copy.copy(blur), blur)
+        self.assertIs(copy.deepcopy(blur), blur)
+        self.assertIs(self.object.add_effect(blur, name="soften"), self.object)
+        self.handle.addEffect.assert_called_once_with(blur._definition, "soften")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = blur._definition
+        self.assertIsInstance(self.object.get_effect("soften").authored_definition, noon.Blur)
+        self.assertIs(self.object.set_effect("soften", radius=noon.Pixels(0)), self.object)
+        self.handle.setEffect.assert_called_once_with("soften", self.request)
+
+    def test_shadow_coerces_offset_units_without_owning_effect_state(self):
+        shadow = noon.Shadow(offset=noon.Pixels((-3.25, 4.5)))
+        self.make_update.assert_called_once_with((), None, False, None, None, (-3.25, 4.5), True)
+        self.make_shadow.assert_called_once_with(self.request)
+        self.assertEqual(shadow.offset, noon.Pixels((-3.25, 4.5)))
+        self.assertEqual(shadow.color.alpha, 0.5)
+        self.assertIs(copy.deepcopy(shadow), shadow)
+        self.object.add_effect(shadow, name="depth")
+        self.handle.addEffect.assert_called_once_with(shadow._definition, "depth")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = shadow._definition
+        self.assertIsInstance(self.object.get_effect("depth").authored_definition, noon.Shadow)
+        self.make_update.reset_mock()
+        self.object.set_effect("depth", offset=(0.25, -0.5))
+        self.make_update.assert_called_once_with((), None, False, None, None, (0.25, -0.5), False)
+        self.handle.setEffect.assert_called_once_with("depth", self.request)
+        self.assertFalse(hasattr(self.object, "_effects"))
+
+    def test_offset_shape_errors_never_cross_the_authoring_boundary(self):
+        for offset in [(1,), (1,2,3), (True,0), ("1",0)]:
+            with self.subTest(offset=offset), self.assertRaises((TypeError,ValueError)):
+                self.object.set_effect("depth", offset=offset)
+        self.make_update.assert_not_called()
 
     def test_pulse_constructor_is_inert_and_carries_only_intensity_and_timing(self):
         pulse = noon.GlowPulse(self.object, intensity=2)
@@ -72,13 +114,13 @@ class EffectFacadeTests(unittest.TestCase):
 
     def test_setter_returns_receiver_and_passes_only_explicit_fields(self):
         self.assertIs(self.object.set_glow(intensity=1.4), self.object)
-        self.make_update.assert_called_once_with((), None, False, 1.4, None)
+        self.make_update.assert_called_once_with((), None, False, 1.4, None, (), False)
         self.handle.setGlow.assert_called_once_with(self.request)
         self.request.free.assert_called_once_with()
 
     def test_pixels_and_color_are_argument_conversion_not_state(self):
         self.object.set_glow(color="#FF0000", radius=noon.Pixels(12), source="silhouette")
-        self.make_update.assert_called_once_with((1.0, 0.0, 0.0, 1.0), 12.0, True, None, "silhouette")
+        self.make_update.assert_called_once_with((1.0, 0.0, 0.0, 1.0), 12.0, True, None, "silhouette", (), False)
 
     def test_invalid_python_types_and_unknown_names_never_publish(self):
         for field, value in [("radius", True), ("intensity", False), ("intensity", "1"), ("source", 1), ("radius", noon.Pixels(True))]:

@@ -1,7 +1,7 @@
 //! Four filled-region operations share ordinary retained paths and rendering.
-use crate::{BooleanOperation, ExecutionSession, ManimGeometryOptions, Scene};
+use crate::{BooleanOperation, ManimGeometryOptions, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut a = scene.circle(0.9)?;
@@ -32,7 +32,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|e| e.to_string())
 }

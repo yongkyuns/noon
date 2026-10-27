@@ -8,21 +8,21 @@
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::{GeometryRef, Glow, GlowSource, ObjectId, Transform2D, Vec2};
+use noon_core::{EffectDefinition, GeometryRef, GlowSource, ObjectId, Transform2D, Vec2};
 
 use super::{
-    Camera2D, CameraUniform, DrawStats, GeometryBinding, GlowCapture, GlowCaptureTile, GlowFilter,
-    GlowParameters, GlowPixelBounds, GlowPrepareError, GlowRasterStats, GlowScope, GpuRenderer,
-    ResolvedOrderedBatch, PATH_SAMPLE_COUNT,
+    Camera2D, CameraUniform, DrawStats, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
+    EffectRasterStats, EffectStackFilter, EffectStackParameters, EffectStackScope, GeometryBinding,
+    GlowCapture, GpuRenderer, ResolvedOrderedBatch, PATH_SAMPLE_COUNT,
 };
 use crate::{CircleInstance, PackedStyle, PreparedFrame, RectangleInstance, RenderPrimitive};
 
 /// One effective renderer request. Object identity/attachment values and animation
 /// phase must come from the normal runtime publication, not a host-owned store.
 #[derive(Clone, Copy, Debug)]
-pub struct AnalyticGlowRequest {
+pub struct EffectCaptureRequest {
     pub object_index: usize,
-    pub definition: Glow,
+    pub definition: EffectDefinition,
     /// Total retained capture + filter texture budget for this renderer, not just
     /// the current object. Source buffers and shared pipeline metadata are separate.
     /// Resources retained by already-submitted frames require an additional host
@@ -31,12 +31,12 @@ pub struct AnalyticGlowRequest {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AnalyticGlowStats {
+pub struct EffectCaptureStats {
     pub source_passes: usize,
     pub source_bytes_uploaded: usize,
     pub source_texture_allocations: usize,
     pub placement_bytes_uploaded: usize,
-    pub filter: GlowRasterStats,
+    pub filter: EffectRasterStats,
     pub retained_texture_bytes: u64,
 }
 
@@ -125,9 +125,9 @@ impl CaptureImage {
 }
 
 #[derive(Debug)]
-struct ResidentGlow {
+struct ResidentEffect {
     object: ObjectId,
-    tile: GlowCaptureTile,
+    tile: EffectCaptureTile,
     camera: Camera2D,
     viewport: [u32; 2],
     effective: SourceInstance,
@@ -145,7 +145,7 @@ struct ResidentGlow {
     placement: Placement,
     placement_buffer: wgpu::Buffer,
     placement_binding: Option<wgpu::BindGroup>,
-    filter: GlowScope,
+    filter: EffectStackScope,
     revision: u64,
     invalidated: bool,
     enabled: bool,
@@ -159,19 +159,19 @@ struct PlacementPrograms {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct AnalyticGlowGpu {
+pub(super) struct EffectCaptureGpu {
     // Existing analytic packed slots and mixed source indices are disposable
     // cache keys; owners retain their normal published object identities.
-    scopes: BTreeMap<(u8, usize), ResidentGlow>,
+    scopes: BTreeMap<(u8, usize), ResidentEffect>,
     owners: BTreeMap<ObjectId, (u8, usize)>,
-    filter: GlowFilter,
+    filter: EffectStackFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
 }
 
 /// Sparse request for one runtime-owned row, never a host copy of effect values.
 #[derive(Clone, Copy, Debug)]
-pub struct PublishedAnalyticGlowRequest {
+pub struct PublishedEffectCaptureRequest {
     pub object_index: usize,
     pub texture_budget_bytes: u64,
 }
@@ -184,60 +184,60 @@ impl GpuRenderer {
     /// Absent/removed attachments retire their existing renderer derivations.
     /// Full Scene orchestration remains guarded until authored activation/live
     /// publication and all platform consumers are integrated (#1897).
-    pub fn prepare_published_analytic_glow(
+    pub fn prepare_published_effect_capture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
         publication: &noon_runtime::RendererPublication<'_>,
-        request: PublishedAnalyticGlowRequest,
-    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+        request: PublishedEffectCaptureRequest,
+    ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let frame = publication.frame();
         let row = frame
             .objects
             .get(request.object_index)
-            .ok_or(GlowPrepareError::UnsupportedCapture)?;
+            .ok_or(EffectPrepareError::UnsupportedCapture)?;
         if frame.time != prepared.time {
-            return Err(GlowPrepareError::PublicationMismatch);
+            return Err(EffectPrepareError::PublicationMismatch);
         }
-        let Some(glow) = row
-            .glow
+        let Some(effect) = row
+            .effect
             .as_ref()
             .filter(|_| frame.is_drawable(request.object_index))
         else {
-            self.remove_analytic_glow(row.id);
-            return Ok(AnalyticGlowStats {
-                retained_texture_bytes: self.analytic_glow_texture_bytes(),
+            self.remove_effect_capture(row.id);
+            return Ok(EffectCaptureStats {
+                retained_texture_bytes: self.effect_capture_texture_bytes(),
                 ..Default::default()
             });
         };
         let observation = prepared
             .observe_object(request.object_index)
-            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+            .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
         let key = match observation.primitive {
             RenderPrimitive::Circle => (0, observation.instance_index),
             RenderPrimitive::Rectangle => (1, observation.instance_index),
-            _ => return Err(GlowPrepareError::UnsupportedCapture),
+            _ => return Err(EffectPrepareError::UnsupportedCapture),
         };
-        let source =
-            SourceInstance::prepared(prepared, key).ok_or(GlowPrepareError::UnsupportedCapture)?;
+        let source = SourceInstance::prepared(prepared, key)
+            .ok_or(EffectPrepareError::UnsupportedCapture)?;
         if observation.object != row.id
             || observation.transform != frame.render_transform(request.object_index).into()
             || observation.style != crate::pack_style(row)
             || frame.render_geometry(request.object_index) != Some(&source.geometry())
             || frame.reveal(request.object_index) != 1.0
         {
-            return Err(GlowPrepareError::PublicationMismatch);
+            return Err(EffectPrepareError::PublicationMismatch);
         }
-        self.prepare_analytic_glow(
+        self.prepare_effect_capture(
             device,
             queue,
             encoder,
             prepared,
-            AnalyticGlowRequest {
+            EffectCaptureRequest {
                 object_index: request.object_index,
-                definition: glow.definition,
+                definition: effect.definition,
                 texture_budget_bytes: request.texture_budget_bytes,
             },
         )
@@ -252,34 +252,34 @@ impl GpuRenderer {
     /// Only one publication for a given scope may be recorded before submission:
     /// queue writes must not overwrite uniforms used by earlier pending frames.
     /// If the encoder is abandoned, call invalidate_analytic_glows before reuse.
-    pub fn prepare_analytic_glow(
+    pub fn prepare_effect_capture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
-        request: AnalyticGlowRequest,
-    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+        request: EffectCaptureRequest,
+    ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let observation = prepared
             .observe_object(request.object_index)
-            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
-        self.prepare_observed_analytic_glow(device, queue, encoder, prepared, request, observation)
+            .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
+        self.prepare_observed_effect_capture(device, queue, encoder, prepared, request, observation)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn prepare_observed_analytic_glow(
+    pub(super) fn prepare_observed_effect_capture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
-        request: AnalyticGlowRequest,
+        request: EffectCaptureRequest,
         observation: crate::PreparedGeometryObjectObservation,
-    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+    ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
             RenderPrimitive::Rectangle => 1,
-            _ => return Err(GlowPrepareError::UnsupportedCapture),
+            _ => return Err(EffectPrepareError::UnsupportedCapture),
         };
         // observe_object already requires a present resident slot. Some(false)
         // means only its base paint is suppressed; a silhouette halo can still
@@ -291,16 +291,16 @@ impl GpuRenderer {
                 wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
             )
         {
-            return Err(GlowPrepareError::UnsupportedCapture);
+            return Err(EffectPrepareError::UnsupportedCapture);
         }
         let key = (kind, observation.instance_index);
-        let effective =
-            SourceInstance::prepared(prepared, key).ok_or(GlowPrepareError::UnsupportedCapture)?;
+        let effective = SourceInstance::prepared(prepared, key)
+            .ok_or(EffectPrepareError::UnsupportedCapture)?;
         if observation.style.stroke_enabled & 1 != 0
             || observation.style.fill_enabled == 0
             || matches!(&effective, SourceInstance::Circle(value) if value.padding[0] != 1.0)
         {
-            return Err(GlowPrepareError::UnsupportedCapture);
+            return Err(EffectPrepareError::UnsupportedCapture);
         }
         if !observation
             .style
@@ -308,7 +308,7 @@ impl GpuRenderer {
             .into_iter()
             .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
         {
-            return Err(GlowPrepareError::UnsupportedCapture);
+            return Err(EffectPrepareError::UnsupportedCapture);
         }
         let transform = Transform2D {
             translation: Vec2::new(
@@ -321,14 +321,14 @@ impl GpuRenderer {
             ),
             rotation: observation.transform.rotation,
         };
-        let bounds = GlowPixelBounds::projected_analytic_in_view(
+        let bounds = EffectPixelBounds::projected_analytic_in_view(
             &effective.geometry(),
             transform,
             self.camera,
             self.viewport_size,
             self.logical_viewport_size,
         )?;
-        self.prepare_source_glow(
+        self.prepare_source_effect(
             device,
             queue,
             encoder,
@@ -344,22 +344,22 @@ impl GpuRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn prepare_draw_source_glow(
+    pub(super) fn prepare_draw_source_effect(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &super::retained_text::PreparedRetainedGpuFrame<'_>,
         text: &super::retained_text::RetainedTextGpuState,
-        request: AnalyticGlowRequest,
+        request: EffectCaptureRequest,
         object: ObjectId,
         opacity: f32,
-    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+    ) -> Result<EffectCaptureStats, EffectPrepareError> {
         if !matches!(
             self.target_format,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
         ) {
-            return Err(GlowPrepareError::UnsupportedCapture);
+            return Err(EffectPrepareError::UnsupportedCapture);
         }
         let source = super::source_capture::PreparedSource::prepare(
             prepared,
@@ -367,8 +367,12 @@ impl GpuRenderer {
             opacity.max(f32::MIN_POSITIVE),
             false,
         )
-        .ok_or(GlowPrepareError::UnsupportedCapture)?;
-        let silhouette = if request.definition.source() == GlowSource::Silhouette {
+        .ok_or(EffectPrepareError::UnsupportedCapture)?;
+        let silhouette = if request
+            .definition
+            .as_glow()
+            .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
+        {
             Some(
                 super::source_capture::PreparedSource::prepare(
                     prepared,
@@ -376,14 +380,14 @@ impl GpuRenderer {
                     opacity.max(f32::MIN_POSITIVE),
                     true,
                 )
-                .ok_or(GlowPrepareError::UnsupportedCapture)?,
+                .ok_or(EffectPrepareError::UnsupportedCapture)?,
             )
         } else {
             None
         };
         // Share the logical-view qualification with analytic capture. Physical
         // sampling remains independent of CSS/DPR rounding.
-        GlowPixelBounds::validate_planar_view(
+        EffectPixelBounds::validate_planar_view(
             Transform2D::IDENTITY,
             self.camera,
             self.viewport_size,
@@ -391,15 +395,15 @@ impl GpuRenderer {
         )?;
         let Some(b) = source.bounds else {
             if let Some(scope) = self
-                .analytic_glows
+                .effect_captures
                 .as_deref_mut()
                 .and_then(|glows| glows.scopes.get_mut(&(2, request.object_index)))
                 .filter(|scope| scope.object == object)
             {
                 scope.enabled = false;
             }
-            return Ok(AnalyticGlowStats {
-                retained_texture_bytes: self.analytic_glow_texture_bytes(),
+            return Ok(EffectCaptureStats {
+                retained_texture_bytes: self.effect_capture_texture_bytes(),
                 ..Default::default()
             });
         };
@@ -413,11 +417,11 @@ impl GpuRenderer {
             f64::from(self.viewport_size[1]) * 0.5
                 - (f64::from(world) - f64::from(self.camera.center.y)) * py
         };
-        let bounds = GlowPixelBounds {
+        let bounds = EffectPixelBounds {
             min: [x(b.min.x), y(b.max.y)],
             max: [x(b.max.x), y(b.min.y)],
         };
-        self.prepare_source_glow(
+        self.prepare_source_effect(
             device,
             queue,
             encoder,
@@ -436,28 +440,27 @@ impl GpuRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn prepare_source_glow(
+    fn prepare_source_effect(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedFrame<'_>,
-        request: AnalyticGlowRequest,
+        request: EffectCaptureRequest,
         key: (u8, usize),
         object: ObjectId,
         mut effective: SourceInstance,
-        bounds: GlowPixelBounds,
+        bounds: EffectPixelBounds,
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
-    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
-        let parameters = GlowParameters {
+    ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        let parameters = super::EffectCaptureParameters {
             definition: request.definition,
             output_height: self.viewport_size[1],
             world_view_height: f64::from(self.camera.world_size.y),
             scope_opacity: opacity,
-            scratch_budget_bytes: request.texture_budget_bytes,
         };
-        let tile = GlowCaptureTile::prepare(
+        let tile = EffectCaptureTile::prepare(
             bounds,
             self.viewport_size,
             parameters,
@@ -467,18 +470,18 @@ impl GpuRenderer {
         let Some(mut tile) = tile else {
             // Retain warmed storage for neutral fades; exact ordinary submission
             // is restored. Absent neutral requests allocate no glow cache.
-            if let Some(glows) = self.analytic_glows.as_deref_mut() {
+            if let Some(glows) = self.effect_captures.as_deref_mut() {
                 if let Some(scope) = glows.scopes.get_mut(&key).filter(|s| s.object == object) {
                     scope.enabled = false;
                 }
             }
-            return Ok(AnalyticGlowStats {
-                retained_texture_bytes: self.analytic_glow_texture_bytes(),
+            return Ok(EffectCaptureStats {
+                retained_texture_bytes: self.effect_capture_texture_bytes(),
                 ..Default::default()
             });
         };
         let old = self
-            .analytic_glows
+            .effect_captures
             .as_deref()
             .and_then(|g| g.scopes.get(&key));
         // Stable high-water capacity avoids reallocating captures whenever a
@@ -500,21 +503,18 @@ impl GpuRenderer {
             .checked_mul(u64::from(tile.size[1]))
             .and_then(|pixels| {
                 pixels.checked_mul(
-                    if request.definition.source() == GlowSource::Silhouette {
-                        20
-                    } else {
-                        16
-                    } + if key.0 == 2 {
-                        4 * u64::from(PATH_SAMPLE_COUNT)
-                    } else {
-                        0
-                    },
+                    parameters.bytes_per_pixel()
+                        + if key.0 == 2 {
+                            4 * u64::from(PATH_SAMPLE_COUNT)
+                        } else {
+                            0
+                        },
                 )
             })
-            .ok_or(GlowPrepareError::ScratchBudgetExceeded)?;
+            .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
         let old_bytes = old.map_or(0, |s| s.tile.capture_and_scratch_bytes);
         let relocated_bytes = self
-            .analytic_glows
+            .effect_captures
             .as_deref()
             .and_then(|g| {
                 g.owners
@@ -524,13 +524,13 @@ impl GpuRenderer {
             })
             .map_or(0, |s| s.tile.capture_and_scratch_bytes);
         let total = self
-            .analytic_glow_texture_bytes()
+            .effect_capture_texture_bytes()
             .checked_sub(old_bytes)
             .and_then(|v| v.checked_sub(relocated_bytes))
             .and_then(|v| v.checked_add(tile.capture_and_scratch_bytes))
-            .ok_or(GlowPrepareError::ScratchBudgetExceeded)?;
+            .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
         if total > request.texture_budget_bytes {
-            return Err(GlowPrepareError::ScratchBudgetExceeded);
+            return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
         if let SourceInstance::Draws { source, silhouette } = &mut effective {
             Arc::make_mut(source).set_capture_origin(tile.origin);
@@ -542,7 +542,10 @@ impl GpuRenderer {
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
         } // apply final scope opacity once
-        let needs_silhouette = request.definition.source() == GlowSource::Silhouette;
+        let needs_silhouette = request
+            .definition
+            .as_glow()
+            .is_some_and(|effect| effect.source() == GlowSource::Silhouette);
         let capture_camera = tile_camera(self.camera, self.viewport_size, tile)?;
         let camera_uniform = capture_camera.uniform(tile.size);
         let placement = Placement {
@@ -552,18 +555,19 @@ impl GpuRenderer {
             padding: [0; 2],
         };
         // Everything that can reject input is checked before installing caches.
-        let mut glows = self.analytic_glows.take().unwrap_or_default();
+        let mut glows = self.effect_captures.take().unwrap_or_default();
         let result = (|| {
             let programs = glows
                 .placement
                 .get_or_insert_with(|| PlacementPrograms::new(device, self.target_format));
             let replace = glows.scopes.get(&key).is_none_or(|s| {
                 s.object != object
+                    || !s.filter.matches(&[request.definition])
                     || s.tile.size != tile.size
                     || s.silhouette.is_some() != needs_silhouette
                     || s.source_buffer.size() < source_instance.bytes().len() as u64
             });
-            let mut stats = AnalyticGlowStats::default();
+            let mut stats = EffectCaptureStats::default();
             if replace {
                 let source = CaptureImage::new(device, self.target_format, tile.size);
                 let silhouette = needs_silhouette
@@ -593,7 +597,7 @@ impl GpuRenderer {
                 });
                 if let Some(previous) = glows.scopes.insert(
                     key,
-                    ResidentGlow {
+                    ResidentEffect {
                         object,
                         tile,
                         camera: self.camera,
@@ -631,7 +635,7 @@ impl GpuRenderer {
                         placement,
                         placement_buffer,
                         placement_binding: None,
-                        filter: GlowScope::default(),
+                        filter: EffectStackScope::default(),
                         revision: 0,
                         invalidated: true,
                         enabled: true,
@@ -670,7 +674,7 @@ impl GpuRenderer {
                                 &scope.source_buffer,
                                 &mut scope.source_image_binding,
                             )
-                            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                            .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         source
                             .encode(
                                 self,
@@ -687,7 +691,7 @@ impl GpuRenderer {
                                 &scope.source_buffer,
                                 scope.source_image_binding.as_ref(),
                             )
-                            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                            .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         stats.source_passes = 1;
                         if let (Some(source), Some(image), Some(buffer)) =
                             (silhouette, &scope.silhouette, &scope.silhouette_buffer)
@@ -700,7 +704,7 @@ impl GpuRenderer {
                                     buffer,
                                     &mut scope.silhouette_image_binding,
                                 )
-                                .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                                .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             source
                                 .encode(
                                     self,
@@ -717,7 +721,7 @@ impl GpuRenderer {
                                     buffer,
                                     scope.silhouette_image_binding.as_ref(),
                                 )
-                                .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                                .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             stats.source_passes += 1;
                         }
                         stats.source_bytes_uploaded = source.bytes.len()
@@ -766,23 +770,25 @@ impl GpuRenderer {
                 queue.write_buffer(&scope.placement_buffer, 0, bytemuck::bytes_of(&placement));
                 stats.placement_bytes_uploaded = size_of::<Placement>();
             }
-            let upload = glows.filter.prepare(
+            let upload = glows.filter.prepare_encode(
                 device,
                 queue,
+                encoder,
                 &mut scope.filter,
                 GlowCapture {
                     source: &scope.source.texture,
                     silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
                     revision: scope.revision,
                 },
-                parameters,
+                &[request.definition],
+                EffectStackParameters {
+                    output_height: parameters.output_height,
+                    world_view_height: parameters.world_view_height,
+                    scope_opacity: opacity,
+                    scratch_budget_bytes: request.texture_budget_bytes,
+                },
             )?;
-            let encoded = glows.filter.encode(encoder, &mut scope.filter);
-            stats.filter = GlowRasterStats {
-                blur_passes: encoded.blur_passes,
-                composite_passes: encoded.composite_passes,
-                ..upload
-            };
+            stats.filter = upload;
             if replace || upload.texture_allocations != 0 || scope.placement_binding.is_none() {
                 scope.placement_binding =
                     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -813,14 +819,14 @@ impl GpuRenderer {
             stats.retained_texture_bytes = glows.bytes;
             Ok(stats)
         })();
-        self.analytic_glows = result.is_ok().then_some(glows);
+        self.effect_captures = result.is_ok().then_some(glows);
         result
     }
 
     /// Retire an exact derived object binding and release its local textures.
     /// Existing scene identity/lifecycle owners decide when this is called.
-    pub fn remove_analytic_glow(&mut self, object: ObjectId) {
-        if let Some(glows) = self.analytic_glows.as_deref_mut() {
+    pub fn remove_effect_capture(&mut self, object: ObjectId) {
+        if let Some(glows) = self.effect_captures.as_deref_mut() {
             if let Some(key) = glows.owners.remove(&object) {
                 if let Some(scope) = glows.scopes.remove(&key) {
                     glows.bytes -= scope.tile.capture_and_scratch_bytes;
@@ -829,15 +835,15 @@ impl GpuRenderer {
         }
     }
 
-    pub fn analytic_glow_texture_bytes(&self) -> u64 {
-        self.analytic_glows.as_deref().map_or(0, |g| g.bytes)
+    pub fn effect_capture_texture_bytes(&self) -> u64 {
+        self.effect_captures.as_deref().map_or(0, |g| g.bytes)
     }
 
     /// Call when recorded capture/filter commands were abandoned rather than
     /// submitted. Renderer/device recreation naturally drops the entire cache.
-    pub fn invalidate_analytic_glows(&mut self) {
-        self.retained_glow.invalidate();
-        if let Some(glows) = self.analytic_glows.as_deref_mut() {
+    pub fn invalidate_effect_captures(&mut self) {
+        self.retained_effects.invalidate();
+        if let Some(glows) = self.effect_captures.as_deref_mut() {
             for scope in glows.scopes.values_mut() {
                 scope.invalidated = true;
                 scope.filter.invalidate();
@@ -845,14 +851,14 @@ impl GpuRenderer {
         }
     }
 
-    pub(super) fn has_analytic_glows(&self) -> bool {
-        self.analytic_glows
+    pub(super) fn has_effect_captures(&self) -> bool {
+        self.effect_captures
             .as_deref()
             .is_some_and(|g| g.scopes.values().any(|s| s.enabled))
     }
 
-    pub(super) fn has_draw_source_glow(&self, object: ObjectId) -> bool {
-        self.analytic_glows.as_deref().is_some_and(|g| {
+    pub(super) fn has_draw_source_effect(&self, object: ObjectId) -> bool {
+        self.effect_captures.as_deref().is_some_and(|g| {
             g.owners
                 .get(&object)
                 .filter(|key| key.0 == 2)
@@ -861,13 +867,13 @@ impl GpuRenderer {
         })
     }
 
-    pub(super) fn draw_source_glow<'a>(
+    pub(super) fn draw_source_effect<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         object: ObjectId,
         single_sample: bool,
     ) -> bool {
-        let Some(glows) = self.analytic_glows.as_deref() else {
+        let Some(glows) = self.effect_captures.as_deref() else {
             return false;
         };
         let Some(scope) = glows
@@ -916,7 +922,7 @@ impl GpuRenderer {
         single_sample: bool,
         binding: &mut Option<GeometryBinding>,
     ) -> Option<DrawStats> {
-        let glows = self.analytic_glows.as_deref()?;
+        let glows = self.effect_captures.as_deref()?;
         let kind = match resolved.batch.primitive {
             RenderPrimitive::Circle => 0,
             RenderPrimitive::Rectangle => 1,
@@ -996,8 +1002,8 @@ impl GpuRenderer {
 fn tile_camera(
     camera: Camera2D,
     viewport: [u32; 2],
-    tile: GlowCaptureTile,
-) -> Result<Camera2D, GlowPrepareError> {
+    tile: EffectCaptureTile,
+) -> Result<Camera2D, EffectPrepareError> {
     let pixel = [
         f64::from(camera.world_size.x) / f64::from(viewport[0]),
         f64::from(camera.world_size.y) / f64::from(viewport[1]),
@@ -1019,7 +1025,7 @@ fn tile_camera(
             (f64::from(tile.size[1]) * pixel[1]) as f32,
         ),
     )
-    .map_err(|_| GlowPrepareError::InvalidProjection)
+    .map_err(|_| EffectPrepareError::InvalidProjection)
 }
 
 fn instance_buffer(device: &wgpu::Device, bytes: usize) -> wgpu::Buffer {

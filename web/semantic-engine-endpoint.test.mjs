@@ -43,7 +43,7 @@ function fixture(
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0, canUndoDrag = false;
-  let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
+  let created = 0, resumed = 0, discarded = 0, completedSegments = 0, drained = 0, committedPhases = 0;
   let leased = false;
   let initialSnapshots = 0, resourceBundles = 0;
   const callbackReads = [];
@@ -51,7 +51,7 @@ function fixture(
   const continuationDriveTimes = [];
   const authoredSampleTimes = [];
   const executionWakeTimes = [];
-  const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 18, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
+  const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 23, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     sealReplay: () => {},
     freshFiniteSourceDuration: () => null,
@@ -132,12 +132,14 @@ function fixture(
     createExecutionPlayer: () => { leased = true; created += 1; return player; },
     resumeExecutionPlayer: () => { leased = true; resumed += 1; return player; },
     returnExecutionPlayer: (value) => { leased = false; returned += 1; returnedPlayer = value; },
+    discardExecutionPlayer: (value) => { assert.equal(value, player); leased = false; discarded += 1; },
+    retireExecutionSource: () => { assert.equal(leased, false); },
     liveHandoffDuration: () => leased ? undefined : Math.max(time, 1),
     liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
   };
   return { control, render, player, context, stats: () => ({
-    returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
+    returned, returnedPlayer, stopped, nativeInputs, created, resumed, discarded, completedSegments,
     initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
     authoredSampleTimes,
     drained, committedPhases,
@@ -146,7 +148,7 @@ function fixture(
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode, ...requestOptions,
-    }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation,
+    }, () => { stopped += 1; callbackHooks.onStop?.(); }, runRequiredCallbackPhase, continuation,
     callbackHooks.complete ?? null, callbackHooks.discard ?? null,
     callbackHooks.testOnlyTickTimestamp ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
@@ -1146,7 +1148,7 @@ test("semantic continuation drives a pure wait only when its Rust deadline is du
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("stopping an incomplete semantic continuation never returns its player", async () => {
+test("stopping an incomplete semantic continuation discards input without returning or completing it", async () => {
   const failures = [];
   const continuation = {
     generation: 12,
@@ -1154,15 +1156,117 @@ test("stopping an incomplete semantic continuation never returns its player", as
     onError: (generation, error) => { failures.push({ generation, error }); },
   };
   const f = fixture("transferable", null, continuation);
+  let inputActive = true;
+  const discard = f.context.discardExecutionPlayer;
+  f.context.discardExecutionPlayer = (player) => { discard(player); inputActive = false; };
   try {
     const ready = next(f.control.port2);
     const endpoint = await f.attach();
     await ready;
     endpoint.stop();
+    assert.equal(inputActive, false);
+    assert.equal(f.stats().discarded, 1);
     assert.equal(f.stats().returned, 0);
     assert.equal(f.stats().completedSegments, 0);
     assert.equal(f.stats().stopped, 1);
     assert.deepEqual(failures, []);
+  } finally { f.close(); }
+});
+
+test("failed incomplete-source discard retains its exact player and context for retry", async () => {
+  const contexts = new Map();
+  const continuation = { generation: 12, onComplete() { throw new Error("must not complete"); } };
+  const f = fixture("transferable", null, continuation, {}, {
+    onStop() { contexts.delete("source"); },
+  });
+  contexts.set("source", f.context);
+  const discard = f.context.discardExecutionPlayer;
+  let attempts = 0, recoveries = 0;
+  f.context.discardExecutionPlayer = (player) => {
+    assert.equal(player, f.player);
+    if (attempts++ === 0) {
+      const error = new Error("shared input retirement rejected");
+      error.takePlayer = () => { recoveries += 1; return player; };
+      throw error;
+    }
+    discard(player);
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    assert.throws(() => endpoint.stop(), /shared input retirement rejected/);
+    assert.equal(recoveries, 1);
+    assert.equal(contexts.get("source"), f.context);
+    assert.equal(f.stats().returned, 0);
+    assert.equal(f.stats().discarded, 0);
+    assert.equal(f.stats().completedSegments, 0);
+    assert.equal(f.stats().stopped, 0);
+    endpoint.stop();
+    assert.equal(attempts, 2);
+    assert.equal(f.stats().discarded, 1);
+    assert.equal(f.stats().stopped, 1);
+    assert.equal(contexts.size, 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("source retirement rejection retains returned ownership and open ports for an explicit retry", async () => {
+  const contexts = new Map();
+  const f = fixture("transferable", null, null, {}, {
+    onStop() { contexts.delete("source"); },
+  });
+  contexts.set("source", f.context);
+  let reject = true, attempts = 0, ticks = 0, controlClosed = false, renderClosed = false;
+  f.control.port1.on("close", () => { controlClosed = true; });
+  f.render.port1.on("close", () => { renderClosed = true; });
+  f.player.tickCallbackPhaseJson = () => { ticks += 1; return null; };
+  f.context.retireExecutionSource = () => {
+    attempts += 1;
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(controlClosed, false);
+    assert.equal(renderClosed, false);
+    if (reject) throw new Error("canonical source retirement rejected");
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const idle = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "idle");
+    assert.throws(() => endpoint.stop({ retireSource: true }), /canonical source retirement rejected/);
+    await idle;
+    await turn();
+    assert.equal(contexts.get("source"), f.context);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().stopped, 0);
+    assert.equal(controlClosed, false);
+    assert.equal(renderClosed, false);
+    f.render.port2.postMessage({ type: "tick", timestamp: 100 });
+    await turn();
+    assert.equal(ticks, 0, "a rejected release halts progression while preserving retry ownership");
+    reject = false;
+    endpoint.stop({ retireSource: true });
+    await turn();
+    assert.equal(attempts, 2);
+    assert.equal(f.stats().returned, 1, "retry must use the same returned player");
+    assert.equal(f.stats().stopped, 1);
+    assert.equal(contexts.size, 0);
+  } finally { reject = false; endpoint?.stop({ retireSource: true }); f.close(); }
+});
+
+test("renderer recovery returns its player without retiring the source invocation", async () => {
+  const f = fixture();
+  f.context.retireExecutionSource = () => assert.fail("recovery must retain input ownership");
+  try {
+    const ready = next(f.control.port2);
+    const endpoint = await f.attach();
+    await ready;
+    endpoint.stop();
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(f.stats().stopped, 1);
   } finally { f.close(); }
 });
 
@@ -1795,6 +1899,8 @@ test("player construction failure closes both transferred ports", async () => {
   await assert.rejects(attachSemanticEngine({
     createExecutionPlayer: () => { throw new Error("lowering failed"); },
     returnExecutionPlayer: () => { throw new Error("must not return an uncreated player"); },
+    discardExecutionPlayer: () => { throw new Error("must not discard an uncreated player"); },
+    retireExecutionSource: () => { throw new Error("must not retire an uncreated source"); },
   }, {
     controlPort: control.port1, renderPort: render.port1, session: 7,
     loopDurationSeconds: 2, transportMode: "transferable",
@@ -2683,7 +2789,7 @@ for (const transportMode of ["transferable", "shared"]) {
       assert.equal(deltas.length, 1, "configuration without an image change emits nothing");
       // Supply exact output from the mocked shared session after admission. JS
       // must forward this verbatim; it must not invent IDs, rows, or a new clock.
-      pending = { channel: "noon.execution.retained", protocol_version: 18,
+      pending = { channel: "noon.execution.retained", protocol_version: 23,
         session: 7, sequence: sequence++, snapshot: false, time: 0,
         objects: [], selection_overlay: overlay };
       const selected = await request(f.control.port2, "browser_pointer_input", 2, { kind: "release" });
@@ -2693,7 +2799,7 @@ for (const transportMode of ["transferable", "shared"]) {
       assert.deepEqual(deltas[1].objects, []);
       assert.equal(selected.time, 0);
       assert.equal(selected.playing, false);
-      pending = { channel: "noon.execution.retained", protocol_version: 18,
+      pending = { channel: "noon.execution.retained", protocol_version: 23,
         session: 7, sequence: sequence++, snapshot: false, time: 0, objects: [] };
       const cleared = await request(f.control.port2, "pointer_fill_selection", 3, { maxMovement: null });
       assert.equal(cleared.type, "pointer_fill_selection");
@@ -3195,4 +3301,65 @@ test("finite export retains presentation barriers and rejects competing controls
     await request(f.control.port2, "cancel_finite_export", 6);
     assert.equal(active, false);
   } finally { endpoint?.stop(); f.close(); }
+});
+
+test("endpoint stop cancels pending scene Play before returning or retiring its owner", async () => {
+  const f = fixture();
+  let pending = { sequence: "17", action: "toggle_playback" };
+  const order = [];
+  f.player.cancelSceneControl = () => { order.push("cancel"); pending = null; };
+  const returnPlayer = f.context.returnExecutionPlayer;
+  f.context.returnExecutionPlayer = (player) => {
+    assert.equal(pending, null, "a returned player must not retain deferred Play");
+    order.push("return");
+    returnPlayer(player);
+  };
+  f.context.retireExecutionSource = () => {
+    assert.equal(pending, null);
+    order.push("retire");
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    endpoint.stop({ retireSource: true });
+    assert.deepEqual(order, ["cancel", "return", "retire"]);
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(f.stats().stopped, 1);
+  } finally { f.close(); }
+});
+
+test("rejected discard keeps its exact owner but never its cancelled scene Play", async () => {
+  const continuation = { generation: 12, onComplete() { assert.fail("must not complete"); } };
+  const f = fixture("transferable", null, continuation);
+  let pending = { sequence: "17", action: "toggle_playback" };
+  let cancellations = 0, attempts = 0;
+  f.player.cancelSceneControl = () => { cancellations += 1; pending = null; };
+  const discard = f.context.discardExecutionPlayer;
+  const failure = new Error("shared source retirement rejected");
+  failure.takePlayer = () => f.player;
+  f.context.discardExecutionPlayer = (player) => {
+    assert.equal(player, f.player);
+    assert.equal(pending, null, "even a rejected exit must cancel deferred Play");
+    if (attempts++ === 0) throw failure;
+    discard(player);
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    assert.throws(() => endpoint.stop(), error => error === failure);
+    assert.equal(f.stats().stopped, 0);
+    assert.equal(f.stats().discarded, 0);
+    assert.equal(pending, null);
+    endpoint.stop();
+    assert.equal(cancellations, 2);
+    assert.equal(attempts, 2);
+    assert.equal(f.stats().discarded, 1);
+    assert.equal(f.stats().returned, 0);
+    assert.equal(f.stats().completedSegments, 0);
+    assert.equal(f.stats().stopped, 1);
+  } finally { f.close(); }
 });

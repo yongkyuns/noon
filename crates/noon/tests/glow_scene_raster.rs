@@ -1,7 +1,7 @@
 //! Public authoring -> Scene execution -> ordinary retained wgpu rendering.
 //! The independent filter reference uses only a separate no-effect Scene image.
 use noon::{
-    effects::{GlowUpdate, Pixels},
+    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ExecutionSession, Mobject, RateFunction, Scene,
 };
 use noon_core::Vec2;
@@ -13,15 +13,15 @@ use std::time::Duration;
 const SIZE: [u32; 2] = [80, 60];
 const START: f64 = 0.4000000000000123;
 
-fn scene(glow: bool) -> (Scene, Mobject, noon::DeclaredAnimation) {
+fn scene(effect: bool) -> (Scene, Mobject, noon::DeclaredAnimation) {
     let mut scene = Scene::new();
     let mut source = scene.circle(0.4).unwrap();
     source.disable_stroke().unwrap();
     source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
-    if glow {
+    if effect {
         source
             .set_glow(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::RED)
                     .radius(Pixels(3.25))
                     .intensity(START),
@@ -31,10 +31,10 @@ fn scene(glow: bool) -> (Scene, Mobject, noon::DeclaredAnimation) {
     scene.add(&source).unwrap();
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
-    if glow {
+    if effect {
         target
             .set_glow(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::BLUE)
                     .radius(Pixels(6.5))
                     .intensity(1.4),
@@ -58,6 +58,8 @@ struct Surface {
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
     target: wgpu::Texture,
+    effect_stats: noon_render_wgpu::RetainedEffectStats,
+    upload_stats: noon_render_wgpu::RetainedUploadStats,
 }
 impl Surface {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -92,6 +94,8 @@ impl Surface {
             preparer: RetainedFramePreparer::new(),
             text,
             target,
+            effect_stats: Default::default(),
+            upload_stats: Default::default(),
         }
     }
     fn render(
@@ -117,7 +121,7 @@ impl Surface {
             .collect::<Vec<_>>();
         let visible = self
             .renderer
-            .glow_source_visibility(&publication, &visible)
+            .effect_source_visibility(&publication, &visible)
             .unwrap();
         let metrics = TextDeviceMetrics::uniform(10.0)
             .unwrap()
@@ -127,11 +131,13 @@ impl Surface {
             .preparer
             .prepare_planned_publication_visible(device, &publication, visible, metrics)
             .unwrap();
-        self.renderer
+        self.upload_stats = self
+            .renderer
             .upload_retained(device, queue, &prepared, &mut self.text);
         let mut encoder = device.create_command_encoder(&Default::default());
-        self.renderer
-            .prepare_retained_analytic_glows(
+        self.effect_stats = self
+            .renderer
+            .prepare_retained_effects(
                 device,
                 queue,
                 &mut encoder,
@@ -348,7 +354,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
     scene.live(&mut session).complete_segment(segment).unwrap();
     scene
         .live(&mut session)
-        .set_glow(&source, GlowUpdate::default().intensity(0.0))
+        .set_glow(&source, EffectUpdate::default().intensity(0.0))
         .unwrap();
     assert_eq!(
         surface.render(&device, &queue, &mut session),
@@ -357,7 +363,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
     );
     scene
         .live(&mut session)
-        .set_glow(&source, GlowUpdate::default().intensity(1.4))
+        .set_glow(&source, EffectUpdate::default().intensity(1.4))
         .unwrap();
     let restored = surface.render(&device, &queue, &mut session);
     assert!(error(&restored, &expected(&last_plain, 1.0)) <= 2);
@@ -371,7 +377,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
         .live(&mut session)
         .set_glow(
             &source,
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .color(Color::BLUE)
                 .radius(Pixels(6.5))
                 .intensity(1.4),
@@ -421,7 +427,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
         scene.live(&mut session).complete_segment(segment).unwrap();
         scene
             .live(&mut session)
-            .set_glow(&source, GlowUpdate::default().intensity(0.0))
+            .set_glow(&source, EffectUpdate::default().intensity(0.0))
             .unwrap();
         assert_eq!(surface.render(&device, &queue, &mut session), last_plain);
         scene.live(&mut session).remove_glow(&source).unwrap();
@@ -461,7 +467,7 @@ fn authored_glow_pulse_pixels_restore_and_replay() {
         if attached {
             source
                 .set_glow(
-                    GlowUpdate::default()
+                    EffectUpdate::default()
                         .color(Color::RED)
                         .radius(Pixels(3.25))
                         .intensity(START),
@@ -592,6 +598,260 @@ fn authored_glow_pulse_pixels_restore_and_replay() {
     eprintln!("GLOW_PULSE_PASS profiles=6 samples=30 max_error={max_error} repeated_exact=true rewind_exact=true restoration_exact=true identity=true temporary_retirement=true");
 }
 
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn click_glow_pulse_pixels_restore_and_retire() {
+    use noon::integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition};
+    use noon_core::{NativePointerId, NativePointerInput};
+
+    fn click(execution: &mut noon::SceneExecution, sequence: u64) {
+        for (sequence, pressed) in [(sequence, true), (sequence + 1, false)] {
+            let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(40.0, 30.0)).unwrap();
+            let kind = if pressed {
+                NativePointerInputKind::Press {
+                    position,
+                    button: 0,
+                }
+            } else {
+                NativePointerInputKind::Release {
+                    position,
+                    button: 0,
+                }
+            };
+            let token = execution.session().native_pointer_input_token().unwrap();
+            let input = NativePointerInput::new(
+                sequence,
+                token.pointer(),
+                token.context(),
+                NativeInputModifiers::default(),
+                kind,
+            );
+            execution
+                .submit_native_pointer_input(&token, input)
+                .unwrap();
+        }
+    }
+
+    let backends = match std::env::var("NOON_GLOW_BACKEND").as_deref() {
+        Ok("vulkan") => wgpu::Backends::VULKAN,
+        Ok("gl") => wgpu::Backends::GL,
+        Ok("metal") => wgpu::Backends::METAL,
+        Ok("dx12") => wgpu::Backends::DX12,
+        Err(std::env::VarError::NotPresent) => wgpu::Backends::PRIMARY,
+        other => panic!("unsupported NOON_GLOW_BACKEND: {other:?}"),
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .unwrap();
+    let info = adapter.get_info();
+    assert_ne!(info.backend, wgpu::Backend::Noop);
+    eprintln!("click GlowPulse raster adapter: {info:?}");
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let make_scene = |attached: bool| {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.4).unwrap();
+        source.disable_stroke().unwrap();
+        source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        if attached {
+            source
+                .set_glow(
+                    EffectUpdate::default()
+                        .color(Color::RED)
+                        .radius(Pixels(3.25))
+                        .intensity(START),
+                )
+                .unwrap();
+        }
+        scene.add(&source).unwrap();
+        (scene, source)
+    };
+    let (plain_scene, _) = make_scene(false);
+    let mut plain = plain_scene.into_execution().unwrap();
+    let ordinary = Surface::new(&device, &queue).render(&device, &queue, plain.session_mut());
+    let mut max_error = 0;
+    let mut samples = 0;
+    for attached in [true, false] {
+        let (mut scene, source) = make_scene(attached);
+        let pulse = scene
+            .declare_glow_pulse(&source, 2.0, AnimationOptions::new().run_time(1.0))
+            .unwrap();
+        scene.on_click(&source, Some(&pulse)).unwrap();
+        assert_eq!(
+            source.get_effect("glow").is_ok(),
+            attached,
+            "binding alone must not install an absent glow"
+        );
+        let mut execution = scene.into_execution().unwrap();
+        // The declaration saw START, while the admitted click must capture this
+        // later authored value. No declaration-time binding/source is authoritative.
+        let baseline = if attached { 0.9 } else { 0.0 };
+        if attached {
+            execution
+                .live()
+                .set_glow(&source, EffectUpdate::default().intensity(baseline))
+                .unwrap();
+        }
+        let original = source.get_effect("glow").ok();
+        let original_definition = original.as_ref().map(|h| h.authored_definition().unwrap());
+        execution
+            .session_mut()
+            .configure_native_pointer_input(
+                NativePointerId {
+                    source: 81,
+                    pointer: 2,
+                },
+                1,
+            )
+            .unwrap();
+        let mut surface = Surface::new(&device, &queue);
+        let baseline_pixels = surface.render(&device, &queue, execution.session_mut());
+        let sigma = if attached { 3.25 } else { 1.5 };
+        let tint = if attached {
+            [
+                f64::from(Color::RED.red),
+                f64::from(Color::RED.green),
+                f64::from(Color::RED.blue),
+            ]
+        } else {
+            [1.0; 3]
+        };
+        let baseline_oracle = expected_glow(&ordinary, sigma, tint, baseline);
+        assert!(error(&baseline_pixels, &baseline_oracle) <= 2);
+        if attached {
+            assert!(
+                error(
+                    &baseline_oracle,
+                    &expected_glow(&ordinary, sigma, tint, START)
+                ) > 4,
+                "stale declaration-time capture negative control is ineffective"
+            );
+        }
+
+        click(&mut execution, 1);
+        assert!(execution.session().interactions_active());
+        let first_binding = source.get_effect("glow").unwrap();
+        for (index, amplitude) in [0.0, 0.5, 1.0, 0.5, 0.0].into_iter().enumerate() {
+            let wall_time = 100.0 + index as f64 * 0.25;
+            execution.advance_interactions(wall_time).unwrap();
+            if index == 1 {
+                click(&mut execution, 3);
+                assert_eq!(
+                    source.get_effect("glow").unwrap().node_id(),
+                    first_binding.node_id()
+                );
+            }
+            let actual = surface.render(&device, &queue, execution.session_mut());
+            let oracle = expected_glow(
+                &ordinary,
+                sigma,
+                tint,
+                baseline + (2.0 - baseline) * amplitude,
+            );
+            let difference = error(&actual, &oracle);
+            max_error = max_error.max(difference);
+            samples += 1;
+            assert!(
+                difference <= 2,
+                "attached={attached} wall={wall_time}: full RGBA error {difference}"
+            );
+            assert_eq!(
+                execution.session().frame().time,
+                0.0,
+                "click ticks advanced authored time"
+            );
+            assert_eq!(
+                surface.render(&device, &queue, execution.session_mut()),
+                actual,
+                "identical publication changed click-pulse pixels"
+            );
+            if amplitude == 0.0 {
+                assert_eq!(
+                    actual, baseline_pixels,
+                    "neutral/restored frame differs from the ordinary baseline"
+                );
+            } else {
+                assert!(
+                    error(&oracle, &baseline_oracle) > 4,
+                    "missing-pulse negative control is ineffective"
+                );
+                assert!(
+                    error(&actual, &baseline_pixels) > 2,
+                    "no visible click-pulse was rendered"
+                );
+            }
+        }
+        assert!(
+            !execution.session().interactions_active(),
+            "retrigger extended the original deadline"
+        );
+        if let Some(original) = &original {
+            assert_eq!(
+                source.get_effect("glow").unwrap().node_id(),
+                original.node_id()
+            );
+            assert_eq!(
+                original.authored_definition().unwrap(),
+                original_definition.unwrap()
+            );
+        } else {
+            assert!(source.get_effect("glow").is_err());
+            assert!(first_binding.authored_definition().is_err());
+        }
+        let settled = execution.session().publication_context();
+        execution.advance_interactions(101.5).unwrap();
+        assert_eq!(
+            execution.session().publication_context(),
+            settled,
+            "settled pulse kept publishing"
+        );
+
+        // A later click acquires a new temporary generation, and an admitted seek
+        // cancels that exact pulse. Seeking never replays an unrecorded click.
+        click(&mut execution, 5);
+        let second_binding = source.get_effect("glow").unwrap();
+        if attached {
+            assert_eq!(second_binding.node_id(), first_binding.node_id());
+        } else {
+            assert_ne!(second_binding.node_id(), first_binding.node_id());
+        }
+        execution.advance_interactions(200.0).unwrap();
+        execution.advance_interactions(200.5).unwrap();
+        let peak = surface.render(&device, &queue, execution.session_mut());
+        let difference = error(&peak, &expected_glow(&ordinary, sigma, tint, 2.0));
+        max_error = max_error.max(difference);
+        samples += 1;
+        assert!(
+            difference <= 2,
+            "later click failed its independent peak oracle"
+        );
+        execution.seek(0.0).unwrap();
+        assert!(!execution.session().interactions_active());
+        assert_eq!(
+            surface.render(&device, &queue, execution.session_mut()),
+            baseline_pixels,
+            "seek cancellation failed to restore the ordinary baseline"
+        );
+        if let Some(original) = original {
+            assert_eq!(
+                source.get_effect("glow").unwrap().node_id(),
+                original.node_id()
+            );
+            assert_eq!(
+                original.authored_definition().unwrap(),
+                original_definition.unwrap()
+            );
+        } else {
+            assert!(source.get_effect("glow").is_err());
+            assert!(second_binding.authored_definition().is_err());
+        }
+    }
+    eprintln!("CLICK_GLOW_PULSE_PASS profiles=2 samples={samples} max_error={max_error} capture_at_click=true retrigger_original_deadline=true repeated_exact=true restoration_exact=true identity=true temporary_retirement=true seek_cleanup=true idle=true");
+}
+
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 fn drawable_scene(kind: &str, glowing: bool, opacity: f64) -> (Scene, Mobject) {
     let mut scene = Scene::new();
@@ -628,7 +888,7 @@ fn drawable_scene(kind: &str, glowing: bool, opacity: f64) -> (Scene, Mobject) {
     if glowing {
         source
             .set_glow(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::RED)
                     .radius(Pixels(3.25))
                     .intensity(START),
@@ -738,7 +998,7 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
                 .unwrap();
             scene
                 .live(&mut session)
-                .set_glow(&source, GlowUpdate::default().intensity(0.0))
+                .set_glow(&source, EffectUpdate::default().intensity(0.0))
                 .unwrap();
             assert_eq!(
                 surface.render(&device, &queue, &mut session),
@@ -751,14 +1011,14 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
                 last_plain,
                 "{kind} removal changed source pixels"
             );
-            assert_eq!(surface.renderer.analytic_glow_texture_bytes(), 0);
+            assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
         }
     }
     eprintln!("GENERIC_SOURCE_GLOW_PASS cases=8 reveal_frames=40 max_error={max_error} opacity_once=true neutral_exact=true retirement=true");
 }
 
 fn image_scene(
-    glow: Option<noon::effects::GlowSource>,
+    effect: Option<noon::effects::GlowSource>,
     sampling: noon::RasterImageSampling,
     paint_opacity: f64,
     scope_opacity: f64,
@@ -772,10 +1032,10 @@ fn image_scene(
     source.scale(-1.1, 0.85).unwrap();
     source.rotate(0.17).unwrap();
     source.set_object_opacity(scope_opacity).unwrap();
-    if let Some(mode) = glow {
+    if let Some(mode) = effect {
         source
             .set_glow(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::RED)
                     .radius(Pixels(3.25))
                     .intensity(START)
@@ -787,10 +1047,10 @@ fn image_scene(
     let mut target = source.target_editor().unwrap();
     target.shift(1.2, 0.3).unwrap();
     target.rotate(0.2).unwrap();
-    if glow.is_some() {
+    if effect.is_some() {
         target
             .set_glow(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::BLUE)
                     .radius(Pixels(6.5))
                     .intensity(1.4),
@@ -875,6 +1135,268 @@ fn expected_image_glow(
         );
     }
     output
+}
+
+fn gradient_glow_scene(
+    kind: usize,
+    mode: Option<noon::effects::GlowSource>,
+    opacity: f64,
+    silhouette: bool,
+) -> (Scene, Mobject, noon::DeclaredAnimation) {
+    use noon::{GradientStop, LinearGradient};
+    let mut scene = Scene::new();
+    let mut source = match kind {
+        0 => scene.circle(0.6).unwrap(),
+        1 => scene.rectangle(1.2, 1.6).unwrap(),
+        _ => Mobject::manim_rectangle(std::rc::Rc::clone(scene.integration_store()), 1.2, 1.6)
+            .unwrap(),
+    };
+    source.disable_stroke().unwrap();
+    let paint = |vertical| {
+        LinearGradient::new(
+            if vertical { [0.5, 0.0] } else { [0.0, 0.5] },
+            if vertical { [0.5, 1.0] } else { [1.0, 0.5] },
+            [
+                GradientStop::new(
+                    0.0,
+                    Color::rgba(1.0, 0.0, 0.0, if vertical { 0.8 } else { 0.2 }),
+                )
+                .unwrap(),
+                GradientStop::new(
+                    1.0,
+                    Color::rgba(0.0, 0.0, 1.0, if vertical { 0.3 } else { 0.9 }),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    };
+    if silhouette {
+        source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    } else {
+        source.set_fill_gradient(paint(false), Some(0.55)).unwrap();
+    }
+    source.set_object_opacity(opacity).unwrap();
+    source.scale(-1.1, 0.85).unwrap();
+    source.rotate(0.17).unwrap();
+    source.shift(-0.6, 0.1).unwrap();
+    if kind == 2 {
+        source
+            .set_stroke_color(0.0, 1.0, 0.0, if silhouette { 1.0 } else { 0.5 })
+            .unwrap();
+        source.set_stroke_width(0.12).unwrap();
+    }
+    if let Some(mode) = mode {
+        source
+            .set_glow(
+                EffectUpdate::default()
+                    .source(mode)
+                    .color(Color::RED)
+                    .radius(Pixels(3.25))
+                    .intensity(START),
+            )
+            .unwrap();
+    }
+    scene.add(&source).unwrap();
+    let mut target = source.target_editor().unwrap();
+    if !silhouette {
+        target.set_fill_gradient(paint(true), Some(0.55)).unwrap();
+    }
+    if mode.is_some() {
+        target
+            .set_glow(
+                EffectUpdate::default()
+                    .color(Color::BLUE)
+                    .radius(Pixels(6.5))
+                    .intensity(1.4),
+            )
+            .unwrap();
+    }
+    let animation = scene
+        .declare_transform_to(
+            &source,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    (scene, source, animation)
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence fails qualification"]
+fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
+    use noon::effects::GlowSource;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    eprintln!("gradient glow adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut samples = 0;
+    let mut max_error = 0;
+    for kind in 0..3 {
+        for mode in [GlowSource::Painted, GlowSource::Silhouette] {
+            let (scene, source, animation) = gradient_glow_scene(kind, Some(mode), 0.45, false);
+            let (plain_scene, plain_source, plain_animation) =
+                gradient_glow_scene(kind, None, 1.0, false);
+            let (mask_scene, _, mask_animation) = gradient_glow_scene(kind, None, 1.0, true);
+            let mut session = scene.execution_session().unwrap();
+            let mut plain = plain_scene.execution_session().unwrap();
+            let mut mask = mask_scene.execution_session().unwrap();
+            let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+            let plain_segment = plain_scene
+                .live(&mut plain)
+                .play_animation(&plain_animation)
+                .unwrap();
+            let mask_segment = mask_scene
+                .live(&mut mask)
+                .play_animation(&mask_animation)
+                .unwrap();
+            let mut surface = Surface::new(&device, &queue);
+            let mut reference = Surface::new(&device, &queue);
+            let mut mask_surface = Surface::new(&device, &queue);
+            let times = [0.0, 0.25, 0.5, 0.75, 1.0];
+            let mut frames = Vec::new();
+            for time in times {
+                scene
+                    .live(&mut session)
+                    .advance_segment_to(segment, time)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .advance_segment_to(plain_segment, time)
+                    .unwrap();
+                mask_scene
+                    .live(&mut mask)
+                    .advance_segment_to(mask_segment, time)
+                    .unwrap();
+                let ordinary =
+                    reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+                let silhouette =
+                    mask_surface.render_on(&device, &queue, &mut mask, wgpu::Color::TRANSPARENT);
+                let alpha = if mode == GlowSource::Painted {
+                    &ordinary
+                } else {
+                    &silhouette
+                };
+                let expected =
+                    expected_image_glow(&ordinary, alpha, time, 0.45, wgpu::Color::TRANSPARENT);
+                let actual =
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let difference = error(&actual, &expected);
+                max_error = max_error.max(difference);
+                let worst = actual
+                    .iter()
+                    .zip(&expected)
+                    .enumerate()
+                    .max_by_key(|(_, (a, b))| a.abs_diff(**b))
+                    .unwrap()
+                    .0;
+                assert!(difference <= 2, "kind={kind} mode={mode:?} time={time}: RGBA error {difference} at ({},{}) actual={:?} expected={:?} ordinary={:?}", (worst / 4) % SIZE[0] as usize, (worst / 4) / SIZE[0] as usize, &actual[worst/4*4..worst/4*4+4], &expected[worst/4*4..worst/4*4+4], &ordinary[worst/4*4..worst/4*4+4]);
+                let missing = expected_image_glow(
+                    &ordinary,
+                    &vec![0; ordinary.len()],
+                    time,
+                    0.45,
+                    wgpu::Color::TRANSPARENT,
+                );
+                assert!(error(&expected, &missing) > 2, "missing halo control");
+                assert_eq!(
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    actual
+                );
+                assert_eq!(surface.effect_stats.source_passes, 0);
+                assert_eq!(surface.effect_stats.blur_passes, 0);
+                assert_eq!(surface.effect_stats.bytes_uploaded, 0);
+                assert_eq!(surface.effect_stats.texture_allocations, 0);
+                frames.push(actual);
+                samples += 1;
+            }
+            for index in [4, 1, 3, 0, 2, 4] {
+                session.seek(times[index]).unwrap();
+                assert_eq!(
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    frames[index]
+                );
+            }
+            scene.live(&mut session).complete_segment(segment).unwrap();
+            plain_scene
+                .live(&mut plain)
+                .complete_segment(plain_segment)
+                .unwrap();
+            let changed = noon::LinearGradient::new(
+                [0.5, 0.0],
+                [0.5, 1.0],
+                [
+                    noon::GradientStop::new(0.0, Color::rgba(0.0, 1.0, 0.0, 0.1)).unwrap(),
+                    noon::GradientStop::new(1.0, Color::rgba(1.0, 0.0, 0.0, 0.6)).unwrap(),
+                ],
+            )
+            .unwrap();
+            scene
+                .live(&mut session)
+                .set_fill_gradient(&source, changed.clone(), None)
+                .unwrap();
+            plain_scene
+                .live(&mut plain)
+                .set_fill_gradient(&plain_source, changed, None)
+                .unwrap();
+            let ordinary =
+                reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+            let silhouette =
+                mask_surface.render_on(&device, &queue, &mut mask, wgpu::Color::TRANSPARENT);
+            let alpha = if mode == GlowSource::Painted {
+                &ordinary
+            } else {
+                &silhouette
+            };
+            let background = wgpu::Color {
+                r: 0.125,
+                g: 0.25,
+                b: 0.375,
+                a: 1.0,
+            };
+            let expected = expected_image_glow(&ordinary, alpha, 1.0, 0.45, background);
+            let actual = surface.render_on(&device, &queue, &mut session, background);
+            assert!(
+                error(&actual, &expected) <= 2,
+                "paint-only edit must recapture current stops"
+            );
+            assert!(surface.effect_stats.source_passes > 0);
+            assert_eq!(surface.effect_stats.texture_allocations, 0);
+            // A warmed intensity edit uses the captured paint and blur again.
+            scene
+                .live(&mut session)
+                .set_glow(&source, EffectUpdate::default().intensity(1.2))
+                .unwrap();
+            surface.render_on(&device, &queue, &mut session, background);
+            assert_eq!(surface.effect_stats.source_passes, 0);
+            assert_eq!(surface.effect_stats.blur_passes, 0);
+            assert_eq!(surface.effect_stats.texture_allocations, 0);
+            plain_scene
+                .live(&mut plain)
+                .set_object_opacity(&plain_source, 0.45)
+                .unwrap();
+            let ordinary = reference.render(&device, &queue, &mut plain);
+            scene
+                .live(&mut session)
+                .set_glow(&source, EffectUpdate::default().intensity(0.0))
+                .unwrap();
+            assert_eq!(
+                surface.render(&device, &queue, &mut session),
+                ordinary,
+                "neutral paint must be exact"
+            );
+            scene.live(&mut session).remove_glow(&source).unwrap();
+            assert_eq!(
+                surface.render(&device, &queue, &mut session),
+                ordinary,
+                "removed paint must be exact"
+            );
+        }
+    }
+    eprintln!("gradient glow: 6 profiles / {samples} samples / max RGBA error {max_error}");
 }
 
 #[test]
@@ -1004,7 +1526,7 @@ fn image_glow_keeps_foreground_painter_order() {
         scene.live(&mut session).complete_segment(segment).unwrap();
         scene
             .live(&mut session)
-            .set_glow(&source, GlowUpdate::default().intensity(0.0))
+            .set_glow(&source, EffectUpdate::default().intensity(0.0))
             .unwrap();
         assert_eq!(
             surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
@@ -1164,7 +1686,7 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             let plain_pixels = reference.render_on(&device, &queue, &mut plain, background);
             scene
                 .live(&mut session)
-                .set_glow(&source, GlowUpdate::default().intensity(0.0))
+                .set_glow(&source, EffectUpdate::default().intensity(0.0))
                 .unwrap();
             assert_eq!(
                 surface.render_on(&device, &queue, &mut session, background),
@@ -1173,7 +1695,7 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             );
             scene
                 .live(&mut session)
-                .set_glow(&source, GlowUpdate::default().intensity(1.4))
+                .set_glow(&source, EffectUpdate::default().intensity(1.4))
                 .unwrap();
             assert_eq!(
                 surface.render_on(&device, &queue, &mut session, background),
@@ -1186,7 +1708,7 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
                 plain_pixels,
                 "effect removal left a stale image or halo"
             );
-            assert_eq!(surface.renderer.analytic_glow_texture_bytes(), 0);
+            assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
         }
     }
     eprintln!("IMAGE_GLOW_PASS cases=6 frames=30 max_error={max_error} alpha=true sampling=true replay_exact=true neutral_exact=true retirement=true");
@@ -1201,7 +1723,7 @@ const EDGE_IMAGE_INTENSITY: f64 = 1.8;
 fn fractional_edge_image(
     bounds: [f64; 4],
     sampling: noon::RasterImageSampling,
-    glow: Option<noon::effects::GlowSource>,
+    effect: Option<noon::effects::GlowSource>,
 ) -> Scene {
     let mut scene = Scene::new();
     let mut options = noon::ImageMobjectOptions::rgba8(1, 1, EDGE_IMAGE_RGBA).unwrap();
@@ -1222,11 +1744,11 @@ fn fractional_edge_image(
             (30.0 - (bounds[1] + bounds[3]) * 0.5) / 10.0,
         )
         .unwrap();
-    if let Some(source) = glow {
+    if let Some(source) = effect {
         image.set_object_opacity(EDGE_IMAGE_SCOPE).unwrap();
         image
             .set_glow(
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::BLUE)
                     .radius(Pixels(EDGE_IMAGE_SIGMA))
                     .intensity(EDGE_IMAGE_INTENSITY)
@@ -1389,4 +1911,1235 @@ fn offscreen_image_glow_uses_global_pixel_crop() {
         "negative-origin crop defect must be detected"
     );
     eprintln!("OFFSCREEN_IMAGE_GLOW_PASS cases=24 max_error={max_error} analytic_source=true global_crop=true offscreen_support=true wrong_crop_rejected={rejected_wrong_crop}");
+}
+
+// Direct four-channel square convolution: independent of the separable GPU
+// operator and driven only by an ordinary no-effect Scene raster.
+fn expected_rgba_blur(source: &[u8], sigma: f64, opacity: f64) -> Vec<u8> {
+    expected_rgba_blur_in_extent(source, sigma, opacity, SIZE)
+}
+
+fn expected_rgba_blur_in_extent(
+    source: &[u8],
+    sigma: f64,
+    opacity: f64,
+    size: [u32; 2],
+) -> Vec<u8> {
+    if sigma == 0.0 {
+        return source
+            .iter()
+            .map(|&v| (f64::from(v) * opacity).round() as u8)
+            .collect();
+    }
+    let [width, height] = size.map(|v| v as usize);
+    let radius = (3.0 * sigma).ceil() as isize;
+    let mut taps = Vec::new();
+    let mut mass = 0.0;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let weight = (-((dx * dx + dy * dy) as f64) / (2.0 * sigma * sigma)).exp();
+            mass += weight;
+            taps.push((dx, dy, weight));
+        }
+    }
+    let mut output = vec![0_u8; source.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = [0.0_f64; 4];
+            for &(dx, dy, weight) in &taps {
+                let (sx, sy) = (x as isize + dx, y as isize + dy);
+                if sx < 0 || sy < 0 || sx >= width as isize || sy >= height as isize {
+                    continue;
+                }
+                for channel in 0..4 {
+                    sum[channel] +=
+                        f64::from(source[(sy as usize * width + sx as usize) * 4 + channel])
+                            * weight
+                            / mass;
+                }
+            }
+            for channel in 0..4 {
+                output[(y * width + x) * 4 + channel] = (sum[channel] * opacity).round() as u8;
+            }
+        }
+    }
+    output
+}
+
+fn blur_fixture(
+    profile: usize,
+    attached: bool,
+    opacity: f32,
+    pixels: bool,
+) -> (Scene, Mobject, noon::DeclaredAnimation) {
+    use noon::effects::Blur;
+    let mut scene = Scene::new();
+    let mut source = match profile {
+        0 => scene.circle(0.6).unwrap(),
+        1 => scene.rectangle(1.4, 0.8).unwrap(),
+        2 => scene
+            .image(noon::example_scenes::image_glow::image_options().unwrap())
+            .unwrap(),
+        3 => scene
+            .path(
+                noon_core::VectorPath::new()
+                    .move_to(Vec2::new(-1.0, -0.5))
+                    .cubic_to(
+                        Vec2::new(-0.5, 1.2),
+                        Vec2::new(0.6, -1.1),
+                        Vec2::new(1.0, 0.5),
+                    ),
+                noon_core::SemanticStyle::default(),
+            )
+            .unwrap(),
+        4 => scene.rectangle(1.4, 0.8).unwrap(),
+        #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+        5 => scene
+            .text(noon::Text::new("Noon").with_font_size(36.0))
+            .unwrap(),
+        #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+        6 => scene
+            .math_typst(noon::MathTypst::new("x^2 + y^2").with_font_size(36.0))
+            .unwrap(),
+        _ => unreachable!(),
+    };
+    if profile != 2 {
+        source.disable_stroke().unwrap();
+        source.set_fill(0.2, 0.7, 0.9, 0.6).unwrap();
+    }
+    if profile == 3 {
+        source.disable_fill().unwrap();
+        source.set_stroke_color(0.8, 0.2, 0.6, 0.7).unwrap();
+        source.set_stroke_width(0.18).unwrap();
+        source.scale(-1.1, 0.85).unwrap();
+        source.rotate(0.17).unwrap();
+    }
+    if profile == 4 {
+        source
+            .set_fill_gradient(
+                noon::LinearGradient::new(
+                    [0.0, 0.5],
+                    [1.0, 0.5],
+                    [
+                        noon::GradientStop::new(0.0, Color::rgba(1.0, 0.0, 0.0, 0.2)).unwrap(),
+                        noon::GradientStop::new(1.0, Color::rgba(0.0, 0.0, 1.0, 0.9)).unwrap(),
+                    ],
+                )
+                .unwrap(),
+                Some(0.55),
+            )
+            .unwrap();
+    }
+    source.set_object_opacity(f64::from(opacity)).unwrap();
+    let radius = |sigma| {
+        if pixels {
+            noon::effects::EffectRadius::Pixels(sigma)
+        } else {
+            noon::effects::EffectRadius::Scene(sigma / 10.0)
+        }
+    };
+    if attached {
+        source
+            .add_effect(
+                Blur::new(EffectUpdate::default().radius(radius(1.25))).unwrap(),
+                "soften",
+            )
+            .unwrap();
+    }
+    scene.add(&source).unwrap();
+    let mut target = source.target_editor().unwrap();
+    if attached {
+        target
+            .set_effect("soften", EffectUpdate::default().radius(radius(3.25)))
+            .unwrap();
+    }
+    let animation = scene
+        .declare_transform_to(
+            &source,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    (scene, source, animation)
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn public_scene_blur_rgba_pixels_seek_neutral_and_removal() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    eprintln!("public Blur adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut maximum_error = 0;
+    let mut sample_count = 0;
+    let profiles = 0..if cfg!(all(
+        feature = "native-text",
+        feature = "typst",
+        feature = "bundled-fonts"
+    )) {
+        7
+    } else {
+        5
+    };
+    let profile_count = profiles.len() * 2;
+    for profile in profiles {
+        let (plain_scene, _, _) = blur_fixture(profile, false, 1.0, true);
+        let mut plain = plain_scene.execution_session().unwrap();
+        let ordinary = Surface::new(&device, &queue).render_on(
+            &device,
+            &queue,
+            &mut plain,
+            wgpu::Color::TRANSPARENT,
+        );
+        for (pixels, opacity) in [(true, 1.0_f32), (false, 0.37_f32)] {
+            let (scene, source, animation) = blur_fixture(profile, true, opacity, pixels);
+            let mut session = scene.execution_session().unwrap();
+            let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+            let mut surface = Surface::new(&device, &queue);
+            for time in [0.0, 0.5, 1.0, 0.25, 0.5] {
+                session.seek(time).unwrap();
+                let actual =
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let expected = expected_rgba_blur(&ordinary, 1.25 + 2.0 * time, f64::from(opacity));
+                let delta = error(&actual, &expected);
+                maximum_error = maximum_error.max(delta);
+                sample_count += 1;
+                assert!(delta <= 1,"Blur profile={profile} pixels={pixels} opacity={opacity} time={time} full-image error={delta}");
+                assert!(
+                    error(&actual, &ordinary) > 2,
+                    "fixture must detect a missing Blur"
+                );
+                assert_eq!(
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    actual
+                );
+                assert_eq!(surface.effect_stats.source_passes, 0);
+                assert_eq!(surface.effect_stats.blur_passes, 0);
+                assert_eq!(surface.effect_stats.composite_passes, 0);
+                assert_eq!(surface.effect_stats.bytes_uploaded, 0);
+                assert_eq!(surface.effect_stats.texture_allocations, 0);
+            }
+            scene
+                .live(&mut session)
+                .advance_segment_to(segment, 1.0)
+                .unwrap();
+            scene.live(&mut session).complete_segment(segment).unwrap();
+            scene
+                .live(&mut session)
+                .set_effect(
+                    &source,
+                    "soften",
+                    EffectUpdate::default().radius(if pixels {
+                        noon::effects::EffectRadius::Pixels(0.0)
+                    } else {
+                        noon::effects::EffectRadius::Scene(0.0)
+                    }),
+                )
+                .unwrap();
+            let neutral =
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            scene
+                .live(&mut session)
+                .remove_effect(&source, "soften")
+                .unwrap();
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                neutral
+            );
+            assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
+        }
+    }
+    eprintln!("public Blur profiles={profile_count} samples={sample_count} max_rgba8_error={maximum_error}");
+}
+
+// Specification reference: direct 2-D convolution, RGBA8 intermediate alpha,
+// transparent bilinear translation, then original source over colored alpha.
+// It shares no production filter, tile planner, uniform or shader arithmetic.
+fn expected_shadow(
+    source: &[u8],
+    sigma: f64,
+    offset: [f64; 2],
+    tint: [f64; 4],
+    opacity: f64,
+) -> Vec<u8> {
+    expected_shadow_in_extent(source, sigma, offset, tint, opacity, SIZE)
+}
+
+fn expected_shadow_in_extent(
+    source: &[u8],
+    sigma: f64,
+    offset: [f64; 2],
+    tint: [f64; 4],
+    opacity: f64,
+    size: [u32; 2],
+) -> Vec<u8> {
+    let blurred = expected_rgba_blur_in_extent(source, sigma, 1.0, size);
+    let [width, height] = size.map(|v| v as usize);
+    let alpha = |x: isize, y: isize| {
+        if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
+            0.0
+        } else {
+            f64::from(blurred[(y as usize * width + x as usize) * 4 + 3]) / 255.0
+        }
+    };
+    let mut result = Vec::with_capacity(source.len());
+    for y in 0..height {
+        for x in 0..width {
+            let qx = x as f64 - offset[0];
+            let qy = y as f64 + offset[1];
+            let (ix, iy) = (qx.floor() as isize, qy.floor() as isize);
+            let (fx, fy) = (qx - qx.floor(), qy - qy.floor());
+            let mask = ((1.0 - fy) * ((1.0 - fx) * alpha(ix, iy) + fx * alpha(ix + 1, iy))
+                + fy * ((1.0 - fx) * alpha(ix, iy + 1) + fx * alpha(ix + 1, iy + 1)))
+                * tint[3];
+            let pixel = &source[(y * width + x) * 4..][..4];
+            let behind = 1.0 - f64::from(pixel[3]) / 255.0;
+            for channel in 0..4 {
+                let value = (f64::from(pixel[channel]) / 255.0
+                    + behind * mask * if channel == 3 { 1.0 } else { tint[channel] })
+                    * opacity;
+                result.push((255.0 * value).round().clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    result
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn public_shadow_pixels_offset_animation_hard_shadow_and_retirement() {
+    use noon::effects::{EffectOffset, EffectRadius, Shadow};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    eprintln!("public Shadow adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let profiles = if cfg!(all(
+        feature = "native-text",
+        feature = "typst",
+        feature = "bundled-fonts"
+    )) {
+        7
+    } else {
+        5
+    };
+    let mut samples = 0;
+    let mut maximum_error = 0;
+    for profile in 0..profiles {
+        let (plain_scene, _, _) = blur_fixture(profile, false, 1.0, true);
+        let mut plain = plain_scene.execution_session().unwrap();
+        let ordinary = Surface::new(&device, &queue).render_on(
+            &device,
+            &queue,
+            &mut plain,
+            wgpu::Color::TRANSPARENT,
+        );
+        for (pixels, opacity) in [(true, 1.0_f32), (false, 0.37_f32)] {
+            let radius = |v| {
+                if pixels {
+                    EffectRadius::Pixels(v)
+                } else {
+                    EffectRadius::Scene(v / 10.0)
+                }
+            };
+            let offset = |v: [f64; 2]| {
+                if pixels {
+                    EffectOffset::Pixels(v)
+                } else {
+                    EffectOffset::Scene(v.map(|c| c / 10.0))
+                }
+            };
+            let (scene, mut source, _) = blur_fixture(profile, false, opacity, pixels);
+            source
+                .add_effect(
+                    Shadow::new(
+                        EffectUpdate::default()
+                            .color(Color::rgba(1.0, 0.0, 0.0, 0.35))
+                            .radius(radius(1.25))
+                            .offset(offset([4.25, -3.5])),
+                    )
+                    .unwrap(),
+                    "depth",
+                )
+                .unwrap();
+            let mut target = source.target_editor().unwrap();
+            target
+                .set_effect(
+                    "depth",
+                    EffectUpdate::default()
+                        .color(Color::rgba(0.0, 0.0, 1.0, 0.8))
+                        .radius(radius(3.25))
+                        .offset(offset([-5.5, 2.25])),
+                )
+                .unwrap();
+            let animation = scene
+                .declare_transform_to(
+                    &source,
+                    &target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .unwrap();
+            let mut session = scene.execution_session().unwrap();
+            let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+            let mut surface = Surface::new(&device, &queue);
+            for time in [0.0, 0.5, 1.0, 0.25, 0.5] {
+                session.seek(time).unwrap();
+                let actual =
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let expected = expected_shadow(
+                    &ordinary,
+                    1.25 + 2.0 * time,
+                    [4.25 - 9.75 * time, -3.5 + 5.75 * time],
+                    [1.0 - time, 0.0, time, 0.35 + 0.45 * time],
+                    f64::from(opacity),
+                );
+                let delta = error(&actual, &expected);
+                maximum_error = maximum_error.max(delta);
+                samples += 1;
+                let worst = actual
+                    .iter()
+                    .zip(&expected)
+                    .enumerate()
+                    .max_by_key(|(_, (&a, &b))| a.abs_diff(b))
+                    .unwrap()
+                    .0;
+                let at = (worst / 4) * 4;
+                assert!(delta<=1,"Shadow profile={profile} pixels={pixels} opacity={opacity} time={time}: error={delta} pixel={} actual={:?} expected={:?} state={:?}",at/4,&actual[at..at+4],&expected[at..at+4],session.frame().objects[0]);
+                assert!(
+                    error(&actual, &ordinary) > 2,
+                    "fixture must reject missing Shadow"
+                );
+                assert_eq!(
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    actual
+                );
+                assert_eq!(surface.effect_stats.source_passes, 0);
+                assert_eq!(surface.effect_stats.blur_passes, 0);
+                assert_eq!(surface.effect_stats.composite_passes, 0);
+                assert_eq!(surface.effect_stats.bytes_uploaded, 0);
+                assert_eq!(surface.effect_stats.texture_allocations, 0);
+            }
+            scene
+                .live(&mut session)
+                .advance_segment_to(segment, 1.0)
+                .unwrap();
+            scene.live(&mut session).complete_segment(segment).unwrap();
+            surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            // Color-only composition must reuse the captured source and Gaussian.
+            scene
+                .live(&mut session)
+                .set_effect(
+                    &source,
+                    "depth",
+                    EffectUpdate::default().color(Color::rgba(0.2, 0.7, 0.1, 0.6)),
+                )
+                .unwrap();
+            surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            assert_eq!(surface.effect_stats.source_passes, 0);
+            assert_eq!(surface.effect_stats.blur_passes, 0);
+            assert_eq!(surface.effect_stats.texture_allocations, 0);
+            assert_eq!(surface.effect_stats.bytes_uploaded, 32);
+            for translation in [[0.0, 0.0], [-4.25, 3.5]] {
+                scene
+                    .live(&mut session)
+                    .set_effect(
+                        &source,
+                        "depth",
+                        EffectUpdate::default()
+                            .radius(radius(0.0))
+                            .offset(offset(translation)),
+                    )
+                    .unwrap();
+                let hard =
+                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let expected = expected_shadow(
+                    &ordinary,
+                    0.0,
+                    translation,
+                    [0.2, 0.7, 0.1, 0.6],
+                    f64::from(opacity),
+                );
+                assert!(
+                    error(&hard, &expected) <= 1,
+                    "hard Shadow profile={profile} offset={translation:?}"
+                );
+            }
+            scene
+                .live(&mut session)
+                .set_effect(
+                    &source,
+                    "depth",
+                    EffectUpdate::default().color(Color::rgba(0.2, 0.7, 0.1, 0.0)),
+                )
+                .unwrap();
+            let neutral =
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            scene
+                .live(&mut session)
+                .remove_effect(&source, "depth")
+                .unwrap();
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                neutral
+            );
+            assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
+        }
+    }
+    eprintln!("public Shadow profiles={} samples={samples} max_rgba8_error={maximum_error} hard=true neutral_exact=true retirement=true",profiles*2);
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn offscreen_shadow_support_and_foreground_painter_order_match_extended_field() {
+    use noon::effects::{EffectOffset, Shadow};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let extended = [SIZE[0] + 80, SIZE[1] + 80];
+    let background = [26_u8, 51, 77, 255];
+    for (bounds, offset, front) in [
+        ([-10, 20, -2, 36], [18.25, -2.5], [10, 26, 16, 32]),
+        ([82, 23, 90, 39], [-18.25, 2.5], [66, 26, 72, 32]),
+    ] {
+        let mut source_pixels = Vec::with_capacity((extended[0] * extended[1] * 4) as usize);
+        for y in -40..SIZE[1] as i32 + 40 {
+            for x in -40..SIZE[0] as i32 + 40 {
+                source_pixels.extend_from_slice(
+                    if x >= bounds[0] && x < bounds[2] && y >= bounds[1] && y < bounds[3] {
+                        &[38, 77, 115, 153]
+                    } else {
+                        &[0; 4]
+                    },
+                );
+            }
+        }
+        let field = expected_shadow_in_extent(
+            &source_pixels,
+            2.25,
+            offset,
+            [0.8, 0.1, 0.3, 0.75],
+            1.0,
+            extended,
+        );
+        let mut expected = Vec::with_capacity((SIZE[0] * SIZE[1] * 4) as usize);
+        let mut unoccluded = Vec::with_capacity(expected.capacity());
+        for y in 0..SIZE[1] as i32 {
+            for x in 0..SIZE[0] as i32 {
+                let p = (((y + 40) as u32 * extended[0] + (x + 40) as u32) * 4) as usize;
+                let alpha = f64::from(field[p + 3]) / 255.0;
+                let mut pixel = [0; 4];
+                for c in 0..3 {
+                    pixel[c] = (f64::from(field[p + c]) + (1.0 - alpha) * f64::from(background[c]))
+                        .round() as u8;
+                }
+                pixel[3] = 255;
+                unoccluded.extend_from_slice(&pixel);
+                if x >= front[0] && x < front[2] && y >= front[1] && y < front[3] {
+                    pixel = [0, 255, 0, 255];
+                }
+                expected.extend_from_slice(&pixel);
+            }
+        }
+        let mut scene = Scene::new();
+        let mut source = scene
+            .rectangle(
+                f64::from(bounds[2] - bounds[0]) / 10.0,
+                f64::from(bounds[3] - bounds[1]) / 10.0,
+            )
+            .unwrap();
+        source
+            .set_translation(
+                f64::from(bounds[0] + bounds[2]) / 20.0 - 4.0,
+                3.0 - f64::from(bounds[1] + bounds[3]) / 20.0,
+            )
+            .unwrap();
+        source.disable_stroke().unwrap();
+        source.set_fill(0.25, 0.5, 0.75, 0.6).unwrap();
+        source
+            .add_effect(
+                Shadow::new(
+                    EffectUpdate::default()
+                        .radius(Pixels(2.25))
+                        .offset(EffectOffset::Pixels(offset))
+                        .color(Color::rgba(0.8, 0.1, 0.3, 0.75)),
+                )
+                .unwrap(),
+                "depth",
+            )
+            .unwrap();
+        scene.add(&source).unwrap();
+        let mut foreground = scene
+            .rectangle(
+                f64::from(front[2] - front[0]) / 10.0,
+                f64::from(front[3] - front[1]) / 10.0,
+            )
+            .unwrap();
+        foreground
+            .set_translation(
+                f64::from(front[0] + front[2]) / 20.0 - 4.0,
+                3.0 - f64::from(front[1] + front[3]) / 20.0,
+            )
+            .unwrap();
+        foreground.disable_stroke().unwrap();
+        foreground.set_fill(0.0, 1.0, 0.0, 1.0).unwrap();
+        scene.add(&foreground).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut surface = Surface::new(&device, &queue);
+        let actual = surface.render_on(
+            &device,
+            &queue,
+            &mut session,
+            wgpu::Color {
+                r: f64::from(background[0]) / 255.0,
+                g: f64::from(background[1]) / 255.0,
+                b: f64::from(background[2]) / 255.0,
+                a: 1.0,
+            },
+        );
+        assert!(
+            error(&actual, &expected) <= 1,
+            "offscreen Shadow {bounds:?}: error {}",
+            error(&actual, &expected)
+        );
+        assert!(
+            error(&expected, &unoccluded) > 100,
+            "foreground must witness painter order"
+        );
+        assert!(
+            actual
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| *p != background && *p != [0, 255, 0, 255]),
+            "fully offscreen source must cast a visible shadow"
+        );
+    }
+    eprintln!("offscreen Shadow cases=2 max_rgba8_error<=1 outside_source=true extended_reference=true foreground_order=true");
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn shadow_scene_and_output_units_reprepare_under_view_changes() {
+    use noon::effects::{EffectOffset, EffectRadius, Shadow};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut maximum_error = 0;
+    for pixels in [true, false] {
+        let (plain_scene, _, _) = blur_fixture(2, false, 1.0, pixels);
+        let mut plain = plain_scene.execution_session().unwrap();
+        let (scene, mut source, _) = blur_fixture(2, false, 0.37, pixels);
+        source
+            .add_effect(
+                Shadow::new(
+                    EffectUpdate::default()
+                        .radius(if pixels {
+                            EffectRadius::Pixels(1.25)
+                        } else {
+                            EffectRadius::Scene(0.125)
+                        })
+                        .offset(if pixels {
+                            EffectOffset::Pixels([4.25, -3.5])
+                        } else {
+                            EffectOffset::Scene([0.425, -0.35])
+                        }),
+                )
+                .unwrap(),
+                "depth",
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut plain_surface = Surface::new(&device, &queue);
+        let mut surface = Surface::new(&device, &queue);
+        let context = session.publication_context();
+        for height in [6.0_f32, 3.0, 6.0] {
+            let camera = Camera2D::new(Vec2::ZERO, Vec2::new(height * 4.0 / 3.0, height)).unwrap();
+            plain_surface.renderer.set_camera(&queue, camera);
+            surface.renderer.set_camera(&queue, camera);
+            let ordinary =
+                plain_surface.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+            let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            let scale = if pixels { 1.0 } else { 6.0 / f64::from(height) };
+            let expected = expected_shadow(
+                &ordinary,
+                1.25 * scale,
+                [4.25 * scale, -3.5 * scale],
+                [0.0, 0.0, 0.0, 0.5],
+                f64::from(0.37_f32),
+            );
+            let delta = error(&actual, &expected);
+            maximum_error = maximum_error.max(delta);
+            assert!(
+                delta <= 1,
+                "Shadow view height={height} pixels={pixels}: error {delta}"
+            );
+            assert_eq!(session.publication_context(), context);
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                actual
+            );
+            assert_eq!(surface.effect_stats.source_passes, 0);
+            assert_eq!(surface.effect_stats.blur_passes, 0);
+            assert_eq!(surface.effect_stats.composite_passes, 0);
+        }
+    }
+    eprintln!("Shadow view samples=6 max_rgba8_error={maximum_error} scene_units=true output_units=true no_semantic_mutation=true");
+}
+
+/// Literal physical fitted rectangles and a standalone reconstruction kernel.
+/// This reference never calls ImageMapping or the engine's CPU pixel sampler.
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
+    use noon::{
+        ImageAddressMode as Address, ImageFit as Fit, ImageMapping, ImagePaintOptions,
+        ImageUvTransform, RasterImageSampling as Sampling,
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    eprintln!("image paint adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let bytes = vec![
+        255, 0, 0, 255, 0, 255, 255, 0, 0, 0, 255, 128, 240, 100, 10, 64, 20, 240, 100, 192, 150,
+        20, 240, 255,
+    ];
+    let mut profiles = 0;
+    let mut channels = 0;
+    let mut max_error = 0;
+    for geometry in 0..3 {
+        for fit in [Fit::Stretch, Fit::Cover, Fit::Contain] {
+            for address in [Address::Transparent, Address::Clamp, Address::Repeat] {
+                for sampling in [Sampling::Nearest, Sampling::Linear, Sampling::Bicubic] {
+                    let mut scene = Scene::new();
+                    let mut source = match geometry {
+                        0 => scene.rectangle(4.0, 2.0).unwrap(),
+                        1 => scene.circle(2.0).unwrap(),
+                        _ => scene
+                            .path(
+                                noon_core::VectorPath::new()
+                                    .move_to(Vec2::new(-2.0, -1.0))
+                                    .line_to(Vec2::new(2.0, -1.0))
+                                    .line_to(Vec2::new(1.0, 1.0))
+                                    .line_to(Vec2::new(-2.0, 1.0))
+                                    .close(),
+                                noon_core::SemanticStyle::default(),
+                            )
+                            .unwrap(),
+                    };
+                    source.disable_stroke().unwrap();
+                    source.set_object_opacity(0.6).unwrap();
+                    let mut options = ImagePaintOptions::rgba8(3, 2, bytes.clone()).unwrap();
+                    options.set_sampling(sampling);
+                    source.set_fill_image(options, Some(0.7)).unwrap();
+                    let mut bitmap = scene.image_rgba8(3, 2, bytes.clone()).unwrap();
+                    bitmap.shift(20.0, 20.0).unwrap();
+                    scene.add(&bitmap).unwrap();
+                    scene.add(&source).unwrap();
+                    let mut session = scene.execution_session().unwrap();
+                    let mut surface = Surface::new(&device, &queue);
+                    for pose in 0..4 {
+                        let (translation, scale, angle) = match pose {
+                            0 => ([0.0, 0.0], [1.0, 1.0], 0.0_f64),
+                            1 => ([0.173, -0.231], [0.63, 1.37], 0.37_f64),
+                            _ => ([-0.29, 0.413], [-0.71, 0.58], -0.61_f64),
+                        };
+                        let mapping = ImageMapping::new(
+                            fit,
+                            [0.23, 0.71],
+                            address,
+                            ImageUvTransform::new(translation, scale, angle).unwrap(),
+                        )
+                        .unwrap();
+                        scene
+                            .live(&mut session)
+                            .set_fill_image_mapping(&source, mapping, Some(0.7))
+                            .unwrap();
+                        if pose == 3 {
+                            let mut live = scene.live(&mut session);
+                            live.set_scale(&source, -0.9, 1.2).unwrap();
+                            live.set_rotation(&source, 0.413).unwrap();
+                            live.shift(&source, 0.17, -0.23).unwrap();
+                        }
+                        let pixels = surface.render_on(
+                            &device,
+                            &queue,
+                            &mut session,
+                            wgpu::Color::TRANSPARENT,
+                        );
+                        assert_eq!(
+                            surface.upload_stats.images.textures_uploaded,
+                            usize::from(pose == 0)
+                        );
+                        assert_eq!(
+                            surface.upload_stats.images.pixel_bytes_uploaded,
+                            if pose == 0 { 24 } else { 0 }
+                        );
+                        assert_eq!(
+                            surface.render_on(
+                                &device,
+                                &queue,
+                                &mut session,
+                                wgpu::Color::TRANSPARENT
+                            ),
+                            pixels
+                        );
+                        assert_eq!(surface.upload_stats.images, Default::default());
+                        let size = [4.0, if geometry == 1 { 4.0 } else { 2.0 }];
+                        for y in (13..47).step_by(3) {
+                            for x in (20..60).step_by(3) {
+                                let mut local = [
+                                    (f64::from(x) + 0.5 - 40.0) / 10.0,
+                                    (30.0 - f64::from(y) - 0.5) / 10.0,
+                                ];
+                                if pose == 3 {
+                                    let dx = local[0] - 0.17;
+                                    let dy = local[1] + 0.23;
+                                    local = [
+                                        (0.413_f64.cos() * dx + 0.413_f64.sin() * dy) / -0.9,
+                                        (-0.413_f64.sin() * dx + 0.413_f64.cos() * dy) / 1.2,
+                                    ];
+                                }
+                                let interior = if geometry == 1 {
+                                    local[0] * local[0] + local[1] * local[1] < 3.0
+                                } else if geometry == 2 {
+                                    local[0] > -1.75
+                                        && local[1].abs() < 0.75
+                                        && local[0] < 1.5 - 0.5 * local[1] - 0.25
+                                } else {
+                                    local[0].abs() < 1.75 && local[1].abs() < 0.75
+                                };
+                                if !interior {
+                                    continue;
+                                }
+                                let normalized =
+                                    [local[0] / size[0] + 0.5, local[1] / size[1] + 0.5];
+                                let delta = [
+                                    normalized[0] - 0.5 - translation[0],
+                                    normalized[1] - 0.5 - translation[1],
+                                ];
+                                let placed = [
+                                    (angle.cos() * delta[0] + angle.sin() * delta[1]) / scale[0]
+                                        + 0.5,
+                                    (-angle.sin() * delta[0] + angle.cos() * delta[1]) / scale[1]
+                                        + 0.5,
+                                ];
+                                let factor = match fit {
+                                    Fit::Stretch => 1.0,
+                                    Fit::Cover => (size[0] / 3.0).max(size[1] / 2.0),
+                                    Fit::Contain => (size[0] / 3.0).min(size[1] / 2.0),
+                                };
+                                let physical = if fit == Fit::Stretch {
+                                    size
+                                } else {
+                                    [3.0 * factor, 2.0 * factor]
+                                };
+                                let lower = [
+                                    (size[0] - physical[0]) * 0.23,
+                                    (size[1] - physical[1]) * 0.71,
+                                ];
+                                let uv = [
+                                    (placed[0] * size[0] - lower[0]) / physical[0],
+                                    1.0 - (placed[1] * size[1] - lower[1]) / physical[1],
+                                ];
+                                let mut expected = [0.0; 4];
+                                if fit != Fit::Contain || uv.iter().all(|v| (0.0..=1.0).contains(v))
+                                {
+                                    expected =
+                                        independent_image_sample(&bytes, uv, sampling, address);
+                                }
+                                let expected = expected.map(|v| {
+                                    (((v * 0.7 * 0.6).clamp(0.0, 1.0) * 65535.0 + 0.5).floor()
+                                        / 256.0)
+                                        .floor() as u8
+                                });
+                                let start = ((y * SIZE[0] + x) * 4) as usize;
+                                for (actual, expected) in
+                                    pixels[start..start + 4].iter().zip(expected)
+                                {
+                                    let error = actual.abs_diff(expected);
+                                    max_error = max_error.max(error);
+                                    channels += 1;
+                                    assert!(error<=1, "geometry={geometry} fit={fit:?} address={address:?} sampling={sampling:?} pose={pose} ({x},{y}) uv={uv:?} actual={:?} expected={expected}", &pixels[start..start+4]);
+                                }
+                            }
+                        }
+                        profiles += 1;
+                    }
+                    assert_eq!(surface.renderer.image_residency_stats().textures, 1);
+                    assert_eq!(surface.renderer.image_residency_stats().pixel_bytes, 24);
+                    scene.live(&mut session).remove(&bitmap).unwrap();
+                    surface.render(&device, &queue, &mut session);
+                    assert_eq!(surface.upload_stats.images.textures_retired, 0);
+                    assert_eq!(surface.renderer.image_residency_stats().textures, 1);
+                    scene
+                        .live(&mut session)
+                        .set_fill(&source, 0.2, 0.4, 0.8, 1.0)
+                        .unwrap();
+                    surface.render(&device, &queue, &mut session);
+                    assert_eq!(surface.upload_stats.images.textures_retired, 1);
+                    assert_eq!(surface.renderer.image_residency_stats().textures, 0);
+                }
+            }
+        }
+    }
+    eprintln!("image fill independent reference: {profiles} profiles, {channels} channels, max byte error {max_error}");
+}
+
+fn independent_image_sample(
+    bytes: &[u8],
+    uv: [f64; 2],
+    sampling: noon::RasterImageSampling,
+    address: noon::ImageAddressMode,
+) -> [f64; 4] {
+    use noon::{ImageAddressMode as Address, RasterImageSampling as Sampling};
+    let tap = |x: i32, y: i32| -> [f64; 4] {
+        let (x, y) = match address {
+            Address::Transparent if !(0..3).contains(&x) || !(0..2).contains(&y) => {
+                return [0.0; 4]
+            }
+            Address::Repeat => (x.rem_euclid(3), y.rem_euclid(2)),
+            _ => (x.clamp(0, 2), y.clamp(0, 1)),
+        };
+        let i = ((y * 3 + x) * 4) as usize;
+        let a = f64::from(bytes[i + 3]) / 255.0;
+        [
+            f64::from(bytes[i]) / 255.0 * a,
+            f64::from(bytes[i + 1]) / 255.0 * a,
+            f64::from(bytes[i + 2]) / 255.0 * a,
+            a,
+        ]
+    };
+    if sampling == Sampling::Nearest {
+        return tap((uv[0] * 3.0).floor() as i32, (uv[1] * 2.0).floor() as i32);
+    }
+    let position = [uv[0] * 3.0 - 0.5, uv[1] * 2.0 - 0.5];
+    let base = position.map(|v| v.floor() as i32);
+    let fraction = [
+        position[0] - f64::from(base[0]),
+        position[1] - f64::from(base[1]),
+    ];
+    let kernel = |distance: f64| {
+        let t = distance.abs();
+        if sampling == Sampling::Linear {
+            (1.0 - t).max(0.0)
+        } else if t <= 1.0 {
+            t.powi(3) - 2.0 * t.powi(2) + 1.0
+        } else if t < 2.0 {
+            -t.powi(3) + 5.0 * t.powi(2) - 8.0 * t + 4.0
+        } else {
+            0.0
+        }
+    };
+    let mut result = [0.0; 4];
+    for y in -1..=2 {
+        for x in -1..=2 {
+            let color = tap(base[0] + x, base[1] + y);
+            let weight = kernel(f64::from(x) - fraction[0]) * kernel(f64::from(y) - fraction[1]);
+            for channel in 0..4 {
+                result[channel] += color[channel] * weight;
+            }
+        }
+    }
+    result[3] = result[3].clamp(0.0, 1.0);
+    for channel in 0..3 {
+        result[channel] = result[channel].clamp(0.0, result[3]);
+    }
+    result
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
+    continuous_fill_filter_capture(false);
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_noise_fill_reuses_source_capture_for_blur_shadow_and_glow() {
+    continuous_fill_filter_capture(true);
+}
+
+fn continuous_fill_filter_capture(noise: bool) {
+    use noon::effects::{Blur, EffectOffset, Glow, GlowSource, Shadow};
+    use noon::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintOptions, ImageUvTransform};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let make = |scope: f64, silhouette: bool| {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.8).unwrap();
+        source.disable_stroke().unwrap();
+        if silhouette {
+            source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        } else if noise {
+            source
+                .set_fill_noise(
+                    noon::NoisePaint::new(
+                        7,
+                        [16.0, 12.0],
+                        [-0.173, 0.231],
+                        [
+                            Color::rgba(1.0, 0.0, 0.0, 0.2),
+                            Color::rgba(0.0, 0.0, 1.0, 0.9),
+                        ],
+                    )
+                    .unwrap(),
+                    Some(0.73),
+                )
+                .unwrap();
+        } else {
+            source
+                .set_fill_image(
+                    ImagePaintOptions::rgba8(3, 2, noon::example_scenes::image_fill::pixels())
+                        .unwrap(),
+                    Some(0.73),
+                )
+                .unwrap();
+        }
+        source.set_object_opacity(scope).unwrap();
+        scene.add(&source).unwrap();
+        (scene, source)
+    };
+    let mut samples = 0;
+    for kind in 0..4 {
+        let (plain_scene, plain_source) = make(1.0, false);
+        let mut plain = plain_scene.execution_session().unwrap();
+        let mut reference = Surface::new(&device, &queue);
+        let (mask_scene, _) = make(1.0, true);
+        let mut mask = mask_scene.execution_session().unwrap();
+        let mask_pixels = Surface::new(&device, &queue).render_on(
+            &device,
+            &queue,
+            &mut mask,
+            wgpu::Color::TRANSPARENT,
+        );
+        let (scene, mut source) = make(0.37, false);
+        let definition: noon::effects::EffectDefinition = match kind {
+            0 => Blur::new(EffectUpdate::default().radius(Pixels(3.25)))
+                .unwrap()
+                .into(),
+            1 => Shadow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(3.25))
+                    .offset(EffectOffset::Pixels([2.5, -1.25]))
+                    .color(Color::rgba(0.2, 0.7, 0.8, 0.6)),
+            )
+            .unwrap()
+            .into(),
+            _ => Glow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(3.25))
+                    .color(Color::RED)
+                    .intensity(START)
+                    .source(if kind == 2 {
+                        GlowSource::Painted
+                    } else {
+                        GlowSource::Silhouette
+                    }),
+            )
+            .unwrap()
+            .into(),
+        };
+        source.add_effect(definition, "surface").unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut surface = Surface::new(&device, &queue);
+        for stage in 0..2 {
+            if stage == 1 && noise {
+                let paint = noon::NoisePaint::new(
+                    7,
+                    [64.0, 64.0],
+                    [0.531, -0.719],
+                    [
+                        Color::rgba(1.0, 0.0, 0.0, 0.2),
+                        Color::rgba(0.0, 0.0, 1.0, 0.9),
+                    ],
+                )
+                .unwrap();
+                scene
+                    .live(&mut session)
+                    .set_fill_noise(&source, paint.clone(), None)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .set_fill_noise(&plain_source, paint, None)
+                    .unwrap();
+            } else if stage == 1 {
+                let mapping = ImageMapping::new(
+                    ImageFit::Cover,
+                    [0.5; 2],
+                    ImageAddressMode::Clamp,
+                    ImageUvTransform::new([0.173, -0.231], [0.63, 1.37], 0.37).unwrap(),
+                )
+                .unwrap();
+                scene
+                    .live(&mut session)
+                    .set_fill_image_mapping(&source, mapping, None)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .set_fill_image_mapping(&plain_source, mapping, None)
+                    .unwrap();
+            }
+            let ordinary =
+                reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+            let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            let expected = match kind {
+                0 => expected_rgba_blur(&ordinary, 3.25, 0.37),
+                1 => expected_shadow(&ordinary, 3.25, [2.5, -1.25], [0.2, 0.7, 0.8, 0.6], 0.37),
+                _ => expected_image_glow(
+                    &ordinary,
+                    if kind == 2 { &ordinary } else { &mask_pixels },
+                    0.0,
+                    0.37,
+                    wgpu::Color::TRANSPARENT,
+                ),
+            };
+            assert!(
+                error(&actual, &expected) <= 1,
+                "noise={noise} fill filter={kind} stage={stage}, max byte error {}",
+                error(&actual, &expected)
+            );
+            // Silhouette Glow retains the painted source and a separate geometry mask.
+            assert_eq!(
+                surface.effect_stats.source_passes,
+                1 + usize::from(kind == 3)
+            );
+            if stage == 1 {
+                assert_eq!(surface.upload_stats.images, Default::default());
+            }
+            assert_eq!(
+                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                actual
+            );
+            assert_eq!(surface.effect_stats.source_passes, 0);
+            assert_eq!(surface.effect_stats.blur_passes, 0);
+            assert_eq!(surface.effect_stats.bytes_uploaded, 0);
+            assert_eq!(surface.effect_stats.texture_allocations, 0);
+            samples += 1;
+        }
+        scene
+            .live(&mut session)
+            .remove_effect(&source, "surface")
+            .unwrap();
+        surface.render(&device, &queue, &mut session);
+        assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
+    }
+    eprintln!("noise={noise} fill source/filter qualification: {samples} whole-image comparisons, max allowed byte error 1");
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
+    continuous_fill_coverage_and_strokes(false);
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_noise_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
+    continuous_fill_coverage_and_strokes(true);
+}
+
+fn continuous_fill_coverage_and_strokes(noise: bool) {
+    use noon::ImagePaintOptions;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut images = 0;
+    for kind in 0..3 {
+        for opaque in [false, true] {
+            let make = |image: bool| {
+                let mut scene = Scene::new();
+                let mut source = match kind {
+                    0 => scene.circle(0.8).unwrap(),
+                    1 => scene.rectangle(2.0, 1.5).unwrap(),
+                    _ => scene
+                        .path(
+                            noon_core::VectorPath::new()
+                                .move_to(Vec2::new(-1.0, -1.0))
+                                .line_to(Vec2::new(1.0, -1.0))
+                                .line_to(Vec2::new(0.2, 0.0))
+                                .line_to(Vec2::new(1.0, 1.0))
+                                .line_to(Vec2::new(-1.0, 1.0))
+                                .close(),
+                            noon_core::SemanticStyle::default(),
+                        )
+                        .unwrap(),
+                };
+                if image {
+                    let rgba = if opaque { [255; 4] } else { [255, 0, 255, 0] };
+                    if noise {
+                        let color = if opaque {
+                            Color::WHITE
+                        } else {
+                            Color::rgba(1.0, 0.0, 1.0, 0.0)
+                        };
+                        source
+                            .set_fill_noise(
+                                noon::NoisePaint::new(7, [8.0; 2], [-0.173, 0.231], [color; 2])
+                                    .unwrap(),
+                                Some(0.73),
+                            )
+                            .unwrap();
+                    } else {
+                        source
+                            .set_fill_image(
+                                ImagePaintOptions::rgba8(1, 1, rgba).unwrap(),
+                                Some(0.73),
+                            )
+                            .unwrap();
+                    }
+                } else if opaque {
+                    source.set_fill(1.0, 1.0, 1.0, 0.73).unwrap();
+                } else {
+                    source.disable_fill().unwrap();
+                }
+                source.set_stroke_color(0.1, 0.8, 0.2, 0.67).unwrap();
+                source.set_stroke_width(0.18).unwrap();
+                source.set_object_opacity(0.37).unwrap();
+                source.scale(-0.9, 1.2).unwrap();
+                source.rotate(0.413).unwrap();
+                source.shift(0.17, -0.23).unwrap();
+                scene.add(&source).unwrap();
+                scene
+            };
+            let mut image = make(true).execution_session().unwrap();
+            let mut ordinary = make(false).execution_session().unwrap();
+            let image = Surface::new(&device, &queue).render_on(
+                &device,
+                &queue,
+                &mut image,
+                wgpu::Color::TRANSPARENT,
+            );
+            let ordinary = Surface::new(&device, &queue).render_on(
+                &device,
+                &queue,
+                &mut ordinary,
+                wgpu::Color::TRANSPARENT,
+            );
+            assert_eq!(
+                image, ordinary,
+                "noise={noise} paint changed geometry/stroke kind={kind} opaque={opaque}"
+            );
+            assert!(
+                image
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[1] > pixel[0] && pixel[1] > pixel[2]),
+                "fixture must contain a visible green stroke"
+            );
+            images += 1;
+        }
+    }
+    eprintln!("noise={noise} paint coverage/strokes: {images} byte-identical whole images");
 }

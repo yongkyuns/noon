@@ -65,7 +65,7 @@ fn native_images_match_manim_sampling_opacity_and_lifecycle() {
     ] {
         for opacity in [1.0, 0.5] {
             let mut session = raster_image::sampling_session(sampling, opacity).unwrap();
-            let pixels = raster.capture(&session.take_renderer_publication());
+            let pixels = raster.capture(&session.session_mut().take_renderer_publication());
             let name = format!("{name}-{opacity:.1}.png");
             if !compare(&pixels, &name, &oracle, &output) {
                 failures.push(name);

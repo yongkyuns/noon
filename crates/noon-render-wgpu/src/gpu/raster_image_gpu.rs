@@ -89,17 +89,22 @@ pub(super) struct RasterImageGpuRenderer {
     object_layout: wgpu::BindGroupLayout,
     textures: HashMap<RasterImageResourceHandle, TextureResidency>,
     objects: HashMap<usize, ObjectResidency>,
+    paints: HashMap<usize, RasterImageResourceHandle>,
     owner: Option<Arc<()>>,
     generation: Option<u64>,
     pixel_bytes: usize,
 }
 
 impl RasterImageGpuRenderer {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        texture_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         let camera_layout = uniform_layout(
             device,
             "image camera",
-            wgpu::ShaderStages::VERTEX,
+            wgpu::ShaderStages::VERTEX_FRAGMENT,
             size_of::<CameraUniform>(),
         );
         let object_layout = uniform_layout(
@@ -108,36 +113,34 @@ impl RasterImageGpuRenderer {
             wgpu::ShaderStages::VERTEX_FRAGMENT,
             size_of::<ImageUniform>(),
         );
-        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon image texture layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon retained image pipeline layout"),
             bind_group_layouts: &[
                 Some(&camera_layout),
-                Some(&texture_layout),
+                Some(texture_layout),
                 Some(&object_layout),
             ],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("raster_image.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon raster image shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    include_str!("raster_sampling.wgsl"),
+                    include_str!("raster_image.wgsl")
+                )
+                .into(),
+            ),
+        });
         Self {
             pipeline: pipeline(device, &layout, &shader, format, 1),
             pipeline_msaa: pipeline(device, &layout, &shader, format, PATH_SAMPLE_COUNT),
-            texture_layout,
+            texture_layout: texture_layout.clone(),
             object_layout,
             textures: HashMap::new(),
             objects: HashMap::new(),
+            paints: HashMap::new(),
             owner: None,
             generation: None,
             pixel_bytes: 0,
@@ -277,6 +280,7 @@ impl RasterImageGpuRenderer {
         {
             stats.textures_retired = self.textures.len();
             self.objects.clear();
+            self.paints.clear();
             self.textures.clear();
             self.pixel_bytes = 0;
             self.owner = Some(prepared.owner.clone());
@@ -325,58 +329,7 @@ impl RasterImageGpuRenderer {
                 }
                 return;
             }
-            let texture = self.textures.entry(handle).or_insert_with(|| {
-                let size = wgpu::Extent3d {
-                    width: row.resource.width(),
-                    height: row.resource.height(),
-                    depth_or_array_layers: 1,
-                };
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Noon immutable raster image"),
-                    size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    row.resource.rgba8(),
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(size.width * 4),
-                        rows_per_image: Some(size.height),
-                    },
-                    size,
-                );
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Noon image texture binding"),
-                    layout: &self.texture_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    }],
-                });
-                let pixel_bytes = row.resource.rgba8().len();
-                stats.textures_uploaded += 1;
-                stats.pixel_bytes_uploaded += pixel_bytes;
-                self.pixel_bytes += pixel_bytes;
-                TextureResidency {
-                    _texture: texture,
-                    binding,
-                    references: 0,
-                    pixel_bytes,
-                }
-            });
-            texture.references += 1;
+            self.retain_texture(device, queue, handle, &row.resource, &mut stats);
             let buffer = create_buffer_with_data(
                 device,
                 queue,
@@ -413,6 +366,42 @@ impl RasterImageGpuRenderer {
                 update(index);
             }
         }
+        let removed_paints: Vec<_> = if partial {
+            prepared.paint_removed.clone()
+        } else {
+            self.paints
+                .keys()
+                .copied()
+                .filter(|index| !prepared.paints.contains_key(index))
+                .collect()
+        };
+        for index in removed_paints {
+            if let Some(handle) = self.paints.remove(&index) {
+                self.release_texture(handle, &mut retired);
+            }
+        }
+        let mut update_paint = |index: usize| {
+            let Some(row) = prepared.paints.get(&index) else {
+                return;
+            };
+            if self.paints.get(&index) == Some(&row.handle) {
+                return;
+            }
+            if let Some(handle) = self.paints.remove(&index) {
+                self.release_texture(handle, &mut retired);
+            }
+            self.retain_texture(device, queue, row.handle, &row.resource, &mut stats);
+            self.paints.insert(index, row.handle);
+        };
+        if partial {
+            for &index in &prepared.paint_dirty {
+                update_paint(index);
+            }
+        } else {
+            for &index in prepared.paints.keys() {
+                update_paint(index);
+            }
+        }
         for handle in retired {
             if self
                 .textures
@@ -428,16 +417,99 @@ impl RasterImageGpuRenderer {
         stats
     }
 
+    fn retain_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        handle: RasterImageResourceHandle,
+        resource: &noon_core::RasterImageResource,
+        stats: &mut RasterImageUploadStats,
+    ) {
+        let texture = self.textures.entry(handle).or_insert_with(|| {
+            let size = wgpu::Extent3d {
+                width: resource.width(),
+                height: resource.height(),
+                depth_or_array_layers: 1,
+            };
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Noon immutable raster image"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                resource.rgba8(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size.width * 4),
+                    rows_per_image: Some(size.height),
+                },
+                size,
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Noon image texture binding"),
+                layout: &self.texture_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                }],
+            });
+            let pixel_bytes = resource.rgba8().len();
+            stats.textures_uploaded += 1;
+            stats.pixel_bytes_uploaded += pixel_bytes;
+            self.pixel_bytes += pixel_bytes;
+            TextureResidency {
+                _texture: texture,
+                binding,
+                references: 0,
+                pixel_bytes,
+            }
+        });
+        texture.references += 1;
+    }
+
+    pub(super) fn texture_binding(
+        &self,
+        handle: RasterImageResourceHandle,
+    ) -> Option<&wgpu::BindGroup> {
+        self.textures.get(&handle).map(|texture| &texture.binding)
+    }
+
+    pub(super) fn texture_dimensions(&self, handle: RasterImageResourceHandle) -> Option<[u32; 2]> {
+        self.textures
+            .get(&handle)
+            .map(|texture| [texture._texture.width(), texture._texture.height()])
+    }
+
+    fn release_texture(
+        &mut self,
+        handle: RasterImageResourceHandle,
+        retired: &mut Vec<RasterImageResourceHandle>,
+    ) {
+        let texture = self
+            .textures
+            .get_mut(&handle)
+            .expect("resident image texture");
+        texture.references -= 1;
+        if texture.references == 0 {
+            retired.push(handle);
+        }
+    }
+
     fn remove_object(&mut self, index: usize, retired: &mut Vec<RasterImageResourceHandle>) {
         if let Some(row) = self.objects.remove(&index) {
-            let texture = self
-                .textures
-                .get_mut(&row.resource)
-                .expect("resident image texture");
-            texture.references -= 1;
-            if texture.references == 0 {
-                retired.push(row.resource);
-            }
+            self.release_texture(row.resource, retired);
         }
     }
 
@@ -525,5 +597,21 @@ fn pipeline(
         },
         multiview_mask: None,
         cache: None,
+    })
+}
+
+pub(super) fn texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Noon image texture layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
     })
 }

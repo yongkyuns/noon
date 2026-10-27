@@ -230,9 +230,23 @@ impl<C: LiveContinuation> LiveProgram<C> {
             return Ok(());
         }
         self.ensure_host_input_available("advance interaction")?;
+        let store = std::rc::Rc::clone(self.scene.integration_store());
         self.scene
             .owned_execution_mut()
-            .advance_interactions(wall_time_seconds)
+            .advance_interactions(&mut store.borrow_mut(), wall_time_seconds)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
+    /// Retire input-owned state before releasing this source's canonical owner.
+    /// This leaves authored time and continuation state unchanged; renderer
+    /// recovery that retains the source must not call this method.
+    pub fn retire_execution_source(&mut self) -> Result<(), LiveProgramError<C::Error>> {
+        let store = std::rc::Rc::clone(self.scene.integration_store());
+        self.scene
+            .owned_execution_mut()
+            .retire_interactions_for_source_replacement(&mut store.borrow_mut())
             .map_err(LiveProgramError::Input)?;
         self.refresh_pending_publication();
         Ok(())

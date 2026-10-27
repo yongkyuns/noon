@@ -15,9 +15,12 @@ fn app(selection: bool, inspection: bool) -> NativeApp {
     circle.set_fill(0.0, 0.5, 1.0, 1.0).unwrap();
     circle.set_translation(2.0, 0.0).unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     if selection {
-        session.enable_pointer_fill_selection(4.0).unwrap();
+        session
+            .session_mut()
+            .enable_pointer_fill_selection(4.0)
+            .unwrap();
     }
     NativeApp::new(
         session,
@@ -41,7 +44,7 @@ fn click_indicate_app() -> NativeApp {
         )
         .unwrap();
     NativeApp::new(
-        scene.execution_session().unwrap(),
+        scene.into_execution().unwrap(),
         NativeViewportConfig {
             inspection_zoom: true,
             ..Default::default()

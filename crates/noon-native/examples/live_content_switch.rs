@@ -42,6 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         live.set_translation(&target, -2.0, 1.0)?;
         live.set_scale(&target, 1.0 / 96.0, 1.0 / 96.0)?;
     }
-    noon_native::run(session)?;
+    noon_native::run(scene.into_execution_with_session(session)?)?;
     Ok(())
 }

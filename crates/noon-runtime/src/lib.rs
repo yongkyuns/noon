@@ -10,11 +10,11 @@ pub use audio::{
 mod compaction;
 mod derived_display_evaluation;
 pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};
+mod effect_attachment;
 mod effective_content;
 mod effective_write;
 mod execution_slots;
 mod frame;
-mod glow_attachment;
 mod graph_endpoints;
 mod numeric_text;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
@@ -22,7 +22,10 @@ mod prepared_frame;
 mod spatial_composition;
 
 mod transient_animation;
-pub use transient_animation::PreparedTransientAnimation;
+pub use transient_animation::{
+    PreparedInteractionAdvance, PreparedInteractionAdvanceMetadata, PreparedTransientAnimation,
+    TransientGlowRetirement,
+};
 mod reactive;
 mod renderer_publication;
 mod replay;
@@ -44,6 +47,9 @@ use effective_write::apply_effective_property_to_row;
 pub use effective_write::EffectivePropertyWrite;
 pub use execution_slots::*;
 use frame::{frame_row_mut, EffectiveBoundsBasis, FrameRowMut, FrameRowState};
+
+#[cfg(test)]
+mod linear_gradient_tests;
 pub use frame::{EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState};
 pub use prepared_frame::*;
 pub use reactive::*;
@@ -83,6 +89,8 @@ pub struct EvaluationStats {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluationError {
+    InteractionRetirementRequired,
+    InteractionRevisionExhausted,
     ReplaySealed,
     ForeignScalarTimeline {
         expected: RuntimeIdentity,
@@ -108,6 +116,11 @@ pub enum EvaluationError {
 impl std::fmt::Display for EvaluationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InteractionRetirementRequired => formatter
+                .write_str("temporary input glow requires a seek through its semantic scene owner"),
+            Self::InteractionRevisionExhausted => {
+                formatter.write_str("transient preparation revision is exhausted")
+            }
             Self::ReplaySealed => {
                 formatter.write_str("sealed replay cannot stage live effective mutations")
             }
@@ -216,6 +229,10 @@ pub struct SceneInstance {
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
+    /// Validated neutral attachment lifetimes may advance this initial-projection
+    /// watermark. Once an ordinary execution edit breaks equality, a later
+    /// transient lifetime cannot restore immutable playback admission.
+    immutable_playback_revision: noon_core::ExecutionRevision,
     effective_driver_rows: BTreeSet<usize>,
     effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
     effective_images: BTreeMap<
@@ -269,6 +286,7 @@ impl Clone for SceneInstance {
             reactive: self.reactive.clone(),
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
+            immutable_playback_revision: self.immutable_playback_revision,
             effective_driver_rows: self.effective_driver_rows.clone(),
             effective_content_drivers,
             effective_images: self.effective_images.clone(),
@@ -342,7 +360,7 @@ impl SceneInstance {
     pub fn preflight_reconcilable_track_additions_with_staged_glow(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledGlow>,
+        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledEffect>,
     ) -> Result<(), CompilePatchError> {
         self.compiled
             .preflight_reconcilable_track_additions_with_staged_glow(tracks, staged_glow)
@@ -375,6 +393,7 @@ impl SceneInstance {
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
+            immutable_playback_revision: noon_core::ExecutionRevision::default(),
             effective_driver_rows: BTreeSet::new(),
             effective_content_drivers: BTreeMap::new(),
             effective_images: BTreeMap::new(),
@@ -684,6 +703,9 @@ impl SceneInstance {
             return Err(EvaluationError::InvalidTime(time));
         }
         self.validate_replay_time(time)?;
+        if time < self.frame.time {
+            self.preflight_raw_interaction_seek(time)?;
+        }
         self.select_replay_revision(time);
         if time >= self.frame.time {
             self.advance_unchecked(time);
@@ -699,6 +721,7 @@ impl SceneInstance {
             return Err(EvaluationError::InvalidTime(time));
         }
         self.validate_replay_time(time)?;
+        self.preflight_raw_interaction_seek(time)?;
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
         let had_interaction = self.interactions_active();
@@ -714,6 +737,9 @@ impl SceneInstance {
             return Err(EvaluationError::InvalidTime(time));
         }
         self.validate_replay_time(time)?;
+        if time < self.frame.time {
+            self.preflight_raw_interaction_seek(time)?;
+        }
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
         if time < previous_time {
@@ -862,13 +888,13 @@ impl SceneInstance {
                 | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetDrawEnabled { .. }
                 | ExecutionPatch::SetStyle { .. }
-                | ExecutionPatch::SetGlow { .. }
+                | ExecutionPatch::SetEffect { .. }
         ) {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
         }
-        if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
-            self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
+        if let ExecutionPatch::SetEffectAttachment { object, effect, .. } = patch {
+            self.apply_effect_attachment_patch(patch, *object, effect.clone())?;
             return Ok(&self.frame);
         }
         if let ExecutionPatch::SetInset2DView { object, .. } = patch {
@@ -1122,7 +1148,10 @@ impl SceneInstance {
             };
             if matches!(
                 channel.property,
-                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+                Property::EffectColor
+                    | Property::EffectRadius
+                    | Property::EffectIntensity
+                    | Property::EffectOffset
             ) {
                 self.changes.insert(channel.object_index as usize);
             } else {
@@ -1205,11 +1234,30 @@ impl SceneInstance {
             new_channel.map(|channel| channel.object_index as usize),
         );
         let mut evaluation = EvaluationStats::default();
+        let paint_only = affected_channels
+            .iter()
+            .flatten()
+            .all(|channel| channel.property == Property::Fill);
         for object_index in affected_objects.into_iter().flatten() {
+            let before = paint_only.then(|| {
+                (
+                    FrameRowState::from_frame(&self.frame, object_index),
+                    self.frame.objects[object_index].content.clone(),
+                    self.frame.objects[object_index].text_bounds,
+                )
+            });
             self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
-            self.mark_changed(object_index);
+            if before.is_some_and(|(row, content, text_bounds)| {
+                !row.spatially_differs_from_frame(&self.frame, object_index)
+                    && content == self.frame.objects[object_index].content
+                    && text_bounds == self.frame.objects[object_index].text_bounds
+            }) {
+                self.changes.insert(object_index);
+            } else {
+                self.mark_changed(object_index);
+            }
             patch_stats.objects_recomputed += 1;
         }
         patch_stats.groups_evaluated = evaluation.groups_evaluated;
@@ -1226,7 +1274,7 @@ impl SceneInstance {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetGlow { object, .. } => *object,
+            | ExecutionPatch::SetEffect { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -1234,6 +1282,8 @@ impl SceneInstance {
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))? as usize;
         let before = self.frame.objects[index].clone();
+        let style_spatial_before = matches!(patch, ExecutionPatch::SetStyle { .. })
+            .then(|| FrameRowState::from_frame(&self.frame, index));
         self.compiled.apply_execution_patch(patch)?;
 
         match patch {
@@ -1296,22 +1346,26 @@ impl SceneInstance {
                 self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
                 self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
             }
-            ExecutionPatch::SetGlow { glow, .. } => {
-                self.frame.objects[index].glow = Some(std::sync::Arc::clone(glow));
+            ExecutionPatch::SetEffect { effect, .. } => {
+                self.frame.objects[index].effect = Some(std::sync::Arc::clone(effect));
                 self.reapply_properties(
                     index,
                     &[
-                        Property::GlowColor,
-                        Property::GlowRadius,
-                        Property::GlowIntensity,
+                        Property::EffectColor,
+                        Property::EffectRadius,
+                        Property::EffectIntensity,
+                        Property::EffectOffset,
                     ],
                 );
             }
             ExecutionPatch::SetDrawEnabled { enabled, .. } => {
                 self.frame.objects[index].draw_enabled = *enabled;
             }
-            ExecutionPatch::SetStyle { style, .. } => {
+            ExecutionPatch::SetStyle {
+                style, fill_paint, ..
+            } => {
                 self.frame.objects[index].style = *style;
+                self.frame.objects[index].fill_paint = fill_paint.clone();
                 self.reapply_properties(
                     index,
                     &[
@@ -1327,7 +1381,7 @@ impl SceneInstance {
         }
         if matches!(
             patch,
-            ExecutionPatch::SetGlow { .. } | ExecutionPatch::SetDrawEnabled { .. }
+            ExecutionPatch::SetEffect { .. } | ExecutionPatch::SetDrawEnabled { .. }
         ) {
             if self.frame.objects[index] != before {
                 self.changes.insert(index);
@@ -1336,7 +1390,15 @@ impl SceneInstance {
             self.reapply_reactive_for_object(index);
             self.reapply_numeric_text_for_object(index);
             if self.frame.objects[index] != before {
-                self.mark_changed(index);
+                if style_spatial_before.is_some_and(|previous| {
+                    !previous.spatially_differs_from_frame(&self.frame, index)
+                        && before.content == self.frame.objects[index].content
+                        && before.text_bounds == self.frame.objects[index].text_bounds
+                }) {
+                    self.changes.insert(index);
+                } else {
+                    self.mark_changed(index);
+                }
             }
         }
         Ok(())
@@ -1401,13 +1463,21 @@ impl SceneInstance {
         for channel in relevant() {
             let object = &self.compiled.objects()[object_index];
             match channel.property {
-                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
+                Property::EffectColor
+                | Property::EffectRadius
+                | Property::EffectIntensity
+                | Property::EffectOffset => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
                     if let (Some(base), Some(current)) =
-                        (&object.glow, &mut self.frame.objects[object_index].glow)
+                        (&object.effect, &mut self.frame.objects[object_index].effect)
                     {
-                        let next = noon_core::GlowTrackValue::from_definition(
+                        if channel.attachment() != Some(base.attachment)
+                            || current.attachment != base.attachment
+                        {
+                            continue;
+                        }
+                        let next = noon_core::EffectTrackValue::from_definition(
                             channel.property,
                             base.definition,
                         )
@@ -1456,7 +1526,8 @@ impl SceneInstance {
                     .scale
                 }
                 Property::Fill => {
-                    self.frame.objects[object_index].style.fill = object.base_style.fill
+                    self.frame.objects[object_index].style.fill = object.base_style.fill;
+                    self.frame.objects[object_index].fill_paint = object.fill_paint.clone();
                 }
                 Property::Stroke => {
                     self.frame.objects[object_index].style.stroke = object.base_style.stroke
@@ -1492,7 +1563,16 @@ impl SceneInstance {
                     unreachable!("coupled channels were handled above")
                 }
             }
-            self.reapply_properties(object_index, &[channel.property]);
+            self.last_stats = reapply_timeline_channels(
+                &self.compiled,
+                &mut self.frame,
+                &mut self.groups,
+                &self.path_motion_plans,
+                [*channel],
+            );
+            if channel.property == Property::ZIndex {
+                self.reposition_painter_row(object_index);
+            }
             stats.groups_evaluated += self.last_stats.groups_evaluated;
             stats.tracks_advanced += self.last_stats.tracks_advanced;
             stats.binary_search_steps += self.last_stats.binary_search_steps;
@@ -1500,38 +1580,26 @@ impl SceneInstance {
     }
 
     fn reapply_properties(&mut self, object_index: usize, properties: &[Property]) {
-        let time = self.frame.time;
-        let mut stats = EvaluationStats::default();
-        for property in properties {
-            let channel = CompiledChannelKey::new(object_index as u32, *property);
-            let tracks = self.compiled.channel_tracks(channel);
-            let object = &self.compiled.objects()[object_index];
-            let Some(group) = self.groups.get_mut(&channel) else {
-                continue;
-            };
-            group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
-            apply_group(
-                &self.compiled,
-                &mut self.frame,
-                tracks,
-                group,
-                time,
-                object.base_transform,
-                object.base_style,
-                &self.path_motion_plans,
-            );
-            stats.groups_evaluated += 1;
-        }
+        let channels = properties.iter().flat_map(|&property| {
+            evaluation_property_channels(&self.compiled, object_index as u32, property)
+        });
+        self.last_stats = reapply_timeline_channels(
+            &self.compiled,
+            &mut self.frame,
+            &mut self.groups,
+            &self.path_motion_plans,
+            channels,
+        );
         if properties.contains(&Property::ZIndex) {
             self.reposition_painter_row(object_index);
         }
-        self.last_stats = stats;
     }
 
     fn relower_object(&mut self, object_index: usize, time: f64, stats: &mut EvaluationStats) {
         reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-        for property in PROPERTY_ORDER {
-            let channel = CompiledChannelKey::new(object_index as u32, property);
+        for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
+            evaluation_property_channels(&self.compiled, object_index as u32, property)
+        }) {
             let tracks = self.compiled.channel_tracks(channel);
             let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
@@ -1684,7 +1752,11 @@ impl SceneInstance {
                 if channel.property == Property::ZIndex {
                     self.reposition_painter_row(channel.object_index as usize);
                 }
-                self.mark_changed(channel.object_index as usize);
+                if channel.property == Property::Fill {
+                    self.changes.insert(channel.object_index as usize);
+                } else {
+                    self.mark_changed(channel.object_index as usize);
+                }
             }
             stats.groups_evaluated += 1;
         }
@@ -1822,8 +1894,9 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            fill_paint: object.fill_paint.clone(),
             draw_enabled: object.draw_enabled,
-            glow: object.glow.clone(),
+            effect: object.effect.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
@@ -1905,7 +1978,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 18] = [
+const PROPERTY_ORDER: [Property; 19] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -1921,10 +1994,61 @@ const PROPERTY_ORDER: [Property; 18] = [
     Property::Appearance,
     Property::Reveal,
     Property::Morph,
-    Property::GlowColor,
-    Property::GlowRadius,
-    Property::GlowIntensity,
+    Property::EffectColor,
+    Property::EffectRadius,
+    Property::EffectIntensity,
+    Property::EffectOffset,
 ];
+
+/// Ordinary channels can have derived drivers without explicit tracks (camera
+/// angular motion). Keep those addresses and add exact effect attachment lanes.
+fn evaluation_property_channels(
+    compiled: &CompiledScene,
+    object_index: u32,
+    property: Property,
+) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+    let attachments = matches!(
+        property,
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
+    )
+    .then(|| compiled.channels_for_object_property(object_index, property));
+    std::iter::once(CompiledChannelKey::new(object_index, property))
+        .chain(attachments.into_iter().flatten())
+}
+
+fn reapply_timeline_channels(
+    compiled: &CompiledScene,
+    frame: &mut FrameState,
+    groups: &mut BTreeMap<CompiledChannelKey, TrackGroup>,
+    path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
+    channels: impl IntoIterator<Item = CompiledChannelKey>,
+) -> EvaluationStats {
+    let time = frame.time;
+    let mut stats = EvaluationStats::default();
+    for channel in channels {
+        let tracks = compiled.channel_tracks(channel);
+        let object = &compiled.objects()[channel.object_index as usize];
+        let Some(group) = groups.get_mut(&channel) else {
+            continue;
+        };
+        group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
+        apply_group(
+            compiled,
+            frame,
+            tracks,
+            group,
+            time,
+            object.base_transform,
+            object.base_style,
+            path_motion_plans,
+        );
+        stats.groups_evaluated += 1;
+    }
+    stats
+}
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
     let mut groups = BTreeMap::new();
@@ -1992,8 +2116,9 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     let object = &compiled.objects()[object_index];
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
+        fill_paint: object.fill_paint.clone(),
         draw_enabled: object.draw_enabled,
-        glow: object.glow.clone(),
+        effect: object.effect.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2035,8 +2160,9 @@ fn reset_object_frame(
 ) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
+        fill_paint: object.fill_paint.clone(),
         draw_enabled: object.draw_enabled,
-        glow: object.glow.clone(),
+        effect: object.effect.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2334,13 +2460,16 @@ fn apply_group_to_row(
 ) -> bool {
     if matches!(
         group.channel.property,
-        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
     ) {
-        return apply_glow_channel(
+        return apply_effect_channel(
             compiled.objects()[group.channel.object_index as usize]
-                .glow
+                .effect
                 .as_deref(),
-            row.glow,
+            row.effect,
             tracks,
             group,
             time,
@@ -2410,6 +2539,19 @@ fn apply_group_to_row(
         // Coupled geometry tracks retain their source snapshot so an earlier
         // wait must recover it, just as affine channels recover their first `from`.
         if let Some(first) = tracks.first() {
+            if group.channel.property == Property::Fill && first.reconciled {
+                if let TrackValues::Paint { transition } = &first.values {
+                    return apply_paint_track(&mut row, transition, 0.0);
+                }
+                if let TrackValues::Color { from, .. } = first.values {
+                    return apply_evaluated_value(
+                        &mut row,
+                        Property::Fill,
+                        EvaluatedValue::Color(from),
+                        false,
+                    );
+                }
+            }
             if group.channel.property == Property::Transform {
                 return apply_transform_track(&mut row, first, 0.0);
             }
@@ -2530,6 +2672,13 @@ fn apply_group_to_row(
         && track.reconciled
         && time >= track.timing.start_time + track.timing.duration
     {
+        if group.channel.property == Property::Fill {
+            let gradient = &compiled.objects()[group.channel.object_index as usize].fill_paint;
+            let changed = row.style.fill != base_style.fill || *row.fill_paint != *gradient;
+            row.style.fill = base_style.fill;
+            *row.fill_paint = gradient.clone();
+            return changed;
+        }
         if group.channel.property == Property::Morph
             && matches!(track.values, TrackValues::PreparedMorph { .. })
         {
@@ -2567,9 +2716,10 @@ fn apply_group_to_row(
                     camera: profile.camera(near, far)?,
                 })
             }),
-            Property::GlowColor
-            | Property::GlowRadius
-            | Property::GlowIntensity
+            Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
             | Property::Presence
             | Property::ZIndex
             | Property::Transform => None,
@@ -2584,6 +2734,13 @@ fn apply_group_to_row(
         });
     }
 
+    if let TrackValues::Paint { transition } = &track.values {
+        let progress =
+            world_track_progress(track, time).expect("selected continuous paint track is active");
+        // Admission excludes overshooting leaf rates. As with glow, remove only
+        // endpoint roundoff from otherwise bounded polynomial rate functions.
+        return apply_paint_track(&mut row, transition, progress.clamp(0.0, 1.0));
+    }
     if group.channel.property == Property::Transform {
         return apply_transform_track(&mut row, track, progress);
     }
@@ -2664,7 +2821,8 @@ fn apply_evaluated_value(
             changed || render_changed
         }
         (Property::Fill, EvaluatedValue::Color(value)) => {
-            let changed = row.style.fill != value;
+            let changed = row.style.fill != value || row.fill_paint.is_some();
+            *row.fill_paint = None;
             row.style.fill = value;
             changed
         }
@@ -2726,6 +2884,36 @@ enum EvaluatedValue {
         profile: noon_core::ManimCamera3DProfile,
         camera: noon_core::SemanticCamera3D,
     },
+}
+
+fn apply_paint_track(
+    row: &mut FrameRowMut<'_>,
+    transition: &noon_core::PaintTransition,
+    progress: f64,
+) -> bool {
+    let (paint, opacity) = transition
+        .sample(progress)
+        .expect("validated continuous fill sample");
+    let (fill, field) = match paint {
+        Some(noon_core::SemanticPaint::Solid(mut color)) => {
+            color.alpha = (f64::from(color.alpha) * opacity) as f32;
+            (Some(color), None)
+        }
+        Some(
+            paint @ (noon_core::SemanticPaint::LinearGradient(_)
+            | noon_core::SemanticPaint::RadialGradient(_)
+            | noon_core::SemanticPaint::Noise(_)
+            | noon_core::SemanticPaint::Image(_)),
+        ) => (
+            Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)),
+            Some(std::sync::Arc::new(paint)),
+        ),
+        None => (None, None),
+    };
+    let changed = row.style.fill != fill || *row.fill_paint != field;
+    row.style.fill = fill;
+    *row.fill_paint = field;
+    changed
 }
 
 // A prepared morph owns its fixed rendering frame alongside ordinary semantic
@@ -2811,9 +2999,9 @@ fn apply_prepared_morph_values(
     Some(changed)
 }
 
-fn apply_glow_channel(
-    base: Option<&noon_compile::CompiledGlow>,
-    glow: &mut Option<Arc<noon_compile::CompiledGlow>>,
+fn apply_effect_channel(
+    base: Option<&noon_compile::CompiledEffect>,
+    effect: &mut Option<Arc<noon_compile::CompiledEffect>>,
     tracks: &[CompiledTrack],
     group: &TrackGroup,
     time: f64,
@@ -2838,7 +3026,7 @@ fn apply_glow_channel(
             (track, 0.0, true)
         }
     };
-    let TrackValues::Glow {
+    let TrackValues::Effect {
         attachment,
         from,
         to,
@@ -2847,7 +3035,10 @@ fn apply_glow_channel(
     else {
         unreachable!("validated glow channel");
     };
-    let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
+    let Some(current) = effect
+        .as_ref()
+        .filter(|effect| effect.attachment == attachment)
+    else {
         return false; // an old generation can never control a replacement
     };
     let patch = if restore_base
@@ -2858,16 +3049,9 @@ fn apply_glow_channel(
         let Some(base) = base.filter(|base| base.attachment == attachment) else {
             return false;
         };
-        match track.property {
-            Property::GlowColor => noon_core::GlowUpdate::default().color(base.definition.color()),
-            Property::GlowRadius => {
-                noon_core::GlowUpdate::default().radius(base.definition.radius())
-            }
-            Property::GlowIntensity => {
-                noon_core::GlowUpdate::default().intensity(base.definition.intensity())
-            }
-            _ => unreachable!(),
-        }
+        noon_core::EffectTrackValue::from_definition(track.property, base.definition)
+            .expect("validated effect channel")
+            .update()
     } else {
         from.sample(to, alpha)
             .expect("validated glow endpoints and normalized timing")
@@ -2878,7 +3062,7 @@ fn apply_glow_channel(
     if current.definition == next {
         return false;
     }
-    Arc::make_mut(glow.as_mut().expect("checked attachment")).definition = next;
+    Arc::make_mut(effect.as_mut().expect("checked attachment")).definition = next;
     true
 }
 
@@ -3318,8 +3502,8 @@ fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
 fn glow_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
     let progress = if matches!(
         track.values,
-        TrackValues::Glow {
-            end_behavior: noon_core::GlowTrackEndBehavior::RestoreSource,
+        TrackValues::Effect {
+            end_behavior: noon_core::EffectTrackEndBehavior::RestoreSource,
             ..
         }
     ) {
@@ -3409,7 +3593,8 @@ fn interpolate_track_values_with_path_plan(
                 sample_camera_profile(*from, *to, *near, *far, f64::from(progress))?;
             Some(EvaluatedValue::CameraProfile { profile, camera })
         }
-        TrackValues::Glow { .. }
+        TrackValues::Effect { .. }
+        | TrackValues::Paint { .. }
         | TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }
@@ -4914,6 +5099,7 @@ mod tests {
             ..Style::default()
         };
         let style_patch = ExecutionPatch::SetStyle {
+            fill_paint: None,
             object,
             style: source.base_style,
         };
@@ -5177,6 +5363,7 @@ mod tests {
         instance.seek(1.0).expect("valid time");
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object,
                 style: Style {
                     fill: Some(Color::rgb(0.2, 0.4, 0.8)),
@@ -5250,6 +5437,7 @@ mod tests {
         instance.advance_to(0.5).expect("valid time");
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: patched,
                 style: Style {
                     opacity: 0.5,

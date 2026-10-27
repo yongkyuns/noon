@@ -1,15 +1,19 @@
 //! Optional language-boundary values, not a second effect store or validator.
 use crate::AuthoringFailure;
-use noon::effects::{Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate};
+#[cfg(any(test, target_arch = "wasm32"))]
+use noon::effects::Glow;
+use noon::effects::{EffectParameterError, EffectRadius, EffectUpdate, GlowSource};
 use noon::Color;
 
-pub(crate) fn glow_update(
+pub(crate) fn effect_update(
     color: &[f64],
     radius: Option<f64>,
     pixels: bool,
     intensity: Option<f64>,
     source: Option<&str>,
-) -> Result<GlowUpdate, AuthoringFailure> {
+    offset: &[f64],
+    offset_pixels: bool,
+) -> Result<EffectUpdate, AuthoringFailure> {
     let color = match color {
         [] => None,
         [r, g, b, a]
@@ -21,7 +25,7 @@ pub(crate) fn glow_update(
             // an accepted f32. The complete schema is validated in shared Rust.
             Some(Color::rgba(*r as f32, *g as f32, *b as f32, *a as f32))
         }
-        _ => return Err(noon::AuthoringError::from(GlowParameterError::InvalidColor).into()),
+        _ => return Err(noon::AuthoringError::from(EffectParameterError::InvalidColor).into()),
     };
     let source = match source {
         None => None,
@@ -42,19 +46,29 @@ pub(crate) fn glow_update(
             "a radius unit requires an explicit radius",
         ));
     }
-    let update = GlowUpdate {
+    let offset = match offset {
+        [] if !offset_pixels => None,
+        [x, y] => Some(if offset_pixels {
+            noon_core::EffectOffset::Pixels([*x, *y])
+        } else {
+            noon_core::EffectOffset::Scene([*x, *y])
+        }),
+        _ => return Err(noon::AuthoringError::from(EffectParameterError::InvalidOffset).into()),
+    };
+    let update = EffectUpdate {
         color,
         radius: radius.map(|v| {
             if pixels {
-                GlowRadius::Pixels(v)
+                EffectRadius::Pixels(v)
             } else {
-                GlowRadius::Scene(v)
+                EffectRadius::Scene(v)
             }
         }),
         intensity,
         source,
+        offset,
     };
-    Glow::new(update).map_err(noon::AuthoringError::from)?;
+    update.validate().map_err(noon::AuthoringError::from)?;
     Ok(update)
 }
 
@@ -66,12 +80,12 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
-    pub struct WasmGlowUpdate {
-        pub(crate) value: GlowUpdate,
+    pub struct WasmEffectUpdate {
+        pub(crate) value: EffectUpdate,
     }
 
     #[wasm_bindgen]
-    impl WasmGlowUpdate {
+    impl WasmEffectUpdate {
         #[wasm_bindgen(constructor)]
         pub fn new(
             color: &[f64],
@@ -79,48 +93,121 @@ mod wasm {
             pixels: bool,
             intensity: Option<f64>,
             source: Option<String>,
-        ) -> Result<WasmGlowUpdate, JsValue> {
-            super::glow_update(color, radius, pixels, intensity, source.as_deref())
-                .map(|value| Self { value })
-                .map_err(js_error)
+            offset: &[f64],
+            offset_pixels: bool,
+        ) -> Result<WasmEffectUpdate, JsValue> {
+            super::effect_update(
+                color,
+                radius,
+                pixels,
+                intensity,
+                source.as_deref(),
+                offset,
+                offset_pixels,
+            )
+            .map(|value| Self { value })
+            .map_err(js_error)
         }
     }
 
     /// Immutable definition only; constructor allocates no scene/GPU identity.
     #[wasm_bindgen]
-    pub struct WasmGlow {
-        value: Glow,
+    pub struct WasmEffectDefinition {
+        value: EffectDefinition,
     }
-    impl WasmGlow {
+    impl WasmEffectDefinition {
+        fn glow_value(&self) -> Result<Glow, JsValue> {
+            self.value.as_glow().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Color),
+                ))
+            })
+        }
+        fn color_value(&self) -> Result<Color, JsValue> {
+            self.value.color().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Color),
+                ))
+            })
+        }
+        fn shadow_value(&self) -> Result<noon::effects::Shadow, JsValue> {
+            self.value.as_shadow().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Offset),
+                ))
+            })
+        }
         pub(crate) fn definition(&self) -> EffectDefinition {
-            self.value.into()
+            self.value
         }
     }
 
     #[wasm_bindgen]
-    impl WasmGlow {
-        #[wasm_bindgen(constructor)]
-        pub fn new(update: &WasmGlowUpdate) -> Result<WasmGlow, JsValue> {
+    impl WasmEffectDefinition {
+        #[wasm_bindgen(js_name = glow)]
+        pub fn glow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
             Glow::new(update.value)
-                .map(|value| Self { value })
+                .map(|value| Self {
+                    value: value.into(),
+                })
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
         }
-        #[wasm_bindgen(getter)]
-        pub fn red(&self) -> f64 {
-            f64::from(self.value.color().red)
+        #[wasm_bindgen(js_name = blur)]
+        pub fn blur(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            noon::effects::Blur::new(update.value)
+                .map(|value| Self {
+                    value: value.into(),
+                })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = shadow)]
+        pub fn shadow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            noon::effects::Shadow::new(update.value)
+                .map(|v| Self { value: v.into() })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(getter, js_name = offsetX)]
+        pub fn offset_x(&self) -> Result<f64, JsValue> {
+            Ok(self.shadow_value()?.offset().value()[0])
+        }
+        #[wasm_bindgen(getter, js_name = offsetY)]
+        pub fn offset_y(&self) -> Result<f64, JsValue> {
+            Ok(self.shadow_value()?.offset().value()[1])
+        }
+        #[wasm_bindgen(getter, js_name = offsetPixels)]
+        pub fn offset_pixels(&self) -> Result<bool, JsValue> {
+            Ok(matches!(
+                self.shadow_value()?.offset(),
+                noon_core::EffectOffset::Pixels(_)
+            ))
         }
         #[wasm_bindgen(getter)]
-        pub fn green(&self) -> f64 {
-            f64::from(self.value.color().green)
+        pub fn kind(&self) -> String {
+            match self.value {
+                EffectDefinition::Glow(_) => "glow",
+                EffectDefinition::Blur(_) => "blur",
+                EffectDefinition::Shadow(_) => "shadow",
+            }
+            .into()
         }
         #[wasm_bindgen(getter)]
-        pub fn blue(&self) -> f64 {
-            f64::from(self.value.color().blue)
+        pub fn red(&self) -> Result<f64, JsValue> {
+            Ok(f64::from(self.color_value()?.red))
         }
         #[wasm_bindgen(getter)]
-        pub fn alpha(&self) -> f64 {
-            f64::from(self.value.color().alpha)
+        pub fn green(&self) -> Result<f64, JsValue> {
+            Ok(f64::from(self.color_value()?.green))
+        }
+        #[wasm_bindgen(getter)]
+        pub fn blue(&self) -> Result<f64, JsValue> {
+            Ok(f64::from(self.color_value()?.blue))
+        }
+        #[wasm_bindgen(getter)]
+        pub fn alpha(&self) -> Result<f64, JsValue> {
+            Ok(f64::from(self.color_value()?.alpha))
         }
         #[wasm_bindgen(getter)]
         pub fn radius(&self) -> f64 {
@@ -128,19 +215,19 @@ mod wasm {
         }
         #[wasm_bindgen(getter)]
         pub fn pixels(&self) -> bool {
-            matches!(self.value.radius(), GlowRadius::Pixels(_))
+            matches!(self.value.radius(), EffectRadius::Pixels(_))
         }
         #[wasm_bindgen(getter)]
-        pub fn intensity(&self) -> f64 {
-            self.value.intensity()
+        pub fn intensity(&self) -> Result<f64, JsValue> {
+            Ok(self.glow_value()?.intensity())
         }
         #[wasm_bindgen(getter)]
-        pub fn source(&self) -> String {
-            match self.value.source() {
+        pub fn source(&self) -> Result<String, JsValue> {
+            Ok(match self.glow_value()?.source() {
                 GlowSource::Painted => "painted",
                 GlowSource::Silhouette => "silhouette",
             }
-            .into()
+            .into())
         }
     }
 
@@ -152,10 +239,9 @@ mod wasm {
     #[wasm_bindgen]
     impl WasmEffectHandle {
         #[wasm_bindgen(js_name = authoredDefinition)]
-        pub fn authored_definition(&self) -> Result<WasmGlow, JsValue> {
-            let EffectDefinition::Glow(value) =
-                self.handle.authored_definition().map_err(js_error)?;
-            Ok(WasmGlow { value })
+        pub fn authored_definition(&self) -> Result<WasmEffectDefinition, JsValue> {
+            let value = self.handle.authored_definition().map_err(js_error)?;
+            Ok(WasmEffectDefinition { value })
         }
     }
 
@@ -163,14 +249,18 @@ mod wasm {
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
         #[wasm_bindgen(js_name = setGlow)]
-        pub fn set_glow(&self, update: &WasmGlowUpdate) -> Result<(), JsValue> {
+        pub fn set_glow(&self, update: &WasmEffectUpdate) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()
                 .set_glow(update.value)
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = addEffect)]
-        pub fn add_effect(&self, definition: &WasmGlow, name: &str) -> Result<(), JsValue> {
+        pub fn add_effect(
+            &self,
+            definition: &WasmEffectDefinition,
+            name: &str,
+        ) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()
                 .add_effect(definition.definition(), name)
@@ -184,7 +274,7 @@ mod wasm {
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = setEffect)]
-        pub fn set_effect(&self, name: &str, update: &WasmGlowUpdate) -> Result<(), JsValue> {
+        pub fn set_effect(&self, name: &str, update: &WasmEffectUpdate) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()
                 .set_effect(name, update.value)
@@ -194,7 +284,7 @@ mod wasm {
         pub fn set_effect_handle(
             &self,
             effect: &WasmEffectHandle,
-            update: &WasmGlowUpdate,
+            update: &WasmEffectUpdate,
         ) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()

@@ -1,13 +1,13 @@
 use super::SemanticExecutionPlayer;
 use crate::AuthoringFailure;
-use noon::effects::{EffectDefinition, EffectSelector, GlowUpdate};
+use noon::effects::{EffectDefinition, EffectSelector, EffectUpdate};
 use noon::Mobject;
 
 impl SemanticExecutionPlayer {
     pub(crate) fn live_set_glow(
         &mut self,
         object: &Mobject,
-        update: GlowUpdate,
+        update: EffectUpdate,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_glow(object, update))
     }
@@ -25,7 +25,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         object: &Mobject,
         selector: EffectSelector<'_>,
-        update: GlowUpdate,
+        update: EffectUpdate,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_effect(object, selector, update))
     }

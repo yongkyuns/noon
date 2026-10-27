@@ -2194,6 +2194,7 @@ mod tests {
             .unwrap();
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: ObjectId::new(1),
                 style: Style {
                     opacity: 0.6,
@@ -2300,6 +2301,7 @@ mod tests {
             .unwrap();
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: ObjectId::new(1),
                 style: Style {
                     opacity: 0.5,

@@ -5,19 +5,19 @@ use noon_compile::{
     SemanticExecutionReachability,
 };
 use noon_core::{
-    Color, Glow, GlowUpdate, ObjectId, Pixels, Property, RateFunction, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticVec3,
-    StoredGeometry, TrackDefinition, TrackId, TrackTiming, TrackValues, Vec2,
+    Color, EffectUpdate, Glow, ObjectId, Pixels, Property, RateFunction,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore,
+    SemanticVec3, StoredGeometry, TrackDefinition, TrackId, TrackTiming, TrackValues, Vec2,
 };
 use noon_runtime::{FrameChanges, ReplayLimits, SceneInstance};
 
 fn circle() -> SemanticObjectState {
     SemanticObjectState::new(StoredGeometry::Circle { radius: 0.4 })
 }
-fn glow(intensity: f64) -> Glow {
+fn effect(intensity: f64) -> Glow {
     Glow::new(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .radius(Pixels(3.25))
             .color(Color::RED)
             .intensity(intensity),
@@ -62,7 +62,7 @@ impl Fixture {
     }
     fn attach(&mut self, intensity: f64) -> SemanticNodeId {
         let mut tx = SemanticMutationTransaction::new();
-        let pending = tx.create_effect(self.source, "glow", glow(intensity));
+        let pending = tx.create_effect(self.source, "glow", effect(intensity));
         self.publish(tx).resolve(pending).unwrap()
     }
     fn publish(&mut self, tx: SemanticMutationTransaction) -> SemanticMutationTransactionResult {
@@ -115,7 +115,7 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
     let frame = f.runtime.frame().clone();
     let revision = f.store.scene_revision();
     let mut tx = SemanticMutationTransaction::new();
-    let pending = tx.create_effect(f.source, "glow", glow(0.4));
+    let pending = tx.create_effect(f.source, "glow", effect(0.4));
     // Raw syntax admits the request; the held preparation below still owns
     // profile validation, identity reservation and atomic publication.
     validate_semantic_publication(&tx).unwrap();
@@ -124,17 +124,17 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
     let prepared = tx.prepare(&mut f.store).unwrap();
     let id = prepared.planned_node_id(pending).unwrap();
     let publication = prepare_semantic_publication(&prepared, &f.index, &f.reachability).unwrap();
-    let [ExecutionPatch::SetGlowAttachment {
+    let [ExecutionPatch::SetEffectAttachment {
         object,
         expected: None,
-        glow: Some(value),
+        effect: Some(value),
     }] = publication.value_transaction().mutations()
     else {
         panic!("one enrollment patch")
     };
     assert_eq!(*object, f.index.execution_object_id(f.source).unwrap());
     assert_eq!(value.attachment, id);
-    assert_eq!(value.definition, glow(0.4));
+    assert_eq!(value.definition, (effect(0.4)).into());
     assert_eq!(publication.stats().object_states_lowered, 0);
     assert_eq!(prepared.store().scene_revision(), revision);
     assert_eq!(f.runtime.frame(), &frame);
@@ -148,7 +148,7 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
     );
     assert_eq!(
         f.runtime.frame().objects[0]
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .attachment,
@@ -163,7 +163,7 @@ fn removal_and_replacement_are_single_owner_patches_not_object_recreation() {
     let object = f.object();
     let original = f.runtime.frame().objects[0].clone();
     let mut tx = SemanticMutationTransaction::new();
-    let new = tx.create_effect(f.source, "glow", glow(1.4));
+    let new = tx.create_effect(f.source, "glow", effect(1.4));
     tx.remove_node(old);
     let prepared = tx.prepare(&mut f.store).unwrap();
     let replacement = prepared.planned_node_id(new).unwrap();
@@ -172,7 +172,7 @@ fn removal_and_replacement_are_single_owner_patches_not_object_recreation() {
     assert!(publication.possible_exits().is_empty());
     assert_eq!(publication.possible_entry_count(), 0);
     assert!(
-        matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetGlowAttachment { expected: Some(id), glow: Some(value), .. }] if *id == old && value.attachment == replacement)
+        matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetEffectAttachment { expected: Some(id), effect: Some(value), .. }] if *id == old && value.attachment == replacement)
     );
     let tx = prepared.into_transaction();
     f.runtime.take_frame_changes();
@@ -189,7 +189,7 @@ fn removal_and_replacement_are_single_owner_patches_not_object_recreation() {
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(replacement);
     f.publish(remove);
-    assert!(f.runtime.frame().objects[0].glow.is_none());
+    assert!(f.runtime.frame().objects[0].effect.is_none());
     assert!(f.store.effect_by_name(f.source, "glow").unwrap().is_none());
 }
 
@@ -198,7 +198,7 @@ fn pending_owner_and_attachment_enter_together_without_dropping_the_glow_column(
     let mut f = Fixture::new(0);
     let mut tx = SemanticMutationTransaction::new();
     let owner = tx.create_node(SemanticNodeCreation::object(circle()));
-    let attachment = tx.create_effect(owner, "glow", glow(0.7));
+    let attachment = tx.create_effect(owner, "glow", effect(0.7));
     tx.add_member(f.root, owner);
     let prepared = tx.prepare(&mut f.store).unwrap();
     let id = prepared.planned_node_id(attachment).unwrap();
@@ -206,7 +206,7 @@ fn pending_owner_and_attachment_enter_together_without_dropping_the_glow_column(
     assert!(publication.value_transaction().is_empty());
     assert_eq!(publication.possible_entry_count(), 1);
     assert!(
-        matches!(publication.conservative_entry_patches(&prepared).as_slice(), [ExecutionPatch::CreateObject(object)] if object.glow.as_ref().unwrap().attachment == id)
+        matches!(publication.conservative_entry_patches(&prepared).as_slice(), [ExecutionPatch::CreateObject(object)] if object.effect.as_ref().unwrap().attachment == id)
     );
     let tx = prepared.into_transaction();
     let result = f.publish(tx);
@@ -218,7 +218,7 @@ fn pending_owner_and_attachment_enter_together_without_dropping_the_glow_column(
         f.runtime
             .effective_object(object)
             .unwrap()
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .attachment,
@@ -235,7 +235,7 @@ fn detached_edits_remain_inert_then_reentry_uses_final_attachment_generation() {
     detach.remove_member(f.root, f.source);
     f.publish(detach);
     let mut tx = SemanticMutationTransaction::new();
-    let new = tx.create_effect(f.source, "glow", glow(1.1));
+    let new = tx.create_effect(f.source, "glow", effect(1.1));
     tx.remove_node(old);
     let prepared = tx.prepare(&mut f.store).unwrap();
     assert!(
@@ -257,7 +257,7 @@ fn detached_edits_remain_inert_then_reentry_uses_final_attachment_generation() {
         f.runtime
             .effective_object(f.object())
             .unwrap()
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .attachment,
@@ -272,14 +272,14 @@ fn writing_a_retired_attachment_remains_an_atomic_semantic_error() {
     let frame = f.runtime.frame().clone();
     let revision = f.store.scene_revision();
     let mut tx = SemanticMutationTransaction::new();
-    tx.update_effect(old, GlowUpdate::default().intensity(1.2));
+    tx.update_effect(old, EffectUpdate::default().intensity(1.2));
     tx.remove_node(old);
     assert!(tx.prepare(&mut f.store).is_err());
     assert_eq!(f.runtime.frame(), &frame);
     assert_eq!(f.store.scene_revision(), revision);
     assert_eq!(
         f.store.semantic_effect_state(old).unwrap().definition(),
-        glow(0.4).into()
+        effect(0.4).into()
     );
 }
 
@@ -295,7 +295,7 @@ fn source_profile_is_validated_against_final_staged_style_and_content() {
             let revision = f.store.scene_revision();
             let mut tx = SemanticMutationTransaction::new();
             if !already_attached {
-                tx.create_effect(f.source, "glow", glow(0.4));
+                tx.create_effect(f.source, "glow", effect(0.4));
             }
             match edit {
                 0 => {
@@ -350,7 +350,7 @@ fn removing_glow_can_legally_leave_the_source_outside_the_glow_profile() {
     );
     tx.remove_node(old);
     f.publish(tx);
-    assert!(f.runtime.frame().objects[0].glow.is_none());
+    assert!(f.runtime.frame().objects[0].effect.is_none());
     assert_eq!(f.runtime.frame().objects[0].transform.scale.x, 0.0);
 }
 
@@ -366,7 +366,7 @@ fn unsupported_stack_rejects_even_with_an_otherwise_valid_motion_prefix() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(1.0, 0.0, 0.0),
     );
-    tx.create_effect(f.source, "second", glow(1.4));
+    tx.create_effect(f.source, "second", effect(1.4));
     let prepared = tx.prepare(&mut f.store).unwrap();
     assert!(prepare_semantic_publication(&prepared, &f.index, &f.reachability).is_err());
     drop(prepared);
@@ -380,7 +380,7 @@ fn parameter_only_change_stays_on_the_existing_value_lane_and_noop_is_empty() {
     let old = f.attach(0.4);
     for intensity in [0.4, 0.9] {
         let mut tx = SemanticMutationTransaction::new();
-        tx.update_effect(old, GlowUpdate::default().intensity(intensity));
+        tx.update_effect(old, EffectUpdate::default().intensity(intensity));
         let prepared = tx.prepare(&mut f.store).unwrap();
         let publication =
             prepare_semantic_publication(&prepared, &f.index, &f.reachability).unwrap();
@@ -388,7 +388,7 @@ fn parameter_only_change_stays_on_the_existing_value_lane_and_noop_is_empty() {
             assert!(publication.value_transaction().is_empty());
         } else {
             assert!(
-                matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetGlow { glow, .. }] if glow.attachment == old && glow.definition.intensity() == intensity)
+                matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetEffect { effect, .. }] if effect.attachment == old && effect.definition.as_glow().unwrap().intensity() == intensity)
             );
         }
     }
@@ -437,9 +437,9 @@ fn semantic_removal_retires_only_glow_drivers_and_replay_restores_their_identity
     let mut f = Fixture::new(0);
     let old = f.attach(0.4);
     let object = f.object();
-    let declaration = f.runtime.frame().objects[0].glow.clone().unwrap();
+    let declaration = f.runtime.frame().objects[0].effect.clone().unwrap();
     let (property, values) = declaration
-        .parameter_channels(GlowUpdate::default().intensity(2.0))
+        .parameter_channels(EffectUpdate::default().intensity(2.0))
         .unwrap()
         .pop()
         .unwrap();
@@ -479,7 +479,7 @@ fn semantic_removal_retires_only_glow_drivers_and_replay_restores_their_identity
     f.publish(remove);
     f.runtime.advance_to(0.75).unwrap();
     let after = f.runtime.frame().clone();
-    assert!(after.objects[0].glow.is_none());
+    assert!(after.objects[0].effect.is_none());
     assert_eq!(after.objects[0].transform.translation.x, 0.75);
     f.runtime.seal_replay().unwrap();
     for _ in 0..3 {
@@ -500,7 +500,7 @@ fn cancelled_pending_attachment_is_idle_and_does_not_consume_a_semantic_id() {
     let frame = f.runtime.frame().clone();
     let revision = f.store.scene_revision();
     let mut tx = SemanticMutationTransaction::new();
-    let pending = tx.create_effect(f.source, "glow", glow(0.4));
+    let pending = tx.create_effect(f.source, "glow", effect(0.4));
     tx.remove_node(pending);
     let prepared = tx.prepare(&mut f.store).unwrap();
     assert!(prepared.planned_node_id(pending).is_none());
@@ -551,7 +551,7 @@ fn shared_family_alias_retains_the_one_source_attachment_when_one_path_is_remove
         f.runtime
             .effective_object(f.object())
             .unwrap()
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .attachment,
@@ -564,7 +564,7 @@ fn shared_family_alias_retains_the_one_source_attachment_when_one_path_is_remove
         .runtime
         .effective_object(f.object())
         .unwrap()
-        .glow
+        .effect
         .is_none());
 }
 
@@ -576,10 +576,10 @@ fn runtime_generation_mismatch_is_rejected_before_the_semantic_commit() {
     // A desynchronized runtime must be detected; the semantic store is not used
     // as an excuse to overwrite whichever runtime attachment happens to exist.
     f.runtime
-        .apply_execution_patch(&ExecutionPatch::SetGlowAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
             object,
             expected: Some(old),
-            glow: None,
+            effect: None,
         })
         .unwrap();
     let frame = f.runtime.frame().clone();

@@ -134,8 +134,7 @@ fn padded_stroke_corner(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, d: vec2<f32>, 
         select(0.0, 1.0, corner >= 2u)));
 }
 
-@vertex
-fn vs_path(input: PathVertexInput) -> PathVertexOutput {
+fn path_vertex(input: PathVertexInput) -> PathVertexOutput {
     let is_stroke = (input.surface_and_progress & 1u) == 1u;
     let encoded_progress = (input.surface_and_progress & PATH_PROGRESS_MASK) >> 1u;
     let path_progress = f32(encoded_progress) / 16777215.0;
@@ -280,8 +279,7 @@ fn fs_path_compact(input: CompactPathVertexOutput) -> @location(0) vec4<f32> {
     return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
 }
 
-@fragment
-fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
+fn path_color(input: PathVertexOutput) -> vec4<f32> {
     // Fragment derivatives must execute in uniform control flow. `reveal` is an
     // interpolated input, so evaluate fwidth before any reveal-dependent branch.
     let edge = max(fwidth(input.path_progress), 0.00001);
@@ -307,8 +305,7 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
 // Keep the bounded stroke integral in its own fragment entry. Ordinary curves
 // and partially revealed tessellations do not inherit the clipping kernel's
 // register footprint through a mixed covered-path batch.
-@fragment
-fn fs_path_stroke(input: PathVertexOutput) -> @location(0) vec4<f32> {
+fn path_stroke_color(input: PathVertexOutput) -> vec4<f32> {
     let edge = max(fwidth(input.path_progress), 0.00001);
     if input.reveal <= 0.0 {
         return vec4<f32>(0.0);
@@ -325,4 +322,17 @@ fn fs_path_stroke(input: PathVertexOutput) -> @location(0) vec4<f32> {
         );
     }
     return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge) * coverage;
+}
+
+@vertex
+fn vs_path(input: PathVertexInput) -> PathVertexOutput {
+    return path_vertex(input);
+}
+@fragment
+fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
+    return path_color(input);
+}
+@fragment
+fn fs_path_stroke(input: PathVertexOutput) -> @location(0) vec4<f32> {
+    return path_stroke_color(input);
 }

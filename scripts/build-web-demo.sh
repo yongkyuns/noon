@@ -41,6 +41,14 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs
+  node --check scripts/gaussian-blur-qualification.mjs
+  node --test scripts/gaussian-blur-reference.test.mjs
+  node --check scripts/linear-gradient-qualification.mjs
+  node --check scripts/radial-gradient-qualification.mjs
+  node --check scripts/noise-paint-qualification.mjs
+  node --check scripts/noise-paint-reference.mjs
+  node --test scripts/noise-paint-reference.test.mjs
+  node --check scripts/image-fill-qualification.mjs
   node --check scripts/glow-worker-reference.mjs
   node --test scripts/glow-worker-reference.test.mjs
   node --check scripts/execution-worker-host-smoke.mjs
@@ -118,6 +126,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/cubic-bezier-qualification.mjs
   node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs
+  node --check scripts/blur-qualification.mjs
+  node --check scripts/shadow-qualification.mjs
   node --check scripts/playground-gallery-runtime-smoke.mjs
   node --check scripts/retained-dynamic-stress-perf.mjs
   node --check scripts/native-input-smoke.mjs

@@ -198,15 +198,15 @@ pub(crate) fn cancel_browser_pointer_input(
     Ok(())
 }
 
-impl BrowserPointerTarget for ExecutionSession {
+impl BrowserPointerTarget for noon::SceneExecution {
     fn session(&self) -> &ExecutionSession {
-        self
+        self.session()
     }
     fn capture_pointer_frame(
         &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
-        self.capture_pointer_frame(view)
+        self.session_mut().capture_pointer_frame(view)
     }
     fn validate_pointer_position(
         &mut self,
@@ -215,7 +215,7 @@ impl BrowserPointerTarget for ExecutionSession {
         surface: Vec2,
     ) -> Result<(), BrowserPointerAdmissionError> {
         frame
-            .validate_position(self, view, surface)
+            .validate_position(self.session_mut(), view, surface)
             .map_err(Into::into)
     }
     fn pointer_frame_token(
@@ -225,25 +225,30 @@ impl BrowserPointerTarget for ExecutionSession {
         surface: Vec2,
     ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
         frame
-            .input_token_at(self, view, surface)
+            .input_token_at(self.session_mut(), view, surface)
             .map_err(Into::into)
     }
     fn observe_pointer_frame(
         &mut self,
         frame: &PointerFrameSnapshot,
     ) -> Result<(), PointerFrameError> {
-        self.refresh_pointer_hover(frame, frame.view()).map(|_| ())
+        self.session_mut()
+            .refresh_pointer_hover(frame, frame.view())
+            .map(|_| ())
     }
     fn configure_pointer(
         &mut self,
         pointer: NativePointerId,
         view: u64,
     ) -> Result<NativePointerInputToken, String> {
-        self.configure_native_pointer_input(pointer, view)
+        self.session_mut()
+            .configure_native_pointer_input(pointer, view)
             .map_err(|e| e.to_string())
     }
     fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
-        self.native_pointer_input_token().map_err(|e| e.to_string())
+        self.session()
+            .native_pointer_input_token()
+            .map_err(|e| e.to_string())
     }
     fn scroll_inspection(
         &mut self,
@@ -252,7 +257,8 @@ impl BrowserPointerTarget for ExecutionSession {
         surface: Vec2,
         delta_pixels: f64,
     ) -> Result<bool, String> {
-        self.scroll_inspection_view(frame, view, surface, delta_pixels)
+        self.session_mut()
+            .scroll_inspection_view(frame, view, surface, delta_pixels)
             .map_err(|error| error.to_string())
     }
     fn submit_pointer(

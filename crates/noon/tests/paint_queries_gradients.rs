@@ -275,6 +275,7 @@ fn late_alias_gradient_uses_last_occurrence_order_authored_and_live_atomically()
 fn paired_gradient_example_reaches_the_ordinary_retained_runtime() {
     let session = noon::example_scenes::paint_queries_gradients::session().unwrap();
     let colors: Vec<_> = session
+        .session()
         .frame()
         .objects
         .iter()

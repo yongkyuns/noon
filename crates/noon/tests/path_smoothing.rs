@@ -224,8 +224,8 @@ fn invalid_smooth_corners_leave_content_and_resources_unchanged() {
 fn paired_family_smoothing_example_uses_shared_execution() {
     let mut session = noon::example_scenes::path_smoothing::session().unwrap();
     session.seek(0.).unwrap();
-    let objects = session.frame().objects.clone();
+    let objects = session.session().frame().objects.clone();
     assert_eq!(objects.len(), 4);
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, objects);
+    assert_eq!(session.session().frame().objects, objects);
 }

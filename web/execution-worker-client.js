@@ -314,6 +314,7 @@ export class ExecutionWorkerClient {
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
+      this.#rememberPlaybackDuration(ready.engine, loopDurationSeconds);
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
@@ -386,6 +387,35 @@ export class ExecutionWorkerClient {
     });
   }
 
+  async retireExecutionSource() {
+    if (this.#semanticContextId === null) return;
+    this.#requireStarted();
+    const generation = this.#lifecycleGeneration;
+    const engine = this.#engineWorker;
+    const contextId = this.#semanticContextId;
+    this.#audioControlGeneration += 1;
+    this.#audioDevice.stop();
+    // Await the canonical owner's stop + retirement, not a fire-and-forget
+    // endpoint message. Rejection keeps that exact source available for retry.
+    await this.#semanticAuthoringClient.releaseSemanticExecution(contextId);
+    this.#assertLifecycleCurrent(generation);
+    if (engine !== this.#engineWorker || contextId !== this.#semanticContextId) {
+      throw new ExecutionTransitionCancelled();
+    }
+    closeEndpoint(engine);
+    this.#engineWorker = null;
+    this.#semanticAuthoringClient = null;
+    this.#semanticContextId = null;
+    this.#semanticCallbackSessionId = null;
+    this.#ready = null;
+    this.#playing = false;
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
+    this.#pointerReceipt = null;
+    this.#rejectOwner("engine", new ExecutionTransitionCancelled());
+    this.#retireAudio();
+  }
+
   async #transitionSemanticExecution(
     contextId,
     authoringClient,
@@ -397,7 +427,11 @@ export class ExecutionWorkerClient {
       replaceExistingEndpoint = false,
     },
   ) {
-    this.#requireStarted();
+    // Explicit Run may have released its source before authoring in the same
+    // store. The retained renderer/canvas can accept the ordinary new endpoint.
+    if (this.#renderWorker === null || this.#session === 0) {
+      throw new Error("ExecutionWorkerClient has not been started");
+    }
     validateSemanticContextId(contextId);
     validateSemanticAuthoringClient(authoringClient);
     const generation = this.#lifecycleGeneration;
@@ -489,7 +523,7 @@ export class ExecutionWorkerClient {
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
-      this.#loopDurationSeconds = duration;
+      this.#rememberPlaybackDuration(candidateReady, duration);
       this.#fatalOwner = null;
       retireSemanticEndpoint(oldEngine);
       if (previousSemanticContextId !== contextId) {
@@ -904,13 +938,15 @@ export class ExecutionWorkerClient {
     const [render, engine] = await Promise.all([
       this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages,
         profileGpuCompletion, includeGpuIdentity }),
-      this.#requestEngine("metrics", {}),
+      this.#engineWorker === null ? null : this.#requestEngine("metrics", {}),
     ]);
-    return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
+    return { ...render, engineMetrics: engine?.metrics ?? null, renderHost: this.#renderHost };
   }
 
   resize(width, height, devicePixelRatio = 1) {
-    this.#requireStarted();
+    if (this.#renderWorker === null) {
+      throw new Error("ExecutionWorkerClient has no retained renderer");
+    }
     if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(devicePixelRatio)) {
       throw new TypeError("execution canvas dimensions must be finite");
     }
@@ -1064,7 +1100,14 @@ export class ExecutionWorkerClient {
   }
 
   async #requestRender(type, payload, transfer = []) {
-    await this.ready();
+    if (this.#ready !== null) {
+      await this.ready();
+    } else if (this.#renderWorker === null || this.#session === 0) {
+      throw new Error("ExecutionWorkerClient has not been started");
+    }
+    // Successful source retirement releases Runtime ownership, while the
+    // retained renderer still owns its last picture and diagnostic counters.
+    // Query those actual counters without inventing a replacement engine.
     return this.#request(
       this.#renderWorker,
       "render",
@@ -1407,14 +1450,19 @@ export class ExecutionWorkerClient {
     }
   }
 
+  #rememberPlaybackDuration(engine, requestedDuration) {
+    // Rust admits the finite endpoint. This is only the client's seek bound;
+    // audio-device availability cannot change it. Ordinary looping playback
+    // without a finite endpoint retains its explicitly requested duration.
+    this.#loopDurationSeconds = Number.isFinite(engine.durationSeconds) && engine.durationSeconds > 0
+      ? engine.durationSeconds : requestedDuration;
+  }
+
   async #prepareAudio(engine) {
     globalThis.document?.removeEventListener?.("visibilitychange", this.#visibilityChanged);
     globalThis.window?.removeEventListener?.("pagehide", this.#audioInterrupted);
     await this.#audioDevice.install(engine.audioResources);
     if (!this.#audioDevice.available) return;
-    if (Number.isFinite(engine.durationSeconds) && engine.durationSeconds > 0) {
-      this.#loopDurationSeconds = engine.durationSeconds;
-    }
     document.addEventListener("visibilitychange", this.#visibilityChanged);
     window.addEventListener("pagehide", this.#audioInterrupted);
   }

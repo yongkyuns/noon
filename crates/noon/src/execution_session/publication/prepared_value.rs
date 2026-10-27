@@ -57,6 +57,7 @@ impl<'session, 'store> PreparedPublication<'session, 'store> {
             .runtime
             .prepare_authored_value_publication(
                 plan.value_transaction(),
+                plan.resource_additions().clone(),
                 session.publication_context(),
                 semantic.proposed_scene_revision(),
             )
@@ -317,6 +318,7 @@ mod viewport_tests {
             },
             occurrence_index: 0,
             base: DerivedDisplayObjectState {
+                fill_paint: None,
                 z_index: 0.0,
                 content: GeometryRef::circle(0.5).into(),
                 text_bounds: None,

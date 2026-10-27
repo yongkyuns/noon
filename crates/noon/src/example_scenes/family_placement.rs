@@ -1,11 +1,10 @@
 //! Native family placement with object, point and family targets.
 use crate::{
-    semantic_mobject::ManimNextToArgs, Color, ExecutionSession, FamilyLayoutTarget as Target,
-    Mobject, Scene,
+    semantic_mobject::ManimNextToArgs, Color, FamilyLayoutTarget as Target, Mobject, Scene,
 };
 use std::rc::Rc;
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut first = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)
         .map_err(|error| error.to_string())?;
@@ -187,5 +186,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    Ok(execution)
+    scene
+        .into_execution_with_session(execution)
+        .map_err(|error| error.to_string())
 }

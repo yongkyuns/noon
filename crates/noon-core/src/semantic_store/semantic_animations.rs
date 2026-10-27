@@ -35,6 +35,9 @@ pub enum SemanticObjectTrackProperty {
 /// execution snapshots and prepared morph payloads do not enter the semantic store.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
+    Paint {
+        transition: std::sync::Arc<crate::PaintTransition>,
+    },
     Bool {
         from: bool,
         to: bool,
@@ -69,6 +72,7 @@ pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SemanticObjectTrackValueKind {
+    Paint,
     Bool,
     Scalar,
     Vec3,
@@ -103,8 +107,20 @@ impl SemanticObjectTrackProperty {
 }
 
 impl<R> SemanticObjectTrackValues<R> {
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        let transition = match self {
+            Self::Paint { transition } => Some(transition),
+            _ => None,
+        };
+        transition
+            .into_iter()
+            .flat_map(|transition| transition.image_resources())
+    }
     const fn value_kind(&self) -> SemanticObjectTrackValueKind {
         match self {
+            Self::Paint { .. } => SemanticObjectTrackValueKind::Paint,
             Self::Bool { .. } => SemanticObjectTrackValueKind::Bool,
             Self::Scalar { .. } => SemanticObjectTrackValueKind::Scalar,
             Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
@@ -555,6 +571,35 @@ pub struct SemanticAnimationState {
 }
 
 impl SemanticAnimationState {
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        let values = match self.intent() {
+            SemanticAnimationIntent::ObjectPropertyTrack { values, .. } => Some(values),
+            _ => None,
+        };
+        values
+            .into_iter()
+            .flat_map(SemanticObjectTrackValues::image_resources)
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        if let SemanticAnimationIntent::ObjectPropertyTrack {
+            values: SemanticObjectTrackValues::Paint { transition },
+            ..
+        } = &mut self.intent
+        {
+            if transition.images().is_none() {
+                return;
+            }
+            let mut mapped = transition.as_ref().clone();
+            mapped.remap_image_resources(remap);
+            *transition = std::sync::Arc::new(mapped);
+        }
+    }
     pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
         Self {
             intent,
@@ -711,7 +756,9 @@ pub(crate) fn validate_object_property_track<R>(
     timing: TrackTiming,
     time_map: &CompositionTimeMap,
 ) -> Result<(), SemanticAnimationError> {
-    if property.value_kind() != values.value_kind()
+    if (property.value_kind() != values.value_kind()
+        && !(property == SemanticObjectTrackProperty::Fill
+            && values.value_kind() == SemanticObjectTrackValueKind::Paint))
         || !timing.start_time.is_finite()
         || !timing.duration.is_finite()
         || timing.duration < 0.0
@@ -727,6 +774,11 @@ pub(crate) fn validate_object_property_track<R>(
         return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
     }
     match values {
+        SemanticObjectTrackValues::Paint { .. } => {
+            if !timing.easing.preserves_unit_interval() {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
         SemanticObjectTrackValues::Scalar { from, to } => {
             if !from.is_finite()
                 || !to.is_finite()
@@ -956,7 +1008,7 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
-        crate::Glow::new(crate::GlowUpdate::default().intensity(intensity))
+        crate::Glow::new(crate::EffectUpdate::default().intensity(intensity))
             .map_err(|_| SemanticAnimationError::InvalidGlowPulseIntensity)?;
         validate_authored_animation_options(options)?;
         Ok(

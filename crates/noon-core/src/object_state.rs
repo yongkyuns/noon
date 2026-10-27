@@ -1,10 +1,57 @@
 //! Typed appearance values and numeric validation for object/track state.
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
+mod blur;
+mod shadow;
+pub use shadow::Shadow;
+pub(crate) mod effect_parameters;
 mod glow;
-pub use glow::{
-    Glow, GlowParameter, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
-    PreparedGlowUpdate,
+mod gradient;
+mod linear_gradient;
+mod noise_paint;
+mod paint_transition;
+mod radial_gradient;
+pub use blur::Blur;
+pub(crate) use effect_parameters::sealed as effect_value_sealed;
+pub use effect_parameters::{
+    EffectOffset, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue,
+    Pixels, PreparedEffectUpdate,
+};
+pub use glow::{Glow, GlowSource};
+pub use gradient::{GradientError, GradientStop};
+pub use linear_gradient::LinearGradient;
+pub use noise_paint::{NoisePaint, NoisePaintError};
+
+/// Checked paint callers supply unit progress and unit colors. Keep stop and
+/// procedural-color interpolation on the same encoded-premultiplied operation.
+pub(crate) fn interpolate_premultiplied_color(from: Color, to: Color, alpha: f64) -> Color {
+    let premultiplied = |c: Color| {
+        let a = f64::from(c.alpha);
+        [
+            f64::from(c.red) * a,
+            f64::from(c.green) * a,
+            f64::from(c.blue) * a,
+            a,
+        ]
+    };
+    let a = premultiplied(from);
+    let b = premultiplied(to);
+    let c: [f64; 4] = std::array::from_fn(|i| a[i] * (1.0 - alpha) + b[i] * alpha);
+    if c[3] == 0.0 {
+        return Color::TRANSPARENT;
+    }
+    Color::rgba(
+        (c[0] / c[3]) as f32,
+        (c[1] / c[3]) as f32,
+        (c[2] / c[3]) as f32,
+        c[3] as f32,
+    )
+}
+pub use paint_transition::{PaintTransition, PaintTransitionError};
+pub use radial_gradient::RadialGradient;
+mod image_paint;
+pub use image_paint::{
+    ImageAddressMode, ImageFit, ImageMapping, ImagePaint, ImagePaintError, ImageUvTransform,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

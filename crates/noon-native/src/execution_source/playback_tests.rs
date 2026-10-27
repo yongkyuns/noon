@@ -24,7 +24,7 @@ fn moving_source() -> StaticExecutionSource {
         .run_time(2.0)
         .unwrap();
     StaticExecutionSource::new(
-        scene.execution_session().unwrap(),
+        scene.into_execution().unwrap(),
         RustHostCallbackTable::new(),
     )
 }
@@ -34,7 +34,7 @@ fn paired_native_audio_examples_admit_the_shared_finite_control_profile() {
     let (scene, animation) = noon::example_scenes::background_audio::scene().unwrap();
     let mut source = StaticExecutionSource::new(
         scene
-            .execution_session_with_animation_root(&animation)
+            .into_execution_with_animation_root(&animation)
             .unwrap(),
         RustHostCallbackTable::new(),
     );
@@ -46,7 +46,7 @@ fn paired_native_audio_examples_admit_the_shared_finite_control_profile() {
 
     let lesson = noon::example_scenes::background_music_lesson::scene().unwrap();
     let mut source = StaticExecutionSource::new(
-        lesson.execution_session().unwrap(),
+        lesson.into_execution().unwrap(),
         RustHostCallbackTable::new(),
     );
     assert_eq!(source.finite_transport_end(), Some(30.0));
@@ -120,11 +120,11 @@ fn native_transport_rejects_a_completed_live_projection_even_after_seek_to_zero(
     scene.add(&marker).unwrap();
     let mut target = marker.target_editor().unwrap();
     target.set_translation(4.0, 0.0).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    assert_eq!(session.painter_order().len(), 1);
-    let initial_revision = session.publication_context().execution_revision();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    assert_eq!(session.session().painter_order().len(), 1);
+    let initial_revision = session.session().publication_context().execution_revision();
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(
             &marker,
             &target,
@@ -133,17 +133,24 @@ fn native_transport_rejects_a_completed_live_projection_even_after_seek_to_zero(
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    session.advance_to(1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    scene.live(&mut session).remove(&marker).unwrap();
+    session.session_mut().advance_to(1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session.live().remove(&marker).unwrap();
     session.seek(0.0).unwrap();
     // The completed source removed its marker without retaining history; the
     // current finite plan cannot reconstruct the former time-zero membership.
-    assert_eq!(session.frame().time, 0.0);
-    assert!(session.painter_order().is_empty());
-    assert!(session.publication_context().execution_revision().get() > initial_revision.get());
-    assert!(session.finite_timeline_end_time().is_some());
-    assert!(!session.replay_scope_active());
+    assert_eq!(session.session().frame().time, 0.0);
+    assert!(session.session().painter_order().is_empty());
+    assert!(
+        session
+            .session()
+            .publication_context()
+            .execution_revision()
+            .get()
+            > initial_revision.get()
+    );
+    assert!(session.session().finite_timeline_end_time().is_some());
+    assert!(!session.session().replay_scope_active());
     let mut source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
     assert_eq!(source.finite_transport_end(), None);
     assert!(matches!(
@@ -163,7 +170,7 @@ fn native_transport_does_not_admit_required_callbacks() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut source = StaticExecutionSource::new(
-        scene.execution_session().unwrap(),
+        scene.into_execution().unwrap(),
         RustHostCallbackTable::new(),
     );
     assert!(source.session().has_required_callbacks());
@@ -180,15 +187,16 @@ fn native_seek_rechecks_external_owner_after_admission() {
     assert_eq!(source.finite_transport_end(), Some(2.0));
     source
         .session
+        .session_mut()
         .begin_replay_retention(Default::default())
         .unwrap();
-    let publication = source.session.publication_context();
+    let publication = source.session().publication_context();
     assert_eq!(source.finite_transport_end(), None);
     assert!(matches!(
         source.seek_to(0.5),
         Err(NativeHostError::PlaybackControlsUnavailable)
     ));
-    assert_eq!(source.session.publication_context(), publication);
+    assert_eq!(source.session().publication_context(), publication);
 }
 
 #[test]
@@ -206,7 +214,7 @@ fn native_source_forwards_each_committed_scene_control_receipt_once() {
         scene.add(&button).unwrap();
         scene.on_click_playback(&button, control).unwrap();
         let mut source = StaticExecutionSource::new(
-            scene.execution_session().unwrap(),
+            scene.into_execution().unwrap(),
             RustHostCallbackTable::new(),
         );
         assert_eq!(source.finite_transport_end(), Some(0.0));
@@ -219,7 +227,7 @@ fn native_source_forwards_each_committed_scene_control_receipt_once() {
                 1,
             )
             .unwrap();
-        let revision = source.session.publication_context().scene_revision();
+        let revision = source.session().publication_context().scene_revision();
         let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(100.0, 100.0)).unwrap();
         for (sequence, kind, expected) in [
             (
@@ -259,7 +267,7 @@ fn native_source_forwards_each_committed_scene_control_receipt_once() {
             assert_eq!(receipt.playback_control(), expected);
             assert_eq!(source.frame_time(), 0.0);
             assert_eq!(
-                source.session.publication_context().scene_revision(),
+                source.session().publication_context().scene_revision(),
                 revision
             );
             assert_eq!(source.finite_transport_end(), Some(0.0));

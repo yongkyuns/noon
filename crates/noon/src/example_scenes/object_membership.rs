@@ -1,14 +1,14 @@
 //! Low-level semantic membership foundation on native and direct Rust/WASM.
 //! Authored and coherent live copies retain own content and ordered descendants.
 //! Broader affine/state semantics and Python membership exposure follow separately.
-use crate::{ExecutionSession, MobjectTarget, Scene};
+use crate::{MobjectTarget, Scene};
 use noon_core::SemanticMutationTransaction;
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     build().map_err(|error| error.to_string())
 }
 
-fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
+fn build() -> Result<crate::SceneExecution, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
     let mut parent = scene.square(2.0)?;
     let mut child = scene.circle(0.6)?;
@@ -111,5 +111,5 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
     let wait = live.wait_segment(0.2)?;
     live.advance_segment_to(wait, wait.end_time())?;
     live.complete_segment(wait)?;
-    Ok(session)
+    Ok(scene.into_execution_with_session(session)?)
 }

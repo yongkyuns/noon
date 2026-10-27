@@ -76,7 +76,11 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
             state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
         }
         state.set_z_index(observed.object.z_index);
-        state.style = target_style_from_effective(&state.style, observed.object.style)?;
+        state.style = target_style_from_effective(
+            &state.style,
+            observed.object.style,
+            observed.object.fill_paint.as_ref(),
+        )?;
     }
     Ok(state)
 }
@@ -87,20 +91,22 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
 pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
     effective: Style,
+    fill_paint: Option<&std::sync::Arc<noon_core::SemanticPaint>>,
 ) -> Result<SemanticStyle, AuthoringError> {
-    if matches!(authored.fill.as_ref(), Some(SemanticPaint::Resource(_)))
-        || matches!(authored.stroke.as_ref(), Some(SemanticPaint::Resource(_)))
-    {
+    if matches!(
+        authored.stroke.as_ref(),
+        Some(
+            SemanticPaint::LinearGradient(_)
+                | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Noise(_)
+                | SemanticPaint::Image(_)
+        )
+    ) {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));
     }
-    let (fill, fill_opacity) =
-        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
-            (authored.fill.clone(), authored.fill_opacity)
-        } else {
-            (effective.fill.map(SemanticPaint::Solid), 1.0)
-        };
+    let (fill, fill_opacity) = authored.capture_effective_fill(effective.fill, fill_paint);
     let (stroke, stroke_opacity) =
         if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
             == effective.stroke
@@ -186,13 +192,13 @@ pub(crate) fn stage_effect_copy(
     let node = store
         .node(source)
         .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.glow.as_deref()) {
+    match (node.effect_ids(), observed.object.effect.as_deref()) {
         ([], None) => Ok(()),
-        ([attachment], Some(glow)) if *attachment == glow.attachment => {
+        ([attachment], Some(effect)) if *attachment == effect.attachment => {
             store.copy_effect_into_with_definition(
                 *attachment,
                 target,
-                glow.definition,
+                effect.definition,
                 transaction,
             )?;
             Ok(())

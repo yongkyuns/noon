@@ -9,6 +9,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// Continuous fills currently require ordinary planar vector content.
+    ContinuousPaintProfile,
     /// This operation requires immutable raster-image content.
     ImageContent,
     /// Point matching requires vector geometry on both operands.
@@ -47,8 +49,6 @@ pub enum UnsupportedAuthoringOperation {
     CaptureResourcePaint,
     /// Manim color queries do not support resource paints.
     ResourcePaintColorQuery,
-    /// Manim opacity queries do not support resource paints.
-    ResourcePaintOpacityQuery,
     /// Manim style interpolation requires matching solid-paint channels and
     /// compatible sheen-direction dimensions.
     ManimStyleInterpolation,
@@ -79,6 +79,7 @@ pub enum UnsupportedAuthoringOperation {
 impl std::fmt::Display for UnsupportedAuthoringOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::ContinuousPaintProfile => "continuous paint requires ordinary planar vector content and a representable finite gradient",
             Self::ImageContent => "this operation requires raster-image content",
             Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",
@@ -93,7 +94,6 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::SpatialPathOpacity => "spatial path caps require opaque or fully transparent paint",
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
-            Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
             Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
@@ -131,12 +131,13 @@ impl From<noon_core::PointArrayShapeError> for AuthoringError {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    PaintTransition(noon_core::PaintTransitionError),
     /// Immutable audio PCM preparation or resource admission failed.
     AudioResource(noon_core::AudioResourceError),
     /// A finite authored clip has invalid timing, trim, gain, or fades.
     AudioClip(noon_core::AudioClipError),
     EffectStateReplacementUnavailable,
-    GlowParameter(noon_core::GlowParameterError),
+    EffectParameter(noon_core::EffectParameterError),
     EffectNotFound {
         owner: noon_core::SemanticNodeId,
         name: String,
@@ -270,8 +271,14 @@ pub enum AuthoringError {
     },
     /// Grid alignment, sizing or flow options are inconsistent.
     InvalidGridOption(&'static str),
-    /// Click indication has one restoring timing shape; other animation options
-    /// would imply a distinct authored action.
+    /// The declared click animation does not target this same single object or
+    /// does not represent a supported click action.
+    InvalidClickActionDeclaration {
+        target: noon_core::SemanticNodeId,
+        animation: noon_core::SemanticNodeId,
+    },
+    /// Click actions accept only their supported restoring timing and lifecycle
+    /// options.
     InvalidClickActionOptions,
     /// A planar flip needs a nonzero XY axis or a pure Z axis.
     InvalidFlipAxis,
@@ -332,9 +339,10 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PaintTransition(error) => error.fmt(f),
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
-            Self::GlowParameter(error) => error.fmt(f),
+            Self::EffectParameter(error) => error.fmt(f),
             Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
             Self::EffectOwnerMismatch { effect, owner } => write!(f, "effect {effect:?} does not belong to object {owner:?}"),
@@ -441,9 +449,13 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("too few grid rows and columns to fit all members")
             }
             Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
-            Self::InvalidClickActionOptions => {
-                f.write_str("click Indicate only accepts there-and-back timing without lag, path arc, reversal, lifecycle options")
-            }
+            Self::InvalidClickActionDeclaration { target, animation } => write!(
+                f,
+                "click action {animation:?} must be an Indicate or GlowPulse declaration for the same single target {target:?}"
+            ),
+            Self::InvalidClickActionOptions => f.write_str(
+                "click actions require supported restoring timing without lag, path arc, or lifecycle options; Indicate also requires there-and-back without reversal"
+            ),
             Self::InvalidFlipAxis => {
                 f.write_str("flip axis must be nonzero and lie in the XY plane or along Z")
             }
@@ -482,11 +494,12 @@ impl std::fmt::Display for AuthoringError {
 impl std::error::Error for AuthoringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::PaintTransition(error) => Some(error),
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),
             Self::AudioResource(error) => Some(error),
             Self::AudioClip(error) => Some(error),
-            Self::GlowParameter(error) => Some(error),
+            Self::EffectParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
             Self::Semantic(error) => Some(error),
@@ -633,8 +646,14 @@ impl From<noon_core::SemanticFamilyPairingError> for AuthoringError {
     }
 }
 
-impl From<noon_core::GlowParameterError> for AuthoringError {
-    fn from(error: noon_core::GlowParameterError) -> Self {
-        Self::GlowParameter(error)
+impl From<noon_core::EffectParameterError> for AuthoringError {
+    fn from(error: noon_core::EffectParameterError) -> Self {
+        Self::EffectParameter(error)
+    }
+}
+
+impl From<noon_core::PaintTransitionError> for AuthoringError {
+    fn from(error: noon_core::PaintTransitionError) -> Self {
+        Self::PaintTransition(error)
     }
 }

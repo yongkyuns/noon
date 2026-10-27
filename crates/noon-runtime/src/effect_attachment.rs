@@ -1,30 +1,35 @@
 //! Attachment lifetime on the existing execution publication and scheduler.
 use std::sync::Arc;
 
-use noon_compile::{CompilePatchError, CompiledChannelKey, CompiledGlow, ExecutionPatch};
+use noon_compile::{CompilePatchError, CompiledChannelKey, CompiledEffect, ExecutionPatch};
 use noon_core::ObjectId;
 
 use crate::{EvaluationStats, RuntimePatchStats, SceneInstance};
 
 impl SceneInstance {
-    pub(crate) fn apply_glow_attachment_patch(
+    pub(crate) fn apply_effect_attachment_patch(
         &mut self,
         patch: &ExecutionPatch,
         object: ObjectId,
-        next: Option<Arc<CompiledGlow>>,
+        next: Option<Arc<CompiledEffect>>,
     ) -> Result<(), CompilePatchError> {
         let index = self
             .compiled
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))?;
+        let previous = self.compiled.objects()[index as usize]
+            .effect
+            .as_ref()
+            .map(|effect| effect.attachment);
         // Compiler validation completes before either authority is changed.
         let compiled = self.compiled.apply_execution_patch_with_stats(patch)?;
         let mut stats = RuntimePatchStats {
             track_locators_removed: compiled.track_locators_removed,
             ..RuntimePatchStats::default()
         };
-        for property in CompiledGlow::PARAMETER_PROPERTIES {
-            let channel = CompiledChannelKey::new(index, property);
+        for property in CompiledEffect::PARAMETER_PROPERTIES {
+            let Some(attachment) = previous else { break };
+            let channel = CompiledChannelKey::effect(index, property, attachment);
             if self.groups.remove(&channel).is_some() {
                 let retired = self.timeline_scheduler.relower_channel(channel, &[]);
                 stats.channels_relowered += retired.groups_relowered;
@@ -33,7 +38,7 @@ impl SceneInstance {
             }
         }
         let index = index as usize;
-        self.frame.objects[index].glow = next;
+        self.frame.objects[index].effect = next;
         // Halo coverage is renderer-derived. Semantic geometry, spatial queries,
         // object motion, painter order and all unrelated rows stay untouched.
         self.changes.insert(index);

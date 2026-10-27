@@ -27,9 +27,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use noon::integration::{RendererPublication, TimelineWakeState};
+#[cfg(test)]
+use noon::ExecutionSession;
 use noon::{
-    EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    LiveContinuation, LiveProgram, RustHostCallbackError, RustHostCallbackTable,
+    EvaluationError, ExecutionSessionCameraError, ExecutionSessionInputError, LiveContinuation,
+    LiveProgram, RustHostCallbackError, RustHostCallbackTable, SceneExecution,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -45,6 +47,26 @@ use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
+
+#[cfg(test)]
+fn test_scene_from_store(mut store: noon_core::SemanticStore) -> noon::Scene {
+    let members = store.scene_roots().collect::<Vec<_>>();
+    let root = store.insert_family();
+    for member in members {
+        store.add_semantic_family_member(root, member).unwrap();
+    }
+    noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
+        .unwrap()
+}
+
+#[cfg(test)]
+fn test_scene_from_root(
+    store: noon_core::SemanticStore,
+    root: noon_core::SemanticNodeId,
+) -> noon::Scene {
+    noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
+        .unwrap()
+}
 use winit::window::{Window, WindowId};
 
 use execution_source::{LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource};
@@ -164,33 +186,33 @@ impl From<ExecutionSessionInputError> for NativeHostError {
     }
 }
 
-/// Run one typed execution session in a native OS window.
+/// Run one consumed scene execution in a native OS window.
 ///
 /// No serialization or language host participates in this path. The function owns
 /// platform lifecycle until the viewport closes.
-pub fn run(session: ExecutionSession) -> Result<(), NativeHostError> {
+pub fn run(session: SceneExecution) -> Result<(), NativeHostError> {
     run_with_config(session, NativeViewportConfig::default())
 }
 
-/// Run one typed execution session with direct Rust host callables.
+/// Run one consumed scene execution with direct Rust host callables.
 pub fn run_with_callbacks(
-    session: ExecutionSession,
+    session: SceneExecution,
     callbacks: RustHostCallbackTable,
 ) -> Result<(), NativeHostError> {
     run_with_callbacks_and_config(session, callbacks, NativeViewportConfig::default())
 }
 
-/// Run one typed execution session with explicit window configuration.
+/// Run one consumed scene execution with explicit window configuration.
 pub fn run_with_config(
-    session: ExecutionSession,
+    session: SceneExecution,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
     run_with_callbacks_and_config(session, RustHostCallbackTable::new(), config)
 }
 
-/// Run one typed execution session with direct Rust callbacks and viewport config.
+/// Run one consumed scene execution with direct Rust callbacks and viewport config.
 pub fn run_with_callbacks_and_config(
-    session: ExecutionSession,
+    session: SceneExecution,
     callbacks: RustHostCallbackTable,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
@@ -274,9 +296,14 @@ fn run_source(
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = NativeApp::from_source(source, config);
-    event_loop
+    let run_result = event_loop
         .run_app(&mut app)
-        .map_err(|error| NativeHostError::Platform(error.to_string()))?;
+        .map_err(|error| NativeHostError::Platform(error.to_string()));
+    // The source can retain input-owned semantic attachments even after the
+    // window closes. Retire them on either event-loop outcome before its owner
+    // is dropped; external authoring handles may still retain the same arena.
+    app.execution.retire_execution_source()?;
+    run_result?;
     if let Some(error) = app.error.take() {
         return Err(error);
     }
@@ -354,7 +381,7 @@ struct NativeApp {
 
 impl NativeApp {
     #[cfg(test)]
-    fn new(session: ExecutionSession, config: NativeViewportConfig) -> Self {
+    fn new(session: SceneExecution, config: NativeViewportConfig) -> Self {
         Self::from_source(
             Box::new(StaticExecutionSource::new(
                 session,
@@ -366,7 +393,7 @@ impl NativeApp {
 
     #[cfg(test)]
     fn new_with_callbacks(
-        session: ExecutionSession,
+        session: SceneExecution,
         callbacks: RustHostCallbackTable,
         config: NativeViewportConfig,
     ) -> Self {
@@ -697,7 +724,7 @@ impl NativeApp {
             // ordinary painter slot in the retained GPU preparation.
             let glow_visible = gpu
                 .renderer
-                .glow_source_visibility(&publication, visibility.object_indices())
+                .effect_source_visibility(&publication, visibility.object_indices())
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             let prepared = gpu
                 .preparer
@@ -740,14 +767,14 @@ impl NativeApp {
             // Endpoint drains above retain the same surface and renderer; only
             // the final bounded pass may create a glow capture/blur workload.
             gpu.renderer
-                .prepare_retained_analytic_glows(
+                .prepare_retained_effects(
                     &gpu.device,
                     &gpu.queue,
                     &mut encoder,
                     &prepared,
                     &gpu.text_state,
                     &publication,
-                    noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                    noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                 )
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             let _draw = gpu
@@ -765,7 +792,7 @@ impl NativeApp {
                     None,
                 )
                 .map_err(|error| {
-                    gpu.renderer.invalidate_analytic_glows();
+                    gpu.renderer.invalidate_effect_captures();
                     NativeHostError::Gpu(error.to_string())
                 })?;
             #[cfg(test)]
@@ -1363,7 +1390,7 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            run(scene.execution_session().unwrap()),
+            run(scene.into_execution().unwrap()),
             Err(NativeHostError::AudioOutputUnavailable)
         ));
     }
@@ -1377,9 +1404,9 @@ mod tests {
         scene
             .on_click_playback(&button, noon::PlaybackControl::TogglePlayback)
             .unwrap();
-        let session = scene.execution_session().unwrap();
-        assert!(!session.has_audio());
-        assert!(session.has_playback_controls());
+        let session = scene.into_execution().unwrap();
+        assert!(!session.session().has_audio());
+        assert!(session.session().has_playback_controls());
         assert!(matches!(
             run_with_config(session, NativeViewportConfig { width: 0, ..Default::default() }),
             Err(NativeHostError::Platform(message)) if message == "initial viewport dimensions must be positive"
@@ -1398,8 +1425,8 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap();
-        let session = scene.execution_session().unwrap();
-        assert!(!session.has_playback_controls());
+        let session = scene.into_execution().unwrap();
+        assert!(!session.session().has_playback_controls());
         // The pre-existing configuration error proves this supported interaction
         // passes profile admission without requiring a real event loop/window.
         let error = run_with_config(
@@ -1645,7 +1672,7 @@ mod tests {
         let animation = store
             .insert_semantic_transform_animation(object, target, AnimationOptions::new())
             .unwrap();
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let session = test_scene_from_store(store).into_execution().unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
         let original_wall = Instant::now();
@@ -1656,14 +1683,20 @@ mod tests {
         assert!(app.realtime_clock.is_none());
 
         let restart_wall = original_wall + Duration::from_secs(30);
-        app.static_session_mut()
-            .activate_animation(
-                &mut store,
-                animation,
-                AnimationOptions::new()
-                    .run_time(1.0)
-                    .rate_func(RateFunction::Linear),
-            )
+        app.execution
+            .static_execution_mut()
+            .unwrap()
+            .with_store_and_session(|store, session| {
+                session
+                    .activate_animation(
+                        store,
+                        animation,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(|_| ())
+            })
             .unwrap();
         app.advance_realtime_timeline(restart_wall).unwrap();
         assert_eq!(app.session().frame().time, 0.0);
@@ -1719,7 +1752,7 @@ mod tests {
                 context.set_target_transform(transform)
             })
             .unwrap();
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let session = test_scene_from_store(store).into_execution().unwrap();
         let mut app =
             NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
 
@@ -1772,16 +1805,18 @@ mod tests {
         callbacks
             .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
             .unwrap();
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let scene = test_scene_from_store(store);
+        let mut session = scene.execution_session().unwrap();
         session
             .activate_animation(
-                &mut store,
+                &mut scene.integration_store().borrow_mut(),
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
+        let session = scene.into_execution_with_session(session).unwrap();
         let mut app =
             NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
 
@@ -1876,7 +1911,7 @@ mod tests {
         store
             .bind_semantic_signal(key_event, object, SemanticObjectProperty::RotationZ)
             .unwrap();
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let session = test_scene_from_store(store).into_execution().unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
         app.dispatch_state(
@@ -1925,7 +1960,7 @@ mod tests {
         store
             .bind_semantic_signal(viewport, object, SemanticObjectProperty::Translation)
             .unwrap();
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let session = test_scene_from_store(store).into_execution().unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
         assert!(app.execution.take_renderer_publication().changes().is_all());
@@ -1983,7 +2018,7 @@ mod tests {
         let mut label = scene.text(Text::new("Noon").with_font_size(48.0)).unwrap();
         label.shift(1.0, 0.0).unwrap();
         scene.add(&label).unwrap();
-        let session = scene.execution_session().unwrap();
+        let session = scene.into_execution().unwrap();
 
         let mut event_loop_builder = EventLoop::builder();
         event_loop_builder.with_any_thread(true);

@@ -160,3 +160,122 @@ fn indicate_ticks_and_release_preserve_unowned_effective_channels() {
     runtime.advance_interactions(2.0).unwrap();
     assert_eq!(runtime.publication_context(), settled);
 }
+
+fn glow_runtime(intensity: f64) -> (SceneInstance, ObjectId, noon_compile::CompiledEffect) {
+    let object = ObjectId::new(1);
+    let glow = noon_compile::CompiledEffect {
+        attachment: SemanticNodeId::new(4, 2),
+        definition: (noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(intensity))
+            .unwrap())
+        .into(),
+    };
+    let mut compiled = CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style {
+            fill: Some(Color::WHITE),
+            stroke: None,
+            ..Style::default()
+        },
+    );
+    compiled.effect = Some(std::sync::Arc::new(glow));
+    (
+        SceneInstance::new(CompiledScene::compile_objects(vec![compiled], &[]).unwrap()),
+        object,
+        glow,
+    )
+}
+
+#[test]
+fn neutral_glow_tick_invalidates_prepared_work_without_a_pixel_epoch() {
+    let (mut runtime, object, glow) = glow_runtime(0.0);
+    let binding = SemanticClickGlowPulse::new(0.0, 1.0, RateFunction::ThereAndBack, false);
+    let activation = runtime
+        .prepare_click_glow_pulse(object, binding, glow, false, runtime.publication_context())
+        .unwrap()
+        .unwrap();
+    runtime.start_transient_animation(activation).unwrap();
+    let stale = runtime.prepare_interactions(1.0).unwrap();
+    let original = runtime.publication_context();
+    runtime.advance_interactions(2.0).unwrap();
+    assert_eq!(
+        runtime.publication_context(),
+        original,
+        "neutral progress has no visible change"
+    );
+    assert!(runtime.commit_prepared_interactions(stale).is_err());
+    assert!(runtime.interactions_active());
+    runtime.advance_interactions(3.0).unwrap();
+    assert!(!runtime.interactions_active());
+}
+
+#[test]
+fn neutral_glow_completion_cannot_reuse_an_old_activation() {
+    let (mut runtime, object, glow) = glow_runtime(0.0);
+    let binding = SemanticClickGlowPulse::new(0.0, 1.0, RateFunction::ThereAndBack, false);
+    let activation = runtime
+        .prepare_click_glow_pulse(object, binding, glow, false, runtime.publication_context())
+        .unwrap()
+        .unwrap();
+    let stale = activation.clone();
+    runtime.start_transient_animation(activation).unwrap();
+    let original = runtime.publication_context();
+    runtime.advance_interactions(1.0).unwrap();
+    runtime.advance_interactions(2.0).unwrap();
+    assert_eq!(runtime.publication_context(), original);
+    assert!(!runtime.interactions_active());
+    assert!(runtime.start_transient_animation(stale).is_err());
+    assert!(!runtime.interactions_active());
+}
+
+#[test]
+fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
+    let (mut runtime, object, glow) = glow_runtime(0.4);
+    let binding = SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false);
+    let activation = runtime
+        .prepare_click_glow_pulse(object, binding, glow, false, runtime.publication_context())
+        .unwrap()
+        .unwrap();
+    runtime.start_transient_animation(activation).unwrap();
+    runtime.advance_interactions(0.0).unwrap();
+    runtime.advance_interactions(0.5).unwrap();
+    assert_eq!(
+        runtime
+            .effective_object(object)
+            .unwrap()
+            .effect
+            .as_ref()
+            .unwrap()
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity(),
+        2.0
+    );
+    let edited = noon_core::EffectUpdate::default()
+        .color(Color::BLUE)
+        .radius(noon_core::EffectRadius::Scene(0.3));
+    runtime
+        .apply_execution_patch(&noon_compile::ExecutionPatch::SetEffect {
+            object,
+            effect: std::sync::Arc::new(noon_compile::CompiledEffect {
+                attachment: glow.attachment,
+                definition: edited.apply_to(glow.definition).unwrap(),
+            }),
+        })
+        .unwrap();
+    runtime.advance_interactions(0.6).unwrap();
+    assert!(runtime.interactions_active());
+    runtime.advance_interactions(1.0).unwrap();
+    let final_glow = runtime
+        .effective_object(object)
+        .unwrap()
+        .effect
+        .as_ref()
+        .unwrap()
+        .definition;
+    assert_eq!(final_glow.as_glow().unwrap().color(), Color::BLUE);
+    assert_eq!(final_glow.radius(), noon_core::EffectRadius::Scene(0.3));
+    assert_eq!(final_glow.as_glow().unwrap().intensity(), 0.4);
+}

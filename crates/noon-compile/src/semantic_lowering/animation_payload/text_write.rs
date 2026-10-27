@@ -378,9 +378,9 @@ fn independent_effect_drivers(
     for (animation, property) in tracks {
         let effect_only = matches!(
             property,
-            noon_core::Property::GlowColor
-                | noon_core::Property::GlowRadius
-                | noon_core::Property::GlowIntensity
+            noon_core::Property::EffectColor
+                | noon_core::Property::EffectRadius
+                | noon_core::Property::EffectIntensity
         );
         *independent.entry(animation).or_insert(true) &= effect_only;
     }

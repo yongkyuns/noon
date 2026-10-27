@@ -172,9 +172,9 @@ try {
       const rejection = await page.evaluate(async mode => {
         const state = glowTest.endpoints.get("scene");
         const invalid = structuredClone(glowTest.fixture.cases[0].frames[1].delta);
-        const row = invalid.objects.find(row => row.glow);
+        const row = invalid.objects.find(row => row.effect);
         if (!row) throw new Error("negative control lacks a glow row");
-        row.glow.intensity = 99;
+        row.effect.intensity = 99;
         const expected = `retained worker slot ${row.slot.slot}:${row.slot.generation} contains invalid or unsupported glow`;
         state.failures.expectRejection(expected);
         if (!state.sender.send(JSON.stringify(invalid))) throw new Error("negative control unexpectedly backpressured");

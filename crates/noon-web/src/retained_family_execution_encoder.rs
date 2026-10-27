@@ -230,6 +230,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             let previous = self.published_rows.get(&row.slot);
             let stable = previous.is_some_and(|previous| {
                 previous.order == row.order
+                    && previous.fill_paint == row.fill_paint
                     && previous.object == row.object
                     && previous.z_index == row.z_index
                     && previous.content == row.content
@@ -360,14 +361,21 @@ impl RetainedFamilyExecutionDeltaEncoder {
             .retained
             .objects
             .iter()
-            .filter_map(|object| match object.content {
-                crate::TransportObjectContent::Image { image, .. }
-                    if !self.resources.contains_image(image) =>
-                {
-                    Some(noon_core::RasterImageResourceHandle::from(image))
-                }
-                _ => None,
+            .flat_map(|object| {
+                let content = match object.content {
+                    crate::TransportObjectContent::Image { image, .. } => {
+                        Some(noon_core::RasterImageResourceHandle::from(image))
+                    }
+                    _ => None,
+                };
+                let paint = object
+                    .fill_paint
+                    .as_deref()
+                    .and_then(noon_core::SemanticPaint::as_image)
+                    .map(|image| image.resource());
+                [content, paint].into_iter().flatten()
             })
+            .filter(|handle| !self.resources.contains_image((*handle).into()))
             .collect::<std::collections::BTreeSet<_>>();
         let new_texts = text_handles
             .into_iter()
@@ -929,8 +937,9 @@ mod tests {
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = noon_runtime::FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -941,8 +950,9 @@ mod tests {
             text_bounds: None,
         };
         let second = noon_runtime::FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -974,8 +984,9 @@ mod tests {
             time: 0.5,
             objects: vec![
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: first.id,
@@ -986,8 +997,9 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: second.id,

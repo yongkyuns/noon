@@ -501,7 +501,7 @@ impl ExecutionSession {
                         semantic.set_camera_profile(entry.semantic_object, *profile, *near, *far);
                     }
                 }
-                SemanticAnimationCompletion::Glow { .. }
+                SemanticAnimationCompletion::Effect { .. }
                 | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
@@ -822,7 +822,7 @@ fn stage_glow_completions(
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+            if let SemanticAnimationCompletion::Effect { attachment, value } = &entry.completion {
                 Some(((*attachment, value.property()), index))
             } else {
                 None
@@ -830,7 +830,7 @@ fn stage_glow_completions(
         })
         .collect::<HashMap<_, _>>();
     for (index, entry) in entries.iter().enumerate() {
-        if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+        if let SemanticAnimationCompletion::Effect { attachment, value } = &entry.completion {
             if !removed.contains(attachment)
                 && final_entries.get(&(*attachment, value.property())) == Some(&index)
             {
@@ -1920,7 +1920,7 @@ mod glow_completion_tests {
     use super::*;
     use crate::execution_segment::SegmentCompletionEntry;
     use crate::{Mobject, Scene};
-    use noon_core::{Color, Glow, GlowTrackValue, GlowUpdate, ObjectId, TrackId};
+    use noon_core::{Color, EffectTrackValue, EffectUpdate, Glow, ObjectId, TrackId};
 
     fn fixture() -> (Scene, Mobject, SemanticNodeId) {
         let mut scene = Scene::new();
@@ -1928,7 +1928,7 @@ mod glow_completion_tests {
         scene
             .set_glow(
                 &source,
-                GlowUpdate::default().intensity(0.4).color(Color::RED),
+                EffectUpdate::default().intensity(0.4).color(Color::RED),
             )
             .unwrap();
         let id = source.get_effect("glow").unwrap().node_id();
@@ -1937,12 +1937,12 @@ mod glow_completion_tests {
     fn entry(
         source: &Mobject,
         attachment: SemanticNodeId,
-        value: GlowTrackValue,
+        value: EffectTrackValue,
         sequence: u64,
     ) -> SegmentCompletionEntry {
         SegmentCompletionEntry {
             semantic_object: source.node_id(),
-            completion: SemanticAnimationCompletion::Glow { attachment, value },
+            completion: SemanticAnimationCompletion::Effect { attachment, value },
             execution_object: ObjectId::new(1),
             property: value.property(),
             track: TrackId::new(sequence),
@@ -1951,22 +1951,24 @@ mod glow_completion_tests {
         }
     }
     fn definition(store: &SemanticStore, attachment: SemanticNodeId) -> Glow {
-        let noon_core::EffectDefinition::Glow(glow) = store
+        let effect = (store
             .semantic_effect_state(attachment)
             .unwrap()
-            .definition();
-        glow
+            .definition())
+        .as_glow()
+        .unwrap();
+        effect
     }
     #[test]
     fn final_glow_completion_owns_only_its_parameter_and_coalesces_sequential_endpoints() {
         let (mut scene, source, attachment) = fixture();
         // Later persistent color edit must survive intensity completion.
         scene
-            .set_glow(&source, GlowUpdate::default().color(Color::BLUE))
+            .set_glow(&source, EffectUpdate::default().color(Color::BLUE))
             .unwrap();
         let entries = [
-            entry(&source, attachment, GlowTrackValue::Intensity(1.4), 1),
-            entry(&source, attachment, GlowTrackValue::Intensity(0.7), 2),
+            entry(&source, attachment, EffectTrackValue::Intensity(1.4), 1),
+            entry(&source, attachment, EffectTrackValue::Intensity(0.7), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
         stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);
@@ -1992,13 +1994,13 @@ mod glow_completion_tests {
         let (mut scene, source, old) = fixture();
         scene.remove_glow(&source).unwrap();
         scene
-            .set_glow(&source, GlowUpdate::default().intensity(0.6))
+            .set_glow(&source, EffectUpdate::default().intensity(0.6))
             .unwrap();
         let new = source.get_effect("glow").unwrap().node_id();
         assert_ne!(old, new);
         let entries = [
-            entry(&source, new, GlowTrackValue::Color(Color::BLUE), 1),
-            entry(&source, old, GlowTrackValue::Intensity(7.0), 2),
+            entry(&source, new, EffectTrackValue::Color(Color::BLUE), 1),
+            entry(&source, old, EffectTrackValue::Intensity(7.0), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
         stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);

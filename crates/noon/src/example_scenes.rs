@@ -11,9 +11,11 @@ pub mod background_audio;
 pub mod background_music_lesson;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub mod bar_chart;
+pub mod blur;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
 pub mod circle_surround;
+pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
 pub mod code_block;
 pub mod cyclic_replace;
@@ -34,8 +36,10 @@ pub mod foreground_matching;
 pub mod foreground_membership;
 pub mod glow_pulse;
 pub mod graph_queries;
+pub mod image_fill;
 pub mod image_glow;
 pub mod line_passing_flash;
+pub mod linear_gradient;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
@@ -46,6 +50,7 @@ pub mod mixed_scalar_composition;
 pub mod moving_around;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod moving_zoomed_scene_around;
+pub mod noise_paint;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;
 pub mod object_membership;
@@ -58,11 +63,13 @@ pub mod painter_order_overlap;
 pub mod point_promotion;
 pub mod pointer_input_trace;
 pub mod polar_plane;
+pub mod radial_gradient;
 pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
+pub mod shadow;
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub mod spatial_camera_labels;
 pub mod spatial_mesh;
@@ -103,11 +110,10 @@ use std::{error::Error, rc::Rc};
 
 use crate::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    AnimationOptions, Color, ExecutionSession, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind,
-    SemanticFadeDirection, SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3,
-    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, TransformToRequest, ValueTracker, Vec2,
-    VectorPath,
+    AnimationOptions, Color, LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction,
+    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, TransformToRequest, ValueTracker, Vec2, VectorPath,
 };
 use noon_core::HostCallbackId;
 
@@ -274,11 +280,11 @@ fn ordered_affine_callbacks(
 /// Build the paired affine callback example without selecting a platform host.
 ///
 /// Both native and direct single-context Rust/WASM examples consume these typed
-/// values. The execution schedule remains owned by [`ExecutionSession`], while
+/// values. The execution schedule remains owned by [`crate::ExecutionSession`], while
 /// the callable table contains only host-owned Rust closures.
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
-pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>>
-{
+pub fn live_affine_callbacks(
+) -> Result<(crate::SceneExecution, RustHostCallbackTable), Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut label = scene.text("Noon")?;
     label.set_translation(0.0, -2.0)?;
@@ -326,7 +332,7 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
         let mut live = scene.live(&mut session);
         live.play_animation(&animation)?;
     }
-    Ok((session, callbacks))
+    Ok((scene.into_execution_with_session(session)?, callbacks))
 }
 
 /// Build the paired callback paint example over the canonical effective-style batch.
@@ -334,7 +340,8 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
 /// The first callback recolors both enabled paint layers while retaining their
 /// independent alpha. The second observes that write, changes only fill alpha,
 /// and separately changes object-composite opacity.
-pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
+pub fn live_callback_paint(
+) -> Result<(crate::SceneExecution, RustHostCallbackTable), Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut source = scene.circle(1.0)?;
     source.set_fill(0.1, 0.2, 0.8, 0.25)?;
@@ -412,7 +419,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
 
     let mut session = scene.execution_session()?;
     scene.live(&mut session).play_animation(&animation)?;
-    Ok((session, callbacks))
+    Ok((scene.into_execution_with_session(session)?, callbacks))
 }
 
 /// Build the paired Line callback example used by renderer-observation proofs.
@@ -422,7 +429,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
 /// one effective transform changes.
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub fn live_line_callback_rotation(
-) -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
+) -> Result<(crate::SceneExecution, RustHostCallbackTable), Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut marker = scene.circle(0.35)?;
     marker.set_fill(0.1, 0.4, 1.0, 1.0)?;
@@ -471,7 +478,7 @@ pub fn live_line_callback_rotation(
         close_windows.apply(&mut store)?;
     }
 
-    Ok((scene.execution_session()?, callbacks))
+    Ok((scene.into_execution()?, callbacks))
 }
 
 /// Rust-authored counterpart of MovingDots' analytic Line callback.
@@ -480,7 +487,7 @@ pub fn live_line_callback_rotation(
 /// overlay write, derives the red Line transform from its immutable local
 /// endpoints, and stages only that transform in the same phase.
 pub fn live_line_match_callback(
-) -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
+) -> Result<(crate::SceneExecution, RustHostCallbackTable), Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut left = scene.circle(0.08)?;
     left.set_translation(-0.5, 0.0)?;
@@ -534,12 +541,12 @@ pub fn live_line_match_callback(
         callbacks.add_updater(&mut store, left_id, MOVE_MATCH_DOT, 0.0, None)?;
         callbacks.add_updater(&mut store, line.node_id(), MATCH_LINE_ENDPOINTS, 0.0, None)?;
     }
-    Ok((scene.execution_session()?, callbacks))
+    Ok((scene.into_execution()?, callbacks))
 }
 
 /// Build the static Typst reference scene through the shared semantic text resource path.
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
-pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn typst_text_reference() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let label = scene.typst(
         Typst::new("*Hello* from _Typst!_")
@@ -552,17 +559,17 @@ pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
             )),
     )?;
     scene.add(&label).map_err(|error| error.to_string())?;
-    Ok(scene.execution_session()?)
+    Ok(scene.into_execution()?)
 }
 
 /// Build the static MathTypst reference scene through the shared semantic text resource path.
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
-pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn math_typst_text_reference() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let equation = scene
         .math_typst(MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0))?;
     scene.add(&equation).map_err(|error| error.to_string())?;
-    Ok(scene.execution_session()?)
+    Ok(scene.into_execution()?)
 }
 
 /// Execute the paired affine-completion example and return its settled session.
@@ -570,7 +577,7 @@ pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
 /// Both animation declarations exist before execution starts. Completion persists
 /// each endpoint into authored state and releases its timeline driver, so an
 /// intervening authored setter and a later replay use the same canonical path.
-pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn live_affine_completion() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let circle = scene.circle(1.0)?;
     scene.add(&circle).map_err(|error| error.to_string())?;
@@ -643,7 +650,7 @@ pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
         let final_authored = live.authored(&circle)?.transform.translation;
         assert_eq!((final_authored.x, final_authored.y), (5.0, -2.0));
     }
-    Ok(session)
+    Ok(scene.into_execution_with_session(session)?)
 }
 
 /// Execute the paired ordinary affine-play example on one live runtime.
@@ -651,7 +658,7 @@ pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
 /// Targets are authored before execution. Each play is declared and activated
 /// atomically against the current effective state, while the intervening wait
 /// and authored shift publish through the same continuation/session authority.
-pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
@@ -702,7 +709,7 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!((authored.x, authored.y), (5.0, -1.0));
     }
     assert_eq!(session.frame().time, 4.0);
-    Ok(session)
+    Ok(scene.into_execution_with_session(session)?)
 }
 
 /// Ordinary Rust continuation used unchanged by native and direct Rust/WASM hosts.
@@ -2302,7 +2309,7 @@ pub fn ordinary_moving_camera_center_program(
 /// Child intervals, root timing, transaction-local declaration identity, and
 /// endpoint release are all owned by the shared compiler/session. This builder
 /// is used unchanged by native Rust and direct single-context Rust/WASM hosts.
-pub fn ordinary_composition_play() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut left = scene.circle(0.4)?;
     left.set_fill(1.0, 1.0, 1.0, 1.0)?;
@@ -2387,7 +2394,7 @@ pub fn ordinary_composition_play() -> Result<ExecutionSession, Box<dyn Error>> {
         );
     }
     assert_eq!(session.frame().time, 4.0);
-    Ok(session)
+    Ok(scene.into_execution_with_session(session)?)
 }
 
 /// Execute one ordinary style play and a following authored style edit.
@@ -2395,7 +2402,7 @@ pub fn ordinary_composition_play() -> Result<ExecutionSession, Box<dyn Error>> {
 /// The animation's fill and object-opacity channels share one runtime segment.
 /// Completion reconciles their exact semantic endpoint before the ordinary green
 /// edit publishes through the same live session.
-pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
@@ -2447,7 +2454,7 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!(effective.opacity, 1.0);
     }
     assert_eq!(session.frame().time, 2.0);
-    Ok(session)
+    Ok(scene.into_execution_with_session(session)?)
 }
 
 /// Execute ordinary Manim paint animations and a following authored edit.
@@ -2455,7 +2462,7 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
 /// Both fill and stroke use the shared color and paint-opacity operations. The
 /// exact midpoint and endpoint assertions protect their independent starting
 /// colors, while the final yellow edit proves completion released both drivers.
-pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.0, 1.0, 1.0)?;
@@ -2561,14 +2568,14 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!(effective.opacity, 1.0);
     }
     assert_eq!(session.frame().time, 2.4);
-    Ok(session)
+    Ok(scene.into_execution_with_session(session)?)
 }
 
 /// Build a canonical scene whose native sources lower into one execution session.
 ///
 /// Browser/native hosts deliver normalized source occurrences to the returned
 /// session. They do not own signal identities, routing tables, or reactive state.
-pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
+pub fn live_native_signals() -> Result<crate::SceneExecution, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut square = scene.square(0.9)?;
     square.set_fill(0.0, 0.4, 1.0, 1.0)?;
@@ -2590,7 +2597,7 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
     let _ = scene.wheel_events()?;
     let _ = scene.control_commit_events("opacity")?;
 
-    Ok(scene.execution_session()?)
+    Ok(scene.into_execution()?)
 }
 
 #[cfg(test)]
@@ -3253,8 +3260,8 @@ mod callback_paint_tests {
     #[test]
     fn paired_callback_paint_preserves_layer_alpha_and_composite_domain() {
         let (mut session, mut callbacks) = live_callback_paint().unwrap();
-        callbacks.advance_to(&mut session, 0.0).unwrap();
-        let initial = &session.frame().objects[0];
+        callbacks.advance_to(session.session_mut(), 0.0).unwrap();
+        let initial = &session.session().frame().objects[0];
         let initial_style = initial.style;
         assert_eq!(initial.transform.translation, Vec2::ZERO);
         assert_eq!(initial.style.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
@@ -3262,13 +3269,16 @@ mod callback_paint_tests {
         assert_eq!(initial.style.stroke_width, 0.12);
         assert_eq!(initial.style.opacity, 0.5);
 
-        callbacks.advance_to(&mut session, 1.0).unwrap();
-        let endpoint = &session.frame().objects[0];
+        callbacks.advance_to(session.session_mut(), 1.0).unwrap();
+        let endpoint = &session.session().frame().objects[0];
         assert_eq!(endpoint.transform.translation, Vec2::new(2.0, 0.0));
         assert_eq!(endpoint.style.fill, initial_style.fill);
         assert_eq!(endpoint.style.stroke, initial_style.stroke);
         assert_eq!(endpoint.style.opacity, 0.5);
-        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(
+            session.session_mut().take_frame_changes().object_indices(),
+            &[0]
+        );
     }
 }
 
@@ -3280,19 +3290,25 @@ mod line_callback_tests {
     #[test]
     fn line_callback_windows_reverse_one_local_effective_transform() {
         let (mut session, mut callbacks) = live_line_callback_rotation().unwrap();
-        callbacks.advance_to(&mut session, 0.0).unwrap();
-        session.take_frame_changes();
-        let siblings = [0, 1, 3].map(|index| session.frame().objects[index].transform);
+        callbacks.advance_to(session.session_mut(), 0.0).unwrap();
+        session.session_mut().take_frame_changes();
+        let siblings = [0, 1, 3].map(|index| session.session().frame().objects[index].transform);
 
-        callbacks.advance_to(&mut session, 1.0).unwrap();
-        assert!((session.frame().objects[2].transform.rotation - 1.0).abs() < 1.0e-6);
-        assert_eq!(session.take_frame_changes().object_indices(), &[2]);
-
-        callbacks.advance_to(&mut session, 3.0).unwrap();
-        assert!((session.frame().objects[2].transform.rotation + 1.0).abs() < 1.0e-6);
-        assert_eq!(session.take_frame_changes().object_indices(), &[2]);
+        callbacks.advance_to(session.session_mut(), 1.0).unwrap();
+        assert!((session.session().frame().objects[2].transform.rotation - 1.0).abs() < 1.0e-6);
         assert_eq!(
-            [0, 1, 3].map(|index| session.frame().objects[index].transform),
+            session.session_mut().take_frame_changes().object_indices(),
+            &[2]
+        );
+
+        callbacks.advance_to(session.session_mut(), 3.0).unwrap();
+        assert!((session.session().frame().objects[2].transform.rotation + 1.0).abs() < 1.0e-6);
+        assert_eq!(
+            session.session_mut().take_frame_changes().object_indices(),
+            &[2]
+        );
+        assert_eq!(
+            [0, 1, 3].map(|index| session.session().frame().objects[index].transform),
             siblings
         );
     }
@@ -3300,8 +3316,8 @@ mod line_callback_tests {
     #[test]
     fn line_match_callback_observes_prior_dot_overlay_and_preserves_red_paint() {
         let (mut session, mut callbacks) = live_line_match_callback().unwrap();
-        callbacks.advance_to(&mut session, 0.0).unwrap();
-        let frame = session.frame();
+        callbacks.advance_to(session.session_mut(), 0.0).unwrap();
+        let frame = session.session().frame();
         assert_eq!(frame.objects[0].transform.translation.x, 2.0);
         let line = &frame.objects[2];
         let start = line.transform.transform_point(Vec2::new(-0.5, 0.0));

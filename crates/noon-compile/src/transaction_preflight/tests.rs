@@ -88,6 +88,7 @@ fn property_batch_ignores_one_hundred_thousand_unrelated_objects_and_tracks() {
     let stats = compiled
         .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: target,
                 style: Style::default(),
             },
@@ -114,6 +115,7 @@ fn late_presence_replacement_rejects_without_touching_unrelated_tracks() {
     let error = compiled
         .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
             ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: unrelated,
                 style: Style::default(),
             },
@@ -382,6 +384,7 @@ fn sparse_preflight_agrees_with_sequential_compiler_validation() {
                 3 => ExecutionPatch::ReplaceTrack(track),
                 4 => ExecutionPatch::RemoveTrack(id),
                 _ => ExecutionPatch::SetStyle {
+                    fill_paint: None,
                     object,
                     style: Style::default(),
                 },

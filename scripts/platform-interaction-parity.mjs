@@ -18,6 +18,7 @@ const output = path.resolve(process.env.NOON_PLATFORM_INTERACTION_ARTIFACTS ??
   path.join(root, "browser-smoke-artifacts/platform-interaction-parity"));
 const source = selectionFixtureSource();
 const movingSource = selectionFixtureSource({ moving: true });
+const clickGlowPulseSource = await readFile(path.join(root, "web/python/examples/click_glow_pulse.py"), "utf8");
 const clickIndicateSource = source
   .replace("Click a filled shape; background clears", "Click a filled shape; it restores automatically")
   .replace("        self.add(shape0, shape1, label)", [
@@ -49,15 +50,17 @@ const trace = [
 ];
 const report = {
   status: "running",
-  scope: "static-and-authored-motion-click-indicate-moving-selection-and-translation-drag",
+  scope: "click-glow-pulse-static-and-authored-motion-click-indicate-moving-selection-and-translation-drag",
   pythonSourceSha256: hash(source),
   movingPythonSourceSha256: hash(movingSource),
   clickIndicatePythonSourceSha256: hash(clickIndicateSource),
   movingClickIndicatePythonSourceSha256: hash(movingClickIndicateSource),
+  clickGlowPulsePythonSourceSha256: hash(clickGlowPulseSource),
   dragPythonSourceSha256: hash(dragSource),
   rustFixture: "noon::example_scenes::pointer_selection::scene",
   movingRustFixture: "noon::example_scenes::pointer_selection::moving_selection_session",
   clickIndicateRustFixture: "noon::example_scenes::pointer_selection::click_indicate_scene",
+  clickGlowPulseRustFixture: "noon::example_scenes::click_glow_pulse::execution",
   dragRustFixture: "createDirectNativeDragSmokeRenderer",
   cases: [],
 };
@@ -446,6 +449,9 @@ async function clickIndicateParity(backend, { moving = false } = {}) {
         const renderer = moving
           ? await createDirectMovingClickIndicateRenderer(canvas.transferControlToOffscreen())
           : await createDirectPointerSelectionRenderer(canvas.transferControlToOffscreen(), false, true);
+        // Match the worker's external-sample pacing. The wake driver still
+        // advances input effects, while authored motion stays at the selected time.
+        if (moving) renderer.pauseDirect(performance.now());
         const driver = createDirectExecutionWakeDriver(renderer);
         const detach = attachNativeInputs(renderer, canvas, {
           onInput: () => driver.wake(), onError: error => errors.push(String(error)),
@@ -580,6 +586,14 @@ async function clickIndicateParity(backend, { moving = false } = {}) {
     };
     const active = {};
     for (const host of ["direct", "worker"]) {
+      if (moving && host === "direct") {
+        // Begin the independently qualified realtime-motion case only after
+        // both hosts have captured the same paused midpoint picture.
+        await pages.direct.evaluate(() => {
+          clickIndicateParity.renderer.resumeDirect();
+          clickIndicateParity.driver.wake();
+        });
+      }
       const presentedBefore = host === "direct"
         ? await pages.direct.evaluate(() => clickIndicateParity.driver.stats().presentedFrames)
         : (await pages.worker.evaluate(async () =>
@@ -712,6 +726,395 @@ async function clickIndicateParity(backend, { moving = false } = {}) {
   }
 }
 
+// Inspect actual halo pixels outside the known source coverage. Independent wall
+// clocks may sample different amplitudes, so active cross-host equality belongs
+// to the deterministic native oracle; baseline and restored equality stay exact.
+function inspectClickGlowHalo(before, after, target, label) {
+  assert.deepEqual([after.width, after.height], [VIEW.width, VIEW.height]);
+  const center = shapeSurfaceCenter(target);
+  const halfExtent = 0.55 * VIEW.height / VIEW.cameraHeight;
+  let haloPixels = 0;
+  let sourceInteriorPixels = 0;
+  for (let y = 0; y < VIEW.height; y++) {
+    for (let x = 0; x < VIEW.width; x++) {
+      const dx = Math.abs(x + 0.5 - center.x), dy = Math.abs(y + 0.5 - center.y);
+      const distance = target.kind === "circle" ? Math.hypot(dx, dy) : Math.max(dx, dy);
+      const offset = (y * VIEW.width + x) * 4;
+      const difference = Math.max(...[0, 1, 2].map(channel =>
+        Math.abs(after.data[offset + channel] - before.data[offset + channel])));
+      if (distance < halfExtent - 2) {
+        sourceInteriorPixels++;
+        assert.equal(difference, 0, `${label}: opaque source interior changed at ${x},${y}`);
+      }
+      if (difference > 2) {
+        assert.ok(dx < halfExtent + 48 && dy < halfExtent + 48,
+          `${label}: unrelated pixel changed at ${x},${y}`);
+        if (distance > halfExtent + 2) haloPixels++;
+      }
+    }
+  }
+  assert.ok(sourceInteriorPixels > 500, `${label}: source interior control is too small`);
+  return { haloPixels, sourceInteriorPixels };
+}
+
+async function clickGlowPulseParity(backend) {
+  const pages = {}, errors = { direct: [], worker: [] }, checkpoints = [];
+  const targets = [
+    { kind: "circle", x: -2, y: 0, index: 0, label: "persistent" },
+    { kind: "rectangle", x: 2, y: 0, index: 1, label: "temporary" },
+  ];
+  const frameFor = host => pages[host].evaluate(host => host === "direct"
+    ? JSON.parse(clickGlowPulseParity.renderer.debugSelectionFrameJson())
+    : clickGlowPulseParity.execution.debugFrame(), host);
+  const waitUntil = async (label, probe, timeoutMs = 90_000) => {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const result = await probe();
+      if (result) return result;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    } while (Date.now() < deadline);
+    throw new Error(`${label} did not settle before ${timeoutMs} ms`);
+  };
+  const capture = (host, label) => image(pages[host], label, backend, `click-glow-pulse-${host}`);
+  try {
+    await openParityPages(pages, errors);
+    await pages.direct.evaluate(async () => {
+      const nativeWorker = globalThis.Worker;
+      globalThis.Worker = class { constructor() { throw new Error("direct click-GlowPulse path created a worker"); } };
+      try {
+        const { default: init, createDirectClickGlowPulseRenderer } = await import("./pkg/noon_web.js");
+        await init();
+        const { attachNativeInputs } = await import("./native-inputs.js");
+        const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
+        const canvas = document.querySelector("#scene"), errors = [];
+        canvas.width = 640; canvas.height = 360;
+        const renderer = await createDirectClickGlowPulseRenderer(canvas.transferControlToOffscreen());
+        const driver = createDirectExecutionWakeDriver(renderer);
+        const detach = attachNativeInputs(renderer, canvas, {
+          onInput: () => driver.wake(), onError: error => errors.push(String(error)),
+        });
+        globalThis.clickGlowPulseParity = { renderer, driver, detach, errors };
+      } finally { globalThis.Worker = nativeWorker; }
+    });
+    await pages.worker.evaluate(async source => {
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+      const canvas = document.querySelector("#scene"), errors = [];
+      canvas.width = 640; canvas.height = 360;
+      canvas.style.width = "640px"; canvas.style.height = "360px";
+      const authoring = new PythonAuthoringClient();
+      const execution = new AuthoringExecutionClient(canvas, {
+        onError: error => errors.push(String(error)),
+        onRecoverableError: error => errors.push(String(error)),
+      });
+      const authored = await authoring.run(source);
+      if (authored.duration !== 0 || authored.semanticExecution?.continuationGeneration != null) {
+        throw new Error("click-GlowPulse example must finish at authored time zero");
+      }
+      await execution.startSemanticExecution(authored.semanticExecution, {
+        authoringClient: authoring, initiallyPaused: true, transportMode: "transferable",
+      });
+      await execution.advanceTo(0);
+      globalThis.clickGlowPulseParity = { authoring, execution, errors };
+    }, clickGlowPulseSource);
+
+    const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
+    assert.equal(await pages.direct.evaluate(() => clickGlowPulseParity.renderer.rendererBackend()), expectedBackend);
+    await pages.direct.waitForFunction(() => clickGlowPulseParity.driver.stats().idle);
+    await waitUntil("worker click-GlowPulse baseline", () => pages.worker.evaluate(async () => {
+      const { metrics } = await clickGlowPulseParity.execution.metrics();
+      return metrics.ready && metrics.retained && metrics.presentedFrames > 0 &&
+        !metrics.needsPresent && metrics.bufferedDeltas === 0;
+    }));
+    const workerMetrics = await pages.worker.evaluate(async () =>
+      (await clickGlowPulseParity.execution.metrics()).metrics);
+    assert.equal(workerMetrics.backend, expectedBackend);
+    assert.equal(workerMetrics.transportMode, "transferable");
+    const initial = { direct: await frameFor("direct"), worker: await frameFor("worker") };
+    const baseline = { direct: await capture("direct", "baseline"), worker: await capture("worker", "baseline") };
+    equalPixels(baseline.direct, baseline.worker, `${backend} click-GlowPulse baseline`);
+    for (const host of ["direct", "worker"]) {
+      assert.equal(initial[host].time, 0);
+      assert.equal(initial[host].interactions_active, false);
+      assert.equal(initial[host].present_object_count, 2);
+      assert.equal(initial[host].objects[0].effect.definition.intensity, 0.35);
+      assert.equal(initial[host].objects[1].effect, null, `${host}: binding must not preinstall a neutral glow`);
+    }
+
+    const restored = {};
+    for (const target of targets) {
+      for (const host of ["direct", "worker"]) {
+        const point = shapeSurfaceCenter(target);
+        const bounds = await pages[host].locator("#scene").boundingBox();
+        assert.ok(bounds);
+        const click = () => pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
+        await click();
+        const baselineIntensity = initial[host].objects[target.index].effect?.definition.intensity ?? 0;
+        const active = await waitUntil(`${host} ${target.label} active glow`, async () => {
+          const frame = await frameFor(host);
+          return frame.interactions_active &&
+            frame.objects[target.index].effect?.definition.intensity > baselineIntensity + 0.15 && frame;
+        }, 5000);
+        // A second genuine DOM click reaches the same active attachment. Exact
+        // original-deadline suppression is checked with native deterministic ticks.
+        await click();
+        const repeated = await frameFor(host);
+        assert.equal(repeated.interactions_active, true);
+        assert.deepEqual(repeated.objects[target.index].effect.attachment,
+          active.objects[target.index].effect.attachment, `${host}: retrigger changed attachment identity`);
+        assert.equal(repeated.time, 0, `${host}: input advanced authored time`);
+        assert.deepEqual(matchedVisibleObjectState(repeated.objects), matchedVisibleObjectState(initial[host].objects),
+          `${host}: glow pulse changed ordinary source geometry or style`);
+        const { pixels, coverage } = await waitUntil(`${host} ${target.label} presented halo`, async () => {
+          if (host === "direct") await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render());
+          const pixels = await capture(host, `${target.label}-active`);
+          const coverage = inspectClickGlowHalo(baseline[host], pixels, target, `${backend} ${host} ${target.label}`);
+          return coverage.haloPixels > 40 && { pixels, coverage };
+        }, 5000);
+        checkpoints.push({ id: `${host}-${target.label}-active`, backend: expectedBackend,
+          transport: host === "worker" ? "transferable" : "direct",
+          attachment: active.objects[target.index].effect.attachment,
+          observedIntensity: active.objects[target.index].effect.definition.intensity,
+          ...coverage, sha256: hash(pixels.data) });
+
+        await waitUntil(`${host} ${target.label} exact restoration`, async () => {
+          const frame = await frameFor(host);
+          if (frame.interactions_active) return false;
+          assert.deepEqual(frame.objects[target.index].effect, initial[host].objects[target.index].effect,
+            `${host}: completion did not restore or retire the exact attachment`);
+          if (host === "direct") return pages.direct.evaluate(() => clickGlowPulseParity.driver.stats().idle);
+          return pages.worker.evaluate(async () => {
+            const { metrics } = await clickGlowPulseParity.execution.metrics();
+            return !metrics.needsPresent && metrics.bufferedDeltas === 0;
+          });
+        });
+        await pages[host].evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        restored[host] = await capture(host, `${target.label}-restored`);
+        assertExactPixels(restored[host], baseline[host], `${backend} ${host} ${target.label} restoration`, VIEW);
+        const finalFrame = await frameFor(host);
+        assert.equal(finalFrame.time, 0);
+        assert.deepEqual(finalFrame.objects.map(object => object.effect), initial[host].objects.map(object => object.effect));
+        if (host === "direct") {
+          const idle = await pages.direct.evaluate(() => ({
+            idle: clickGlowPulseParity.driver.stats().idle,
+            redrew: clickGlowPulseParity.renderer.render(),
+          }));
+          assert.deepEqual(idle, { idle: true, redrew: false });
+        } else {
+          const before = await pages.worker.evaluate(async () =>
+            (await clickGlowPulseParity.execution.metrics()).metrics.presentedFrames);
+          await pages.worker.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const after = await pages.worker.evaluate(async () =>
+            (await clickGlowPulseParity.execution.metrics()).metrics.presentedFrames);
+          assert.equal(after, before, "settled click-GlowPulse must stop presenting");
+        }
+        checkpoints.push({ id: `${host}-${target.label}-restored-idle`, sha256: hash(restored[host].data) });
+      }
+      equalPixels(restored.direct, restored.worker, `${backend} ${target.label} restored click-GlowPulse`);
+    }
+
+    // A genuine viewer seek must retire a visible input pulse through the same
+    // source owner, even when the authored playhead is already at the target.
+    const temporary = targets[1];
+    const sought = {};
+    for (const host of ["direct", "worker"]) {
+      const point = shapeSurfaceCenter(temporary);
+      const bounds = await pages[host].locator("#scene").boundingBox();
+      assert.ok(bounds);
+      await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
+      const active = await waitUntil(`${host} temporary glow before seek`, async () => {
+        const frame = await frameFor(host);
+        return frame.interactions_active && frame.objects[1].effect?.definition.intensity > 0.15 && frame;
+      }, 5000);
+      const visible = await waitUntil(`${host} presented halo before seek`, async () => {
+        if (host === "direct") await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render());
+        const pixels = await capture(host, "active-pulse-before-seek");
+        const coverage = inspectClickGlowHalo(baseline[host], pixels, temporary,
+          `${backend} ${host} temporary before seek`);
+        return coverage.haloPixels > 40 && coverage;
+      }, 5000);
+      await pages[host].evaluate(async ({ host, attachment }) => {
+        const current = host === "direct"
+          ? JSON.parse(clickGlowPulseParity.renderer.debugSelectionFrameJson())
+          : await clickGlowPulseParity.execution.debugFrame();
+        if (!current.interactions_active ||
+            JSON.stringify(current.objects[1].effect?.attachment) !== JSON.stringify(attachment)) {
+          throw new Error("seek must cancel the exact active attachment whose halo was observed");
+        }
+        if (host === "direct") {
+          clickGlowPulseParity.renderer.seekDirect(0);
+          clickGlowPulseParity.driver.wake();
+        } else {
+          await clickGlowPulseParity.execution.seek(0);
+        }
+      }, { host, attachment: active.objects[1].effect.attachment });
+      await waitUntil(`${host} seek retirement`, async () => {
+        const frame = await frameFor(host);
+        if (frame.interactions_active || frame.objects[1].effect !== null || frame.time !== 0) return false;
+        assert.deepEqual(frame.objects[0].effect, initial[host].objects[0].effect,
+          `${host}: seeking temporary pulse changed the persistent attachment`);
+        if (host === "direct") return pages.direct.evaluate(() => clickGlowPulseParity.driver.stats().idle);
+        return pages.worker.evaluate(async () => {
+          const { metrics } = await clickGlowPulseParity.execution.metrics();
+          return !metrics.needsPresent && metrics.bufferedDeltas === 0;
+        });
+      });
+      await pages[host].evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      sought[host] = await capture(host, "active-pulse-seek");
+      assertExactPixels(sought[host], baseline[host], `${backend} ${host} active-pulse seek`, VIEW);
+      checkpoints.push({ id: `${host}-active-pulse-seek`, attachment: active.objects[1].effect.attachment,
+        ...visible, sha256: hash(sought[host].data) });
+    }
+    equalPixels(sought.direct, sought.worker, `${backend} click-GlowPulse seek parity`);
+
+    // Replace the source while its input-owned attachment is still live. Worker
+    // replacement uses the same fresh Run/reconcile seam as the Playground;
+    // direct Rust destroys its old typed source and creates a new one.
+    const reloaded = {};
+    for (const host of ["direct", "worker"]) {
+      const previousSession = host === "worker" ? await pages.worker.evaluate(async () =>
+        (await clickGlowPulseParity.execution.metrics()).metrics.presentedSession) : null;
+      const point = shapeSurfaceCenter(temporary);
+      const bounds = await pages[host].locator("#scene").boundingBox();
+      assert.ok(bounds);
+      await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
+      const active = await waitUntil(`${host} temporary glow before reload`, async () => {
+        const frame = await frameFor(host);
+        return frame.interactions_active && frame.objects[1].effect?.definition.intensity > 0.15 && frame;
+      }, 5000);
+      assert.equal(active.time, 0, `${host}: reload click advanced authored time`);
+      assert.deepEqual(active.objects.map(object => object.id), initial[host].objects.map(object => object.id),
+        `${host}: reload click changed the current source`);
+      assert.deepEqual(matchedVisibleObjectState(active.objects), matchedVisibleObjectState(initial[host].objects),
+        `${host}: reload click changed ordinary source geometry or style`);
+      const { pixels, coverage } = await waitUntil(`${host} presented halo before reload`, async () => {
+        if (host === "direct") await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render());
+        const pixels = await capture(host, "active-pulse-before-reload");
+        const coverage = inspectClickGlowHalo(baseline[host], pixels, temporary,
+          `${backend} ${host} temporary before reload`);
+        return coverage.haloPixels > 40 && { pixels, coverage };
+      }, 5000);
+      checkpoints.push({ id: `${host}-active-pulse-before-reload`,
+        attachment: active.objects[1].effect.attachment, previousSession,
+        ...coverage, sha256: hash(pixels.data) });
+      let replacement;
+      if (host === "direct") {
+        replacement = await pages.direct.evaluate(async attachment => {
+          const previous = clickGlowPulseParity;
+          const active = JSON.parse(previous.renderer.debugSelectionFrameJson());
+          if (!active.interactions_active || active.objects[1].effect === null) {
+            throw new Error("direct source replacement must begin with an active temporary attachment");
+          }
+          if (JSON.stringify(active.objects[1].effect.attachment) !== JSON.stringify(attachment)) {
+            throw new Error("direct source replacement must retire the attachment whose halo was observed");
+          }
+          previous.detach(); previous.driver.stop();
+          previous.renderer.retireExecutionSource();
+          const retired = JSON.parse(previous.renderer.debugSelectionFrameJson());
+          if (retired.interactions_active || retired.objects[1].effect !== null) {
+            throw new Error("direct source retirement must clear the old invocation and temporary attachment before free");
+          }
+          if (retired.time !== active.time ||
+              JSON.stringify(retired.objects[0].effect) !== JSON.stringify(active.objects[0].effect)) {
+            throw new Error("direct source retirement changed authored time or the persistent attachment");
+          }
+          previous.renderer.free();
+          const oldCanvas = document.querySelector("#scene");
+          const canvas = oldCanvas.cloneNode(false);
+          oldCanvas.replaceWith(canvas);
+          const { createDirectClickGlowPulseRenderer } = await import("./pkg/noon_web.js");
+          const { attachNativeInputs } = await import("./native-inputs.js");
+          const { createDirectExecutionWakeDriver } = await import("./direct-execution-wake-driver.js");
+          const renderer = await createDirectClickGlowPulseRenderer(canvas.transferControlToOffscreen());
+          const driver = createDirectExecutionWakeDriver(renderer);
+          const errors = previous.errors;
+          const detach = attachNativeInputs(renderer, canvas, {
+            onInput: () => driver.wake(), onError: error => errors.push(String(error)),
+          });
+          globalThis.clickGlowPulseParity = { renderer, driver, detach, errors };
+          return { retiredAttachment: active.objects[1].effect.attachment,
+            retiredPublication: active.publication, retirementPublication: retired.publication,
+            retiredBeforeFree: true, recreated: true };
+        }, active.objects[1].effect.attachment);
+        await pages.direct.waitForFunction(() => clickGlowPulseParity.driver.stats().idle);
+      } else {
+        assert.ok(previousSession != null, "worker reload click requires a presented source session");
+        replacement = await pages.worker.evaluate(async ({ source, previousSession, attachment }) => {
+          const { execution, authoring } = clickGlowPulseParity;
+          if ((await execution.metrics()).metrics.presentedSession !== previousSession) {
+            throw new Error("worker source changed between the reload click and retirement");
+          }
+          const active = await execution.debugFrame();
+          if (!active.interactions_active || active.objects[1].effect === null) {
+            throw new Error("worker source replacement must begin with an active temporary attachment");
+          }
+          if (JSON.stringify(active.objects[1].effect.attachment) !== JSON.stringify(attachment)) {
+            throw new Error("worker source replacement must retire the attachment whose halo was observed");
+          }
+          // Authoring also writes this worker's canonical store. Await the old
+          // source's release before Run can make its input publication stale.
+          await execution.retireExecutionSource();
+          const authored = await authoring.run(source);
+          const result = await execution.reconcileSemanticExecution(authored.semanticExecution, {
+            authoringClient: authoring,
+          });
+          const fresh = await execution.debugFrame();
+          if (fresh.interactions_active || fresh.objects[1].effect !== null) {
+            throw new Error("fresh Run retained an old input-owned attachment or invocation");
+          }
+          await execution.pause();
+          return { retiredAttachment: active.objects[1].effect.attachment,
+            retiredPublication: active.publication, previousSession, session: result.ready.session,
+            releasedBeforeAuthoring: true };
+        }, { source: clickGlowPulseSource, previousSession, attachment: active.objects[1].effect.attachment });
+        assert.notEqual(replacement.session, replacement.previousSession, "fresh Run must replace the execution session");
+        await waitUntil("worker fresh Run presentation", () => pages.worker.evaluate(async session => {
+          const { metrics } = await clickGlowPulseParity.execution.metrics();
+          return metrics.presentedSession === session && metrics.ready && !metrics.needsPresent &&
+            metrics.bufferedDeltas === 0;
+        }, replacement.session));
+      }
+      const fresh = await frameFor(host);
+      assert.equal(fresh.time, 0);
+      assert.equal(fresh.interactions_active, false);
+      assert.equal(fresh.objects[1].effect, null, `${host}: retired temporary generation survived source replacement`);
+      assert.deepEqual(fresh.objects[0].effect.definition, initial[host].objects[0].effect.definition);
+      assert.deepEqual(matchedVisibleObjectState(fresh.objects), matchedVisibleObjectState(initial[host].objects));
+      await pages[host].evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      reloaded[host] = await capture(host, "active-pulse-reload");
+      assertExactPixels(reloaded[host], baseline[host], `${backend} ${host} active-pulse source replacement`, VIEW);
+      if (host === "direct") {
+        assert.equal(await pages.direct.evaluate(() => clickGlowPulseParity.driver.stats().idle), true);
+        assert.equal(await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render()), false);
+      } else {
+        const before = await pages.worker.evaluate(async () =>
+          (await clickGlowPulseParity.execution.metrics()).metrics.presentedFrames);
+        await pages.worker.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        const after = await pages.worker.evaluate(async () =>
+          (await clickGlowPulseParity.execution.metrics()).metrics.presentedFrames);
+        assert.equal(after, before, "replaced source must remain idle after old input is retired");
+      }
+      checkpoints.push({ id: `${host}-active-pulse-reload`, ...replacement, sha256: hash(reloaded[host].data) });
+    }
+    equalPixels(reloaded.direct, reloaded.worker, `${backend} click-GlowPulse fresh source parity`);
+    assert.deepEqual(errors, { direct: [], worker: [] });
+    assert.deepEqual(await pages.direct.evaluate(() => clickGlowPulseParity.errors), []);
+    assert.deepEqual(await pages.worker.evaluate(() => clickGlowPulseParity.errors), []);
+    console.log(`CLICK_GLOW_PULSE_PASS backend=${expectedBackend} transport=transferable profiles=2 actual_dom=true active_halo=true restoration_exact=true temporary_retirement=true active_seek_exact=true active_reload_exact=true idle=true`);
+    return checkpoints;
+  } finally {
+    await pages.direct?.evaluate(() => {
+      clickGlowPulseParity.detach(); clickGlowPulseParity.driver.stop();
+      clickGlowPulseParity.renderer.retireExecutionSource();
+      clickGlowPulseParity.renderer.free();
+    }).catch(() => {});
+    await pages.worker?.evaluate(() => {
+      clickGlowPulseParity.execution.terminate(); clickGlowPulseParity.authoring.terminate();
+    }).catch(() => {});
+    for (const page of Object.values(pages)) await page.close();
+  }
+}
+
 try {
   const declarationPath = path.join(root, "web/pkg/noon_web.d.ts");
   const wasmPath = path.join(root, "web/pkg/noon_web_bg.wasm");
@@ -722,6 +1125,8 @@ try {
     "build the moving-selection renderer-smoke package before this qualification");
   assert.match(declarations, /createDirectMovingClickIndicateRenderer\(/,
     "build the authored-motion click-Indicate renderer-smoke package before this qualification");
+  assert.match(declarations, /createDirectClickGlowPulseRenderer\(/,
+    "build the click-GlowPulse renderer-smoke package before this qualification");
   assert.match(declarations, /createDirectNativeDragSmokeRenderer\(/,
     "build the native-drag renderer-smoke package before this qualification");
   report.wasmSha256 = hash(await readFile(wasmPath));
@@ -860,6 +1265,7 @@ try {
       result.dragCheckpoints = await dragParity(backend);
       result.clickIndicateCheckpoints = await clickIndicateParity(backend);
       result.movingClickIndicateCheckpoints = await clickIndicateParity(backend, { moving: true });
+      result.clickGlowPulseCheckpoints = await clickGlowPulseParity(backend);
       result.status = "passed";
     } catch (error) {
       result.status = "failed"; result.error = String(error.stack ?? error); throw error;

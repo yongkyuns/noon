@@ -71,6 +71,7 @@ mod brace_authoring;
 mod camera_authoring;
 mod camera_motion_authoring;
 mod camera_profile_authoring;
+mod click_action;
 mod compact_value_authoring;
 mod composite_entry;
 mod coordinate_authoring;
@@ -86,12 +87,13 @@ mod effect_authoring;
 mod effective_capture;
 pub mod number_line_example;
 
-/// Checked leaf effects. Finite glow playback supports filled, unstroked planar
-/// circles/rectangles through ordinary Scene execution and live publication.
+/// Finite leaf effects through shared semantic identity, ordinary animation
+/// channels and retained source capture. Groups/stacks have separate admission.
 pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{
-        EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
+        Blur, EffectDefinition, EffectOffset, EffectParameterError, EffectRadius, EffectUpdate,
+        Glow, GlowSource, Pixels, Shadow,
     };
 }
 mod drawing;
@@ -255,7 +257,9 @@ pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayo
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
-pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
+pub use image_authoring::{
+    ImageMobjectOptions, ImagePaintOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION,
+};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
 pub use inspection_view::{InspectionView2D, InspectionViewError};
@@ -311,7 +315,20 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
+pub use noon_core::{
+    GradientError, GradientStop, LinearGradient, PaintTransitionError, RadialGradient,
+};
+pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
+pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
+#[cfg(test)]
+mod gradient_authoring_tests;
+#[cfg(test)]
+mod image_paint_authoring_tests;
+#[cfg(test)]
+mod noise_authoring_tests;
+#[cfg(test)]
+mod radial_authoring_tests;
 pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
@@ -340,7 +357,10 @@ pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use scene::{Scene, SceneSection, SceneSectionNavigation, SectionNavigation, SectionType};
+pub use scene::{
+    Scene, SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation,
+    SectionNavigation, SectionType,
+};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{

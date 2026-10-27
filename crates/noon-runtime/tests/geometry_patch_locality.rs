@@ -76,6 +76,7 @@ fn transient_presentation_retirement_does_not_dirty_a_100k_stable_scene() {
         0,
         7,
         TransientPresentationState {
+            fill_paint: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
             text_bounds: None,

@@ -1,5 +1,5 @@
 //! Local lowering for an exclusively prepared authored transaction.
-mod glow;
+mod effect;
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
@@ -1324,7 +1324,13 @@ fn lower_prepared_entry(
         lowered.base_transform,
         lowered.base_style,
     );
-    compiled.glow = glow::lower_prepared_attachment(prepared, object)?;
+    compiled.effect = effect::lower_prepared_attachment(prepared, object)?;
+    if let Some(paint) = lowered.fill_paint.as_deref() {
+        resource_additions
+            .capture_paint_from_arena(prepared.store().raster_image_resources(), paint)
+            .map_err(SemanticPublicationLoweringError::Resource)?;
+    }
+    compiled.fill_paint = lowered.fill_paint;
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
@@ -1484,7 +1490,8 @@ fn lower_semantic_publication(
         };
         // A style/content/domain edit must not leave an installed or newly staged
         // glow outside the same finite profile accepted at initial lowering.
-        glow::lower_prepared_attachment(prepared, node.into())?;
+        effect::lower_prepared_attachment(prepared, node.into())?;
+        super::paint::lower_fill(node, &state, prepared.store())?;
         // Object-owned interaction/metadata declarations have no render-value patch.
         let Some(flags) = domains.get(&node) else {
             continue;
@@ -1567,13 +1574,19 @@ fn lower_semantic_publication(
             }
         }
         if flags.style {
+            if let Some(paint) = state.style.fill.as_ref() {
+                resource_additions
+                    .capture_paint_from_arena(prepared.store().raster_image_resources(), paint)
+                    .map_err(SemanticPublicationLoweringError::Resource)?;
+            }
             mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,
+                fill_paint: super::paint::lower_fill(node, &state, prepared.store())?,
             });
         }
     }
-    glow::lower_changes(prepared, index, reachability, &mut mutations)?;
+    effect::lower_changes(prepared, index, reachability, &mut mutations)?;
     Ok((
         ExecutionMutationTransaction::from_mutations(mutations),
         resource_additions,

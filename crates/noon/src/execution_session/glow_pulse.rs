@@ -10,7 +10,7 @@ use noon_compile::{
     PreparedSemanticAnimationScheduleProjection, PreparedSemanticScheduledAnimationPayload,
 };
 use noon_core::{
-    AnimationOptions, GlowParameter, GlowTrackEndBehavior, PreparedSemanticMutationTransaction,
+    AnimationOptions, EffectParameter, EffectTrackEndBehavior, PreparedSemanticMutationTransaction,
     SemanticMutation, SemanticMutationTransaction, SemanticNodeId, SemanticTransactionNodeRef,
     TrackDefinition, TrackId, TrackValues,
 };
@@ -170,9 +170,9 @@ pub(super) fn record_attachment_completion(
     definition: &TrackDefinition,
     temporary: &BTreeSet<SemanticNodeId>,
 ) {
-    let TrackValues::Glow {
+    let TrackValues::Effect {
         attachment,
-        end_behavior: GlowTrackEndBehavior::RestoreSource,
+        end_behavior: EffectTrackEndBehavior::RestoreSource,
         ..
     } = &definition.values
     else {
@@ -199,10 +199,10 @@ pub(super) fn adopt_ordinary_parameter_tracks(
     definitions: &[TrackDefinition],
 ) {
     for definition in definitions {
-        if let TrackValues::Glow {
+        if let TrackValues::Effect {
             attachment,
             from,
-            end_behavior: GlowTrackEndBehavior::Sample,
+            end_behavior: EffectTrackEndBehavior::Sample,
             ..
         } = &definition.values
         {
@@ -216,12 +216,13 @@ pub(super) fn adopt_ordinary_parameter_tracks(
     }
 }
 
-const fn parameter_bit(parameter: GlowParameter) -> u8 {
+const fn parameter_bit(parameter: EffectParameter) -> u8 {
     match parameter {
-        GlowParameter::Color => 1,
-        GlowParameter::Radius => 2,
-        GlowParameter::Intensity => 4,
-        GlowParameter::Source => 8,
+        EffectParameter::Color => 1,
+        EffectParameter::Radius => 2,
+        EffectParameter::Intensity => 4,
+        EffectParameter::Source => 8,
+        EffectParameter::Offset => 16,
     }
 }
 

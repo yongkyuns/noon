@@ -61,7 +61,9 @@ export async function attachSemanticEngine(
     throw new Error("semantic execution requires control and render ports");
   }
   if (typeof context?.createExecutionPlayer !== "function" ||
-      typeof context.returnExecutionPlayer !== "function") {
+      typeof context.returnExecutionPlayer !== "function" ||
+      typeof context.discardExecutionPlayer !== "function" ||
+      typeof context.retireExecutionSource !== "function") {
     throw new Error("semantic execution requires a context player lease API");
   }
   if (typeof initiallyPaused !== "boolean") {
@@ -85,7 +87,7 @@ export async function attachSemanticEngine(
   let sections = [];
   // A player is leased from the authoring context. The transport session only
   // frames deltas; it never selects or creates a second runtime for a scene.
-  let transport;
+  let transport = null;
   let stopped = false;
   let latestTick = null;
   let draining = false;
@@ -1180,10 +1182,47 @@ export async function attachSemanticEngine(
       stop();
     }
   }
-  function stop() {
-    if (stopped) return;
-    if (hasAudio) post({ type: "audio_stopped" });
+  function stop({ retireSource = false } = {}) {
+    // Halt progression immediately, while retaining a rejected consuming exit
+    // for an explicit retry. Final release happens only after ownership settles.
+    if (stopped && player === null && transport === null) return;
     stopped = true;
+    if (transport !== null) emitExecutionWake("idle", null, true);
+    if (player !== null) {
+      player.cancelSceneControl();
+      if (pendingPhaseJson !== null) {
+        const interruption = new Error("canonical callback phase interrupted by endpoint stop");
+        if (typeof player.interruptCallbackPhaseJson === "function") {
+          player.interruptCallbackPhaseJson(pendingPhaseJson);
+        } else {
+          player.failCallbackPhaseJson(pendingPhaseJson);
+        }
+        callbackFault = interruption;
+        pendingPhaseJson = null;
+      }
+      try {
+        if (continuationActive) {
+          // An incomplete source is aborted, never returned as a completed
+          // continuation. Its exact owner retires input before dropping it.
+          context.discardExecutionPlayer(player);
+        } else {
+          player.clearTranslationDragUndo();
+          context.returnExecutionPlayer(player);
+        }
+      } catch (error) {
+        // Consuming WASM exits preserve a rejected capability on the real Error.
+        // Keep it here for retry before releasing ports or the context registry.
+        if (typeof error?.takePlayer === "function") player = error.takePlayer();
+        throw error;
+      }
+      player = null;
+    }
+    // Genuine source replacement must finish its shared semantic cleanup before
+    // closing either port. A rejected retirement keeps the returned player in
+    // its exact context and this halted endpoint open for an explicit retry.
+    // Renderer recovery calls ordinary stop() and preserves that invocation.
+    if (retireSource) context.retireExecutionSource();
+    if (hasAudio) post({ type: "audio_stopped" });
     continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
     rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
@@ -1197,27 +1236,8 @@ export async function attachSemanticEngine(
     }
     controls.length = 0;
     latestTick = null;
-    if (player !== null) {
-      player.cancelSceneControl();
-      player.clearTranslationDragUndo();
-      if (pendingPhaseJson !== null) {
-        const interruption = new Error("canonical callback phase interrupted by endpoint stop");
-        try {
-          if (typeof player.interruptCallbackPhaseJson === "function") {
-            player.interruptCallbackPhaseJson(pendingPhaseJson);
-          } else {
-            player.failCallbackPhaseJson(pendingPhaseJson);
-          }
-        } catch { /* teardown owns final release */ }
-        callbackFault = interruption;
-        pendingPhaseJson = null;
-      }
-      // The authoring context retains this exact runtime for renderer recovery
-      // and setup retries. Dropping the context is the only genuine teardown.
-      if (!continuationActive) context.returnExecutionPlayer(player);
-      player = null;
-    }
     transport?.close?.();
+    transport = null;
     renderPort.close();
     controlPort.close();
     onStop();

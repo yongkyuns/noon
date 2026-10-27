@@ -24,6 +24,9 @@ enum SourceDraw {
         batch: OrderedRenderBatch,
         bytes: std::ops::Range<u64>,
         mesh: Option<usize>,
+        // The value participates in capture invalidation even when the packed
+        // carrier row is unchanged. GPU bindings remain renderer-owned.
+        paint: Option<(noon_core::ObjectId, crate::paint::PreparedPaint)>,
     },
     Glyph {
         item: PreparedTextItem,
@@ -60,6 +63,22 @@ impl PreparedSource {
         for item in frame.capture_items(object)? {
             match item {
                 RetainedRenderItem::Geometry { batch, .. } => {
+                    let at = batch.instance_range.start as usize;
+                    let packed = match batch.primitive {
+                        RenderPrimitive::Circle => frame.geometry.circle_ids.get(at),
+                        RenderPrimitive::Rectangle => frame.geometry.rectangle_ids.get(at),
+                        RenderPrimitive::Path { .. } => frame.geometry.path_ids.get(at),
+                        _ => None,
+                    };
+                    // Retained mixed frames use private scratch identities. The
+                    // canonical source draw range proves their packed mapping.
+                    let paint = packed.filter(|_| !silhouette).and_then(|id| {
+                        frame
+                            .geometry
+                            .fill_paints
+                            .get(id)
+                            .map(|value| (*id, value.clone()))
+                    });
                     let start = source.bytes.len() as u64;
                     let mut local = batch.clone();
                     local.instance_range = 0..batch.instance_range.len() as u32;
@@ -137,6 +156,7 @@ impl PreparedSource {
                             batch: local,
                             bytes: start..source.bytes.len() as u64,
                             mesh,
+                            paint,
                         });
                     }
                 }
@@ -296,8 +316,28 @@ impl PreparedSource {
         let mut binding = None;
         for draw in &self.draws {
             match draw {
-                SourceDraw::Geometry { batch, bytes, .. } => {
+                SourceDraw::Geometry {
+                    batch,
+                    bytes,
+                    paint,
+                    ..
+                } => {
                     pass.set_bind_group(0, camera, &[]);
+                    if let Some((object, _)) = paint {
+                        renderer
+                            .draw_paint_batch(
+                                &mut pass,
+                                prepared,
+                                batch.primitive,
+                                batch.instance_range.clone(),
+                                false,
+                                &mut binding,
+                                *object,
+                                Some(instances.slice(bytes.clone())),
+                            )
+                            .ok_or(RetainedDrawError::GradientNotUploaded)?;
+                        continue;
+                    }
                     renderer.draw_isolated_ordered_batch(
                         &mut pass,
                         prepared,

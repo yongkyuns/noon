@@ -1,5 +1,5 @@
 //! One retained coordinate grid, curve and marker, paired with number_plane.py.
-use crate::{ExecutionSession, ManimNumberPlaneOptions, Scene, SemanticPaint, BLUE, GREEN, YELLOW};
+use crate::{ManimNumberPlaneOptions, Scene, SemanticPaint, BLUE, GREEN, YELLOW};
 
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 use crate::Text;
@@ -64,10 +64,10 @@ pub(super) fn scene_with_tips(include_tips: bool) -> Result<Scene, Box<dyn std::
     Ok(scene)
 }
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let scene = scene()?;
-        Ok(scene.execution_session()?)
+        Ok(scene.into_execution()?)
     };
     build().map_err(|error| error.to_string())
 }

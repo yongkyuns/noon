@@ -20,8 +20,9 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         time: 0.0,
         objects: (0..OBJECT_COUNT)
             .map(|index| FrameObjectState {
+                fill_paint: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),
@@ -50,8 +51,9 @@ fn single_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),

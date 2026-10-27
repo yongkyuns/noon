@@ -60,6 +60,7 @@ fn input(
 }
 
 fn click_edge(
+    store: &mut SemanticStore,
     session: &mut ExecutionSession,
     sequence: u64,
     surface: Vec2,
@@ -80,7 +81,7 @@ fn click_edge(
         }
     };
     session
-        .submit_native_pointer_input(&token, input(&token, sequence, kind))
+        .submit_native_pointer_input(store, &token, input(&token, sequence, kind))
         .unwrap()
 }
 
@@ -144,8 +145,14 @@ fn no_op_and_saturated_zoom_preserve_bindings_and_revisions() {
 
 #[test]
 fn invalid_and_foreign_requests_leave_view_frame_and_gesture_unchanged() {
-    let (_, _, mut session) = fixture();
-    click_edge(&mut session, 1, Vec2::new(500.0, 200.0), true);
+    let (scene, _, mut session) = fixture();
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        1,
+        Vec2::new(500.0, 200.0),
+        true,
+    );
     let state = session.frame().clone();
     let gesture = session.pointer_selection;
     let token = session.native_pointer_input_token().unwrap();
@@ -220,8 +227,14 @@ fn precise_picking_uses_composed_view_and_rejects_old_uncomposed_view() {
 
 #[test]
 fn zoom_cancels_a_press_and_old_or_fresh_releases_cannot_synthesize_a_click() {
-    let (_, _, mut session) = fixture();
-    click_edge(&mut session, 1, Vec2::new(500.0, 200.0), true);
+    let (scene, _, mut session) = fixture();
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        1,
+        Vec2::new(500.0, 200.0),
+        true,
+    );
     let old_frame = displayed(&mut session);
     let old_token = session.native_pointer_input_token().unwrap();
     zoom(&mut session, CENTER, 0.5).unwrap();
@@ -234,21 +247,43 @@ fn zoom_cancels_a_press_and_old_or_fresh_releases_cannot_synthesize_a_click() {
         },
     );
     assert!(session
-        .submit_native_pointer_input(&old_token, release)
+        .submit_native_pointer_input(
+            &mut scene.integration_store().borrow_mut(),
+            &old_token,
+            release
+        )
         .is_err());
     assert_eq!(session.last_native_event_sequence, Some(1));
     session
         .configure_native_pointer_input(POINTER, SURFACE)
         .unwrap();
-    assert!(click_edge(&mut session, 2, Vec2::new(600.0, 200.0), false)
-        .selection_click()
-        .is_none());
-    click_edge(&mut session, 3, Vec2::new(600.0, 200.0), true);
-    assert!(click_edge(&mut session, 4, Vec2::new(600.0, 200.0), false)
-        .selection_click()
-        .unwrap()
-        .target()
-        .is_some());
+    assert!(click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        2,
+        Vec2::new(600.0, 200.0),
+        false
+    )
+    .selection_click()
+    .is_none());
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        3,
+        Vec2::new(600.0, 200.0),
+        true,
+    );
+    assert!(click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        4,
+        Vec2::new(600.0, 200.0),
+        false
+    )
+    .selection_click()
+    .unwrap()
+    .target()
+    .is_some());
 }
 
 #[test]
@@ -272,10 +307,26 @@ fn zoom_during_click_indicate_restores_and_allows_a_fresh_composed_view_repick()
 
     let authored_time = session.frame().time;
     let publication = session.publication_context();
-    click_edge(&mut session, 1, Vec2::new(500.0, 200.0), true);
-    click_edge(&mut session, 2, Vec2::new(500.0, 200.0), false);
-    session.advance_interactions(10.0).unwrap();
-    session.advance_interactions(10.2).unwrap();
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        1,
+        Vec2::new(500.0, 200.0),
+        true,
+    );
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        2,
+        Vec2::new(500.0, 200.0),
+        false,
+    );
+    session
+        .advance_interactions(&mut scene.integration_store().borrow_mut(), 10.0)
+        .unwrap();
+    session
+        .advance_interactions(&mut scene.integration_store().borrow_mut(), 10.2)
+        .unwrap();
     assert!(session.interactions_active());
     let indicated = session.frame().clone();
     assert!(indicated.objects[0].transform.scale.x > 1.0);
@@ -292,7 +343,9 @@ fn zoom_during_click_indicate_restores_and_allows_a_fresh_composed_view_repick()
         publication.execution_revision()
     );
 
-    session.advance_interactions(10.5).unwrap();
+    session
+        .advance_interactions(&mut scene.integration_store().borrow_mut(), 10.5)
+        .unwrap();
     assert!(!session.interactions_active());
     assert_eq!(session.frame().time, authored_time);
     assert_eq!(session.frame().objects[0].transform.scale.x, 1.0);
@@ -300,8 +353,20 @@ fn zoom_during_click_indicate_restores_and_allows_a_fresh_composed_view_repick()
     session
         .configure_native_pointer_input(POINTER, SURFACE)
         .unwrap();
-    click_edge(&mut session, 3, Vec2::new(600.0, 200.0), true);
-    click_edge(&mut session, 4, Vec2::new(600.0, 200.0), false);
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        3,
+        Vec2::new(600.0, 200.0),
+        true,
+    );
+    click_edge(
+        &mut scene.integration_store().borrow_mut(),
+        &mut session,
+        4,
+        Vec2::new(600.0, 200.0),
+        false,
+    );
     assert!(session.interactions_active());
 }
 
@@ -490,7 +555,7 @@ fn cancellation_clears_held_native_buttons_without_fabricating_release_events() 
     session
         .configure_native_pointer_input(POINTER, SURFACE)
         .unwrap();
-    click_edge(&mut session, 1, CENTER, true);
+    click_edge(&mut store, &mut session, 1, CENTER, true);
     assert_eq!(
         session.effective_signal_value(button),
         Some(&ReactiveValue::Bool(true))

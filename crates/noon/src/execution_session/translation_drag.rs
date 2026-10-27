@@ -232,7 +232,7 @@ impl ExecutionSession {
     ) -> Result<TranslationDragReceipt, TranslationDragError> {
         if !self.translation_drag.has_targets() && !self.translation_drag.is_active() {
             return self
-                .submit_native_pointer_input(token, input)
+                .submit_native_pointer_input(store, token, input)
                 .map(|input| TranslationDragReceipt { input, undo: None })
                 .map_err(TranslationDragError::Input);
         }
@@ -350,7 +350,7 @@ impl ExecutionSession {
         let captured =
             start.is_some() || active.is_some_and(|active| active.pointer == input.pointer());
         let publication = match self
-            .submit_native_pointer_input_with_effective(token, input, effective, captured)
+            .submit_native_pointer_input_with_effective(store, token, input, effective, captured)
         {
             Ok(publication) => publication,
             Err(error) => {

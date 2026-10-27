@@ -3,7 +3,7 @@
 
 use super::*;
 use noon::integration::PointerFillOutcome;
-use noon::{AnimationOptions, ExecutionSession, RateFunction, Scene};
+use noon::{AnimationOptions, RateFunction, Scene};
 use noon_core::{
     NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
     NativePointerPosition, SemanticMutationTransaction, SemanticObjectProperty,
@@ -16,7 +16,7 @@ fn viewport() -> Rect {
     Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0))
 }
 
-fn expansion_source(with_second: bool) -> (Scene, StaticExecutionSource, noon::ExecutionSegment) {
+fn expansion_source(with_second: bool) -> (StaticExecutionSource, noon::ExecutionSegment) {
     let mut scene = Scene::new();
     let mut left = scene.circle(0.5).unwrap();
     left.shift(-20.0, 0.0).unwrap();
@@ -67,8 +67,10 @@ fn expansion_source(with_second: bool) -> (Scene, StaticExecutionSource, noon::E
         .unwrap()
     };
     (
-        scene,
-        StaticExecutionSource::new(session, RustHostCallbackTable::new()),
+        StaticExecutionSource::new(
+            scene.into_execution_with_session(session).unwrap(),
+            RustHostCallbackTable::new(),
+        ),
         segment,
     )
 }
@@ -86,12 +88,12 @@ fn assert_canonical(query: &ExecutionViewportQuery, publication: &RendererPublic
 
 #[test]
 fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
-    let (_scene, mut source, _segment) = expansion_source(true);
+    let (mut source, _segment) = expansion_source(true);
     source.advance_to(0.5).unwrap();
-    let stable_count = source.session.frame().objects.len();
-    let spatial = source.session.query_viewports(&[viewport()]);
+    let stable_count = source.session().frame().objects.len();
+    let spatial = source.session.session_mut().query_viewports(&[viewport()]);
     let query = source.query_viewports(&[viewport()]);
-    assert_eq!(source.session.frame().objects.len(), stable_count);
+    assert_eq!(source.session().frame().objects.len(), stable_count);
     assert_eq!(spatial.object_indices().len(), 1);
     assert_eq!(query.object_indices().len(), 2);
     assert_eq!(query.spatial_stats(), spatial.spatial_stats());
@@ -151,9 +153,9 @@ fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
 
 #[test]
 fn native_viewport_admits_a_shared_anchor_only_once() {
-    let (_scene, mut source, _segment) = expansion_source(false);
+    let (mut source, _segment) = expansion_source(false);
     source.advance_to(0.5).unwrap();
-    let spatial = source.session.query_viewports(&[viewport()]);
+    let spatial = source.session.session_mut().query_viewports(&[viewport()]);
     let query = source.query_viewports(&[viewport()]);
     assert_eq!(
         query.object_indices().len(),
@@ -183,10 +185,10 @@ fn native_viewport_admits_a_shared_anchor_only_once() {
 
 #[test]
 fn native_viewport_leaves_visible_anchor_candidates_unchanged() {
-    let (_scene, mut source, _segment) = expansion_source(true);
+    let (mut source, _segment) = expansion_source(true);
     source.advance_to(0.5).unwrap();
     let bounds = Rect::new(Vec2::new(-22.0, -2.0), Vec2::new(-16.0, 2.0));
-    let spatial = source.session.query_viewports(&[bounds]);
+    let spatial = source.session.session_mut().query_viewports(&[bounds]);
     let query = source.query_viewports(&[bounds]);
     assert_eq!(query, spatial);
     let publication = source.take_renderer_publication();
@@ -196,7 +198,7 @@ fn native_viewport_leaves_visible_anchor_candidates_unchanged() {
 
 #[test]
 fn native_viewport_seek_matches_forward_presentation() {
-    let (_forward_scene, mut forward, _forward_segment) = expansion_source(true);
+    let (mut forward, _forward_segment) = expansion_source(true);
     forward.advance_to(0.25).unwrap();
     drop(forward.take_renderer_publication());
     forward.advance_to(0.5).unwrap();
@@ -206,7 +208,7 @@ fn native_viewport_seek_matches_forward_presentation() {
         .transient_presentations()
         .to_vec();
 
-    let (_direct_scene, mut direct, _direct_segment) = expansion_source(true);
+    let (mut direct, _direct_segment) = expansion_source(true);
     direct.session.seek(0.5).unwrap();
     let direct_query = direct.query_viewports(&[viewport()]);
     let direct_occurrences = direct
@@ -222,13 +224,14 @@ fn native_viewport_seek_matches_forward_presentation() {
 
 #[test]
 fn native_viewport_releases_transient_anchors_after_completion() {
-    let (scene, mut source, segment) = expansion_source(true);
-    source.session.advance_segment_to(segment, 1.0).unwrap();
-    scene
-        .live(&mut source.session)
-        .complete_segment(segment)
+    let (mut source, segment) = expansion_source(true);
+    source
+        .session
+        .session_mut()
+        .advance_segment_to(segment, 1.0)
         .unwrap();
-    let spatial = source.session.query_viewports(&[viewport()]);
+    source.session.live().complete_segment(segment).unwrap();
+    let spatial = source.session.session_mut().query_viewports(&[viewport()]);
     let query = source.query_viewports(&[viewport()]);
     assert_eq!(query, spatial);
     assert!(source
@@ -264,9 +267,14 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
         }
     }
     let target = target.unwrap();
-    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-    session.configure_native_pointer_input(POINTER, 1).unwrap();
-    session.take_frame_changes();
+    let mut session = crate::test_scene_from_store(store)
+        .into_execution()
+        .unwrap();
+    session
+        .session_mut()
+        .configure_native_pointer_input(POINTER, 1)
+        .unwrap();
+    session.session_mut().take_frame_changes();
     let mut source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
@@ -306,7 +314,9 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
         );
         source
             .session
-            .apply_semantic_transaction(&mut store, transaction)
+            .with_store_and_session(|store, session| {
+                session.apply_semantic_transaction(store, transaction)
+            })
             .unwrap();
 
         // Exercise the native adapter's normalized input lane before comparing
@@ -327,10 +337,13 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
             .unwrap();
 
         let bounds = Rect::new(next - Vec2::new(1.1, 1.1), next + Vec2::new(1.1, 1.1));
-        let spatial = source.session.query_viewports(&[bounds]);
-        assert_eq!(source.session.last_spatial_update_stats().full_rebuilds, 0);
+        let spatial = source.session.session_mut().query_viewports(&[bounds]);
         assert_eq!(
-            source.session.last_spatial_update_stats().leaves_upserted,
+            source.session().last_spatial_update_stats().full_rebuilds,
+            0
+        );
+        assert_eq!(
+            source.session().last_spatial_update_stats().leaves_upserted,
             1
         );
         let native = source.query_viewports(&[bounds]);
@@ -377,6 +390,7 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
         let pointer_token = source.native_pointer_input_token().unwrap();
         let picked = source
             .session
+            .session_mut()
             .pick_native_pointer_fill(
                 &pointer_token,
                 NativePointerInput::new(

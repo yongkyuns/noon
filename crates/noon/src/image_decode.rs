@@ -52,47 +52,65 @@ impl ImageMobjectOptions {
         bytes: &[u8],
         limits: ImageDecodeLimits,
     ) -> Result<Self, AuthoringError> {
-        if limits.max_dimension == 0
-            || limits.max_encoded_bytes == 0
-            || limits.max_decoded_bytes == 0
-        {
-            return Err(ImageDecodeError::InvalidLimits.into());
-        }
-        if bytes.len() > limits.max_encoded_bytes {
-            return Err(ImageDecodeError::EncodedSize {
-                actual: bytes.len(),
-                limit: limits.max_encoded_bytes,
-            }
-            .into());
-        }
-        let format = match image::guess_format(bytes) {
-            Ok(format @ (ImageFormat::Png | ImageFormat::Jpeg)) => format,
-            _ => return Err(ImageDecodeError::UnsupportedFormat.into()),
-        };
-        let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-        let mut allocation_limits = image::Limits::default();
-        allocation_limits.max_image_width = Some(limits.max_dimension);
-        allocation_limits.max_image_height = Some(limits.max_dimension);
-        allocation_limits.max_alloc = Some(limits.max_decoded_bytes);
-        reader.limits(allocation_limits);
-        let decoder = reader.into_decoder().map_err(decode_error)?;
-        let (width, height) = decoder.dimensions();
-        let rgba_bytes = u64::from(width)
-            .checked_mul(u64::from(height))
-            .and_then(|count| count.checked_mul(4));
-        if !rgba_bytes.is_some_and(|count| count <= limits.max_decoded_bytes) {
-            return Err(ImageDecodeError::DecodedSize {
-                width,
-                height,
-                limit: limits.max_decoded_bytes,
-            }
-            .into());
-        }
-        let rgba = DynamicImage::from_decoder(decoder)
-            .map_err(decode_error)?
-            .into_rgba8();
-        Self::rgba8(width, height, rgba.into_raw())
+        Ok(Self::from_resource(decode_image_resource(bytes, limits)?))
     }
+}
+
+impl crate::ImagePaintOptions {
+    pub fn encoded(bytes: &[u8]) -> Result<Self, AuthoringError> {
+        Self::encoded_with_limits(bytes, ImageDecodeLimits::default())
+    }
+
+    pub fn encoded_with_limits(
+        bytes: &[u8],
+        limits: ImageDecodeLimits,
+    ) -> Result<Self, AuthoringError> {
+        Ok(Self::from_resource(decode_image_resource(bytes, limits)?))
+    }
+}
+
+fn decode_image_resource(
+    bytes: &[u8],
+    limits: ImageDecodeLimits,
+) -> Result<noon_core::RasterImageResource, AuthoringError> {
+    if limits.max_dimension == 0 || limits.max_encoded_bytes == 0 || limits.max_decoded_bytes == 0 {
+        return Err(ImageDecodeError::InvalidLimits.into());
+    }
+    if bytes.len() > limits.max_encoded_bytes {
+        return Err(ImageDecodeError::EncodedSize {
+            actual: bytes.len(),
+            limit: limits.max_encoded_bytes,
+        }
+        .into());
+    }
+    let format = match image::guess_format(bytes) {
+        Ok(format @ (ImageFormat::Png | ImageFormat::Jpeg)) => format,
+        _ => return Err(ImageDecodeError::UnsupportedFormat.into()),
+    };
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut allocation_limits = image::Limits::default();
+    allocation_limits.max_image_width = Some(limits.max_dimension);
+    allocation_limits.max_image_height = Some(limits.max_dimension);
+    allocation_limits.max_alloc = Some(limits.max_decoded_bytes);
+    reader.limits(allocation_limits);
+    let decoder = reader.into_decoder().map_err(decode_error)?;
+    let (width, height) = decoder.dimensions();
+    let rgba_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|count| count.checked_mul(4));
+    if !rgba_bytes.is_some_and(|count| count <= limits.max_decoded_bytes) {
+        return Err(ImageDecodeError::DecodedSize {
+            width,
+            height,
+            limit: limits.max_decoded_bytes,
+        }
+        .into());
+    }
+    let rgba = DynamicImage::from_decoder(decoder)
+        .map_err(decode_error)?
+        .into_rgba8();
+    noon_core::RasterImageResource::from_rgba8(width, height, rgba.into_raw())
+        .map_err(AuthoringError::from)
 }
 fn decode_error(error: image::ImageError) -> AuthoringError {
     ImageDecodeError::InvalidEncoding(error.to_string()).into()

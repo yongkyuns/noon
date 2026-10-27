@@ -44,6 +44,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     live.advance_segment_to(wait, wait.end_time())?;
     live.complete_segment(wait)?;
     assert!(live.segment_state(wait).is_complete());
-    noon_native::run(session)?;
+    noon_native::run(scene.into_execution_with_session(session)?)?;
     Ok(())
 }

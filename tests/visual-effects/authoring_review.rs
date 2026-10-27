@@ -4,7 +4,7 @@
 //! Same scenes/checkpoints as authoring_review.py. Normal LiveContinuation handles
 //! segment completion; no per-frame callback, private timeline or renderer loop.
 use effect_fixture::{ScanBand, ScanBandUpdate};
-use noon::effects::{Bloom, BloomUpdate, EffectOptions, EffectScope, Glow, GlowUpdate, Pixels}; // scope options: M3/M4
+use noon::effects::{Bloom, BloomUpdate, EffectOptions, EffectScope, Glow, EffectUpdate, Pixels}; // scope options: M3/M4
 use noon::{
     AnimationOptions, ContinuationStep, DeclaredAnimation, LiveContinuation, LiveProgram,
     LiveSession, ManimGeometryOptions, Mobject, MobjectFamily, MobjectTarget, RateFunction, Scene,
@@ -48,7 +48,7 @@ impl LiveContinuation for LuminousExplanation {
             3 => live.declare_and_activate_effect_to(
                 &self.dot,
                 "glow",
-                GlowUpdate::default().intensity(0.0),
+                EffectUpdate::default().intensity(0.0),
                 linear(0.4),
             )?,
             _ => {
@@ -62,11 +62,11 @@ impl LiveContinuation for LuminousExplanation {
 pub fn luminous_program() -> Result<LiveProgram<LuminousExplanation>, Error> {
     let mut scene = Scene::new();
     let dot = white_dot(&mut scene)?;
-    scene.set_glow(&dot, GlowUpdate::default().radius(0.15).intensity(0.35))?;
+    scene.set_glow(&dot, EffectUpdate::default().radius(0.15).intensity(0.35))?;
     scene.add(&dot)?;
     let mut target = dot.target_editor()?;
     target.shift(2.0, 0.0)?;
-    target.set_glow(GlowUpdate::default().intensity(1.2))?;
+    target.set_glow(EffectUpdate::default().intensity(1.2))?;
     let movement = scene.declare_transform_to(&dot, &target, linear(1.5))?;
     Ok(scene.into_live_program(LuminousExplanation {
         dot,
@@ -103,7 +103,7 @@ impl LiveContinuation for MixedEffectsReview {
                 live.set_effect(
                     &self.group,
                     "group-halo",
-                    GlowUpdate::default().intensity(0.25),
+                    EffectUpdate::default().intensity(0.25),
                 )?;
                 live.wait_segment(0.5)?
             }
@@ -153,17 +153,17 @@ pub fn mixed_program() -> Result<LiveProgram<MixedEffectsReview>, Error> {
     let group = scene.family(&[(&inner).into(), (&dot).into()])?;
     let aliases = scene.family(&[(&inner).into(), (&dot).into(), (&path).into()])?;
     scene.add_many(&[(&group).into(), (&title).into()])?;
-    scene.set_glow(&dot, GlowUpdate::default().intensity(0.35))?;
+    scene.set_glow(&dot, EffectUpdate::default().intensity(0.35))?;
     scene.add_effect(
         &title,
-        Glow::new(GlowUpdate::default().radius(Pixels(12.0)))?,
+        Glow::new(EffectUpdate::default().radius(Pixels(12.0)))?,
         "accent",
     )?;
     scene.add_effect(&title, ScanBand::new(0.2, 0.0), "scan")?;
     // M3/M4: explicit authored scopes; never infer isolation or recurse on lookup.
     scene.add_effect(
         &group,
-        Glow::new(GlowUpdate::default().radius(Pixels(12.0)))?,
+        Glow::new(EffectUpdate::default().radius(Pixels(12.0)))?,
         EffectOptions::named("group-halo").scope(EffectScope::Composed),
     )?;
     scene.add_effect(
@@ -175,13 +175,13 @@ pub fn mixed_program() -> Result<LiveProgram<MixedEffectsReview>, Error> {
     scene.on_click(&dot, Some(&click))?;
     let mut target = dot.target_editor()?;
     target.shift(2.0, 0.0)?;
-    target.set_glow(GlowUpdate::default().intensity(1.2))?;
+    target.set_glow(EffectUpdate::default().intensity(1.2))?;
     let movement = scene.declare_transform_to(&dot, &target, linear(1.5))?;
     // M1/M4: typed partial requests, with values captured at activation, not here.
     let accent = scene.declare_effect_to(
         &title,
         "accent",
-        GlowUpdate::default().intensity(1.4),
+        EffectUpdate::default().intensity(1.4),
         linear(1.5),
     )?;
     let parallel = scene.declare_animation(
@@ -195,7 +195,7 @@ pub fn mixed_program() -> Result<LiveProgram<MixedEffectsReview>, Error> {
     let dim = scene.declare_effect_to(
         &dot,
         "glow",
-        GlowUpdate::default().intensity(0.5),
+        EffectUpdate::default().intensity(0.5),
         linear(0.5),
     )?;
     let sequence = scene.declare_animation(

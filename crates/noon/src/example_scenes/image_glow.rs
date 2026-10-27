@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/image_glow.py`.
 
 use crate::{
-    effects::{GlowUpdate, Pixels},
+    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram,
     LiveSession, Mobject, RasterImageSampling, RateFunction, Scene,
 };
@@ -61,7 +61,7 @@ impl LiveContinuation for ImageGlow {
                     .map_err(message)?;
                 live.set_glow(
                     &target,
-                    GlowUpdate::default()
+                    EffectUpdate::default()
                         .color(Color::PINK)
                         .radius(Pixels(20.0))
                         .intensity(2.2),
@@ -77,7 +77,7 @@ impl LiveContinuation for ImageGlow {
                     .map_err(message)?;
                 live.set_glow(
                     &target,
-                    GlowUpdate::default()
+                    EffectUpdate::default()
                         .color(Color::BLUE)
                         .radius(Pixels(10.0))
                         .intensity(0.0),
@@ -117,7 +117,7 @@ pub fn program() -> Result<LiveProgram<ImageGlow>, String> {
     image.set_translation(2.2, 0.0).map_err(message)?;
     image
         .set_glow(
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .color(Color::BLUE)
                 .radius(Pixels(10.0))
                 .intensity(1.4),

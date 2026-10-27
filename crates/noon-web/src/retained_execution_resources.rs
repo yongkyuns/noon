@@ -549,6 +549,22 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let Some(image) = object
+                .fill_paint
+                .as_deref()
+                .and_then(noon_core::SemanticPaint::as_image)
+            {
+                let handle = image.resource().into();
+                if self
+                    .resources
+                    .resolve_image_handle(handle, image.sampling().into())
+                    .is_none()
+                {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownImageResource(handle).into(),
+                    );
+                }
+            }
             if let TransportObjectContent::Image { image, sampling } = object.content {
                 if self
                     .resources
@@ -660,7 +676,8 @@ mod tests {
             .text(noon::Text::new("World").with_font_size(72.0))
             .unwrap();
         scene.add_many(&[(&hello).into(), (&world).into()]).unwrap();
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap()
     }
 
     fn geometry_engine() -> SemanticExecutionPlayer {
@@ -670,7 +687,8 @@ mod tests {
         scene
             .add_many(&[(&first).into(), (&second).into()])
             .unwrap();
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap()
     }
 
     #[test]
@@ -720,15 +738,16 @@ mod tests {
             InstalledRetainedExecutionMirror::from_bundle_bytes(&bundle.encode_binary().unwrap())
                 .unwrap();
         let local_handle = mirror.resources().geometry_handle_remap()[&source_handle];
-        let compiled_glow = noon_compile::CompiledGlow {
+        let compiled_glow = noon_compile::CompiledEffect {
             attachment: noon_core::SemanticNodeId::new(90, 1),
-            definition: noon_core::Glow::new(
-                noon::effects::GlowUpdate::default()
+            definition: (noon_core::Glow::new(
+                noon::effects::EffectUpdate::default()
                     .color(noon::Color::BLUE)
                     .radius(noon::effects::Pixels(8.0))
                     .intensity(1.25),
             )
-            .unwrap(),
+            .unwrap())
+            .into(),
         };
         let context = noon_core::PublicationContext::default();
         let retained = RetainedExecutionDeltaEnvelope {
@@ -742,6 +761,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![crate::RetainedTransportObjectState {
+                fill_paint: None,
                 draw_enabled: true,
                 slot: crate::TransportSlotId {
                     slot: 0,
@@ -749,7 +769,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(90),
-                glow: Some(crate::TransportGlowState::from(&compiled_glow)),
+                effect: Some(crate::TransportEffectState::from(&compiled_glow)),
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -801,7 +821,14 @@ mod tests {
         );
         assert_eq!(resolved_frame.reveals[0], 0.35);
         assert_eq!(
-            resolved.glow.as_deref().unwrap().definition.intensity(),
+            resolved
+                .effect
+                .as_deref()
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .intensity(),
             1.25
         );
     }
@@ -809,7 +836,7 @@ mod tests {
     #[test]
     fn actual_surface_player_binds_mesh_before_worker_install_and_keeps_motion_local() {
         let session = noon::example_scenes::spatial_surface::session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 81).unwrap();
+        let mut player = SemanticExecutionPlayer::from_scene_execution(session, 2.0, 81).unwrap();
         let mut mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(&player.resource_bundle_bytes())
                 .unwrap();
@@ -949,6 +976,7 @@ mod tests {
                 camera: Camera2DState::default(),
                 inset_2d_views: Vec::new(),
                 objects: vec![crate::RetainedTransportObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot: 0,
@@ -956,7 +984,7 @@ mod tests {
                     },
                     order: 0,
                     object: ObjectId::new(90),
-                    glow: None,
+                    effect: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -995,6 +1023,7 @@ mod tests {
                                      camera_projection: Option<crate::TransportProjection3D>,
                                      point_light: bool| {
                 crate::RetainedTransportObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot,
@@ -1002,7 +1031,7 @@ mod tests {
                     },
                     order: slot,
                     object: ObjectId::new(object),
-                    glow: None,
+                    effect: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1131,6 +1160,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,
@@ -1138,7 +1168,7 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        glow: None,
+                        effect: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1214,6 +1244,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,
@@ -1221,7 +1252,7 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        glow: None,
+                        effect: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),
