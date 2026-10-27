@@ -22,7 +22,6 @@ jobs:
       PR_SOURCE: 34f25a35bf2e5856d00b904a27a7675094b2c362
       MASTER_SOURCE: bc25e92bb741607f678f6adea528c9e894c6335c
       MERGE_BASE: 0351da54754cd2d5f95a7624aacd10872a5b8499
-      EVIDENCE_DIR: ${{ runner.temp }}/audio-2296-bc25-conflicts
     steps:
       - name: Checkout immutable qualified draft source
         uses: actions/checkout@v7
@@ -32,6 +31,8 @@ jobs:
           persist-credentials: false
       - name: Capture exact overlapping files and merge stages
         shell: bash
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/audio-2296-bc25-conflicts
         run: |
           set -euo pipefail
           python3 - <<'PY'
