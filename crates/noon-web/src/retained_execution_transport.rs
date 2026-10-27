@@ -380,9 +380,16 @@ impl TransportSpatialState {
     }
 }
 
-impl From<&ObjectContentRef> for TransportObjectContent {
-    fn from(value: &ObjectContentRef) -> Self {
-        match value {
+impl TryFrom<&ObjectContentRef> for TransportObjectContent {
+    type Error = RetainedExecutionTransportError;
+    fn try_from(value: &ObjectContentRef) -> Result<Self, Self::Error> {
+        Ok(match value {
+            // A composed plan must cross once as an immutable installed resource,
+            // not be copied into every parameter row. That worker capability is
+            // not admitted until its plan/resource publication is qualified.
+            ObjectContentRef::Composed(_) => {
+                return Err(RetainedExecutionTransportError::UnsupportedComposedSource)
+            }
             ObjectContentRef::Image(image) => Self::Image {
                 image: image.resource().into(),
                 sampling: image.sampling().into(),
@@ -394,7 +401,7 @@ impl From<&ObjectContentRef> for TransportObjectContent {
             ObjectContentRef::Text(text) => Self::Text {
                 text: TransportTextResourceHandle::from_source_handle(*text),
             },
-        }
+        })
     }
 }
 
@@ -507,6 +514,7 @@ pub enum RetainedTransportApplyOutcome {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
+    UnsupportedComposedSource,
     UnknownImageResource(TransportImageResourceHandle),
     ImageRenderGeometry(TransportSlotId),
     InvalidChannel(String),
@@ -553,6 +561,7 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedComposedSource => write!(formatter,"composed source plans are not installed in this worker profile"),
             Self::InvalidEffectState(slot) => write!(
                 formatter,
                 "retained worker slot {}:{} contains invalid or unsupported effect stack",
@@ -1088,6 +1097,12 @@ struct PreparedPainterOrder {
     range: std::ops::Range<usize>,
     old_end: usize,
     segment: Vec<u32>,
+}
+
+impl noon_runtime::ObjectIndexLookup for RetainedExecutionFrameMirror {
+    fn object_index(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
 }
 
 impl RetainedExecutionFrameMirror {
@@ -1912,7 +1927,7 @@ fn transport_object(
             })
             .unwrap_or_default(),
         z_index: object.z_index,
-        content: (&object.content).into(),
+        content: (&object.content).try_into()?,
         transform: object.transform,
         spatial: object
             .spatial
@@ -2256,6 +2271,40 @@ mod tests {
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
         }
+    }
+
+    #[test]
+    fn uninstalled_composed_plan_rejects_without_consuming_sequence_or_snapshot_state() {
+        let frame = mixed_frame();
+        let camera = Camera2DState::default();
+        let context = PublicationContext::default();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(73);
+        let first = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        assert_eq!(first.sequence, 0);
+        let orders = encoder.snapshot_orders.clone();
+        let geometries = encoder.published_render_geometries.clone();
+        let mut unsupported = frame.clone();
+        let member = unsupported.objects[0].id;
+        unsupported.objects[1].content = ObjectContentRef::Composed(Arc::new(
+            noon_core::ComposedSource::new([member], None).unwrap(),
+        ));
+        unsupported.objects[1].draw_enabled = false;
+        assert_eq!(
+            encoder.encode_snapshot_with_context(&unsupported, camera, context),
+            Err(RetainedExecutionTransportError::UnsupportedComposedSource)
+        );
+        assert_eq!(encoder.snapshot_orders, orders);
+        assert_eq!(encoder.published_render_geometries, geometries);
+        let next = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        assert_eq!(next.sequence, 1);
+        let mut mirror = test_mirror();
+        mirror.apply(first).unwrap();
+        mirror.apply(next).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &frame);
     }
 
     fn effect_stack(

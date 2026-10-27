@@ -1,6 +1,7 @@
 mod animation_payload;
 mod animation_schedule;
 mod compiled_scene;
+mod composed;
 mod entrypoint;
 #[cfg(test)]
 mod family_transform_schedule_tests;

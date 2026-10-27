@@ -24,8 +24,20 @@ pub(super) fn lower_prepared_attachment(
     if effects.is_empty() {
         return Ok(None);
     }
-    let state = prepared.proposed_object_state(owner)?;
-    super::super::projection::validate_effect_source_profile(semantic, &state, prepared.store())?;
+    match prepared.proposed_object_state(owner) {
+        Ok(state) => super::super::projection::validate_effect_source_profile(
+            semantic,
+            &state,
+            prepared.store(),
+        )?,
+        Err(error) => {
+            // An admitted non-drawable family already owns its immutable input
+            // plan. Parameter-only publication must not traverse that family.
+            if prepared.family_style(owner).is_err() {
+                return Err(error.into());
+            }
+        }
+    }
     let stack = CompiledEffectStack::new(effects.into_iter().map(|effect| CompiledEffect {
         attachment: effect.attachment,
         definition: effect.definition,

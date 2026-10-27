@@ -1644,9 +1644,16 @@ impl CompiledScene {
         let mut painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
         painter_order.sort_by(|&a, &b| {
             objects[a as usize]
-                .base_z_index
-                .partial_cmp(&objects[b as usize].base_z_index)
-                .unwrap()
+                .content
+                .composed_source()
+                .is_some()
+                .cmp(&objects[b as usize].content.composed_source().is_some())
+                .then_with(|| {
+                    objects[a as usize]
+                        .base_z_index
+                        .partial_cmp(&objects[b as usize].base_z_index)
+                        .unwrap()
+                })
         });
         let mut painter_ranks = vec![None; objects.len()];
         for (rank, &index) in painter_order.iter().enumerate() {
@@ -1760,9 +1767,16 @@ impl CompiledScene {
             index,
             |a, b| {
                 self.objects[a as usize]
-                    .base_z_index
-                    .partial_cmp(&self.objects[b as usize].base_z_index)
-                    .expect("validated finite priorities")
+                    .content
+                    .composed_source()
+                    .is_some()
+                    .cmp(&self.objects[b as usize].content.composed_source().is_some())
+                    .then_with(|| {
+                        self.objects[a as usize]
+                            .base_z_index
+                            .partial_cmp(&self.objects[b as usize].base_z_index)
+                            .expect("validated finite priorities")
+                    })
                     .then_with(|| self.family_ranks[a as usize].cmp(&self.family_ranks[b as usize]))
             },
         );
@@ -3005,6 +3019,11 @@ fn validate_execution_content(
     text_bounds: Option<Rect>,
 ) -> Result<(), CompilePatchError> {
     match content {
+        ObjectContentRef::Composed(source) => (text_bounds.is_none()
+            && !source.members().contains(&object)
+            && source.parent_scope() != Some(object))
+        .then_some(())
+        .ok_or(CompilePatchError::InvalidContentBounds(object)),
         ObjectContentRef::Geometry(geometry) => {
             if text_bounds.is_some() {
                 return Err(CompilePatchError::InvalidContentBounds(object));

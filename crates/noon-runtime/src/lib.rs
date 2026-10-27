@@ -543,6 +543,7 @@ impl SceneInstance {
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
+            self,
         )
     }
 
@@ -569,6 +570,7 @@ impl SceneInstance {
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
+            self,
         )
     }
 

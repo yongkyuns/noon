@@ -2723,6 +2723,9 @@ impl RetainedFramePreparer {
             }
 
             match &object.content {
+                ObjectContentRef::Composed(_) => {
+                    geometry_only = false;
+                }
                 ObjectContentRef::Image(_) => {
                     unreachable!("images bypass the geometry/text stream")
                 }

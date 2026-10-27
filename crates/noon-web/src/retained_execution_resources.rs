@@ -93,6 +93,7 @@ impl InstalledRetainedExecutionMirror {
                 self.family.plans(),
                 self.family.active_indices(),
                 self.wire.painter_order(),
+                &self.wire,
             ),
         )
     }

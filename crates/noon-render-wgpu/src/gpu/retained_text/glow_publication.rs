@@ -78,6 +78,11 @@ impl RetainedEffectPublication {
             self.sources.clear();
             for (index, row) in frame.objects.iter().enumerate() {
                 self.rows_examined += 1;
+                if row.content.composed_source().is_some() {
+                    // #1897: capture plans must be connected to whole-interval
+                    // placement before this renderer profile admits group rows.
+                    return Err(EffectPrepareError::UnsupportedCapture);
+                }
                 if row.effects.is_some() && frame.is_drawable(index) {
                     self.sources.insert(index, row.id);
                     self.dirty.insert(index);
@@ -86,6 +91,13 @@ impl RetainedEffectPublication {
         } else {
             for &index in publication.changes().object_indices() {
                 self.rows_examined += 1;
+                if frame
+                    .objects
+                    .get(index)
+                    .is_some_and(|row| row.content.composed_source().is_some())
+                {
+                    return Err(EffectPrepareError::UnsupportedCapture);
+                }
                 let next = frame
                     .objects
                     .get(index)

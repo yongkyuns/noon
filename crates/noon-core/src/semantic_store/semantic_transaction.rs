@@ -759,8 +759,8 @@ impl SemanticMutationTransaction {
     }
 
     /// Create an ordered named appearance attachment using the ordinary allocator.
-    /// This initial semantic slice supports leaf owners only; renderer admission
-    /// remains separately gated until effect lowering is available.
+    /// Objects own local appearance; a family owns one composed treatment.
+    /// Execution admission validates the supported source/isolation profile.
     pub fn create_effect(
         &mut self,
         owner: impl Into<SemanticTransactionNodeRef>,
@@ -3614,7 +3614,7 @@ impl SemanticMutationTransaction {
                         }
                     }
                     if let SemanticNodeCreation::Effect { owner, name, .. } = creation {
-                        catalog.ensure_object(*owner, index)?;
+                        catalog.ensure_authoring_node(*owner, index)?;
                         if name.is_empty() {
                             return Err(
                                 SemanticMutationTransactionError::InvalidEffectAttachment {

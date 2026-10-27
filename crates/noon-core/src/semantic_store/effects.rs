@@ -196,8 +196,8 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
 }
 
 /// One named attachment. Identity is the containing node's ordinary NodeId.
-/// This first authored slice is leaf-local; composed scopes are not silently
-/// expanded into independent children. The renderer support gate is separate.
+/// A family owns a composed treatment; it is never silently expanded into
+/// independent child attachments. Execution validates source/isolation support.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticEffectState {
     owner: SemanticNodeId,

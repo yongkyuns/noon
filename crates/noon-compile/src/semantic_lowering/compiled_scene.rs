@@ -153,10 +153,17 @@ fn materialize_semantic_projection(
         }
     }
     ordered.sort_by(|left, right| {
-        left.presentation
-            .z_index
-            .partial_cmp(&right.presentation.z_index)
-            .unwrap()
+        matches!(left.content, super::SemanticExecutionContent::Composed(_))
+            .cmp(&matches!(
+                right.content,
+                super::SemanticExecutionContent::Composed(_)
+            ))
+            .then_with(|| {
+                left.presentation
+                    .z_index
+                    .partial_cmp(&right.presentation.z_index)
+                    .unwrap()
+            })
     });
 
     let count = ordered.len();
@@ -196,8 +203,14 @@ fn materialize_semantic_projection(
 
         let object_index =
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
-        let (content, text_bounds) =
-            lower_content(object.semantic_id, object.content, store, &mut resources)?;
+        let (content, text_bounds) = match &object.content {
+            super::SemanticExecutionContent::Object(content) => {
+                lower_content(object.semantic_id, *content, store, &mut resources)?
+            }
+            super::SemanticExecutionContent::Composed(source) => {
+                (ObjectContentRef::Composed(source.clone()), None)
+            }
+        };
         if let Some(paint) = object.fill_paint.as_deref() {
             if let Some(image) = paint.as_image() {
                 let store = store.ok_or(SemanticCompiledSceneError::Resource {

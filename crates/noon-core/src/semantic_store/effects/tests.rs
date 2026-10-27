@@ -248,7 +248,7 @@ fn canceled_pending_owner_cancels_attachment_allocation() {
 }
 
 #[test]
-fn foreign_pending_owner_and_family_owner_are_rejected() {
+fn foreign_pending_owner_and_non_authoring_owner_are_rejected() {
     let mut store = SemanticStore::new();
     let mut foreign = SemanticMutationTransaction::new();
     let owner = foreign.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
@@ -257,11 +257,48 @@ fn foreign_pending_owner_and_family_owner_are_rejected() {
     let mut tx = SemanticMutationTransaction::new();
     tx.create_effect(owner, "glow", Glow::default());
     assert!(tx.apply(&mut store).is_err());
-    let family = store.insert_family();
+    let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
     let mut tx = SemanticMutationTransaction::new();
-    tx.create_effect(family, "glow", Glow::default());
+    tx.create_effect(signal, "glow", Glow::default());
     assert!(tx.apply(&mut store).is_err());
-    assert!(store.node(family).unwrap().effect_ids().is_empty());
+    assert!(store.node(signal).unwrap().effect_ids().is_empty());
+}
+
+#[test]
+fn composed_family_attachment_is_owned_once_and_preserves_child_attachments() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let child = object(&mut store);
+    store.add_member(family, child).unwrap();
+    let local = attach(&mut store, child, "glow");
+    let composed = attach(&mut store, family, "glow");
+    assert_eq!(store.node(family).unwrap().effect_ids(), &[composed]);
+    assert_eq!(store.node(child).unwrap().effect_ids(), &[local]);
+    assert_eq!(
+        store.semantic_effect_state(composed).unwrap().owner(),
+        family
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.update_effect(composed, EffectUpdate::default().intensity(2.0));
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(
+        prepared.animation_effect_snapshot(family).unwrap()[0]
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity(),
+        2.0
+    );
+    assert_eq!(effect(prepared.store(), composed), Glow::default());
+    prepared.commit();
+    assert_eq!(effect(&store, composed).intensity(), 2.0);
+    assert_eq!(effect(&store, local), Glow::default());
+    let mut remove = SemanticMutationTransaction::new();
+    remove.remove_node(family);
+    remove.apply(&mut store).unwrap();
+    assert!(store.node(composed).is_none());
+    assert!(store.node(child).is_some());
+    assert!(store.node(local).is_some());
 }
 
 #[test]
