@@ -1,4 +1,7 @@
+mod composed_sources;
 mod images;
+pub use composed_sources::TransportComposedSourceHandle;
+use composed_sources::{install_composed_sources, ComposedSources, TransportComposedSourceEntry};
 pub(crate) mod residency;
 use crate::TransportImageResourceHandle;
 use images::{install_images, ImageHandles, TransportImageEntry};
@@ -30,7 +33,7 @@ pub(crate) mod incremental_render;
 /// vector-decoration geometry, typed spatial meshes, and exact OpenType buffers
 /// across the Python-worker boundary when a retained scene is installed.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 14;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 15;
 const MAX_SHARED_RENDER_GEOMETRIES: usize = 16;
 const MAX_TRANSPORT_MESH_VERTICES: usize = 500_000;
 const MAX_TRANSPORT_MESH_INDICES: usize = 3_000_000;
@@ -67,6 +70,8 @@ struct RenderGeometryUpdate {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetainedResourceRetirements {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub composed_sources: Vec<TransportComposedSourceHandle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<TransportImageResourceHandle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<TransportTextResourceHandle>,
@@ -76,10 +81,17 @@ pub struct RetainedResourceRetirements {
 
 impl RetainedResourceRetirements {
     pub(crate) fn is_empty(&self) -> bool {
-        self.images.is_empty() && self.texts.is_empty() && self.geometries.is_empty()
+        self.composed_sources.is_empty()
+            && self.images.is_empty()
+            && self.texts.is_empty()
+            && self.geometries.is_empty()
     }
 
     pub(crate) fn validate(&self) -> Result<(), RetainedResourceTransportError> {
+        if self.composed_sources.iter().collect::<HashSet<_>>().len() != self.composed_sources.len()
+        {
+            return Err(RetainedResourceTransportError::DuplicateRetiredComposedSource);
+        }
         if self.images.iter().collect::<HashSet<_>>().len() != self.images.len() {
             return Err(RetainedResourceTransportError::DuplicateRetiredImage);
         }
@@ -307,6 +319,7 @@ impl From<GeometryResourceHandle> for TransportGeometryResourceHandle {
 pub struct RetainedResourceBundle {
     pub channel: String,
     pub protocol_version: u32,
+    composed_sources: Vec<TransportComposedSourceEntry>,
     images: Vec<TransportImageEntry>,
     texts: Vec<TransportTextEntry>,
     geometries: Vec<TransportGeometryEntry>,
@@ -316,6 +329,7 @@ pub struct RetainedResourceBundle {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RetainedResourceInventory {
+    composed_sources: HashSet<TransportComposedSourceHandle>,
     images: HashSet<TransportImageResourceHandle>,
     texts: HashMap<(u64, u64), TransportTextResourceHandle>,
     geometries: BTreeSet<TransportGeometryResourceHandle>,
@@ -335,6 +349,9 @@ impl RetainedResourceInventory {
         self.geometries.contains(&handle)
     }
     pub(crate) fn forget_root_retirements(&mut self, retirements: &RetainedResourceRetirements) {
+        for source in &retirements.composed_sources {
+            self.composed_sources.remove(source);
+        }
         for image in &retirements.images {
             self.images.remove(image);
         }
@@ -355,12 +372,13 @@ impl RetainedResourceInventory {
     }
 
     #[cfg(test)]
-    pub(crate) fn counts(&self) -> [usize; 4] {
+    pub(crate) fn counts(&self) -> [usize; 5] {
         [
             self.images.len(),
             self.texts.len(),
             self.geometries.len(),
             self.fonts.len(),
+            self.composed_sources.len(),
         ]
     }
 }
@@ -374,6 +392,11 @@ pub(crate) struct TransportTextDependencyClosure {
 impl RetainedResourceBundle {
     pub(crate) fn inventory(&self) -> RetainedResourceInventory {
         RetainedResourceInventory {
+            composed_sources: self
+                .composed_sources
+                .iter()
+                .map(|entry| entry.handle)
+                .collect(),
             images: self.images.iter().map(|entry| entry.handle).collect(),
             texts: self
                 .texts
@@ -412,6 +435,8 @@ impl RetainedResourceBundle {
     }
 
     pub(crate) fn retain_additions(&mut self, installed: &mut RetainedResourceInventory) {
+        self.composed_sources
+            .retain(|entry| installed.composed_sources.insert(entry.handle));
         self.images
             .retain(|entry| installed.images.insert(entry.handle));
         self.texts.retain(|entry| {
@@ -433,7 +458,8 @@ impl RetainedResourceBundle {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.images.is_empty()
+        self.composed_sources.is_empty()
+            && self.images.is_empty()
             && self.texts.is_empty()
             && self.geometries.is_empty()
             && self.fonts.is_empty()
@@ -577,6 +603,7 @@ impl RetainedResourceBundle {
         Ok(Self {
             channel: RETAINED_RESOURCE_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,
+            composed_sources: Vec::new(),
             images: Vec::new(),
             texts: text_entries,
             geometries: geometry_entries,
@@ -680,6 +707,7 @@ impl RetainedResourceBundle {
             }
         }
 
+        let composed_sources = install_composed_sources(self.composed_sources)?;
         let (images, image_handles) = install_images(self.images)?;
         let mut geometries = GeometryResourceArena::new();
         let mut geometry_handles = HashMap::with_capacity(self.geometries.len());
@@ -744,6 +772,7 @@ impl RetainedResourceBundle {
         }
 
         let inventory = RetainedResourceInventory {
+            composed_sources: composed_sources.keys().copied().collect(),
             images: image_handles.keys().copied().collect(),
             texts: text_handles
                 .keys()
@@ -754,6 +783,7 @@ impl RetainedResourceBundle {
             fonts: font_bytes.keys().cloned().collect(),
         };
         let mut installed = InstalledRetainedResources {
+            composed_sources,
             images,
             image_handles,
             image_layers: HashMap::new(),
@@ -899,6 +929,7 @@ struct TextResourceDependencies {
 
 #[derive(Clone, Debug)]
 pub struct InstalledRetainedResources {
+    composed_sources: ComposedSources,
     images: noon_core::RasterImageResourceArena,
     image_handles: ImageHandles,
     image_layers: HashMap<u64, usize>,
@@ -1001,6 +1032,15 @@ impl InstalledRetainedResources {
             return Err(RetainedResourceTransportError::IncrementalRenderGeometryResources);
         }
         let inventory = bundle.inventory();
+        if let Some(handle) = inventory
+            .composed_sources
+            .intersection(&self.inventory.composed_sources)
+            .next()
+        {
+            return Err(RetainedResourceTransportError::DuplicateComposedSource(
+                *handle,
+            ));
+        }
         if let Some(handle) = inventory.images.intersection(&self.inventory.images).next() {
             return Err(RetainedResourceTransportError::DuplicateImage(*handle));
         }
@@ -1027,6 +1067,7 @@ impl InstalledRetainedResources {
             });
         }
         bundle.validate_protocol()?;
+        let composed_sources = install_composed_sources(bundle.composed_sources)?;
         let (images, image_handles) = install_images(bundle.images)?;
         let mut geometries = GeometryResourceArena::new();
         let mut geometry_handles = HashMap::with_capacity(bundle.geometries.len());
@@ -1158,6 +1199,7 @@ impl InstalledRetainedResources {
             text_dependencies.insert(entry.handle, dependencies);
         }
         let mut installed = InstalledRetainedResources {
+            composed_sources,
             images,
             image_handles,
             image_layers: HashMap::new(),
@@ -1203,7 +1245,7 @@ impl InstalledRetainedResources {
 
     pub(crate) fn commit_additions(&mut self, additions: PreparedRetainedResourceAdditions) {
         let PreparedRetainedResourceAdditions {
-            installed,
+            mut installed,
             staged_texts,
             staged_text_arenas,
             text_handle_remap,
@@ -1211,6 +1253,13 @@ impl InstalledRetainedResources {
         } = additions;
         self.commit_staged_text_replacements(staged_texts)
             .expect("prepared retained text replacements must remain current until commit");
+        // Plans live in this table alone, not retained addition layers. A plan
+        // replacement cannot keep an otherwise empty arena layer resident.
+        self.inventory
+            .composed_sources
+            .extend(installed.inventory.composed_sources.drain());
+        self.composed_sources
+            .extend(installed.composed_sources.drain());
         let owns_payload = !installed.images.is_empty()
             || !installed.texts.is_empty()
             || !installed.geometries.is_empty()
@@ -1291,6 +1340,10 @@ impl InstalledRetainedResources {
     }
 
     pub(crate) fn retire(&mut self, retirements: &RetainedResourceRetirements) {
+        for source in &retirements.composed_sources {
+            self.composed_sources.remove(source);
+            self.inventory.composed_sources.remove(source);
+        }
         for image in &retirements.images {
             self.retire_image(*image);
         }
@@ -1703,6 +1756,12 @@ impl FontResourceLookup for InstalledRetainedResources {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedResourceTransportError {
+    DuplicateRetiredComposedSource,
+    DuplicateComposedSource(TransportComposedSourceHandle),
+    InvalidComposedSource {
+        handle: TransportComposedSourceHandle,
+        reason: String,
+    },
     DuplicateRetiredImage,
     DuplicateRetiredText,
     DuplicateRetiredGeometry,
@@ -1722,9 +1781,15 @@ pub enum RetainedResourceTransportError {
     UnsupportedMeshGeometry(TransportGeometryResourceHandle),
     InvalidGeometry(TransportGeometryResourceHandle),
     GeometryPayloadLimit(TransportGeometryResourceHandle),
-    DuplicateFont { face_key: String, face_index: u32 },
+    DuplicateFont {
+        face_key: String,
+        face_index: u32,
+    },
     MissingGeometry(TransportGeometryResourceHandle),
-    MissingFont { face_key: String, face_index: u32 },
+    MissingFont {
+        face_key: String,
+        face_index: u32,
+    },
     InvalidText(String),
     InvalidFont(String),
     InvalidRenderGeometry(usize),
@@ -1737,6 +1802,15 @@ pub enum RetainedResourceTransportError {
 impl fmt::Display for RetainedResourceTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateRetiredComposedSource => {
+                formatter.write_str("duplicate retired composed source")
+            }
+            Self::DuplicateComposedSource(handle) => {
+                write!(formatter, "duplicate immutable composed source {handle:?}")
+            }
+            Self::InvalidComposedSource { handle, reason } => {
+                write!(formatter, "invalid composed source {handle:?}: {reason}")
+            }
             Self::DuplicateRetiredImage => formatter.write_str("duplicate retired raster image"),
             Self::DuplicateRetiredText => formatter.write_str("duplicate retired text resource"),
             Self::DuplicateRetiredGeometry => {
@@ -3310,6 +3384,7 @@ mod tests {
         let bundle = RetainedResourceBundle {
             channel: "noon.execution".to_owned(),
             protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,
+            composed_sources: Vec::new(),
             images: Vec::new(),
             texts: Vec::new(),
             geometries: Vec::new(),

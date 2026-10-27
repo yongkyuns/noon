@@ -36,11 +36,10 @@ impl<'a> Row<'a> {
 }
 pub(super) struct Projection<'a> {
     scene: &'a CompiledScene,
-    base: &'a ComposedDependencies,
     rows: BTreeMap<ObjectId, Option<Row<'a>>>,
     changed: BTreeSet<ObjectId>,
     replaced: BTreeSet<ObjectId>,
-    added: ComposedDependencies,
+    dependencies: ComposedDependencyChanges<'a>,
     family: ProjectedOrder<'a>,
     painter: ProjectedOrder<'a>,
 }
@@ -51,11 +50,10 @@ impl<'a> Projection<'a> {
     pub(super) fn with_index(scene: &'a CompiledScene, base: &'a ComposedDependencies) -> Self {
         Self {
             scene,
-            base,
             rows: BTreeMap::new(),
             changed: BTreeSet::new(),
             replaced: BTreeSet::new(),
-            added: ComposedDependencies::default(),
+            dependencies: ComposedDependencyChanges::new(base),
             family: ProjectedOrder::new(scene, true),
             painter: ProjectedOrder::new(scene, false),
         }
@@ -268,65 +266,34 @@ impl<'a> Projection<'a> {
             }
         }
         for &id in &self.replaced {
-            if let Some(source) = self.source(id) {
-                self.added.insert(id, source);
-            }
+            self.dependencies.replace(id, None, self.source(id));
         }
         Ok(())
     }
-    pub(super) fn overlapping(&self, member: ObjectId) -> BTreeSet<ObjectId> {
-        self.base
-            .dependents(member)
-            .filter(|owner| !self.replaced.contains(owner))
-            .chain(self.added.dependents(member))
-            .collect()
-    }
     pub(super) fn affected_scopes(&self) -> BTreeSet<ObjectId> {
-        let mut result = BTreeSet::new();
-        for id in self.changed.iter().copied() {
-            if self.source(id).is_some() {
-                result.insert(id);
-            }
-            result.extend(self.base.dependents(id));
-            result.extend(self.added.dependents(id));
-            for child in self.base.children.get(&id).into_iter().flatten() {
-                result.insert(*child);
-            }
-        }
-        // Controller ranks are metadata order only. Moving one because an
-        // unrelated trailing object was removed does not touch its source.
-        for id in self.painter.touched() {
-            result.extend(self.base.dependents(id));
-            result.extend(self.added.dependents(id));
-        }
-        for member in self.added.members.keys() {
-            result.extend(self.base.dependents(*member));
-        }
-        let mut pending = result.iter().copied().collect::<Vec<_>>();
-        while let Some(id) = pending.pop() {
-            if let Some(parent) = self.source(id).and_then(ComposedSource::parent_scope) {
-                if result.insert(parent) {
-                    pending.push(parent);
-                }
-            }
-            for &child in self
-                .base
-                .children
-                .get(&id)
-                .into_iter()
-                .flatten()
-                .chain(self.added.children.get(&id).into_iter().flatten())
-            {
-                if self
-                    .source(child)
-                    .is_some_and(|source| source.parent_scope() == Some(id))
-                    && result.insert(child)
-                {
-                    pending.push(child);
-                }
-            }
-        }
-        result
+        self.dependencies.affected_scopes(
+            self,
+            self.changed.iter().copied(),
+            self.painter.touched(),
+        )
+    }
+}
+
+impl ComposedSourceGraphView for Projection<'_> {
+    fn source(&self, owner: ObjectId) -> Option<&ComposedSource> {
+        self.source(owner)
+    }
+    fn owner_valid(&self, owner: ObjectId) -> bool {
+        self.owner_valid(owner)
+    }
+    fn input_valid(&self, input: ObjectId) -> Option<bool> {
+        self.input_valid(input)
+    }
+    fn rank(&self, input: ObjectId) -> Option<usize> {
+        self.rank(input)
+    }
+    fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
+        self.dependencies.overlapping(input)
     }
 }
 

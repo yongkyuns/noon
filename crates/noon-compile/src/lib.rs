@@ -10,7 +10,9 @@ pub use audio::CompiledAudioClip;
 mod compaction;
 mod composed_dependencies;
 pub use composed_dependencies::{
-    CompiledComposedSourceError, CompiledComposedSourceErrorKind, ComposedValidationStats,
+    validate_composed_sources, CompiledComposedSourceError, CompiledComposedSourceErrorKind,
+    ComposedDependencies, ComposedDependencyChanges, ComposedSourceGraphView,
+    ComposedValidationStats,
 };
 mod effect_attachment;
 pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};

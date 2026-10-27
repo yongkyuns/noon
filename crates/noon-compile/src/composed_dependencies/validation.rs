@@ -1,4 +1,3 @@
-use super::projection::Projection;
 use super::*;
 
 fn error(owner: ObjectId, kind: CompiledComposedSourceErrorKind) -> CompiledComposedSourceError {
@@ -6,7 +5,7 @@ fn error(owner: ObjectId, kind: CompiledComposedSourceErrorKind) -> CompiledComp
 }
 
 pub(super) fn validate(
-    view: &Projection<'_>,
+    view: &impl ComposedSourceGraphView,
     affected: &BTreeSet<ObjectId>,
 ) -> Result<ComposedValidationStats, CompiledComposedSourceError> {
     let mut candidates = affected

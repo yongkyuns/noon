@@ -7,6 +7,32 @@ use std::collections::{BTreeMap, BTreeSet};
 mod projection;
 mod validation;
 
+/// Borrowed final execution state used to validate composed source dependencies.
+///
+/// The compiler and genuine cross-context receivers supply their existing row,
+/// identity and painter-order lookups. Implementations must include staged rows
+/// and removals so validation observes the complete proposed transaction.
+/// `overlapping` returns every final scope that names the given input.
+#[doc(hidden)]
+pub trait ComposedSourceGraphView {
+    fn source(&self, owner: ObjectId) -> Option<&ComposedSource>;
+    fn owner_valid(&self, owner: ObjectId) -> bool;
+    fn input_valid(&self, input: ObjectId) -> Option<bool>;
+    fn rank(&self, input: ObjectId) -> Option<usize>;
+    fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId>;
+}
+
+/// Validate affected source scopes against one coherent final execution view.
+/// Unchanged scopes must already be valid. Callers include changed scopes,
+/// scopes using changed inputs/order, and their final ancestors and children.
+#[doc(hidden)]
+pub fn validate_composed_sources(
+    view: &impl ComposedSourceGraphView,
+    affected: &BTreeSet<ObjectId>,
+) -> Result<ComposedValidationStats, CompiledComposedSourceError> {
+    validation::validate(view, affected)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledComposedSourceErrorKind {
     InvalidOwner,
@@ -36,13 +62,48 @@ impl std::fmt::Display for CompiledComposedSourceError {
 }
 impl std::error::Error for CompiledComposedSourceError {}
 
+/// Derived reverse links into existing execution plans. This index owns no
+/// source plans, execution rows or identities. Update it only when the matching
+/// row publication commits; validation can borrow a separate staged index.
+#[doc(hidden)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ComposedDependencies {
+pub struct ComposedDependencies {
     owners: BTreeSet<ObjectId>,
     members: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
     children: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
 }
 impl ComposedDependencies {
+    pub fn is_empty(&self) -> bool {
+        self.owners.is_empty()
+    }
+    pub fn owners(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.owners.iter().copied()
+    }
+    pub fn children(&self, parent: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
+        self.children.get(&parent).into_iter().flatten().copied()
+    }
+    /// Replace the links for one existing row using its previous and final
+    /// immutable plan. Both plans are borrowed from the caller's row storage.
+    pub fn replace(
+        &mut self,
+        owner: ObjectId,
+        previous: Option<&ComposedSource>,
+        next: Option<&ComposedSource>,
+    ) {
+        if previous
+            .zip(next)
+            .is_some_and(|(old, new)| std::ptr::eq(old, new))
+            || previous == next
+        {
+            return;
+        }
+        if let Some(previous) = previous {
+            self.remove(owner, previous);
+        }
+        if let Some(next) = next {
+            self.insert(owner, next);
+        }
+    }
     fn insert(&mut self, owner: ObjectId, source: &ComposedSource) {
         self.owners.insert(owner);
         for &member in source.members() {
@@ -61,8 +122,91 @@ impl ComposedDependencies {
             remove_link(&mut self.children, parent, owner);
         }
     }
-    fn dependents(&self, member: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
+    pub fn dependents(&self, member: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
         self.members.get(&member).into_iter().flatten().copied()
+    }
+}
+
+/// Sparse derived dependency overlay for a proposed execution publication.
+/// Source payloads stay borrowed from the existing rows and their staged edits.
+#[doc(hidden)]
+pub struct ComposedDependencyChanges<'a> {
+    base: &'a ComposedDependencies,
+    added: ComposedDependencies,
+    replaced: BTreeSet<ObjectId>,
+}
+impl<'a> ComposedDependencyChanges<'a> {
+    pub fn new(base: &'a ComposedDependencies) -> Self {
+        Self {
+            base,
+            added: ComposedDependencies::default(),
+            replaced: BTreeSet::new(),
+        }
+    }
+    /// Stage a row's final source links. On repeated staging, `previous` is the
+    /// preceding staged plan, not the installed plan.
+    pub fn replace(
+        &mut self,
+        owner: ObjectId,
+        previous: Option<&ComposedSource>,
+        next: Option<&ComposedSource>,
+    ) {
+        if self.replaced.insert(owner) {
+            self.added.replace(owner, None, next);
+        } else {
+            self.added.replace(owner, previous, next);
+        }
+    }
+    pub fn overlapping(&self, member: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
+        self.base
+            .dependents(member)
+            .filter(|owner| !self.replaced.contains(owner))
+            .chain(self.added.dependents(member))
+    }
+    /// Find the local validation closure of changed row properties, source
+    /// links and painter ranks. The view supplies the complete proposed state.
+    pub fn affected_scopes(
+        &self,
+        view: &impl ComposedSourceGraphView,
+        changed: impl IntoIterator<Item = ObjectId>,
+        painter_rows: impl IntoIterator<Item = ObjectId>,
+    ) -> BTreeSet<ObjectId> {
+        let mut result = BTreeSet::new();
+        for id in changed.into_iter().chain(self.replaced.iter().copied()) {
+            if view.source(id).is_some() {
+                result.insert(id);
+            }
+            result.extend(self.base.dependents(id));
+            result.extend(self.added.dependents(id));
+            result.extend(self.base.children(id));
+        }
+        // Controller ranks are metadata order only. A shifted unrelated
+        // trailing controller does not make its entire input list dirty.
+        for id in painter_rows {
+            result.extend(self.base.dependents(id));
+            result.extend(self.added.dependents(id));
+        }
+        for member in self.added.members.keys() {
+            result.extend(self.base.dependents(*member));
+        }
+        let mut pending = result.iter().copied().collect::<Vec<_>>();
+        while let Some(id) = pending.pop() {
+            if let Some(parent) = view.source(id).and_then(ComposedSource::parent_scope) {
+                if result.insert(parent) {
+                    pending.push(parent);
+                }
+            }
+            for child in self.base.children(id).chain(self.added.children(id)) {
+                if view
+                    .source(child)
+                    .is_some_and(|source| source.parent_scope() == Some(id))
+                    && result.insert(child)
+                {
+                    pending.push(child);
+                }
+            }
+        }
+        result
     }
 }
 fn remove_link(index: &mut BTreeMap<ObjectId, BTreeSet<ObjectId>>, key: ObjectId, owner: ObjectId) {
@@ -104,12 +248,8 @@ impl CompiledScene {
         {
             return;
         }
-        if let Some(old) = previous {
-            self.composed_dependencies.remove(owner, &old);
-        }
-        if let Some(new) = next {
-            self.composed_dependencies.insert(owner, &new);
-        }
+        self.composed_dependencies
+            .replace(owner, previous.as_deref(), next.as_deref());
     }
     pub(crate) fn rebuild_composed_dependencies(
         &mut self,
@@ -121,7 +261,7 @@ impl CompiledScene {
             }
         }
         let view = projection::Projection::with_index(self, &index);
-        validation::validate(&view, &index.owners)?;
+        validate_composed_sources(&view, &index.owners)?;
         self.composed_dependencies = index;
         Ok(())
     }
@@ -145,7 +285,7 @@ impl CompiledScene {
         view.stage(patches)
             .map_err(crate::CompilePatchError::InvalidComposedSource)?;
         let affected = view.affected_scopes();
-        let mut stats = validation::validate(&view, &affected)
+        let mut stats = validate_composed_sources(&view, &affected)
             .map_err(crate::CompilePatchError::InvalidComposedSource)?;
         stats.painter_rows_staged = view.painter_rows_staged();
         Ok(stats)

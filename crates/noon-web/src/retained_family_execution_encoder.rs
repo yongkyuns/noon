@@ -1575,7 +1575,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(encoder.resources.counts(), [0; 4]);
+        assert_eq!(encoder.resources.counts(), [0; 5]);
         assert!(encoder.text_closures.is_empty());
         assert!(encoder.geometry_references.is_empty());
         assert!(encoder.font_references.is_empty());
@@ -1606,7 +1606,7 @@ mod tests {
                     &images,
                 )
                 .is_err());
-            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert_eq!(encoder.resources.counts(), [0; 5]);
             assert!(encoder.resource_roots.is_empty());
             encoder
                 .attach_resource_additions(
@@ -1653,7 +1653,7 @@ mod tests {
                     &images,
                 )
                 .unwrap();
-            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert_eq!(encoder.resources.counts(), [0; 5]);
             assert!(encoder.text_closures.is_empty());
             assert!(encoder.geometry_references.is_empty());
             assert!(encoder.font_references.is_empty());
