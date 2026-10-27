@@ -68,7 +68,8 @@ impl ExecutionSession {
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?
-                .is_empty()
+                .iter()
+                .all(|effect| effect.name.authored() != Some("glow"))
             {
                 missing.insert(owner);
             }
