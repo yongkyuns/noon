@@ -1,7 +1,7 @@
 """Animate detail on a composed image, through ordinary shared Rust effects."""
-from noon import Pixelate, Pixels, Rectangle, Scene, VGroup, linear
+from noon import Pixelate, Pixels, Rectangle, MovingCameraScene, VGroup, linear
 
-class PixelDetail(Scene):
+class PixelDetail(MovingCameraScene):
     def construct(self):
         self.camera.frame.scale(1.125)
         background = Rectangle(width=16,height=9,fill="#183040",fill_opacity=1,stroke=None)
