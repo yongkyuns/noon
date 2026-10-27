@@ -1,0 +1,88 @@
+name: One-off 2308 ordered-effects source inventory
+on:
+  push:
+    branches: [agent/2308-combined-memory-qualification-20261027]
+    paths: [.github/workflows/one-off-2308-effects-snapshot.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        with:
+          name: noon2308-combined-memory-source-qualification
+          run-id: 40571552550
+          repository: yongkyuns/noon
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/qualified-input
+      - name: Authenticate green source and capture exact latest-master merge
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, shutil, subprocess, tarfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          out = root / 'effects-inventory'
+          out.mkdir()
+          repo = Path.cwd()
+          inp = root / 'qualified-input'
+          manifest = json.loads((inp / 'manifest.json').read_text())
+          source = inp / 'combined-source.tar.gz'
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == '2139a31eeab3da11296fe1373c32f2593a9e7c65795e2f58d0493c35d9422df7'
+          assert manifest['tested_tree'] == '1ef901ef0d649bd04e4054211f1e715ca87fac03'
+          assert manifest['tracked_source_unchanged']
+          assert set(manifest['command_exit_codes']) == {'fast', 'prepared', 'controls', 'wasm', 'web'}
+          assert all(x == 0 for x in manifest['command_exit_codes'].values())
+          old = '0351da54754cd2d5f95a7624aacd10872a5b8499'
+          new = 'bc25e92bb741607f678f6adea528c9e894c6335c'
+          feature = 'b3a4b7f484e607a4b14bc57e70f4947f8520ca42'
+          memory = '472a61fadfdabba44756b75caaa184cee8c4be57'
+          def git(*args, cwd=repo, check=True, data=None):
+              return subprocess.run(['git', *args], cwd=cwd, input=data, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          def text(*args, cwd=repo):
+              return git(*args, cwd=cwd).stdout.decode().strip()
+          git('fetch', '--no-tags', '--depth=256', 'origin', old, new, feature, memory)
+          work = root / 'effects-merge'
+          git('worktree', 'add', '--detach', str(work), feature)
+          git('config', 'user.name', 'Noon read-only source inventory', cwd=work)
+          git('config', 'user.email', 'qualification@example.invalid', cwd=work)
+          for p in work.iterdir():
+              if p.name == '.git': continue
+              if p.is_dir() and not p.is_symlink(): shutil.rmtree(p)
+              else: p.unlink()
+          with tarfile.open(source) as tar:
+              assert all(not (p.name.startswith('/') or '..' in Path(p.name).parts or p.issym() or p.islnk()) for p in tar.getmembers())
+              tar.extractall(work, filter='data')
+          git('add', '--all', cwd=work)
+          assert text('write-tree', cwd=work) == manifest['tested_tree']
+          candidate = git('commit-tree', manifest['tested_tree'], '-p', feature, '-p', old, '-p', memory, cwd=work, data=b'Authenticated green combined source; local only\n').stdout.decode().strip()
+          git('checkout', '--detach', '--force', candidate, cwd=work)
+          assert text('merge-base', candidate, new, cwd=work) == old
+          merged = git('merge', '--no-commit', '--no-ff', new, cwd=work, check=False)
+          assert merged.returncode in (0, 1)
+          conflicts = text('diff', '--name-only', '--diff-filter=U', cwd=work).splitlines()
+          (out / 'merge.log').write_bytes(merged.stdout + merged.stderr)
+          (out / 'conflicts.diff').write_bytes(git('diff', '--cc', cwd=work).stdout)
+          (out / 'unmerged-stages.txt').write_bytes(git('ls-files', '-u', cwd=work).stdout)
+          results = {'scope': 'Source inventory only; no remote updates', 'candidate_tree': manifest['tested_tree'], 'candidate_local': candidate, 'base': old, 'latest_master': new, 'merge_exit': merged.returncode, 'conflicts': conflicts, 'snapshots': {}}
+          for label, sha in [('base', old), ('latest', new)]:
+              archive = out / (label + '-source.tar.gz')
+              git('archive', '--format=tar.gz', '--output=' + str(archive), sha)
+              results['snapshots'][label] = {'commit': sha, 'tree': text('rev-parse', sha + '^{tree}'), 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}
+          (out / 'manifest.json').write_text(json.dumps(results, indent=2) + '\n')
+          print(json.dumps(results, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: noon2308-ordered-effects-source-inventory
+          path: ${{ runner.temp }}/effects-inventory
+          retention-days: 3
+          if-no-files-found: error
