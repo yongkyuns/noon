@@ -79,9 +79,10 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
-            Property::EffectColor | Property::EffectRadius | Property::EffectIntensity => {
-                self.effect = true
-            }
+            Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
@@ -154,10 +155,11 @@ pub struct CompiledEffect {
 
 impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 3] = [
+    pub const PARAMETER_PROPERTIES: [Property; 4] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
+        Property::EffectOffset,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -171,12 +173,14 @@ impl CompiledEffect {
         let target = update.apply_to(self.definition)?;
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
-            + usize::from(update.intensity.is_some());
+            + usize::from(update.intensity.is_some())
+            + usize::from(update.offset.is_some());
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
             (update.color.is_some(), Property::EffectColor),
             (update.radius.is_some(), Property::EffectRadius),
             (update.intensity.is_some(), Property::EffectIntensity),
+            (update.offset.is_some(), Property::EffectOffset),
         ] {
             if requested {
                 channels.push((
@@ -1392,6 +1396,7 @@ impl CompiledScene {
                         | Property::EffectColor
                         | Property::EffectRadius
                         | Property::EffectIntensity
+                        | Property::EffectOffset
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -2580,6 +2585,7 @@ impl CompiledScene {
                             | Property::EffectColor
                             | Property::EffectRadius
                             | Property::EffectIntensity
+                            | Property::EffectOffset
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -3315,6 +3321,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectColor => 15,
         Property::EffectRadius => 16,
         Property::EffectIntensity => 17,
+        Property::EffectOffset => 18,
     }
 }
 

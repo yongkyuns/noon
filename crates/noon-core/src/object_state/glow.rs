@@ -77,22 +77,12 @@ impl Glow {
 impl sealed::Sealed for Glow {}
 impl EffectValue for Glow {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
-        if let Some(color) = update.color {
-            if ![color.red, color.green, color.blue, color.alpha]
-                .into_iter()
-                .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
-            {
-                return Err(EffectParameterError::InvalidColor);
-            }
+        if update.offset.is_some() {
+            return Err(EffectParameterError::UnsupportedParameter(
+                EffectParameter::Offset,
+            ));
         }
-        if let Some(radius) = update.radius {
-            radius.validate()?;
-        }
-        if let Some(intensity) = update.intensity {
-            if !intensity.is_finite() || !(0.0..=8.0).contains(&intensity) {
-                return Err(EffectParameterError::InvalidIntensity);
-            }
-        }
+        update.validate()?;
         Ok(Glow {
             color: update.color.unwrap_or(self.color),
             radius: update.radius.unwrap_or(self.radius),
@@ -136,6 +126,7 @@ impl EffectValue for Glow {
                 .intensity
                 .map(|_| interpolate(self.intensity, target.intensity, alpha)),
             source: request.source,
+            offset: None,
         };
         // Keep even extreme finite radius arithmetic fail-closed.
         update.apply_to(self)?;

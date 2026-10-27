@@ -852,6 +852,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectColor
                             | Property::EffectRadius
                             | Property::EffectIntensity
+                            | Property::EffectOffset
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

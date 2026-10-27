@@ -8,6 +8,9 @@ fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
         noon_core::EffectDefinition::Glow(glow) => {
             json!({ "kind": "glow", "color": glow.color(), "radius": glow.radius(), "intensity": glow.intensity(), "source": match glow.source() { noon_core::GlowSource::Painted => "painted", noon_core::GlowSource::Silhouette => "silhouette" } })
         }
+        noon_core::EffectDefinition::Shadow(v) => {
+            json!({"kind":"shadow","color":v.color(),"radius":v.radius(),"offset":v.offset()})
+        }
         noon_core::EffectDefinition::Blur(blur) => {
             json!({ "kind": "blur", "radius": blur.radius() })
         }

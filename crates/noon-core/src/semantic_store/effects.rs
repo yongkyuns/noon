@@ -6,6 +6,7 @@ use std::sync::Arc;
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
 use crate::{
     Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Glow,
+    Shadow,
 };
 
 /// Finite built-in definitions; custom program/schema resources remain #1897 M4.
@@ -13,6 +14,13 @@ use crate::{
 pub enum EffectDefinition {
     Glow(Glow),
     Blur(Blur),
+    Shadow(Shadow),
+}
+
+impl From<Shadow> for EffectDefinition {
+    fn from(value: Shadow) -> Self {
+        Self::Shadow(value)
+    }
 }
 
 impl From<Blur> for EffectDefinition {
@@ -32,12 +40,28 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => v.radius(),
             Self::Blur(v) => v.radius(),
+            Self::Shadow(v) => v.radius(),
         }
     }
     pub fn is_neutral(self) -> bool {
         match self {
             Self::Glow(v) => v.is_neutral(),
             Self::Blur(v) => v.is_neutral(),
+            Self::Shadow(v) => v.is_neutral(),
+        }
+    }
+    pub const fn as_shadow(self) -> Option<Shadow> {
+        if let Self::Shadow(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub const fn color(self) -> Option<crate::Color> {
+        match self {
+            Self::Glow(v) => Some(v.color()),
+            Self::Shadow(v) => Some(v.color()),
+            Self::Blur(_) => None,
         }
     }
     pub const fn as_glow(self) -> Option<Glow> {
@@ -58,9 +82,16 @@ impl EffectDefinition {
         match (self, next) {
             (Self::Glow(previous), Self::Glow(next)) => match parameter {
                 EffectParameter::Color => previous.color() != next.color(),
+                EffectParameter::Offset => false,
                 EffectParameter::Radius => previous.radius() != next.radius(),
                 EffectParameter::Intensity => previous.intensity() != next.intensity(),
                 EffectParameter::Source => previous.source() != next.source(),
+            },
+            (Self::Shadow(previous), Self::Shadow(next)) => match parameter {
+                EffectParameter::Color => previous.color() != next.color(),
+                EffectParameter::Radius => previous.radius() != next.radius(),
+                EffectParameter::Offset => previous.offset() != next.offset(),
+                _ => false,
             },
             (Self::Blur(previous), Self::Blur(next)) => {
                 parameter == EffectParameter::Radius && previous.radius() != next.radius()
@@ -80,12 +111,14 @@ impl EffectValue for EffectDefinition {
         match self {
             Self::Glow(v) => update.apply_to(v).map(Self::Glow),
             Self::Blur(v) => update.apply_to(v).map(Self::Blur),
+            Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
         }
     }
     fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
         match (self, target) {
             (Self::Glow(a), Self::Glow(b)) => a.validate_effect_transition(b),
             (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
+            (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -98,6 +131,7 @@ impl EffectValue for EffectDefinition {
         match (self, target) {
             (Self::Glow(a), Self::Glow(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Blur(a), Self::Blur(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::Shadow(a), Self::Shadow(b)) => a.sample_effect_parameters(b, request, alpha),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -153,6 +187,7 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Radius => 2,
         EffectParameter::Intensity => 4,
         EffectParameter::Source => 8,
+        EffectParameter::Offset => 16,
     }
 }
 

@@ -2945,6 +2945,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
+        Property::EffectOffset,
     ]
     .map(|property| driver_key(ObjectId::new(object), property).1);
     if property == Property::Morph {
@@ -2966,7 +2967,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             }
         })
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
-        (0..=driver_key(ObjectId::new(object), Property::EffectIntensity).1)
+        (0..=driver_key(ObjectId::new(object), Property::EffectOffset).1)
             .filter(|slot| *slot != reveal_slot)
             .find_map(|slot| {
                 driven
@@ -2976,7 +2977,10 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             })
     } else if matches!(
         property,
-        Property::EffectColor | Property::EffectRadius | Property::EffectIntensity
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
     ) {
         [
             Property::Transform,
@@ -3057,6 +3061,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::EffectColor => 15,
         Property::EffectRadius => 16,
         Property::EffectIntensity => 17,
+        Property::EffectOffset => 18,
     };
     (object.get(), slot)
 }

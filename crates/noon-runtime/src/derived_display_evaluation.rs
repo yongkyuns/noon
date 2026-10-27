@@ -319,6 +319,7 @@ fn apply_derived_track(
         Property::EffectColor
         | Property::EffectRadius
         | Property::EffectIntensity
+        | Property::EffectOffset
         | Property::Presence
         | Property::ZIndex
         | Property::Transform

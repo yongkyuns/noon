@@ -66,6 +66,7 @@ pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
+pub mod shadow;
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub mod spatial_camera_labels;
 pub mod spatial_mesh;

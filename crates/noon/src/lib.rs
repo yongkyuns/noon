@@ -87,13 +87,13 @@ mod effect_authoring;
 mod effective_capture;
 pub mod number_line_example;
 
-/// Checked leaf effects. Finite glow playback supports filled, unstroked planar
-/// circles/rectangles through ordinary Scene execution and live publication.
+/// Finite leaf effects through shared semantic identity, ordinary animation
+/// channels and retained source capture. Groups/stacks have separate admission.
 pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{
-        Blur, EffectDefinition, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
-        Pixels,
+        Blur, EffectDefinition, EffectOffset, EffectParameterError, EffectRadius, EffectUpdate,
+        Glow, GlowSource, Pixels, Shadow,
     };
 }
 mod drawing;

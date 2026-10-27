@@ -1,6 +1,8 @@
 //! Optional language-boundary values, not a second effect store or validator.
 use crate::AuthoringFailure;
-use noon::effects::{EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource};
+#[cfg(any(test, target_arch = "wasm32"))]
+use noon::effects::Glow;
+use noon::effects::{EffectParameterError, EffectRadius, EffectUpdate, GlowSource};
 use noon::Color;
 
 pub(crate) fn effect_update(
@@ -9,6 +11,8 @@ pub(crate) fn effect_update(
     pixels: bool,
     intensity: Option<f64>,
     source: Option<&str>,
+    offset: &[f64],
+    offset_pixels: bool,
 ) -> Result<EffectUpdate, AuthoringFailure> {
     let color = match color {
         [] => None,
@@ -42,6 +46,15 @@ pub(crate) fn effect_update(
             "a radius unit requires an explicit radius",
         ));
     }
+    let offset = match offset {
+        [] if !offset_pixels => None,
+        [x, y] => Some(if offset_pixels {
+            noon_core::EffectOffset::Pixels([*x, *y])
+        } else {
+            noon_core::EffectOffset::Scene([*x, *y])
+        }),
+        _ => return Err(noon::AuthoringError::from(EffectParameterError::InvalidOffset).into()),
+    };
     let update = EffectUpdate {
         color,
         radius: radius.map(|v| {
@@ -53,8 +66,9 @@ pub(crate) fn effect_update(
         }),
         intensity,
         source,
+        offset,
     };
-    Glow::new(update).map_err(noon::AuthoringError::from)?;
+    update.validate().map_err(noon::AuthoringError::from)?;
     Ok(update)
 }
 
@@ -79,10 +93,20 @@ mod wasm {
             pixels: bool,
             intensity: Option<f64>,
             source: Option<String>,
+            offset: &[f64],
+            offset_pixels: bool,
         ) -> Result<WasmEffectUpdate, JsValue> {
-            super::effect_update(color, radius, pixels, intensity, source.as_deref())
-                .map(|value| Self { value })
-                .map_err(js_error)
+            super::effect_update(
+                color,
+                radius,
+                pixels,
+                intensity,
+                source.as_deref(),
+                offset,
+                offset_pixels,
+            )
+            .map(|value| Self { value })
+            .map_err(js_error)
         }
     }
 
@@ -96,6 +120,20 @@ mod wasm {
             self.value.as_glow().ok_or_else(|| {
                 js_error(noon::AuthoringError::from(
                     EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Color),
+                ))
+            })
+        }
+        fn color_value(&self) -> Result<Color, JsValue> {
+            self.value.color().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Color),
+                ))
+            })
+        }
+        fn shadow_value(&self) -> Result<noon::effects::Shadow, JsValue> {
+            self.value.as_shadow().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Offset),
                 ))
             })
         }
@@ -124,29 +162,52 @@ mod wasm {
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = shadow)]
+        pub fn shadow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            noon::effects::Shadow::new(update.value)
+                .map(|v| Self { value: v.into() })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(getter, js_name = offsetX)]
+        pub fn offset_x(&self) -> Result<f64, JsValue> {
+            Ok(self.shadow_value()?.offset().value()[0])
+        }
+        #[wasm_bindgen(getter, js_name = offsetY)]
+        pub fn offset_y(&self) -> Result<f64, JsValue> {
+            Ok(self.shadow_value()?.offset().value()[1])
+        }
+        #[wasm_bindgen(getter, js_name = offsetPixels)]
+        pub fn offset_pixels(&self) -> Result<bool, JsValue> {
+            Ok(matches!(
+                self.shadow_value()?.offset(),
+                noon_core::EffectOffset::Pixels(_)
+            ))
+        }
         #[wasm_bindgen(getter)]
         pub fn kind(&self) -> String {
             match self.value {
                 EffectDefinition::Glow(_) => "glow",
                 EffectDefinition::Blur(_) => "blur",
+                EffectDefinition::Shadow(_) => "shadow",
             }
             .into()
         }
         #[wasm_bindgen(getter)]
         pub fn red(&self) -> Result<f64, JsValue> {
-            Ok(f64::from(self.glow_value()?.color().red))
+            Ok(f64::from(self.color_value()?.red))
         }
         #[wasm_bindgen(getter)]
         pub fn green(&self) -> Result<f64, JsValue> {
-            Ok(f64::from(self.glow_value()?.color().green))
+            Ok(f64::from(self.color_value()?.green))
         }
         #[wasm_bindgen(getter)]
         pub fn blue(&self) -> Result<f64, JsValue> {
-            Ok(f64::from(self.glow_value()?.color().blue))
+            Ok(f64::from(self.color_value()?.blue))
         }
         #[wasm_bindgen(getter)]
         pub fn alpha(&self) -> Result<f64, JsValue> {
-            Ok(f64::from(self.glow_value()?.color().alpha))
+            Ok(f64::from(self.color_value()?.alpha))
         }
         #[wasm_bindgen(getter)]
         pub fn radius(&self) -> f64 {

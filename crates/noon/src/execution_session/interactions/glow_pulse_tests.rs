@@ -138,40 +138,45 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
-fn click_pulse_rejects_blur_without_publishing_or_acknowledging_the_release() {
-    let mut f = Fixture::new(None);
-    f.scene
-        .live(&mut f.session)
-        .add_effect(&f.targets[0], crate::effects::Blur::default(), "glow")
-        .unwrap();
-    let attachment = f.effect(0).unwrap();
-    f.send(1, 0, true).unwrap();
-    let context = f.session.publication_context();
-    let frame = f.session.frame().clone();
-    let revision = f.scene.revision();
-    assert!(matches!(
-        f.send(2, 0, false),
-        Err(ExecutionSessionInputError::Interaction(_))
-    ));
-    assert_eq!(f.session.publication_context(), context);
-    assert_eq!(f.session.frame(), &frame);
-    assert_eq!(f.scene.revision(), revision);
-    assert_eq!(f.effect(0), Some(attachment));
-    assert!(f
-        .scene
-        .get_effect(&f.targets[0], "glow")
-        .unwrap()
-        .authored_definition()
-        .unwrap()
-        .as_blur()
-        .is_some());
-    assert!(!f.session.interactions_active());
-    f.scene
-        .live(&mut f.session)
-        .on_click(&f.targets[0], None)
-        .unwrap();
-    // The rejected release is still the next admitted input occurrence.
-    f.send(2, 0, false).unwrap();
+fn click_pulse_rejects_non_glow_attachments_without_publishing_or_acknowledging_the_release() {
+    for definition in [
+        noon_core::EffectDefinition::Blur(crate::effects::Blur::default()),
+        noon_core::EffectDefinition::Shadow(crate::effects::Shadow::default()),
+    ] {
+        let mut f = Fixture::new(None);
+        f.scene
+            .live(&mut f.session)
+            .add_effect(&f.targets[0], definition, "glow")
+            .unwrap();
+        let attachment = f.effect(0).unwrap();
+        f.send(1, 0, true).unwrap();
+        let context = f.session.publication_context();
+        let frame = f.session.frame().clone();
+        let revision = f.scene.revision();
+        assert!(matches!(
+            f.send(2, 0, false),
+            Err(ExecutionSessionInputError::Interaction(_))
+        ));
+        assert_eq!(f.session.publication_context(), context);
+        assert_eq!(f.session.frame(), &frame);
+        assert_eq!(f.scene.revision(), revision);
+        assert_eq!(f.effect(0), Some(attachment));
+        assert_eq!(
+            f.scene
+                .get_effect(&f.targets[0], "glow")
+                .unwrap()
+                .authored_definition()
+                .unwrap(),
+            definition
+        );
+        assert!(!f.session.interactions_active());
+        f.scene
+            .live(&mut f.session)
+            .on_click(&f.targets[0], None)
+            .unwrap();
+        // The rejected release is still the next admitted input occurrence.
+        f.send(2, 0, false).unwrap();
+    }
 }
 
 #[test]
