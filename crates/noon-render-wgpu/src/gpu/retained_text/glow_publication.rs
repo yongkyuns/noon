@@ -59,10 +59,80 @@ pub(crate) struct RetainedEffectPublication {
     view: Option<(Camera2D, [u32; 2])>,
     rows_examined: usize,
     invalidated: bool,
+    sync_failed: bool,
 }
 impl RetainedEffectPublication {
-    pub(crate) fn composed_placement(&self, object: ObjectId) -> Option<(ObjectId, bool)> {
-        self.composed.placement(object)
+    fn active_source(
+        frame: &noon_runtime::FrameState,
+        index: usize,
+        view: (Camera2D, [u32; 2]),
+    ) -> Result<bool, EffectPrepareError> {
+        let Some(effects) = frame.objects[index].effects.as_ref() else {
+            return Ok(false);
+        };
+        let opacity = crate::pack_style(&frame.objects[index]).opacity;
+        let mut active = false;
+        for &definition in effects.definitions() {
+            let parameters = crate::EffectCaptureParameters {
+                definition,
+                output_height: view.1[1],
+                world_view_height: f64::from(view.0.world_size.y),
+                scope_opacity: opacity,
+            };
+            active |= !parameters.is_neutral_at_sigma(parameters.sigma_pixels()?);
+        }
+        Ok(active && opacity > 0.0)
+    }
+
+    fn required_by_parent(
+        &self,
+        frame: &noon_runtime::FrameState,
+        index: usize,
+        view: (Camera2D, [u32; 2]),
+    ) -> Result<bool, EffectPrepareError> {
+        for parent in self
+            .composed
+            .dependents(index)
+            .chain(self.composed.ancestors(index))
+        {
+            if Self::active_source(frame, parent, view)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn composed_placement(
+        &self,
+        object: ObjectId,
+        enabled: impl Fn(ObjectId) -> bool,
+    ) -> Option<(ObjectId, bool)> {
+        self.composed.placement(object, enabled)
+    }
+
+    pub(crate) fn packed_capture_owner(&self, index: usize, object: ObjectId) -> Option<ObjectId> {
+        self.packed
+            .get(&index)
+            .filter(|(owner, _)| *owner == object)
+            .map(|(_, packed)| *packed)
+    }
+
+    pub(crate) fn composed_candidates(
+        &self,
+        owner: usize,
+        member: usize,
+    ) -> impl Iterator<Item = (usize, ObjectId, usize, ObjectId, usize)> + '_ {
+        self.composed
+            .candidates(owner, member)
+            .map(|(index, scope)| {
+                (
+                    index,
+                    scope.owner,
+                    scope.source.members().len(),
+                    scope.source.members()[0],
+                    scope.depth.unwrap_or(0),
+                )
+            })
     }
 
     pub(crate) fn invalidate(&mut self) {
@@ -77,12 +147,14 @@ impl RetainedEffectPublication {
         {
             return Err(EffectPrepareError::PublicationMismatch);
         }
-        if self.context == Some(context) && !publication.changes().is_all() {
+        if self.context == Some(context) && !publication.changes().is_all() && !self.sync_failed {
             return Ok(());
         }
         let frame = publication.frame();
-        let full = self.context.is_none() || publication.changes().is_all();
+        let full = self.context.is_none() || publication.changes().is_all() || self.sync_failed;
         let order = publication.painter_order();
+        let mut order_affected = BTreeSet::new();
+        let mut capture_ancestors = BTreeSet::new();
         if full {
             self.painter_ranks.clear();
             self.painter_ranks.resize(frame.objects.len(), usize::MAX);
@@ -92,18 +164,10 @@ impl RetainedEffectPublication {
             self.composed = ComposedCaptures::default();
         } else if let Some(range) = publication.changes().painter_order_range() {
             self.painter_ranks.resize(frame.objects.len(), usize::MAX);
-            let mut affected = BTreeSet::new();
             for (rank, &index) in order.iter().enumerate().take(range.end).skip(range.start) {
                 let index = index as usize;
                 self.painter_ranks[index] = rank;
-                if let Some(scope) = self.composed.dependent(index) {
-                    affected.insert(scope);
-                }
-            }
-            for scope in affected {
-                self.composed.validate_order(&self.painter_ranks, scope)?;
-                self.capture_dirty.insert(scope);
-                self.dirty.insert(scope);
+                order_affected.extend(self.composed.dependents(index));
             }
         }
         if full {
@@ -127,10 +191,8 @@ impl RetainedEffectPublication {
         } else {
             for &index in publication.changes().object_indices() {
                 self.rows_examined += 1;
-                if let Some(scope) = self.composed.changed_member(publication, index)? {
-                    self.dirty.insert(scope);
-                    self.capture_dirty.insert(scope);
-                }
+                capture_ancestors.extend(self.composed.dependents(index));
+                capture_ancestors.extend(self.composed.ancestors(index));
                 let old_source = self
                     .composed
                     .scopes
@@ -166,6 +228,14 @@ impl RetainedEffectPublication {
                     })
                     .map(|row| row.id);
                 if let Some(object) = next {
+                    if self.composed.scopes.contains_key(&index)
+                        && !self.sources.contains_key(&index)
+                    {
+                        // Reattaching a treatment must validate eligibility that
+                        // ordinary drawing could change while this plan was inert.
+                        capture_ancestors.insert(index);
+                        self.capture_dirty.insert(index);
+                    }
                     self.sources.insert(index, object);
                     self.dirty.insert(index);
                 } else if self.sources.remove(&index).is_some() || self.packed.contains_key(&index)
@@ -174,7 +244,27 @@ impl RetainedEffectPublication {
                 }
             }
         }
+        self.composed.finish_topology()?;
+        if !full {
+            for &index in publication.changes().object_indices() {
+                capture_ancestors.extend(self.composed.dependents(index));
+                capture_ancestors.extend(self.composed.ancestors(index));
+                order_affected.extend(self.composed.dependents(index));
+            }
+        }
+        for scope in order_affected {
+            self.composed.validate_order(&self.painter_ranks, scope)?;
+            capture_ancestors.insert(scope);
+        }
+        for scope in capture_ancestors {
+            self.composed.validate_inputs(publication, scope)?;
+            if self.sources.contains_key(&scope) {
+                self.dirty.insert(scope);
+                self.capture_dirty.insert(scope);
+            }
+        }
         self.context = Some(context);
+        self.sync_failed = false;
         Ok(())
     }
 }
@@ -208,7 +298,18 @@ impl GpuRenderer {
         publication: &RendererPublication<'_>,
         visible: &'a [usize],
     ) -> Result<&'a [usize], EffectPrepareError> {
-        self.retained_effects.sync(publication)?;
+        if self
+            .retained_effects
+            .context
+            .is_some_and(|old| publication_is_stale(publication.context(), old))
+        {
+            return Err(EffectPrepareError::PublicationMismatch);
+        }
+        if let Err(error) = self.retained_effects.sync(publication) {
+            self.retained_effects.sync_failed = true;
+            self.invalidate_effect_captures();
+            return Err(error);
+        }
         if self.retained_effects.sources.is_empty() {
             return Ok(visible);
         }
@@ -334,6 +435,42 @@ impl GpuRenderer {
         let frame = publication.frame();
         // Prove all source mappings before recording GPU work. Scratch identities
         // stay private; no assumption that frame index equals packed index.
+        // Activating a parent can demand a formerly offscreen child. Revisit
+        // only its declared input closure, and only when this parent needs a
+        // capture or has no usable output. Warm active parameter edits skip it.
+        let mut demanded = BTreeSet::new();
+        for &index in &self.retained_effects.dirty {
+            let Some(scope) = self.retained_effects.composed.scopes.get(&index) else {
+                continue;
+            };
+            if !RetainedEffectPublication::active_source(frame, index, view)?
+                || (!self.retained_effects.capture_dirty.contains(&index)
+                    && self.retained_input_is_ready(index, scope.owner))
+            {
+                continue;
+            }
+            for &object in scope.source.members() {
+                let member = publication
+                    .object_index(object)
+                    .ok_or(EffectPrepareError::PublicationMismatch)?;
+                demanded.insert(member);
+                demanded.extend(
+                    self.retained_effects
+                        .composed
+                        .candidates(index, member)
+                        .map(|(child, _)| child),
+                );
+            }
+        }
+        for index in demanded {
+            if let Some(&object) = self.retained_effects.sources.get(&index) {
+                if !self.retained_input_is_ready(index, object)
+                    && RetainedEffectPublication::active_source(frame, index, view)?
+                {
+                    self.retained_effects.dirty.insert(index);
+                }
+            }
+        }
         let mut sources = Vec::with_capacity(self.retained_effects.dirty.len());
         for &index in &self.retained_effects.dirty {
             let mapped = if let Some(&object) = self.retained_effects.sources.get(&index) {
@@ -482,8 +619,21 @@ impl GpuRenderer {
             // successful ordinary encode so abandoned encoders remain retryable.
             prepared.text.atlas.encode_pending_uploads(encoder);
         }
+        // Physical sources precede scopes; deeper scopes precede their parents,
+        // including equal intervals whose identities were allocated in any order.
+        sources.sort_by_key(|(index, _)| {
+            self.retained_effects
+                .composed
+                .depth(*index)
+                .map_or((false, std::cmp::Reverse(0)), |depth| {
+                    (true, std::cmp::Reverse(depth))
+                })
+        });
         for (index, mapped) in sources {
             if let Some((object, scratch, definitions, observation)) = mapped {
+                let required_by_parent = self
+                    .retained_effects
+                    .required_by_parent(frame, index, view)?;
                 let packed = observation
                     .as_ref()
                     .map_or(object, |observation| observation.object);
@@ -493,13 +643,14 @@ impl GpuRenderer {
                     texture_budget_bytes,
                 };
                 let value = if let Some(observation) = observation {
-                    self.prepare_observed_effect_capture(
+                    self.prepare_observed_effect_capture_input(
                         device,
                         queue,
                         encoder,
                         &prepared.geometry,
                         request,
                         observation,
+                        required_by_parent,
                     )?
                 } else {
                     self.prepare_draw_source_effect(
@@ -517,6 +668,7 @@ impl GpuRenderer {
                             .get(&index)
                             .map(|scope| scope.source.clone()),
                         self.retained_effects.capture_dirty.contains(&index),
+                        required_by_parent,
                     )?
                 };
                 stats.accumulate(value);

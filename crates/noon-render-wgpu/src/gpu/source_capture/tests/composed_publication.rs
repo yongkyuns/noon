@@ -10,6 +10,10 @@ use std::sync::Arc;
 const OWNER: ObjectId = ObjectId::new(90);
 const ATTACHMENT: SemanticNodeId = SemanticNodeId::new(91, 2);
 
+mod nested;
+mod offscreen;
+mod silhouette;
+
 fn effects(radius: f64) -> Arc<CompiledEffectStack> {
     Arc::new(
         CompiledEffectStack::new([CompiledEffect {
@@ -229,7 +233,7 @@ fn flat_group_publication_reuses_capture_and_replaces_the_whole_painter_interval
 #[cfg(feature = "ci-noop")]
 fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
     let (device, queue) = wgpu::Device::noop(&Default::default());
-    for case in 0..6 {
+    for case in 0..7 {
         let (mut runtime, _) = grouped_fixture();
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         {
@@ -243,10 +247,12 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
                 object: ObjectId::new(2),
                 value: 2.0,
             },
-            1 => ExecutionPatch::SetEffectStack {
-                object: ObjectId::new(2),
-                expected: Box::new([]),
-                effects: Some(effects(2.0)),
+            1 => ExecutionPatch::SetTransform {
+                object: OWNER,
+                transform: Transform2D {
+                    translation: Vec2::new(0.5, 0.0),
+                    ..Transform2D::IDENTITY
+                },
             },
             2 => ExecutionPatch::SetStyle {
                 object: OWNER,
@@ -257,6 +263,10 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
                     ..Style::default()
                 },
                 fill_paint: None,
+            },
+            6 => ExecutionPatch::SetDrawEnabled {
+                object: ObjectId::new(2),
+                enabled: false,
             },
             _ => {
                 let members = if case == 3 {
@@ -275,7 +285,7 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
                 }
             }
         };
-        if matches!(case, 0 | 3 | 4 | 5) {
+        if matches!(case, 0 | 1 | 3 | 4 | 5) {
             let before = runtime.frame().clone();
             assert!(
                 runtime.apply_execution_patch(&patch).is_err(),
@@ -292,6 +302,78 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
                 .is_err(),
             "unqualified group profile {case} must not silently paint raw children"
         );
+        // Failed renderer admission leaves its successful epoch authoritative;
+        // a corrected publication must rebuild the disposable index and retry.
+        let restore = if case == 6 {
+            ExecutionPatch::SetDrawEnabled {
+                object: ObjectId::new(2),
+                enabled: true,
+            }
+        } else {
+            ExecutionPatch::SetStyle {
+                object: OWNER,
+                style: Style {
+                    fill: None,
+                    stroke: None,
+                    ..Style::default()
+                },
+                fill_paint: None,
+            }
+        };
+        runtime.apply_execution_patch(&restore).unwrap();
+        assert!(renderer
+            .effect_source_visibility(&runtime.take_renderer_publication(), &[0, 1, 2, 3])
+            .is_ok());
+        if case == 6 {
+            // Inert containment metadata must not impose capture-only limits
+            // on the ordinary no-effect scene after its attachment retires.
+            for patch in [
+                ExecutionPatch::SetEffectStack {
+                    object: OWNER,
+                    expected: vec![ATTACHMENT].into_boxed_slice(),
+                    effects: None,
+                },
+                ExecutionPatch::SetStyle {
+                    object: OWNER,
+                    style: Style {
+                        fill: None,
+                        stroke: None,
+                        opacity: 0.5,
+                        ..Style::default()
+                    },
+                    fill_paint: None,
+                },
+                ExecutionPatch::SetDrawEnabled {
+                    object: ObjectId::new(2),
+                    enabled: false,
+                },
+            ] {
+                runtime.apply_execution_patch(&patch).unwrap();
+            }
+            assert!(renderer
+                .effect_source_visibility(&runtime.take_renderer_publication(), &[0, 2, 3])
+                .is_ok());
+            assert!(!renderer.has_retained_effect_sources());
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetStyle {
+                    object: OWNER,
+                    style: Style {
+                        fill: None,
+                        stroke: None,
+                        ..Style::default()
+                    },
+                    fill_paint: None,
+                })
+                .unwrap();
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                    object: OWNER,
+                    expected: Box::new([]),
+                    effects: Some(effects(2.0)),
+                })
+                .unwrap();
+            assert!(renderer.effect_source_visibility(&runtime.take_renderer_publication(), &[0,2,3]).is_err(), "reattachment must revalidate hidden inputs even when the immutable plan is unchanged");
+        }
     }
 }
 

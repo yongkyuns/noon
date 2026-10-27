@@ -205,6 +205,28 @@ impl EffectCaptureTile {
         maximum_texture_dimension: u32,
         memory_budget_bytes: u64,
     ) -> Result<Option<Self>, EffectPrepareError> {
+        Self::prepare_stack_input(
+            bounds,
+            viewport,
+            definitions,
+            parameters,
+            maximum_texture_dimension,
+            memory_budget_bytes,
+            false,
+        )
+    }
+
+    /// An ancestor filter can consume pixels that are outside the final view.
+    /// This changes contribution clipping only, never output units or the camera.
+    pub(super) fn prepare_stack_input(
+        bounds: EffectPixelBounds,
+        viewport: [u32; 2],
+        definitions: &[noon_core::EffectDefinition],
+        parameters: super::EffectStackParameters,
+        maximum_texture_dimension: u32,
+        memory_budget_bytes: u64,
+        required_by_parent: bool,
+    ) -> Result<Option<Self>, EffectPrepareError> {
         if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
         }
@@ -291,7 +313,7 @@ impl EffectCaptureTile {
             end[0].min(i64::from(viewport[0])),
             end[1].min(i64::from(viewport[1])),
         ];
-        if (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
+        if !required_by_parent && (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
             return Ok(None);
         }
         let width = end[0] - start[0];
@@ -311,21 +333,28 @@ impl EffectCaptureTile {
         if bytes > memory_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        Ok(Some(Self {
+        let mut tile = Self {
             origin: [start[0] as i32, start[1] as i32],
             size,
-            viewport_origin: [visible_start[0] as u32, visible_start[1] as u32],
-            local_origin: [
-                (visible_start[0] - start[0]) as u32,
-                (visible_start[1] - start[1]) as u32,
-            ],
-            visible_size: [
-                (visible_end[0] - visible_start[0]) as u32,
-                (visible_end[1] - visible_start[1]) as u32,
-            ],
+            viewport_origin: [0; 2],
+            local_origin: [0; 2],
+            visible_size: [0; 2],
             support_radius,
             capture_and_scratch_bytes: bytes,
-        }))
+        };
+        tile.refresh_visible_region(viewport);
+        Ok(Some(tile))
+    }
+
+    pub(super) fn refresh_visible_region(&mut self, viewport: [u32; 2]) {
+        for (axis, viewport) in viewport.into_iter().enumerate() {
+            let origin = i64::from(self.origin[axis]);
+            let start = origin.clamp(0, i64::from(viewport));
+            let end = (origin + i64::from(self.size[axis])).clamp(0, i64::from(viewport));
+            self.viewport_origin[axis] = start as u32;
+            self.local_origin[axis] = (start - origin).clamp(0, i64::from(self.size[axis])) as u32;
+            self.visible_size[axis] = (end - start).max(0) as u32;
+        }
     }
 }
 

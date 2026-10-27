@@ -17,6 +17,8 @@ use super::{
 };
 use crate::{CircleInstance, PackedStyle, PreparedFrame, RectangleInstance, RenderPrimitive};
 
+mod inputs;
+
 /// One effective renderer request. Object identity/attachment values and animation
 /// phase must come from the normal runtime publication, not a host-owned store.
 #[derive(Clone, Copy, Debug)]
@@ -72,6 +74,18 @@ impl SourceInstance {
             _ => self == other,
         }
     }
+    fn set_capture_region(&mut self, tile: EffectCaptureTile) -> Result<(), EffectPrepareError> {
+        if let Self::Draws { source, silhouette } = self {
+            for source in std::iter::once(source).chain(silhouette.iter_mut()) {
+                if source.needs_capture_region(tile.origin, tile.size) {
+                    Arc::make_mut(source)
+                        .set_capture_region(tile.origin, tile.size)
+                        .ok_or(EffectPrepareError::CaptureCoordinatesOutOfRange)?;
+                }
+            }
+        }
+        Ok(())
+    }
     fn prepared(prepared: &PreparedFrame<'_>, key: (u8, usize)) -> Option<Self> {
         match key {
             (0, index) => prepared.circles.get(index).copied().map(Self::Circle),
@@ -111,11 +125,11 @@ impl SourceInstance {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-struct Placement {
-    origin: [i32; 2],
-    size: [u32; 2],
-    viewport: [u32; 2],
-    padding: [u32; 2],
+pub(super) struct Placement {
+    pub origin: [i32; 2],
+    pub size: [u32; 2],
+    pub viewport: [u32; 2],
+    pub padding: [u32; 2],
 }
 
 #[derive(Debug)]
@@ -160,6 +174,8 @@ struct ResidentEffect {
     silhouette_buffer: Option<wgpu::Buffer>,
     source_image_bindings: Vec<super::raster_image_gpu::CapturedImageBinding>,
     silhouette_image_bindings: Vec<super::raster_image_gpu::CapturedImageBinding>,
+    source_filtered_bindings: Vec<super::source_capture::FilteredBinding>,
+    silhouette_filtered_bindings: Vec<super::source_capture::FilteredBinding>,
     camera_buffer: wgpu::Buffer,
     camera_binding: wgpu::BindGroup,
     text_camera_binding: Option<wgpu::BindGroup>,
@@ -170,6 +186,7 @@ struct ResidentEffect {
     placement_output: Option<wgpu::Texture>,
     filter: EffectStackScope,
     revision: u64,
+    output_revision: u64,
     invalidated: bool,
     enabled: bool,
 }
@@ -299,6 +316,28 @@ impl GpuRenderer {
         request: EffectCaptureRequest<'_>,
         observation: crate::PreparedGeometryObjectObservation,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        self.prepare_observed_effect_capture_input(
+            device,
+            queue,
+            encoder,
+            prepared,
+            request,
+            observation,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_observed_effect_capture_input(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        prepared: &PreparedFrame<'_>,
+        request: EffectCaptureRequest<'_>,
+        observation: crate::PreparedGeometryObjectObservation,
+        required_by_parent: bool,
+    ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
             RenderPrimitive::Rectangle => 1,
@@ -363,6 +402,7 @@ impl GpuRenderer {
             bounds,
             observation.style.opacity,
             None,
+            required_by_parent,
         )
     }
 
@@ -379,6 +419,7 @@ impl GpuRenderer {
         opacity: f32,
         composed: Option<Arc<noon_core::ComposedSource>>,
         recapture: bool,
+        required_by_parent: bool,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         if !matches!(
             self.target_format,
@@ -418,11 +459,21 @@ impl GpuRenderer {
             });
             let leaf = [(object, opacity.max(f32::MIN_POSITIVE))];
             let members = members.as_deref().unwrap_or(&leaf);
-            let source = super::source_capture::PreparedSource::prepare(
+            let replacements = if let Some(composed) = &composed {
+                self.prepare_composed_replacements(
+                    prepared,
+                    request.object_index,
+                    composed.members(),
+                )?
+            } else {
+                Vec::new()
+            };
+            let source = super::source_capture::PreparedSource::prepare_with_replacements(
                 prepared,
                 members,
                 false,
                 device.limits().min_uniform_buffer_offset_alignment as usize,
+                &replacements,
             )
             .ok_or(EffectPrepareError::UnsupportedCapture)?;
             let silhouette = if needs_silhouette {
@@ -488,6 +539,7 @@ impl GpuRenderer {
             bounds,
             opacity,
             Some(text),
+            required_by_parent,
         )
     }
 
@@ -505,6 +557,7 @@ impl GpuRenderer {
         bounds: EffectPixelBounds,
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
+        required_by_parent: bool,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let parameters = EffectStackParameters {
             output_height: self.viewport_size[1],
@@ -512,13 +565,14 @@ impl GpuRenderer {
             scope_opacity: opacity,
             scratch_budget_bytes: request.texture_budget_bytes,
         };
-        let tile = EffectCaptureTile::prepare_stack(
+        let tile = EffectCaptureTile::prepare_stack_input(
             bounds,
             self.viewport_size,
             request.definitions,
             parameters,
             device.limits().max_texture_dimension_2d,
             request.texture_budget_bytes,
+            required_by_parent,
         )?;
         let Some(mut tile) = tile else {
             // Retain warmed storage for neutral fades; exact ordinary submission
@@ -531,6 +585,23 @@ impl GpuRenderer {
                     .and_then(|owned_key| glows.scopes.get_mut(&owned_key))
                     .filter(|s| s.object == object)
                 {
+                    // Drop obsolete child-output leases even while this scope is
+                    // neutral. Its warmed source image is reusable only when its
+                    // normalized inputs still describe that captured image.
+                    effective.set_capture_region(scope.tile)?;
+                    let mut source_instance = effective.clone();
+                    if key.0 != 2 {
+                        source_instance.style_mut().opacity = 1.0;
+                    }
+                    if !scope.source_instance.same_source(&source_instance) {
+                        scope.source_instance = source_instance;
+                        scope.effective = effective;
+                        scope.source_filtered_bindings.clear();
+                        scope.silhouette_filtered_bindings.clear();
+                        scope.source_image_bindings.clear();
+                        scope.silhouette_image_bindings.clear();
+                        scope.invalidated = true;
+                    }
                     let source_bytes = u64::from(scope.tile.size[0])
                         * u64::from(scope.tile.size[1])
                         * 4
@@ -577,9 +648,8 @@ impl GpuRenderer {
                 .next_multiple_of(16)
                 .min(device.limits().max_texture_dimension_2d);
             tile.size[axis] = reserved.max(previous);
-            tile.visible_size[axis] = (tile.size[axis] - tile.local_origin[axis])
-                .min(self.viewport_size[axis] - tile.viewport_origin[axis]);
         }
+        tile.refresh_visible_region(self.viewport_size);
         tile.capture_and_scratch_bytes = u64::from(tile.size[0])
             .checked_mul(u64::from(tile.size[1]))
             .and_then(|pixels| {
@@ -613,16 +683,7 @@ impl GpuRenderer {
         if total > request.texture_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        if let SourceInstance::Draws { source, silhouette } = &mut effective {
-            if source.capture_origin() != tile.origin {
-                Arc::make_mut(source).set_capture_origin(tile.origin);
-            }
-            if let Some(silhouette) = silhouette {
-                if silhouette.capture_origin() != tile.origin {
-                    Arc::make_mut(silhouette).set_capture_origin(tile.origin);
-                }
-            }
-        }
+        effective.set_capture_region(tile)?;
         let mut source_instance = effective.clone();
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
@@ -695,6 +756,8 @@ impl GpuRenderer {
                         silhouette_buffer,
                         source_image_bindings: Vec::new(),
                         silhouette_image_bindings: Vec::new(),
+                        source_filtered_bindings: Vec::new(),
+                        silhouette_filtered_bindings: Vec::new(),
                         text_camera_binding: text
                             .map(|text| text.glyphs.capture_camera_binding(device, &camera_buffer)),
                         multisampled: (key.0 == 2).then(|| {
@@ -723,6 +786,7 @@ impl GpuRenderer {
                         placement_output: None,
                         filter: EffectStackScope::default(),
                         revision: 0,
+                        output_revision: 0,
                         invalidated: true,
                         enabled: true,
                     },
@@ -753,6 +817,12 @@ impl GpuRenderer {
                 match &source_instance {
                     SourceInstance::Draws { source, silhouette } => {
                         let text = text.expect("isolated text capture state");
+                        source.prepare_filtered_bindings(
+                            device,
+                            &programs.layout,
+                            &scope.source_buffer,
+                            &mut scope.source_filtered_bindings,
+                        );
                         source
                             .prepare_image_bindings(
                                 self,
@@ -776,6 +846,7 @@ impl GpuRenderer {
                                     .expect("isolated text camera"),
                                 &scope.source_buffer,
                                 &scope.source_image_bindings,
+                                Some((&programs.multisampled, &scope.source_filtered_bindings)),
                             )
                             .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         stats.source_passes = 1;
@@ -783,6 +854,12 @@ impl GpuRenderer {
                             (silhouette, &scope.silhouette, &scope.silhouette_buffer)
                         {
                             queue.write_buffer(buffer, 0, &source.bytes);
+                            source.prepare_filtered_bindings(
+                                device,
+                                &programs.layout,
+                                buffer,
+                                &mut scope.silhouette_filtered_bindings,
+                            );
                             source
                                 .prepare_image_bindings(
                                     self,
@@ -806,6 +883,10 @@ impl GpuRenderer {
                                         .expect("isolated text camera"),
                                     buffer,
                                     &scope.silhouette_image_bindings,
+                                    Some((
+                                        &programs.multisampled,
+                                        &scope.silhouette_filtered_bindings,
+                                    )),
                                 )
                                 .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             stats.source_passes += 1;
@@ -875,6 +956,12 @@ impl GpuRenderer {
                 },
             )?;
             stats.filter = upload;
+            if source_changed || stats.filter.composite_passes > 0 {
+                scope.output_revision = scope
+                    .output_revision
+                    .checked_add(1)
+                    .expect("effect output revision exhausted");
+            }
             if scope.placement_output.as_ref() != scope.filter.output()
                 || scope.placement_binding.is_none()
             {
@@ -946,11 +1033,7 @@ impl GpuRenderer {
             .is_some_and(|g| g.scopes.values().any(|s| s.enabled))
     }
 
-    pub(super) fn has_draw_source_effect(&self, object: ObjectId) -> bool {
-        let object = self
-            .retained_effects
-            .composed_placement(object)
-            .map_or(object, |(owner, _)| owner);
+    fn has_own_draw_source_effect(&self, object: ObjectId) -> bool {
         self.effect_captures.as_deref().is_some_and(|g| {
             g.owners
                 .get(&object)
@@ -960,10 +1043,17 @@ impl GpuRenderer {
         })
     }
 
+    pub(super) fn has_draw_source_effect(&self, object: ObjectId) -> bool {
+        self.retained_effects
+            .composed_placement(object, |owner| self.has_own_draw_source_effect(owner))
+            .is_some()
+            || self.has_own_draw_source_effect(object)
+    }
+
     pub(super) fn skip_composed_source(&self, object: ObjectId) -> bool {
         self.retained_effects
-            .composed_placement(object)
-            .is_some_and(|(owner, anchor)| !anchor && self.has_draw_source_effect(owner))
+            .composed_placement(object, |owner| self.has_own_draw_source_effect(owner))
+            .is_some_and(|(_, anchor)| !anchor)
     }
 
     pub(super) fn draw_source_effect<'a>(
@@ -972,7 +1062,10 @@ impl GpuRenderer {
         object: ObjectId,
         single_sample: bool,
     ) -> bool {
-        let object = match self.retained_effects.composed_placement(object) {
+        let object = match self
+            .retained_effects
+            .composed_placement(object, |owner| self.has_own_draw_source_effect(owner))
+        {
             Some((owner, true)) => owner,
             Some((_, false)) => return false,
             None => object,

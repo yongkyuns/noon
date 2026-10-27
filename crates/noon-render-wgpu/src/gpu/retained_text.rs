@@ -280,6 +280,10 @@ pub enum RetainedPreparedObjectOutcome {
 }
 
 impl PreparedRetainedGpuFrame<'_> {
+    pub(super) fn capture_index(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
+
     pub(super) fn capture_rank(&self, object: ObjectId) -> Option<usize> {
         self.painter_ranks
             .get(*self.object_indices.get(&object)?)
@@ -6684,6 +6688,7 @@ pub use family_plan_set_prepare::*;
 /// Mixed-content draw failures preserve their source domain.
 #[derive(Debug)]
 pub enum RetainedDrawError {
+    EffectNotPrepared,
     Text(TextGpuDrawError),
     Image(RasterImageDrawError),
     GradientNotUploaded,
@@ -6704,6 +6709,7 @@ impl From<RasterImageDrawError> for RetainedDrawError {
 impl std::fmt::Display for RetainedDrawError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EffectNotPrepared => formatter.write_str("nested effect input was not prepared"),
             Self::Text(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
             Self::GradientNotUploaded => formatter.write_str("gradient source was not uploaded"),

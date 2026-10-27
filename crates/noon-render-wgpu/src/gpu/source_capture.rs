@@ -18,8 +18,37 @@ use crate::{
 };
 use noon_core::{RasterImageResourceHandle, Rect, Vec2};
 
+mod filtered;
+
+/// A versioned disposable renderer output, consumed without resampling it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FilteredCapture {
+    pub object: noon_core::ObjectId,
+    pub texture: wgpu::Texture,
+    pub revision: u64,
+    pub origin: [i32; 2],
+    pub size: [u32; 2],
+    pub bounds: Rect,
+}
+
+pub(super) struct SourceReplacement {
+    pub members: std::ops::Range<usize>,
+    pub capture: FilteredCapture,
+}
+
+#[derive(Debug)]
+pub(super) struct FilteredBinding {
+    texture: wgpu::Texture,
+    offset: u64,
+    binding: wgpu::BindGroup,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum SourceDraw {
+    Filtered {
+        capture: FilteredCapture,
+        bytes: std::ops::Range<u64>,
+    },
     Geometry {
         batch: OrderedRenderBatch,
         bytes: std::ops::Range<u64>,
@@ -45,6 +74,8 @@ pub(super) struct PreparedSource {
     pub bytes: Vec<u8>,
     pub bounds: Option<Rect>,
     capture_origin: [i32; 2],
+    capture_viewport: [u32; 2],
+    has_filtered: bool,
 }
 
 impl PreparedSource {
@@ -57,6 +88,16 @@ impl PreparedSource {
         silhouette: bool,
         uniform_alignment: usize,
     ) -> Option<Self> {
+        Self::prepare_with_replacements(frame, objects, silhouette, uniform_alignment, &[])
+    }
+
+    pub(super) fn prepare_with_replacements(
+        frame: &PreparedRetainedGpuFrame<'_>,
+        objects: &[(noon_core::ObjectId, f32)],
+        silhouette: bool,
+        uniform_alignment: usize,
+        replacements: &[SourceReplacement],
+    ) -> Option<Self> {
         if objects.is_empty() || !uniform_alignment.is_power_of_two() {
             return None;
         }
@@ -65,6 +106,8 @@ impl PreparedSource {
             bytes: Vec::new(),
             bounds: None,
             capture_origin: [0; 2],
+            capture_viewport: [0; 2],
+            has_filtered: false,
         };
         let mut previous_rank = None;
         for &(object, opacity) in objects {
@@ -78,6 +121,34 @@ impl PreparedSource {
                 return None;
             }
             previous_rank = Some(rank);
+        }
+        let mut previous_end = 0;
+        for replacement in replacements {
+            if replacement.members.is_empty()
+                || replacement.members.start < previous_end
+                || replacement.members.end > objects.len()
+            {
+                return None;
+            }
+            previous_end = replacement.members.end;
+        }
+        let mut replacements = replacements.iter().peekable();
+        let mut skip_until = 0;
+        for (index, &(object, opacity)) in objects.iter().enumerate() {
+            if !silhouette {
+                if index < skip_until {
+                    continue;
+                }
+                if replacements
+                    .peek()
+                    .is_some_and(|entry| entry.members.start == index)
+                {
+                    let replacement = replacements.next()?;
+                    source.push_filtered(&replacement.capture, uniform_alignment)?;
+                    skip_until = replacement.members.end;
+                    continue;
+                }
+            }
             for item in frame.capture_items(object)? {
                 match item {
                     RetainedRenderItem::Geometry { batch, .. } => {
@@ -272,11 +343,18 @@ impl PreparedSource {
         }));
     }
 
-    pub(super) fn set_capture_origin(&mut self, origin: [i32; 2]) {
-        if self.capture_origin == origin {
-            return;
+    pub(super) fn needs_capture_region(&self, origin: [i32; 2], size: [u32; 2]) -> bool {
+        self.capture_origin != origin || (self.has_filtered && self.capture_viewport != size)
+    }
+
+    pub(super) fn set_capture_region(&mut self, origin: [i32; 2], size: [u32; 2]) -> Option<()> {
+        if !self.needs_capture_region(origin, size) {
+            return Some(());
         }
         self.capture_origin = origin;
+        if self.has_filtered {
+            self.capture_viewport = size;
+        }
         for draw in &self.draws {
             if let SourceDraw::Image { bytes, .. } = draw {
                 let bytes = &mut self.bytes[bytes.start as usize..bytes.end as usize];
@@ -284,11 +362,21 @@ impl PreparedSource {
                     bytemuck::pod_read_unaligned::<ImageUniform>(bytes).with_capture_origin(origin);
                 bytes.copy_from_slice(bytemuck::bytes_of(&uniform));
             }
+            if let SourceDraw::Filtered { capture, bytes } = draw {
+                let placement = super::analytic_glow::Placement {
+                    origin: [
+                        capture.origin[0].checked_sub(origin[0])?,
+                        capture.origin[1].checked_sub(origin[1])?,
+                    ],
+                    size: capture.size,
+                    viewport: size,
+                    padding: [0; 2],
+                };
+                self.bytes[bytes.start as usize..bytes.end as usize]
+                    .copy_from_slice(bytemuck::bytes_of(&placement));
+            }
         }
-    }
-
-    pub(super) fn capture_origin(&self) -> [i32; 2] {
-        self.capture_origin
+        Some(())
     }
 
     /// Rebind only when an immutable image resource or the capture buffer changes.
@@ -344,6 +432,7 @@ impl PreparedSource {
         text_camera: &wgpu::BindGroup,
         instances: &wgpu::Buffer,
         images: &[CapturedImageBinding],
+        filtered: Option<(&wgpu::RenderPipeline, &[FilteredBinding])>,
     ) -> Result<(), RetainedDrawError> {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: multisampled,
@@ -364,8 +453,21 @@ impl PreparedSource {
         });
         let mut binding = None;
         let mut images = images.iter();
+        let mut filtered_index = 0;
         for draw in &self.draws {
             match draw {
+                SourceDraw::Filtered { .. } => {
+                    let (pipeline, filtered) =
+                        filtered.ok_or(RetainedDrawError::EffectNotPrepared)?;
+                    let tile = filtered
+                        .get(filtered_index)
+                        .ok_or(RetainedDrawError::EffectNotPrepared)?;
+                    filtered_index += 1;
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &tile.binding, &[]);
+                    pass.draw(0..6, 0..1);
+                    binding = None;
+                }
                 SourceDraw::Geometry {
                     batch,
                     bytes,

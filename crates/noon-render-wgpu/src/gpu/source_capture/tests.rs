@@ -1,5 +1,5 @@
-//! Renderer capture prerequisite for composed scopes. This does not qualify
-//! semantic group admission, animation, nested isolation or worker transport.
+//! Execution capture qualification for mixed and nested composed scopes.
+//! Public group authoring, animation and worker transport have separate gates.
 use super::*;
 use crate::{text::TextDeviceMetrics, Camera2D, RetainedFramePreparer};
 use noon_compile::{CompiledObject, CompiledResources, CompiledScene};
@@ -317,7 +317,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
     }
     let mut source = PreparedSource::prepare(&prepared, &members, false, alignment).unwrap();
     assert_eq!(source.draws.len(), 3);
-    source.set_capture_origin([0, 0]);
+    source.set_capture_region([0, 0], SIZE).unwrap();
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: source.bytes.len().next_power_of_two() as u64,
@@ -340,7 +340,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
     for silhouette in [false, true] {
         let mut source =
             PreparedSource::prepare(&prepared, &members, silhouette, alignment).unwrap();
-        source.set_capture_origin([17, -13]);
+        source.set_capture_region([17, -13], SIZE).unwrap();
         for draw in &source.draws {
             if let SourceDraw::Image {
                 object_index,
@@ -385,6 +385,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
                 &text_camera,
                 &buffer,
                 &bindings,
+                None,
             )
             .unwrap();
         let mut filter = super::super::EffectStackFilter::default();
