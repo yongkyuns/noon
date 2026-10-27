@@ -30,7 +30,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
       MASTER: f71a4c121bc29921133f790ae9783e89e962e7d9
-      CANDIDATE_PARENT: 33dfeb0acac81ae295322373d03bfeaca3d91932
+      CANDIDATE_PARENT: f138cb378a58ae94fad4fb762b625667120a20e0
       CANDIDATE_BRANCH: codex/audio-2296-integrated-5cc-f71
     defaults:
       run:
@@ -45,28 +45,32 @@ jobs:
       - name: Checkout exact integrated candidate
         uses: actions/checkout@v7
         with:
-          ref: 33dfeb0acac81ae295322373d03bfeaca3d91932
+          ref: f138cb378a58ae94fad4fb762b625667120a20e0
           fetch-depth: 0
           path: candidate
-      - name: Apply exact inspection-fixture initialization correction
+      - name: Apply exact bounded nonspatial pointer damage correction
         run: |
           set -euo pipefail
           mkdir -p ../evidence
           git config user.name 'Noon integration workbench'
           git config user.email 'noreply@example.invalid'
-          test "$(git rev-parse HEAD^{tree})" = aeedb2aa752ea8aae1b26429362275c47f2554b2
+          test "$(git rev-parse HEAD^{tree})" = abf2cf2adff928feffd09e0b054ff7d4510ef87e
           test -z "$(git status --porcelain)"
           python3 - <<'PY'
-          import hashlib, pathlib
-          path = pathlib.Path('../workbench/integration/inspection-initializer-fix.patch')
-          assert hashlib.sha256(path.read_bytes()).hexdigest() == '1cf427f228187988a452244d8ec52aff2e760eb186f23e5d976ece889c5f6474'
+          import gzip,hashlib,pathlib
+          payload = pathlib.Path('../workbench/integration/nonspatial-correction.patch.gz').read_bytes()
+          assert hashlib.sha256(payload).hexdigest() == '13f62009c8928a0e5311c53d199cecc54e6a76c34f64913e69bd9571b7923177'
+          patch = gzip.decompress(payload)
+          assert hashlib.sha256(patch).hexdigest() == '39dfa3f2d4a77baf8203a04fd4faaf9cc30a9992aafbfa08704f8d093b6a38d1'
+          pathlib.Path('../evidence/nonspatial-correction.patch').write_bytes(patch)
           PY
-          git apply --check ../workbench/integration/inspection-initializer-fix.patch
-          git apply ../workbench/integration/inspection-initializer-fix.patch
+          git apply --check ../evidence/nonspatial-correction.patch
+          git apply ../evidence/nonspatial-correction.patch
           git diff --check
-          git diff > ../evidence/fixture-fix.patch
           git add -u
-          test "$(git write-tree)" = abf2cf2adff928feffd09e0b054ff7d4510ef87e
+          test "$(git write-tree)" = 1f0fe72ad502ea19eb62da92382c854f9695d731
+          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = 5
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341
       - name: Use repository-pinned Rust and WASM target
         run: |
           rustup install
@@ -90,12 +94,15 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Publish fixture fix only to isolated candidate
+      - name: Publish damage fix only to isolated candidate
         run: |
           set -euo pipefail
+          cargo fmt --all
           cargo fmt --all -- --check
+          git add -u
+          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = 5
           tree=$(git write-tree)
-          commit=$(git commit-tree "$tree" -p "$CANDIDATE_PARENT" -m 'fix(tests): initialize control publication in paired inspection fixture')
+          commit=$(git commit-tree "$tree" -p "$CANDIDATE_PARENT" -m 'fix(input): journal nonspatial picking changes without spatial reindex')
           git checkout --detach "$commit"
           export tree commit
           python3 - <<'PY'
@@ -113,6 +120,10 @@ jobs:
           node --test web/execution-worker-client.test.mjs web/semantic-engine-endpoint.test.mjs scripts/playground-preload.test.mjs | tee ../evidence/worker-tests.log
       - name: Install native audio build dependencies
         run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Validate point-local pointer compatibility
+        run: |
+          set -euo pipefail
+          cargo test -p noon --lib execution_session::input::presentation::compatibility_tests --locked -- --nocapture 2>&1 | tee ../evidence/pointer-compatibility.log
       - name: Run full repository gate on exact candidate
         run: |
           set -euo pipefail
