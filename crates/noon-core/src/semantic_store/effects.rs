@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
 use crate::{
     Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Glow,
-    NoiseDissolve, Shadow,
+    NoiseDissolve, Pixelate, Shadow,
 };
 
 /// Maximum attachment count in the qualified finite planar execution profile.
@@ -20,6 +20,13 @@ pub enum EffectDefinition {
     Blur(Blur),
     Shadow(Shadow),
     NoiseDissolve(NoiseDissolve),
+    Pixelate(Pixelate),
+}
+
+impl From<Pixelate> for EffectDefinition {
+    fn from(value: Pixelate) -> Self {
+        Self::Pixelate(value)
+    }
 }
 
 impl From<NoiseDissolve> for EffectDefinition {
@@ -52,7 +59,7 @@ impl EffectDefinition {
             Self::Glow(v) => Some(v.radius()),
             Self::Blur(v) => Some(v.radius()),
             Self::Shadow(v) => Some(v.radius()),
-            Self::NoiseDissolve(_) => None,
+            Self::NoiseDissolve(_) | Self::Pixelate(_) => None,
         }
     }
     pub fn is_neutral(self) -> bool {
@@ -61,6 +68,7 @@ impl EffectDefinition {
             Self::Blur(v) => v.is_neutral(),
             Self::Shadow(v) => v.is_neutral(),
             Self::NoiseDissolve(v) => v.is_neutral(),
+            Self::Pixelate(v) => v.is_neutral(),
         }
     }
     pub const fn as_shadow(self) -> Option<Shadow> {
@@ -74,7 +82,7 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => Some(v.color()),
             Self::Shadow(v) => Some(v.color()),
-            Self::Blur(_) | Self::NoiseDissolve(_) => None,
+            Self::Blur(_) | Self::NoiseDissolve(_) | Self::Pixelate(_) => None,
         }
     }
     pub const fn as_glow(self) -> Option<Glow> {
@@ -87,6 +95,13 @@ impl EffectDefinition {
         match self {
             Self::Blur(v) => Some(v),
             _ => None,
+        }
+    }
+    pub const fn as_pixelate(self) -> Option<Pixelate> {
+        if let Self::Pixelate(v) = self {
+            Some(v)
+        } else {
+            None
         }
     }
     pub const fn as_noise_dissolve(self) -> Option<NoiseDissolve> {
@@ -123,6 +138,9 @@ impl EffectDefinition {
                 EffectParameter::Seed => previous.seed() != next.seed(),
                 _ => false,
             },
+            (Self::Pixelate(a), Self::Pixelate(b)) => {
+                parameter == EffectParameter::Size && a.size() != b.size()
+            }
             _ => true,
         }
     }
@@ -136,7 +154,7 @@ impl EffectDefinition {
         match self {
             Self::Glow(value) => EffectUpdate::default().source(value.source()),
             Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
-            Self::Blur(_) | Self::Shadow(_) => EffectUpdate::default(),
+            Self::Blur(_) | Self::Shadow(_) | Self::Pixelate(_) => EffectUpdate::default(),
         }
     }
 }
@@ -149,11 +167,13 @@ impl EffectValue for EffectDefinition {
             Self::Blur(v) => update.apply_to(v).map(Self::Blur),
             Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
             Self::NoiseDissolve(v) => update.apply_to(v).map(Self::NoiseDissolve),
+            Self::Pixelate(v) => update.apply_to(v).map(Self::Pixelate),
         }
     }
     fn validate_effect_value_update(self, target: Self) -> Result<(), EffectParameterError> {
         match (self, target) {
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_value_update(b),
+            (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_value_update(b),
             _ => self.validate_effect_transition(target),
         }
     }
@@ -163,6 +183,7 @@ impl EffectValue for EffectDefinition {
             (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
             (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_transition(b),
+            (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_transition(b),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -179,6 +200,7 @@ impl EffectValue for EffectDefinition {
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => {
                 a.sample_effect_parameters(b, request, alpha)
             }
+            (Self::Pixelate(a), Self::Pixelate(b)) => a.sample_effect_parameters(b, request, alpha),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -192,7 +214,7 @@ impl EffectValue for EffectDefinition {
 pub struct SemanticEffectCopyProvenance {
     source_attachment: SemanticNodeId,
     copied_definition: EffectDefinition,
-    written_parameters: u8,
+    written_parameters: u16,
 }
 
 impl SemanticEffectCopyProvenance {
@@ -228,7 +250,7 @@ impl SemanticEffectCopyProvenance {
     }
 }
 
-const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
+const fn effect_parameter_bit(parameter: EffectParameter) -> u16 {
     match parameter {
         EffectParameter::Color => 1,
         EffectParameter::Radius => 2,
@@ -238,6 +260,7 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Progress => 32,
         EffectParameter::Softness => 64,
         EffectParameter::Seed => 128,
+        EffectParameter::Size => 256,
     }
 }
 

@@ -92,6 +92,7 @@ impl DynamicProperties {
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
+            | Property::EffectSize
             | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
@@ -165,7 +166,7 @@ pub struct CompiledEffect {
 
 impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 7] = [
+    pub const PARAMETER_PROPERTIES: [Property; 8] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
@@ -173,6 +174,7 @@ impl CompiledEffect {
         Property::EffectProgress,
         Property::EffectSoftness,
         Property::EffectSeed,
+        Property::EffectSize,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -189,7 +191,8 @@ impl CompiledEffect {
             + usize::from(update.intensity.is_some())
             + usize::from(update.offset.is_some())
             + usize::from(update.progress.is_some())
-            + usize::from(update.softness.is_some());
+            + usize::from(update.softness.is_some())
+            + usize::from(update.size.is_some());
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
             (update.color.is_some(), Property::EffectColor),
@@ -198,6 +201,7 @@ impl CompiledEffect {
             (update.offset.is_some(), Property::EffectOffset),
             (update.progress.is_some(), Property::EffectProgress),
             (update.softness.is_some(), Property::EffectSoftness),
+            (update.size.is_some(), Property::EffectSize),
         ] {
             if requested {
                 channels.push((
@@ -1503,6 +1507,7 @@ impl CompiledScene {
                         | Property::EffectOffset
                         | Property::EffectProgress
                         | Property::EffectSoftness
+                        | Property::EffectSize
                         | Property::EffectSeed
                 )
             {
@@ -2777,6 +2782,7 @@ impl CompiledScene {
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
+                            | Property::EffectSize
                             | Property::EffectSeed
                     )
                 {
@@ -3574,6 +3580,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectProgress => 19,
         Property::EffectSoftness => 20,
         Property::EffectSeed => 21,
+        Property::EffectSize => 22,
     }
 }
 

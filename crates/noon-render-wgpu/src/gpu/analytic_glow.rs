@@ -193,7 +193,7 @@ struct ResidentEffect {
     source_instance: SourceInstance,
     source: CaptureImage,
     silhouette: Option<CaptureImage>,
-    original_mask: super::DissolveScope,
+    original_mask: super::SampleScope,
     original_masked: bool,
     source_buffer: wgpu::Buffer,
     silhouette_buffer: Option<wgpu::Buffer>,
@@ -762,6 +762,13 @@ impl GpuRenderer {
             min: std::array::from_fn(|axis| bounds.min[axis] - f64::from(tile.origin[axis])),
             max: std::array::from_fn(|axis| bounds.max[axis] - f64::from(tile.origin[axis])),
         };
+        if request
+            .definitions
+            .iter()
+            .any(|definition| definition.as_pixelate().is_some())
+        {
+            super::sample_filter::checked_sample_origin(source_bounds)?;
+        }
         if request.definitions.iter().any(|definition| {
             definition
                 .as_noise_dissolve()
@@ -770,7 +777,7 @@ impl GpuRenderer {
             // Check the final high-water capture domain before taking or
             // mutating any retained scope. A rejected tiny source must keep the
             // previous coherent outputs, including unrelated captures.
-            super::dissolve_filter::checked_domain(tile.size, source_bounds)?;
+            super::sample_filter::checked_domain(tile.size, source_bounds)?;
         }
         tile.capture_and_scratch_bytes = u64::from(tile.size[0])
             .checked_mul(u64::from(tile.size[1]))
@@ -883,7 +890,7 @@ impl GpuRenderer {
                         source_instance: source_instance.clone(),
                         source,
                         silhouette,
-                        original_mask: super::DissolveScope::default(),
+                        original_mask: super::SampleScope::default(),
                         original_masked: false,
                         source_buffer,
                         silhouette_buffer,
@@ -1112,7 +1119,7 @@ impl GpuRenderer {
                     .silhouette
                     .as_ref()
                     .ok_or(EffectPrepareError::MissingSilhouette)?;
-                glows.filter.dissolve.prepare_encode(
+                glows.filter.sample.prepare_encode(
                     device,
                     queue,
                     encoder,
@@ -1121,8 +1128,10 @@ impl GpuRenderer {
                         source: &image.texture,
                         revision: scope.revision,
                     },
-                    super::DissolveParameters {
-                        definition: visibility.expect("active private visibility"),
+                    super::SampleParameters {
+                        definition: visibility.expect("active private visibility").into(),
+                        output_height: parameters.output_height,
+                        world_view_height: parameters.world_view_height,
                         source_bounds,
                         scope_opacity: 1.0,
                         scratch_budget_bytes: u64::from(tile.size[0]) * u64::from(tile.size[1]) * 4,

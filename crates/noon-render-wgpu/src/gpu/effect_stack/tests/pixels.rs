@@ -139,6 +139,22 @@ fn ordered_pixels_match_independent_composition_with_single_final_opacity() {
         vec![dissolve(7, 0.08, 1.0), glow(0.8, GlowSource::Silhouette)],
         vec![blur(1.25), dissolve(7, 0.08, 0.0)],
         vec![dissolve(7, 0.08, 0.25), dissolve(11, 0.5, 0.75)],
+        vec![noon_core::Pixelate::default().into(), blur(1.25)],
+        vec![blur(1.25), noon_core::Pixelate::default().into()],
+        vec![
+            noon_core::Pixelate::default().into(),
+            dissolve(7, 0.08, 0.5),
+        ],
+        vec![
+            dissolve(7, 0.08, 0.5),
+            noon_core::Pixelate::default().into(),
+        ],
+        vec![
+            noon_core::Pixelate::new(EffectUpdate::default().size(Pixels(1.0)))
+                .unwrap()
+                .into(),
+            blur(1.25),
+        ],
     ];
     let mut frames = 0;
     let mut channels = 0;

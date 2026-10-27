@@ -9,12 +9,11 @@ mod derived_display;
 mod paint;
 mod source_capture;
 pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
-mod dissolve_filter;
 mod effect_stack;
 mod gaussian_blur;
 mod glow_filter;
+mod sample_filter;
 mod shadow_filter;
-pub use dissolve_filter::{DissolveFilter, DissolveParameters, DissolveScope};
 pub use effect_stack::{
     EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,
 };
@@ -26,6 +25,7 @@ pub use glow_filter::{
     EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
     EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
+pub use sample_filter::{SampleFilter, SampleParameters, SampleScope};
 mod overlay;
 mod path_batching;
 mod presentation;

@@ -23,7 +23,22 @@ fn field(uv: vec2<f32>) -> f32 {
     return mix(mix(lattice(base), lattice(base+vec2<i32>(1,0)), w.x),
                mix(lattice(base+vec2<i32>(0,1)), lattice(base+vec2<i32>(1,1)), w.x), w.y);
 }
-@fragment fn fs_dissolve(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+// WGSL integer division truncates toward zero; source padding needs floor.
+fn grid_floor(value: vec2<i32>, divisor: i32) -> vec2<i32> {
+    let d = vec2<i32>(divisor);
+    return value/d - select(vec2<i32>(0),vec2<i32>(1),value%d < vec2<i32>(0));
+}
+@fragment fn fs_sample(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    if mask.control.w == 1.0 {
+        let cell = i32(mask.seed.x);
+        if cell <= 256 { return textureLoad(source,vec2<i32>(position.xy),0) * mask.control.z; }
+        let origin = bitcast<vec2<i32>>(mask.seed.yz);
+        let pixel = vec2<i32>(position.xy)*256+vec2<i32>(128);
+        let lower = origin + grid_floor(pixel-origin,cell)*cell;
+        let sample = grid_floor(2*lower+vec2<i32>(cell),512);
+        if any(sample < vec2<i32>(0)) || any(sample >= vec2<i32>(textureDimensions(source))) { return vec4<f32>(0.0); }
+        return textureLoad(source,sample,0) * mask.control.z;
+    }
     let original = textureLoad(source,vec2<i32>(position.xy),0);
     let progress = mask.control.x;
     if progress <= 0.0 { return original * mask.control.z; }

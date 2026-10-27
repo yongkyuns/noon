@@ -1476,6 +1476,7 @@ impl SceneInstance {
                 | Property::EffectOffset
                 | Property::EffectProgress
                 | Property::EffectSoftness
+                | Property::EffectSize
                 | Property::EffectSeed => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
@@ -2015,7 +2016,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 22] = [
+const PROPERTY_ORDER: [Property; 23] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -2038,6 +2039,7 @@ const PROPERTY_ORDER: [Property; 22] = [
     Property::EffectProgress,
     Property::EffectSoftness,
     Property::EffectSeed,
+    Property::EffectSize,
 ];
 
 /// Ordinary channels can have derived drivers without explicit tracks (camera
@@ -2760,6 +2762,7 @@ fn apply_group_to_row(
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
+            | Property::EffectSize
             | Property::EffectSeed
             | Property::Presence
             | Property::ZIndex

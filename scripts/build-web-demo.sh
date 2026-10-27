@@ -46,6 +46,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/dissolve-mask-reference.test.mjs
   node --check scripts/scope-opacity-qualification.mjs
   node --check scripts/effect-restore-qualification.mjs
+  node --check scripts/pixelate-qualification.mjs
   node --check scripts/linear-gradient-qualification.mjs
   node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/noise-paint-qualification.mjs

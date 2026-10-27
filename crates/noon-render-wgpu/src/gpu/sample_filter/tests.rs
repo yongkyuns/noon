@@ -1,12 +1,15 @@
 use super::*;
 
 const SIZE: [u32; 2] = [24, 20];
-fn parameters(progress: f64) -> DissolveParameters {
-    DissolveParameters {
+fn parameters(progress: f64) -> SampleParameters {
+    SampleParameters {
         definition: noon_core::NoiseDissolve::new(7, 0.08)
             .unwrap()
             .with_progress(progress)
-            .unwrap(),
+            .unwrap()
+            .into(),
+        output_height: SIZE[1],
+        world_view_height: f64::from(SIZE[1]),
         source_bounds: EffectPixelBounds {
             min: [0.0, 0.0],
             max: SIZE.map(f64::from),
@@ -32,12 +35,12 @@ fn source(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Texture {
     })
 }
 fn prepare(
-    filter: &mut DissolveFilter,
-    scope: &mut DissolveScope,
+    filter: &mut SampleFilter,
+    scope: &mut SampleScope,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
-    p: DissolveParameters,
+    p: SampleParameters,
 ) -> Result<EffectRasterStats, EffectPrepareError> {
     let mut encoder = device.create_command_encoder(&Default::default());
     let result = filter.prepare_encode(
@@ -61,8 +64,8 @@ fn prepare(
 fn mask_preflight_is_atomic_and_clean_preparation_reuses_resources() {
     let (device, queue) = wgpu::Device::noop(&Default::default());
     let source = source(&device, wgpu::TextureFormat::Rgba8Unorm);
-    let mut filter = DissolveFilter::default();
-    let mut scope = DissolveScope::default();
+    let mut filter = SampleFilter::default();
+    let mut scope = SampleScope::default();
     let mut rejected = parameters(0.5);
     rejected.scratch_budget_bytes = 0;
     assert_eq!(
@@ -209,9 +212,10 @@ fn noise(seed: u32, uv: [f64; 2]) -> f64 {
     }
     sum
 }
-pub(in crate::gpu) fn reference(input: &[u8], p: DissolveParameters, size: [u32; 2]) -> Vec<u8> {
-    let progress = f64::from(p.definition.progress() as f32);
-    let softness = f64::from(p.definition.softness() as f32);
+pub(in crate::gpu) fn reference(input: &[u8], p: SampleParameters, size: [u32; 2]) -> Vec<u8> {
+    let definition = p.definition.as_noise_dissolve().expect("mask reference");
+    let progress = f64::from(definition.progress() as f32);
+    let softness = f64::from(definition.softness() as f32);
     let mut result = Vec::with_capacity(input.len());
     for y in 0..size[1] {
         for x in 0..size[0] {
@@ -224,7 +228,7 @@ pub(in crate::gpu) fn reference(input: &[u8], p: DissolveParameters, size: [u32;
             } else if progress == 1.0 {
                 0.0
             } else {
-                let n = noise(p.definition.seed(), uv);
+                let n = noise(definition.seed(), uv);
                 if softness == 0.0 {
                     if n >= progress {
                         1.0
@@ -319,7 +323,7 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
             );
         }
     }
-    let mut filter = DissolveFilter::default();
+    let mut filter = SampleFilter::default();
     let mut maximum = 0;
     let mut count = 0;
     for format in [
@@ -343,7 +347,7 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
             },
             texture.size(),
         );
-        let mut scope = DissolveScope::default();
+        let mut scope = SampleScope::default();
         for seed in [0, 1, 7, u32::MAX] {
             for softness in [0.0, 0.08, 0.5] {
                 for opacity in [1.0, 0.375] {
@@ -366,7 +370,8 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
                             p.definition = noon_core::NoiseDissolve::new(seed, softness)
                                 .unwrap()
                                 .with_progress(progress)
-                                .unwrap();
+                                .unwrap()
+                                .into();
                             p.scope_opacity = opacity;
                             p.source_bounds = bounds;
                             let first_in_scope = scope.output().is_none();
@@ -546,4 +551,262 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
             .all(|(a, b)| a.abs_diff(b) <= 1));
     }
     eprintln!("DISSOLVE_OPERATOR_PASS cases={count} channels={} max_error={maximum} source_endpoints_exact=true empty_endpoints_exact=true warmed_bytes=1920 source_revisions=true rebind=true abandoned_retry=true",count*input.len());
+}
+
+fn pixel_parameters(size: f64) -> SampleParameters {
+    SampleParameters {
+        definition: noon_core::Pixelate::new(
+            noon_core::EffectUpdate::default().size(noon_core::Pixels(size)),
+        )
+        .unwrap()
+        .into(),
+        ..parameters(0.0)
+    }
+}
+pub(in crate::gpu) fn cell_reference(
+    input: &[u8],
+    size: f64,
+    origin: [f64; 2],
+    opacity: f64,
+    extent: [u32; 2],
+) -> Vec<u8> {
+    // The finite raster profile rounds declared lengths/origins to 1/256
+    // output pixel. Double precision then paints exact binary cell rectangles.
+    let size = (size * 256.0).round() / 256.0;
+    let origin = origin.map(|v| (v * 256.0).round() / 256.0);
+    if size <= 1.0 {
+        return input
+            .iter()
+            .map(|&v| (f64::from(v) * opacity).round() as u8)
+            .collect();
+    }
+    let mut output = vec![0; input.len()];
+    let ranges = std::array::from_fn::<_, 2, _>(|a| {
+        ((-origin[a] / size).floor() as i32 - 1)
+            ..(((f64::from(extent[a]) - origin[a]) / size).ceil() as i32 + 1)
+    });
+    for cy in ranges[1].clone() {
+        for cx in ranges[0].clone() {
+            let lower = [
+                origin[0] + f64::from(cx) * size,
+                origin[1] + f64::from(cy) * size,
+            ];
+            let selected = lower.map(|v| (v + size / 2.0).floor() as i32);
+            let mut rgba = [0; 4];
+            if (0..extent[0] as i32).contains(&selected[0])
+                && (0..extent[1] as i32).contains(&selected[1])
+            {
+                let at = (selected[1] as usize * extent[0] as usize + selected[0] as usize) * 4;
+                rgba = std::array::from_fn(|c| (f64::from(input[at + c]) * opacity).round() as u8);
+            }
+            for y in 0..extent[1] {
+                for x in 0..extent[0] {
+                    if (0..2).all(|a| {
+                        let p = f64::from([x, y][a]) + 0.5;
+                        p >= lower[a] && p < lower[a] + size
+                    }) {
+                        let at = (y as usize * extent[0] as usize + x as usize) * 4;
+                        output[at..at + 4].copy_from_slice(&rgba);
+                    }
+                }
+            }
+        }
+    }
+    output
+}
+#[test]
+fn cells_reject_out_of_profile_before_writes_and_reuse_the_mask_program() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let source = source(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut filter = SampleFilter::default();
+    let mut scope = SampleScope::default();
+    assert_eq!(
+        prepare(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            &source,
+            pixel_parameters(129.0)
+        ),
+        Err(EffectPrepareError::CellSizeExceedsProfile)
+    );
+    assert!(filter.program.is_none());
+    assert!(scope.output().is_none());
+    prepare(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        &source,
+        parameters(0.4),
+    )
+    .unwrap();
+    let output = scope.output().unwrap().clone();
+    let changed = prepare(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        &source,
+        pixel_parameters(8.0),
+    )
+    .unwrap();
+    assert_eq!(changed.pipeline_compiles, 0);
+    assert_eq!(changed.texture_allocations, 0);
+    assert_eq!(scope.output(), Some(&output));
+    let uniform = scope.uniform;
+    let mut invalid = pixel_parameters(8.0);
+    invalid.source_bounds.min[0] = f64::NAN;
+    assert_eq!(
+        prepare(&mut filter, &mut scope, &device, &queue, &source, invalid),
+        Err(EffectPrepareError::InvalidSourceBounds)
+    );
+    assert_eq!(scope.uniform, uniform);
+    assert_eq!(scope.output(), Some(&output));
+    let clean = prepare(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        &source,
+        pixel_parameters(8.0),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            clean.bytes_uploaded,
+            clean.composite_passes,
+            clean.texture_allocations
+        ),
+        (0, 0, 0)
+    );
+}
+#[test]
+#[ignore = "requires native raster adapter; independent square-cell sampling and transparent-edge oracle"]
+fn pixelate_pixels_formats_fractional_cells_and_warm_reuse_match_independent_cell_rectangles() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let input: Vec<u8> = (0..SIZE[1])
+        .flat_map(|y| {
+            (0..SIZE[0]).flat_map(move |x| {
+                let a = (x * 19 + y * 29) % 256;
+                [
+                    (x * 7 % 256) * a / 255,
+                    (y * 11 % 256) * a / 255,
+                    ((x + y) * 13 % 256) * a / 255,
+                    a,
+                ]
+                .map(|v| v as u8)
+            })
+        })
+        .collect();
+    let mut filter = SampleFilter::default();
+    let mut count = 0;
+    let mut maximum = 0;
+    for format in [
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Bgra8Unorm,
+    ] {
+        let source = source(&device, format);
+        let mut upload = input.clone();
+        if format == wgpu::TextureFormat::Bgra8Unorm {
+            for p in upload.as_chunks_mut::<4>().0 {
+                p.swap(0, 2);
+            }
+        }
+        queue.write_texture(
+            source.as_image_copy(),
+            &upload,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE[0] * 4),
+                rows_per_image: None,
+            },
+            source.size(),
+        );
+        let mut scope = SampleScope::default();
+        for size in [
+            0.0, 1.0, 1.1, 1.2, 2.0, 2.5, 3.1, 4.0, 7.75, 12.4, 32.0, 128.0,
+        ] {
+            for origin in [[0.0, 0.0], [-7.5, 5.25], [3.5, 2.25], [0.1, 0.3]] {
+                for opacity in [1.0, 0.375] {
+                    let mut p = pixel_parameters(size);
+                    p.source_bounds.min = origin;
+                    p.scope_opacity = opacity;
+                    let work =
+                        prepare(&mut filter, &mut scope, &device, &queue, &source, p).unwrap();
+                    if count > 0 {
+                        assert_eq!(work.pipeline_compiles, 0);
+                    }
+                    assert_eq!(
+                        work.texture_allocations,
+                        usize::from(size == 0.0 && origin == [0.0, 0.0] && opacity == 1.0)
+                    );
+                    let actual = read(&device, &queue, scope.output().unwrap());
+                    let expected = cell_reference(&input, size, origin, f64::from(opacity), SIZE);
+                    let error = actual
+                        .iter()
+                        .zip(&expected)
+                        .map(|(a, b)| a.abs_diff(*b))
+                        .max()
+                        .unwrap();
+                    maximum = maximum.max(error);
+                    assert!(
+                        error <= 1,
+                        "cells size={size} origin={origin:?} opacity={opacity} error={error}"
+                    );
+                    if size <= 1.0 && opacity == 1.0 {
+                        assert_eq!(actual, input);
+                    }
+                    let again =
+                        prepare(&mut filter, &mut scope, &device, &queue, &source, p).unwrap();
+                    assert_eq!(
+                        (
+                            again.bytes_uploaded,
+                            again.composite_passes,
+                            again.texture_allocations
+                        ),
+                        (0, 0, 0)
+                    );
+                    assert_eq!(read(&device, &queue, scope.output().unwrap()), actual);
+                    count += 1;
+                }
+            }
+        }
+    }
+    eprintln!("PIXELATE_NATIVE_PASS profiles={count} maximum_byte_error={maximum}");
+}
+
+#[test]
+fn cell_grid_has_literal_subpixel_vectors_and_bounded_integer_coordinates() {
+    let cell =
+        noon_core::Pixelate::new(noon_core::EffectUpdate::default().size(noon_core::Pixels(1.1)))
+            .unwrap();
+    assert_eq!(checked_cell_size(cell, 360, 9.0).unwrap(), 282.0 / 256.0);
+    assert_eq!(
+        checked_sample_origin(EffectPixelBounds {
+            min: [-0.1, 0.3],
+            max: [24.0, 20.0]
+        })
+        .unwrap(),
+        [-26, 77]
+    );
+    assert_eq!(
+        checked_sample_origin(EffectPixelBounds {
+            min: [-1.0 / 512.0, 1.0 / 512.0],
+            max: [24.0, 20.0]
+        })
+        .unwrap(),
+        [-1, 1]
+    );
+    assert_eq!(
+        checked_sample_origin(EffectPixelBounds {
+            min: [-1_048_577.0, 0.0],
+            max: [24.0, 20.0]
+        }),
+        Err(EffectPrepareError::CaptureCoordinatesOutOfRange)
+    );
 }

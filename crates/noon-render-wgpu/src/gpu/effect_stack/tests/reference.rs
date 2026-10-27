@@ -87,6 +87,7 @@ fn neutral(effect: EffectDefinition, height: u32, world: f64) -> bool {
         }
         EffectDefinition::Shadow(v) => v.color().alpha == 0.0,
         EffectDefinition::NoiseDissolve(v) => v.is_neutral(),
+        EffectDefinition::Pixelate(v) => scalar(v.size(), height, world) <= 1.0,
     }
 }
 
@@ -108,11 +109,23 @@ pub(super) fn evaluate(
             continue;
         }
         let stage_opacity = if Some(index) == last { opacity } else { 1.0 };
-        if let EffectDefinition::NoiseDissolve(definition) = effect {
-            input = crate::gpu::dissolve_filter::tests::reference(
+        if let EffectDefinition::Pixelate(definition) = effect {
+            input = crate::gpu::sample_filter::tests::cell_reference(
                 &input,
-                crate::DissolveParameters {
-                    definition,
+                scalar(definition.size(), height, world),
+                [0.0; 2],
+                stage_opacity,
+                size,
+            );
+            continue;
+        }
+        if let EffectDefinition::NoiseDissolve(definition) = effect {
+            input = crate::gpu::sample_filter::tests::reference(
+                &input,
+                crate::SampleParameters {
+                    definition: definition.into(),
+                    output_height: height,
+                    world_view_height: world,
                     source_bounds: crate::EffectPixelBounds {
                         min: [0.0; 2],
                         max: size.map(f64::from),
@@ -142,7 +155,7 @@ pub(super) fn evaluate(
                 let source: [f64; 4] = std::array::from_fn(|c| f64::from(pixel[c]) / 255.0);
                 let value: [f64; 4] = match effect {
                     EffectDefinition::Blur(_) => blurred[at],
-                    EffectDefinition::NoiseDissolve(_) => {
+                    EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_) => {
                         unreachable!("mask stage was evaluated above")
                     }
                     EffectDefinition::Glow(v) => {

@@ -23,10 +23,10 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V27 carries ordered bindings, composed source plans, seeded masks, HatchPaint
+// V28 adds finite Pixelate cell sampling to V27's ordered bindings, composed source plans, seeded masks, HatchPaint
 // and exact private Visibility roles across the genuine worker boundary. Older
 // envelopes reject; native and direct Rust/WASM execution remain typed in process.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 27;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 28;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +65,9 @@ pub struct TransportEffectState {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TransportEffectDefinition {
+    Pixelate {
+        size: EffectRadius,
+    },
     Glow {
         color: Color,
         radius: EffectRadius,
@@ -88,6 +91,9 @@ pub enum TransportEffectDefinition {
 impl From<&noon_compile::CompiledEffect> for TransportEffectState {
     fn from(effect: &noon_compile::CompiledEffect) -> Self {
         let definition = match effect.definition {
+            noon_core::EffectDefinition::Pixelate(v) => {
+                TransportEffectDefinition::Pixelate { size: v.size() }
+            }
             noon_core::EffectDefinition::Glow(effect) => TransportEffectDefinition::Glow {
                 color: effect.color(),
                 radius: effect.radius(),
@@ -119,6 +125,11 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
 impl TransportEffectState {
     fn to_compiled(self) -> Option<noon_compile::CompiledEffect> {
         let definition = match self.definition {
+            TransportEffectDefinition::Pixelate { size } => {
+                noon_core::Pixelate::new(EffectUpdate::default().size(size))
+                    .ok()?
+                    .into()
+            }
             TransportEffectDefinition::Glow {
                 color,
                 radius,
@@ -2756,6 +2767,60 @@ mod tests {
     }
 
     #[test]
+    fn tagged_cell_size_round_trips_and_failed_values_keep_the_current_publication() {
+        let mut frame = mixed_frame();
+        let effect = Arc::new(noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(77, u32::MAX),
+            definition: noon_core::Pixelate::new(
+                EffectUpdate::default().size(noon_core::Pixels(7.750000000000123)),
+            )
+            .unwrap()
+            .into(),
+        });
+        frame.objects[0].effects = Some(effect_stack(&effect));
+        let snapshot = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["protocol_version"], 28);
+        assert_eq!(json["objects"][0]["effects"][0]["kind"], "pixelate");
+        let mut mirror = test_mirror();
+        let mut older = snapshot.clone();
+        older.protocol_version = 27;
+        assert!(mirror.apply(older).is_err());
+        assert!(mirror.frame().is_none());
+        mirror
+            .apply(serde_json::from_value(json.clone()).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+        let before = mirror.frame().unwrap().clone();
+        for size in [f64::NAN, f64::INFINITY, -1.0] {
+            let mut bad = snapshot.clone();
+            bad.snapshot = false;
+            bad.sequence = 1;
+            bad.objects[0].effects[0].definition = TransportEffectDefinition::Pixelate {
+                size: EffectRadius::Pixels(size),
+            };
+            assert!(mirror.apply(bad).is_err());
+            assert_eq!(mirror.frame().unwrap(), &before);
+        }
+        let mut foreign = json;
+        foreign["objects"][0]["effects"][0]["radius"] = serde_json::json!(1.0);
+        assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(foreign).is_err());
+        let mut corrected = snapshot;
+        corrected.snapshot = false;
+        corrected.sequence = 1;
+        mirror.apply(corrected).unwrap();
+    }
+
+    #[test]
     fn tagged_mask_preserves_seed_and_precision_and_rejects_foreign_fields() {
         let mut frame = mixed_frame();
         let definition = noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
@@ -2775,7 +2840,7 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(value["protocol_version"], 27);
+        assert_eq!(value["protocol_version"], 28);
         let mask = &value["objects"][0]["effects"][0];
         assert_eq!(mask["kind"], "noise_dissolve");
         assert_eq!(mask["seed"], u32::MAX);
@@ -2831,7 +2896,7 @@ mod tests {
                 PublicationContext::default(),
             )
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 27);
+        assert_eq!(snapshot.protocol_version, 28);
         let encoded = serde_json::to_value(&snapshot).unwrap();
         let decoded: RetainedExecutionDeltaEnvelope =
             serde_json::from_value(encoded.clone()).unwrap();
@@ -3066,7 +3131,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 27);
+        assert_eq!(snapshot.protocol_version, 28);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();

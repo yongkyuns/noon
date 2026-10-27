@@ -290,7 +290,16 @@ impl EffectCaptureTile {
                 continue;
             }
             active = true;
-            let support = (3.0 * sigma).ceil() as u32;
+            let support = if let Some(pixelate) = definition.as_pixelate() {
+                super::sample_filter::checked_cell_size(
+                    pixelate,
+                    parameters.output_height,
+                    parameters.world_view_height,
+                )?
+                .ceil() as u32
+            } else {
+                (3.0 * sigma).ceil() as u32
+            };
             support_radius += support;
             let input = if mask { original } else { extent };
             for (axis, offset) in offset.into_iter().enumerate() {
@@ -385,8 +394,23 @@ impl EffectCaptureParameters {
     pub(super) fn is_neutral_at_sigma(self, sigma: f64) -> bool {
         self.definition.is_neutral()
             || (matches!(self.definition, noon_core::EffectDefinition::Blur(_)) && sigma == 0.0)
+            || self.definition.as_pixelate().is_some_and(|v| {
+                super::sample_filter::checked_cell_size(
+                    v,
+                    self.output_height,
+                    self.world_view_height,
+                )
+                .is_ok_and(|size| size <= 1.0)
+            })
     }
     pub(super) fn sigma_pixels(self) -> Result<f64, EffectPrepareError> {
+        if let Some(pixelate) = self.definition.as_pixelate() {
+            super::sample_filter::checked_cell_size(
+                pixelate,
+                self.output_height,
+                self.world_view_height,
+            )?;
+        }
         let sigma = self
             .definition
             .radius()
@@ -419,7 +443,8 @@ impl EffectCaptureParameters {
     }
     pub(crate) fn filter_bytes_per_pixel(self) -> u64 {
         match self.definition {
-            noon_core::EffectDefinition::NoiseDissolve(_) => 4,
+            noon_core::EffectDefinition::NoiseDissolve(_)
+            | noon_core::EffectDefinition::Pixelate(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
             noon_core::EffectDefinition::Blur(_) => 28,
             noon_core::EffectDefinition::Shadow(_) => 32,
@@ -453,6 +478,7 @@ pub struct GlowParameters {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectPrepareError {
+    CellSizeExceedsProfile,
     Blur(super::gaussian_blur::GaussianBlurPrepareError),
     Parameter(EffectParameterError),
     InvalidScopeOpacity,

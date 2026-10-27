@@ -30,6 +30,8 @@ class EffectFacadeTests(unittest.TestCase):
         js.noonShadow = self.make_shadow
         self.make_mask = Mock(return_value=types.SimpleNamespace(kind="noise_dissolve", seed=7, softness=0.08, progress=0.4))
         js.noonNoiseDissolve = self.make_mask
+        self.make_pixelate = Mock(return_value=types.SimpleNamespace(kind="pixelate", size=12.0, sizePixels=True))
+        js.noonPixelate = self.make_pixelate
         ffi = types.ModuleType("pyodide.ffi")
         ffi.to_js = tuple
         self.enter(patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}))
@@ -46,6 +48,30 @@ class EffectFacadeTests(unittest.TestCase):
         value = context.__enter__()
         self.addCleanup(context.__exit__, None, None, None)
         return value
+
+    def test_pixelate_keeps_checked_size_units_and_ordinary_shared_effect_routing(self):
+        value = noon.Pixelate(size=noon.Pixels(12))
+        self.request.setSize.assert_called_once_with(12.0, True)
+        self.make_pixelate.assert_called_once_with(self.request)
+        self.assertEqual(value.size, noon.Pixels(12))
+        self.assertIs(copy.deepcopy(value), value)
+        self.assertFalse(hasattr(value, "radius"))
+        self.object.add_effect(value, name="detail")
+        self.handle.addEffect.assert_called_once_with(value._definition, "detail")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = value._definition
+        self.assertIsInstance(self.object.get_effect("detail").authored_definition, noon.Pixelate)
+        self.request.setSize.reset_mock()
+        self.object.set_effect("detail", size=0.125)
+        self.request.setSize.assert_called_once_with(0.125, False)
+        self.request.setSize.reset_mock()
+        for size in [True, "12", noon.Pixels((2,3))]:
+            with self.assertRaises(TypeError):
+                self.object.set_effect("detail", size=size)
+        self.request.setSize.assert_not_called()
+        self.request.setSize.side_effect = ValueError("checked Rust size failure")
+        with self.assertRaises(ValueError):
+            self.object.set_effect("detail", size=noon.Pixels(-1))
+        self.assertGreaterEqual(self.request.free.call_count, 4)
 
     def test_constructor_defers_defaults_and_validation_to_rust(self):
         glow = noon.Glow()

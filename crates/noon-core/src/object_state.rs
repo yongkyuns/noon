@@ -10,6 +10,8 @@ mod gradient;
 mod hatch_paint;
 mod linear_gradient;
 mod noise_dissolve;
+mod pixelate;
+pub use pixelate::Pixelate;
 mod noise_paint;
 mod paint_transition;
 mod radial_gradient;

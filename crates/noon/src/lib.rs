@@ -94,7 +94,7 @@ pub mod effects {
     pub use noon_core::{
         Blur, DissolveDirection, DissolveStyle, EffectDefinition, EffectOffset,
         EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource, NoiseDissolve,
-        NoiseDissolveError, Pixels, Shadow,
+        NoiseDissolveError, Pixelate, Pixels, Shadow,
     };
 }
 mod drawing;

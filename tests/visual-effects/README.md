@@ -1416,3 +1416,45 @@ requires identical direct Rust/WASM and Python images on actual WebGPU/WebGL2,
 visible outside-source shadow, animated radius/color/offset, exact neutral/removal
 and idle source completion. These are qualification commands, not a claim of
 physical-device pacing or completion of the remaining M0–M5 scope.
+
+
+### Bounded square-cell sampling
+
+`Pixelate(size=Pixels(12))` attaches to an ordinary object or isolated composed
+family with `add_effect(..., name="detail")`. Animate the same checked size using
+`obj.animate.set_effect("detail", size=Pixels(1))`. The executable Rust and Python
+`pixelate` lessons reduce detail, reach exact identity, change units immediately,
+and remove the treatment through ordinary scene/live operations.
+
+Cells follow screen axes and are anchored at the original source's top-left
+projected bounds, excluding capture padding and retained texture capacity. The finite raster profile rounds cell lengths and the source anchor to
+1/256 output pixel (nearest, ties away from zero) and computes cells with signed integer arithmetic, so
+decimal lengths and negative padding have stable ties on every backend. Each
+cell selects the nearest input texel at its mathematical centre; texels beyond
+the preceding image are transparent. All encoded-premultiplied channels sample
+together. Final scope opacity applies once. A resolved size at most one output
+pixel bypasses the filter exactly. The finite backend profile accepts sizes up
+to 128 output pixels and conservatively expands each input's contribution bounds
+by the cell size. Ordered filters consume the preceding output; they retain the
+original source anchor. Geometry, layout and picking remain authoritative.
+
+A plain size uses scene units resolved through the uniform planar view; `Pixels`
+means final output pixels. Object rotation/scale affects source geometry, while
+cell axes and resolved scene/pixel length follow the view. Unit changes are
+immediate value edits and cannot interpolate; nonfinite/negative sizes reject.
+The same `Size` channel, generational bindings, copy/restore and driver arbitration
+serve native Rust, direct Rust/WASM and the Python wrapper. Only the genuine
+worker boundary advances to protocol 28; older envelopes reject atomically.
+
+The retained sampled-image owner is shared by seeded masks and cells. Programs
+and per-scope images survive parameter edits; clean preparation uploads and
+encodes nothing. There is no extra scene, clock or renderer. Native independent
+cell-rectangle references cover RGBA/BGRA sources, fractional/negative origins,
+transparent borders, exact identity and warmed reuse. Ordered convolution/mask
+references exercise both operator orders. The authored native export and paired
+browser corpus use literal colored rectangles and alpha composition, excluding
+only a declared one-pixel source-AA band from the source oracle; every texel of
+the sampling operator is independently checked separately. The browser helper
+retains complete paired images and reports. This is a distortion filter over its
+explicit object/group input; backdrop dependencies, HDR/bloom and custom WGSL
+remain separate #1897 gates. Source/build-qualified results live in its issue/PR.

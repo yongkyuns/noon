@@ -70,7 +70,9 @@ on:
       - "scripts/dissolve-mask-*.mjs"
       - "scripts/scope-opacity-qualification.mjs"
       - "scripts/effect-restore-qualification.mjs"
+      - "scripts/pixelate-qualification.mjs"
       - "crates/noon-export/tests/scope_opacity.rs"
+      - "crates/noon-export/tests/pixelate.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -103,6 +105,7 @@ on:
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/pixelate.rs"
       - "crates/noon/tests/composed/**"
       - "crates/noon/tests/composed_effects.rs"
       - "crates/noon/tests/linear_gradient_raster.rs"
@@ -252,8 +255,10 @@ jobs:
         run: cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
+      - name: Qualify authored cell sampling and export
+        run: cargo test -p noon-export --test pixelate -- --ignored --nocapture
       - name: Qualify dissolve mask field and premultiplied alpha operator
-        run: cargo test -p noon-render-wgpu --lib dissolve_filter -- --ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::sample_filter::tests -- --include-ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
@@ -540,6 +545,8 @@ jobs:
         run: node scripts/scope-opacity-qualification.mjs
       - name: Qualify ordered and composed appearance save/restore
         run: node scripts/effect-restore-qualification.mjs
+      - name: Qualify bounded cell sampling through Rust and Python
+        run: node scripts/pixelate-qualification.mjs
       - name: Qualify private visibility lifecycle through Rust and Python
         run: node scripts/dissolve-qualification.mjs
       - name: Qualify composed seeded masks through Rust and Python
@@ -602,6 +609,7 @@ jobs:
             browser-smoke-artifacts/composed-effects
             browser-smoke-artifacts/scope-opacity
             browser-smoke-artifacts/effect-restore
+            browser-smoke-artifacts/pixelate
             browser-smoke-artifacts/dissolve
             browser-smoke-artifacts/noise-dissolve
           if-no-files-found: warn

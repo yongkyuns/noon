@@ -114,6 +114,20 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmEffectUpdate {
+        #[wasm_bindgen(js_name = setSize)]
+        pub fn set_size(&mut self, size: f64, pixels: bool) -> Result<(), JsValue> {
+            let value = self.value.size(if pixels {
+                EffectRadius::Pixels(size)
+            } else {
+                EffectRadius::Scene(size)
+            });
+            value
+                .validate()
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)?;
+            self.value = value;
+            Ok(())
+        }
         #[wasm_bindgen(constructor)]
         pub fn new(
             color: &[f64],
@@ -148,6 +162,13 @@ mod wasm {
         value: EffectDefinition,
     }
     impl WasmEffectDefinition {
+        fn pixelate_value(&self) -> Result<noon_core::Pixelate, JsValue> {
+            self.value.as_pixelate().ok_or_else(|| {
+                js_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Size),
+                ))
+            })
+        }
         fn radius_value(&self) -> Result<EffectRadius, JsValue> {
             self.value.radius().ok_or_else(|| {
                 js_error(noon::AuthoringError::from(
@@ -200,6 +221,26 @@ mod wasm {
                 })
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = pixelate)]
+        pub fn pixelate(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            noon_core::Pixelate::new(update.value)
+                .map(|value| Self {
+                    value: value.into(),
+                })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(getter)]
+        pub fn size(&self) -> Result<f64, JsValue> {
+            Ok(self.pixelate_value()?.size().value())
+        }
+        #[wasm_bindgen(getter, js_name = sizePixels)]
+        pub fn size_pixels(&self) -> Result<bool, JsValue> {
+            Ok(matches!(
+                self.pixelate_value()?.size(),
+                EffectRadius::Pixels(_)
+            ))
         }
         #[wasm_bindgen(js_name = blur)]
         pub fn blur(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
@@ -258,6 +299,7 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn kind(&self) -> String {
             match self.value {
+                EffectDefinition::Pixelate(_) => "pixelate",
                 EffectDefinition::Glow(_) => "glow",
                 EffectDefinition::Blur(_) => "blur",
                 EffectDefinition::Shadow(_) => "shadow",
