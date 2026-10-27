@@ -5,6 +5,7 @@ on:
     branches: [agent/2308-reconcile-qualification-20261026]
     paths:
       - .github/ci/one-off-2308-reconcile.py
+      - .github/ci/one-off-2308-gradient.patch
       - .github/workflows/one-off-2308-reconcile.yml
 
 permissions:
@@ -19,6 +20,8 @@ jobs:
       PIN_PR: b3a4b7f484e607a4b14bc57e70f4947f8520ca42
       PIN_MASTER: f102a74b9bf28440f4862e799604a57c7882fa68
       EXPECTED_TREE: 5c5ac2f6a5eed63d62ca926a5585de3a7bc2a80e
+      CORRECTED_TREE: 698155b1065bd9bcaf6ae0e7f08d618d70aba735
+      GRADIENT_PATCH_SHA256: 1b5cb7e5bfd8538b524338747313f0c9307fbfeb550d083ded1d63e78cb4295e
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -106,6 +109,33 @@ jobs:
           (out / 'unformatted-vs-master.patch').write_bytes(git('diff', '--cached', '--binary', refs['master'], cwd=work).stdout)
           print(json.dumps(manifest, indent=2))
           PY
+      - name: Apply authenticated gradient storage repair and regressions
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          patch = Path(os.environ['GITHUB_WORKSPACE']) / '.github/ci/one-off-2308-gradient.patch'
+          payload = patch.read_bytes()
+          digest = hashlib.sha256(payload).hexdigest()
+          assert digest == os.environ['GRADIENT_PATCH_SHA256'], digest
+          subprocess.run(['git', 'apply', '--check', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check', os.environ['PIN_MASTER']], check=True)
+          tree = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert tree == os.environ['CORRECTED_TREE'], tree
+          manifest = json.loads((out / 'manifest.json').read_text())
+          manifest['corrected_unformatted_tree'] = tree
+          manifest['gradient_patch_sha256'] = digest
+          manifest['gradient_repair_scope'] = 'One FrameObjectState initializer and two new storage regressions; no existing assertions removed'
+          (out / 'gradient-repair.patch').write_bytes(payload)
+          (out / 'corrected-unformatted-vs-master.patch').write_bytes(subprocess.check_output(
+              ['git', 'diff', '--cached', '--binary', os.environ['PIN_MASTER']]))
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print('Authenticated corrected unformatted tree:', tree)
+          PY
       - name: Install repository-pinned Rust and WASM target
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
         run: |
@@ -135,9 +165,9 @@ jobs:
           set -euo pipefail
           cargo fmt --all 2>&1 | tee "$EVIDENCE/format.log"
           git add --all
-          git diff --cached --binary "$EXPECTED_TREE" > "$EVIDENCE/formatter.patch"
+          git diff --cached --binary "$CORRECTED_TREE" > "$EVIDENCE/formatter.patch"
           git diff --cached --check "$PIN_MASTER"
-          git commit -m 'Reconcile prepared playback with pinned master for isolated qualification'
+          git commit -m 'Reconcile prepared playback and preserve gradient frame storage for isolated qualification'
           python3 - <<'PY'
           import hashlib, json, os, subprocess
           from pathlib import Path
@@ -157,7 +187,55 @@ jobs:
           (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
           print(json.dumps(manifest['tested_candidate'], indent=2))
           PY
+      - name: Qualify gradient history and reject a cleared-gradient negative control
+        id: gradient
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/gradient.exit"; exit "$code"' EXIT
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          path = Path('crates/noon-runtime/src/replay/prefix/storage.rs')
+          original = path.read_bytes()
+          command = ['cargo', 'test', '--locked', '-p', 'noon-runtime', '--features', 'prepared-prefix', '--lib']
+          group = 'replay::prefix::storage::tests::'
+          case = group + 'prefix_storage_materializes_gradient_and_solid_rows_without_publishing_the_future'
+          outcomes = {}
+          def run(label, selector, exact=False):
+              args = command + [selector, '--', '--test-threads=1'] + (['--exact'] if exact else [])
+              result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              (out / (label + '.log')).write_bytes(result.stdout)
+              outcomes[label] = result.returncode
+              text = result.stdout.decode(errors='replace')
+              print(text, flush=True)
+              return result.returncode, text
+          try:
+              code, text = run('gradient-positive', group)
+              assert code == 0 and 'test result: ok. 2 passed; 0 failed' in text, 'gradient positive tests did not both pass'
+              needle = b'fill_gradient: object.fill_gradient.clone(),'
+              assert original.count(needle) == 1
+              path.write_bytes(original.replace(needle, b'fill_gradient: None,', 1))
+              try:
+                  code, text = run('gradient-cleared-negative-control', case, True)
+                  assert code != 0 and 'error[E' not in text, 'negative control must fail by assertion, not compilation'
+                  assert re.search(r'test ' + re.escape(case) + r' \.\.\. FAILED', text), 'expected exact regression did not fail'
+                  assert 'test result: FAILED. 0 passed; 1 failed' in text
+              finally:
+                  path.write_bytes(original)
+              code, text = run('gradient-restored', group)
+              assert code == 0 and 'test result: ok. 2 passed; 0 failed' in text, 'restored gradient tests failed'
+          finally:
+              path.write_bytes(original)
+              (out / 'gradient-outcomes.json').write_text(json.dumps(outcomes, indent=2) + '\n')
+          subprocess.run(['git', 'diff', '--exit-code'], check=True)
+          PY
       - name: Run canonical fast gate without changing assertions
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
         env:
           RUSTC_WRAPPER: sccache
@@ -209,7 +287,7 @@ jobs:
           manifest = json.loads((out / 'manifest.json').read_text())
           assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip() == manifest['tested_candidate']['tree']
           manifest['command_exit_codes'] = {name: int(path.read_text()) if path.exists() else None
-              for name in ('fast', 'prepared-input', 'wasm', 'web-preflight')
+              for name in ('gradient', 'fast', 'prepared-input', 'wasm', 'web-preflight')
               for path in [out / (name + '.exit')]}
           manifest['tracked_source_unchanged'] = True
           (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
