@@ -64,7 +64,10 @@ jobs:
           test "$(git rev-list --parents -n 1 HEAD | awk '{print $3}')" = "$NEW_MASTER"
           git merge-base --is-ancestor "$PR_SOURCE" HEAD
           git merge-base --is-ancestor "$NEW_MASTER" HEAD
-          test -z "$(git status --porcelain)"
+          # The workbench's evidence/ directory is intentionally untracked.
+          # Reject all tracked edits and any other untracked source files.
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test -z "$(git ls-files --others --exclude-standard | grep -v '^evidence/' || true)"
           git diff --check "$NEW_MASTER" HEAD
           git show -s --format=fuller HEAD > evidence/integration-commit.txt
           git diff --name-only "$PR_SOURCE" HEAD > evidence/updated-master-files.txt
