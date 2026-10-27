@@ -162,6 +162,31 @@ def stage(repo, root):
         old = (work / path).read_text()
         assert tests(snippet) and not (tests(old) & tests(snippet))
         (work / path).write_text(old + snippet)
+    # The compiler's historical inset snapshot is now one optional boxed field.
+    # Memory-stack storage-accounting tests construct a deliberately empty revision;
+    # retain that fixture and all assertions rather than weakening Fast Gate.
+    fixture_path = 'crates/noon-compile/src/replay_revision/prefix/storage.rs'
+    fixture = work / fixture_path
+    fixture_original = fixture.read_text()
+    assert digest(fixture_original.encode()) == '0751278e9a68ce4ff21efd3a0cca5e5e398b059e41652aaa06d4ece28aaf922d'
+    compiled_revision = (work / 'crates/noon-compile/src/replay_revision.rs').read_text()
+    assert compiled_revision.count('inset_2d_view: Option<Box<SavedInset2DView>>') == 1
+    missing_field = ('        let mut revision = CompiledReplayRevision {\n'
+                     '            rows: Vec::with_capacity(3),\n')
+    filled_field = missing_field + '            inset_2d_view: None,\n'
+    assert fixture_original.count(missing_field) == 1
+    assert 'inset_2d_view: None,' not in fixture_original
+    fixture_updated = fixture_original.replace(missing_field, filled_field, 1)
+    assert tests(fixture_updated) == tests(fixture_original)
+    assert fixture_updated.count('inset_2d_view: None,') == 1
+    fixture.write_text(fixture_updated)
+    fixture_repair = {
+        'file': fixture_path,
+        'reason': 'Compile existing saved-revision vector budget test with current inset metadata',
+        'original_sha256': digest(fixture_original.encode()),
+        'corrected_sha256': digest(fixture_updated.encode()),
+        'assertions_and_test_names_unchanged': True
+    }
     prefix = (work / PREFIX).read_text()
     for module in ('inset_tests', 'history_index_budget_tests', 'history_payload_budget_tests', 'object_budget_tests'):
         assert prefix.count('#[cfg(test)]\nmod ' + module + ';') == 1
@@ -194,7 +219,8 @@ def stage(repo, root):
               'source_tree': SOURCE_TREE, 'source_archive_sha256': SOURCE_SHA256,
               'source_workflow_run': 40563358160, 'latest_candidate_local': latest_candidate,
               'combined_local': combined, 'unformatted_tree': text(work, 'rev-parse', 'HEAD^{tree}'),
-              'resolutions': resolutions, 'test_inventory': inventory}
+              'resolutions': resolutions, 'test_inventory': inventory,
+              'test_fixture_repair': fixture_repair}
     (evidence / 'manifest.json').write_text(json.dumps(record, indent=2) + '\n')
     (evidence / 'combined-vs-latest.patch').write_bytes(git(work, 'diff', '--binary', LATEST_MASTER, combined).stdout)
     (evidence / 'combined-vs-green.patch').write_bytes(git(work, 'diff', '--binary', synthetic, combined).stdout)
