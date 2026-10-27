@@ -3010,16 +3010,31 @@ fn independent_image_sample(
 #[test]
 #[ignore = "requires a real native raster adapter; absence is a failure"]
 fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
-    continuous_fill_filter_capture(false);
+    continuous_fill_filter_capture(ContinuousFillFixture::Image);
 }
 
 #[test]
 #[ignore = "requires a real native raster adapter; absence is a failure"]
 fn public_noise_fill_reuses_source_capture_for_blur_shadow_and_glow() {
-    continuous_fill_filter_capture(true);
+    continuous_fill_filter_capture(ContinuousFillFixture::Noise);
 }
 
-fn continuous_fill_filter_capture(noise: bool) {
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_hatch_fill_reuses_source_capture_for_blur_shadow_and_glow() {
+    for cross in [false, true] {
+        continuous_fill_filter_capture(ContinuousFillFixture::Hatch { cross });
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ContinuousFillFixture {
+    Image,
+    Noise,
+    Hatch { cross: bool },
+}
+
+fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
     use noon::effects::{Blur, EffectOffset, Glow, GlowSource, Shadow};
     use noon::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintOptions, ImageUvTransform};
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -3031,36 +3046,60 @@ fn continuous_fill_filter_capture(noise: bool) {
         source.disable_stroke().unwrap();
         if silhouette {
             source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
-        } else if noise {
-            source
-                .set_fill_noise(
-                    noon::NoisePaint::new(
-                        7,
-                        [16.0, 12.0],
-                        [-0.173, 0.231],
-                        [
-                            Color::rgba(1.0, 0.0, 0.0, 0.2),
-                            Color::rgba(0.0, 0.0, 1.0, 0.9),
-                        ],
+        } else {
+            match fixture {
+                ContinuousFillFixture::Noise => source
+                    .set_fill_noise(
+                        noon::NoisePaint::new(
+                            7,
+                            [16.0, 12.0],
+                            [-0.173, 0.231],
+                            [
+                                Color::rgba(1.0, 0.0, 0.0, 0.2),
+                                Color::rgba(0.0, 0.0, 1.0, 0.9),
+                            ],
+                        )
+                        .unwrap(),
+                        Some(0.73),
                     )
                     .unwrap(),
-                    Some(0.73),
-                )
-                .unwrap();
-        } else {
-            source
-                .set_fill_image(
-                    ImagePaintOptions::rgba8(3, 2, noon::example_scenes::image_fill::pixels())
+                ContinuousFillFixture::Image => source
+                    .set_fill_image(
+                        ImagePaintOptions::rgba8(3, 2, noon::example_scenes::image_fill::pixels())
+                            .unwrap(),
+                        Some(0.73),
+                    )
+                    .unwrap(),
+                ContinuousFillFixture::Hatch { cross } => source
+                    .set_fill_hatch(
+                        noon::HatchPaint::new(
+                            Color::rgba(1.0, 0.0, 0.0, 0.2),
+                            Color::rgba(0.0, 0.0, 1.0, 0.9),
+                            noon::HatchPaintOptions {
+                                spacing: 0.4,
+                                width: 0.12,
+                                angle: 0.37,
+                                phase: [-0.173, 0.231],
+                                cross,
+                            },
+                        )
                         .unwrap(),
-                    Some(0.73),
-                )
-                .unwrap();
+                        Some(0.73),
+                    )
+                    .unwrap(),
+            }
+        }
+        if matches!(fixture, ContinuousFillFixture::Hatch { .. }) {
+            source.scale(-0.9, 1.2).unwrap();
+            source.rotate(0.413).unwrap();
+            source.shift(0.17, -0.23).unwrap();
         }
         source.set_object_opacity(scope).unwrap();
         scene.add(&source).unwrap();
         (scene, source)
     };
     let mut samples = 0;
+    let mut maximum_byte_error = 0;
     for kind in 0..4 {
         let (plain_scene, plain_source) = make(1.0, false);
         let mut plain = plain_scene.execution_session().unwrap();
@@ -3104,7 +3143,7 @@ fn continuous_fill_filter_capture(noise: bool) {
         let mut session = scene.execution_session().unwrap();
         let mut surface = Surface::new(&device, &queue);
         for stage in 0..2 {
-            if stage == 1 && noise {
+            if stage == 1 && matches!(fixture, ContinuousFillFixture::Noise) {
                 let paint = noon::NoisePaint::new(
                     7,
                     [64.0, 64.0],
@@ -3122,6 +3161,27 @@ fn continuous_fill_filter_capture(noise: bool) {
                 plain_scene
                     .live(&mut plain)
                     .set_fill_noise(&plain_source, paint, None)
+                    .unwrap();
+            } else if let (1, ContinuousFillFixture::Hatch { cross }) = (stage, fixture) {
+                let paint = noon::HatchPaint::new(
+                    Color::rgba(1.0, 0.0, 0.0, 0.2),
+                    Color::rgba(0.0, 0.0, 1.0, 0.9),
+                    noon::HatchPaintOptions {
+                        spacing: 0.06,
+                        width: 0.021,
+                        angle: 0.67,
+                        phase: [0.531, -0.719],
+                        cross,
+                    },
+                )
+                .unwrap();
+                scene
+                    .live(&mut session)
+                    .set_fill_hatch(&source, paint.clone(), None)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .set_fill_hatch(&plain_source, paint, None)
                     .unwrap();
             } else if stage == 1 {
                 let mapping = ImageMapping::new(
@@ -3154,10 +3214,11 @@ fn continuous_fill_filter_capture(noise: bool) {
                     wgpu::Color::TRANSPARENT,
                 ),
             };
+            let byte_error = error(&actual, &expected);
+            maximum_byte_error = maximum_byte_error.max(byte_error);
             assert!(
-                error(&actual, &expected) <= 1,
-                "noise={noise} fill filter={kind} stage={stage}, max byte error {}",
-                error(&actual, &expected)
+                byte_error <= 1,
+                "{fixture:?} fill filter={kind} stage={stage}, max byte error {byte_error}"
             );
             // Silhouette Glow retains the painted source and a separate geometry mask.
             assert_eq!(
@@ -3173,8 +3234,10 @@ fn continuous_fill_filter_capture(noise: bool) {
             );
             assert_eq!(surface.effect_stats.source_passes, 0);
             assert_eq!(surface.effect_stats.blur_passes, 0);
+            assert_eq!(surface.effect_stats.composite_passes, 0);
             assert_eq!(surface.effect_stats.bytes_uploaded, 0);
             assert_eq!(surface.effect_stats.texture_allocations, 0);
+            assert_eq!(surface.upload_stats.bytes_uploaded(), 0);
             samples += 1;
         }
         scene
@@ -3184,22 +3247,30 @@ fn continuous_fill_filter_capture(noise: bool) {
         surface.render(&device, &queue, &mut session);
         assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
     }
-    eprintln!("noise={noise} fill source/filter qualification: {samples} whole-image comparisons, max allowed byte error 1");
+    eprintln!("{fixture:?} filter/composition qualification from ordinary source: {samples} whole-image comparisons, max byte error {maximum_byte_error} (bound 1)");
 }
 
 #[test]
 #[ignore = "requires a real native raster adapter; absence is a failure"]
 fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
-    continuous_fill_coverage_and_strokes(false);
+    continuous_fill_coverage_and_strokes(ContinuousFillFixture::Image);
 }
 
 #[test]
 #[ignore = "requires a real native raster adapter; absence is a failure"]
 fn public_noise_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
-    continuous_fill_coverage_and_strokes(true);
+    continuous_fill_coverage_and_strokes(ContinuousFillFixture::Noise);
 }
 
-fn continuous_fill_coverage_and_strokes(noise: bool) {
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_hatch_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
+    for cross in [false, true] {
+        continuous_fill_coverage_and_strokes(ContinuousFillFixture::Hatch { cross });
+    }
+}
+
+fn continuous_fill_coverage_and_strokes(fixture: ContinuousFillFixture) {
     use noon::ImagePaintOptions;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
@@ -3227,26 +3298,40 @@ fn continuous_fill_coverage_and_strokes(noise: bool) {
                 };
                 if image {
                     let rgba = if opaque { [255; 4] } else { [255, 0, 255, 0] };
-                    if noise {
-                        let color = if opaque {
-                            Color::WHITE
-                        } else {
-                            Color::rgba(1.0, 0.0, 1.0, 0.0)
-                        };
-                        source
+                    let color = if opaque {
+                        Color::WHITE
+                    } else {
+                        Color::rgba(1.0, 0.0, 1.0, 0.0)
+                    };
+                    match fixture {
+                        ContinuousFillFixture::Noise => source
                             .set_fill_noise(
                                 noon::NoisePaint::new(7, [8.0; 2], [-0.173, 0.231], [color; 2])
                                     .unwrap(),
                                 Some(0.73),
                             )
-                            .unwrap();
-                    } else {
-                        source
+                            .unwrap(),
+                        ContinuousFillFixture::Image => source
                             .set_fill_image(
                                 ImagePaintOptions::rgba8(1, 1, rgba).unwrap(),
                                 Some(0.73),
                             )
-                            .unwrap();
+                            .unwrap(),
+                        ContinuousFillFixture::Hatch { cross } => source
+                            .set_fill_hatch(
+                                noon::HatchPaint::new(
+                                    color,
+                                    color,
+                                    noon::HatchPaintOptions {
+                                        phase: [-0.173, 0.231],
+                                        cross,
+                                        ..Default::default()
+                                    },
+                                )
+                                .unwrap(),
+                                Some(0.73),
+                            )
+                            .unwrap(),
                     }
                 } else if opaque {
                     source.set_fill(1.0, 1.0, 1.0, 0.73).unwrap();
@@ -3278,7 +3363,7 @@ fn continuous_fill_coverage_and_strokes(noise: bool) {
             );
             assert_eq!(
                 image, ordinary,
-                "noise={noise} paint changed geometry/stroke kind={kind} opaque={opaque}"
+                "{fixture:?} paint changed geometry/stroke kind={kind} opaque={opaque}"
             );
             assert!(
                 image
@@ -3291,5 +3376,5 @@ fn continuous_fill_coverage_and_strokes(noise: bool) {
             images += 1;
         }
     }
-    eprintln!("noise={noise} paint coverage/strokes: {images} byte-identical whole images");
+    eprintln!("{fixture:?} paint coverage/strokes: {images} byte-identical whole images");
 }

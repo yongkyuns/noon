@@ -1667,6 +1667,7 @@ pub(super) fn lower_affine_channels(
                     paint @ (noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
                     | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
                     | noon_core::SemanticPaint::Image(_)),
                 ) => Some(paint),
                 _ => None,
@@ -1682,6 +1683,7 @@ pub(super) fn lower_affine_channels(
                 noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
                     | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
                     | noon_core::SemanticPaint::Image(_)
             )
         );
@@ -1787,6 +1789,7 @@ pub(super) fn lower_affine_lifecycle_channels(
                 noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
                     | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
                     | noon_core::SemanticPaint::Image(_)
             )
         ) || matches!(
@@ -1795,6 +1798,7 @@ pub(super) fn lower_affine_lifecycle_channels(
                 noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
                     | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
                     | noon_core::SemanticPaint::Image(_)
             )
         ) || from.fill_paint.is_some())
@@ -2652,6 +2656,7 @@ pub(super) fn lower_transform_channels(
                 noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
                     | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
                     | noon_core::SemanticPaint::Image(_)
             )
         )

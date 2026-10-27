@@ -36,6 +36,7 @@ pub mod foreground_matching;
 pub mod foreground_membership;
 pub mod glow_pulse;
 pub mod graph_queries;
+pub mod hatch_paint;
 pub mod image_fill;
 pub mod image_glow;
 pub mod line_passing_flash;

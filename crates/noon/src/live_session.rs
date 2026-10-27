@@ -1688,6 +1688,7 @@ impl<'a> LiveSession<'a> {
                 noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
                     | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
                     | noon_core::SemanticPaint::Image(_)
             )
         ) {
@@ -3128,6 +3129,24 @@ impl<'a> LiveSession<'a> {
             )?
         };
         self.publish_path_edits(prepared)
+    }
+
+    /// Set immutable stripes or crosshatching through the shared style publication.
+    pub fn set_fill_hatch(
+        &mut self,
+        mobject: &Mobject,
+        paint: impl Into<std::sync::Arc<noon_core::HatchPaint>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state = crate::semantic_mobject::prepare_fill_paint_value(
+            &self.store.borrow(),
+            mobject.node_id(),
+            mobject.state()?,
+            noon_core::SemanticPaint::Hatch(paint.into()),
+            opacity,
+        )?;
+        self.replace_style(mobject, state.style)
     }
 
     /// Set a seeded local noise fill through the shared style publication.

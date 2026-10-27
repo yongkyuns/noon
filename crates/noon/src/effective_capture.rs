@@ -99,6 +99,7 @@ pub(crate) fn target_style_from_effective(
             SemanticPaint::LinearGradient(_)
                 | SemanticPaint::RadialGradient(_)
                 | SemanticPaint::Noise(_)
+                | SemanticPaint::Hatch(_)
                 | SemanticPaint::Image(_)
         )
     ) {
