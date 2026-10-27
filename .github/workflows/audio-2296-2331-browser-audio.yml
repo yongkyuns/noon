@@ -1,0 +1,171 @@
+name: Noon 2296 + 2331 browser audio qualification
+
+# Temporary source-pinned qualification only. Never merge this workflow.
+on:
+  push:
+    branches: [codex/audio-2296-2331-recovery-qualification]
+    paths:
+      - .github/workflows/audio-2296-2331-browser-audio.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: noon-2296-2331-browser-audio
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build pinned combined browser runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout exact combined source
+        uses: actions/checkout@v7
+        with:
+          ref: 6d9ee7783537b250ed06255d03b82eb5f8280b5f
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert immutable original fixture and combined source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 6d9ee7783537b250ed06255d03b82eb5f8280b5f
+          test "$(git rev-parse HEAD^{tree})" = 61c4dd39490c578f94a2845cd7851bba90992941
+          test -z "$(git status --porcelain)"
+          test "$(git hash-object web/worker-audio-device.js)" = 27effe9441745f3c2f82157306e95d212edc4cb3
+          test "$(git hash-object web/worker-audio-device.test.mjs)" = a52baf962a15d4111fc40c465dddf060ca156cf1
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+      - name: Use pinned Rust target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build browser runtime from pinned source
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/build-web-demo.sh
+          test "$(git rev-parse HEAD)" = 6d9ee7783537b250ed06255d03b82eb5f8280b5f
+          test -f web/runtime-build-identity.json
+          test -f web/python-worker.js
+          test -f web/pkg/noon_web_bg.wasm
+          node scripts/check-web-package.mjs
+      - name: Retain exact producer assets for all browser profiles
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-2331-browser-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/runtime-build-identity.json
+            web/python/compat-bundle.*.json
+          if-no-files-found: error
+          retention-days: 3
+
+  audio:
+    name: ${{ matrix.browser }} / ${{ matrix.audio_backend }} / ${{ matrix.audio_render_host }}
+    runs-on: ${{ matrix.os }}
+    needs: build
+    timeout-minutes: 35
+    env:
+      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            audio_backend: webgpu
+            audio_render_host: auto
+            os: ubuntu-latest
+            display: "xvfb-run -a"
+          - browser: firefox
+            audio_backend: webgl
+            audio_render_host: auto
+            os: ubuntu-latest
+            display: "xvfb-run -a"
+          - browser: webkit
+            audio_backend: webgl
+            audio_render_host: main-thread
+            os: macos-latest
+            display: ""
+    steps:
+      - name: Checkout exact combined source
+        uses: actions/checkout@v7
+        with:
+          ref: 6d9ee7783537b250ed06255d03b82eb5f8280b5f
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download exact producer runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: audio-2296-2331-browser-runtime
+          path: web
+      - name: Assert original 15-case fixture and combined source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 6d9ee7783537b250ed06255d03b82eb5f8280b5f
+          test "$(git rev-parse HEAD^{tree})" = 61c4dd39490c578f94a2845cd7851bba90992941
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+          test -f web/runtime-build-identity.json
+          test -f web/python-worker.js
+          test -f web/pkg/noon_web_bg.wasm
+      - name: Cache exact Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
+      - name: Install browser dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install browser and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
+      - name: Install Linux native audio output
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: bash scripts/ci-install-reference-deps.sh pulseaudio pulseaudio-utils libasound2-plugins
+      - name: Qualify unchanged Python audio fixture on native output
+        timeout-minutes: 5
+        env:
+          NOON_PYTHON_AUDIO_BROWSER: ${{ matrix.browser }}
+          NOON_PYTHON_AUDIO_BACKEND: ${{ matrix.audio_backend }}
+          NOON_PLAYGROUND_RENDER_HOST: ${{ matrix.audio_render_host }}
+          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/noon-2296-2331/${{ matrix.browser }}-${{ matrix.audio_backend }}-${{ matrix.audio_render_host }}-desktop-dpr1
+        run: bash scripts/ci-python-audio-smoke.sh ${{ matrix.display }}
+      - name: Retain exact profile outputs and provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-2331-${{ matrix.browser }}-${{ matrix.audio_backend }}-${{ matrix.audio_render_host }}-desktop-dpr1
+          path: browser-smoke-artifacts/noon-2296-2331/${{ matrix.browser }}-${{ matrix.audio_backend }}-${{ matrix.audio_render_host }}-desktop-dpr1
+          if-no-files-found: warn
+          retention-days: 3
