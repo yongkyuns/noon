@@ -1,0 +1,94 @@
+name: Audio 2296 ordered-effects conflict inventory
+
+# Temporary read-only diagnostic. Never merge this workflow into product code.
+on:
+  push:
+    branches: [codex/audio-2296-bc25-conflict-inventory]
+    paths: [.github/workflows/audio-2296-bc25-conflict-inventory.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-2296-bc25-conflict-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    name: Inventory exact merge inputs (not qualification)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PR_SOURCE: 34f25a35bf2e5856d00b904a27a7675094b2c362
+      MASTER_SOURCE: bc25e92bb741607f678f6adea528c9e894c6335c
+      MERGE_BASE: 0351da54754cd2d5f95a7624aacd10872a5b8499
+      EVIDENCE_DIR: ${{ runner.temp }}/audio-2296-bc25-conflicts
+    steps:
+      - name: Checkout immutable qualified draft source
+        uses: actions/checkout@v7
+        with:
+          ref: 34f25a35bf2e5856d00b904a27a7675094b2c362
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture exact overlapping files and merge stages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def text(*args):
+              return git(*args).decode().strip()
+          root = pathlib.Path(os.environ['EVIDENCE_DIR'])
+          root.mkdir(parents=True, exist_ok=True)
+          ours, theirs, base = (os.environ[k] for k in ('PR_SOURCE','MASTER_SOURCE','MERGE_BASE'))
+          assert text('rev-parse', 'HEAD') == ours
+          assert text('rev-parse', 'HEAD^{tree}') == '697ce5668dfab1a6053c55914882977c9bd00a9d'
+          assert not text('status', '--porcelain')
+          assert text('merge-base', ours, theirs) == base
+          fixture = pathlib.Path('scripts/python-background-audio-smoke.mjs').read_bytes()
+          assert hashlib.sha256(fixture).hexdigest() == '7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a'
+          def changed(ref):
+              return set(git('diff','--name-only','-z',base,ref).decode().rstrip('\0').split('\0')) - {''}
+          overlaps = sorted(changed(ours) & changed(theirs))
+          subprocess.run(['git','config','user.name','Noon conflict inventory'],check=True)
+          subprocess.run(['git','config','user.email','noreply@example.invalid'],check=True)
+          merge = subprocess.run(['git','merge','--no-ff','--no-commit',theirs],capture_output=True)
+          (root/'merge.stdout.log').write_bytes(merge.stdout)
+          (root/'merge.stderr.log').write_bytes(merge.stderr)
+          conflicts = git('diff','--name-only','--diff-filter=U','-z').decode().rstrip('\0').split('\0')
+          conflicts = sorted(set(conflicts) - {''})
+          (root/'unmerged-index.txt').write_bytes(git('ls-files','--unmerged'))
+          (root/'status.txt').write_bytes(git('status','--short'))
+          files = []
+          for path in sorted(set(overlaps) | set(conflicts)):
+              assert not pathlib.PurePosixPath(path).is_absolute() and '..' not in pathlib.PurePosixPath(path).parts
+              record = {'path':path,'conflicted':path in conflicts,'versions':{}}
+              for label, ref in [('base',base),('pr',ours),('master',theirs)]:
+                  raw = subprocess.run(['git','show',f'{ref}:{path}'],capture_output=True)
+                  if raw.returncode:
+                      record['versions'][label] = {'absent':True}
+                      continue
+                  dest = root/label/path
+                  dest.parent.mkdir(parents=True,exist_ok=True)
+                  dest.write_bytes(raw.stdout)
+                  record['versions'][label] = {'blob':text('rev-parse',f'{ref}:{path}'),'sha256':hashlib.sha256(raw.stdout).hexdigest(),'bytes':len(raw.stdout)}
+              if pathlib.Path(path).is_file():
+                  dest = root/'merge-worktree'/path
+                  dest.parent.mkdir(parents=True,exist_ok=True)
+                  dest.write_bytes(pathlib.Path(path).read_bytes())
+              files.append(record)
+          receipt = {'pr_source':ours,'pr_tree':text('rev-parse',f'{ours}^{{tree}}'),'master_source':theirs,'master_tree':text('rev-parse',f'{theirs}^{{tree}}'),'merge_base':base,'merge_exit_status':merge.returncode,'overlapping_paths':overlaps,'conflicted_paths':conflicts,'files':files,'qualification':'not_run','remote_mutations':False}
+          (root/'manifest.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps({k:receipt[k] for k in ('pr_source','master_source','merge_exit_status','overlapping_paths','conflicted_paths','qualification')},indent=2))
+          assert merge.returncode in (0,1), 'unexpected Git merge error; inspect retained diagnostics'
+          PY
+      - name: Retain exact read-only conflict evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-bc25-conflict-inputs
+          path: ${{ runner.temp }}/audio-2296-bc25-conflicts/
+          if-no-files-found: error
+          retention-days: 7
