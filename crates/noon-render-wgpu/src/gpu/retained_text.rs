@@ -280,6 +280,13 @@ pub enum RetainedPreparedObjectOutcome {
 }
 
 impl PreparedRetainedGpuFrame<'_> {
+    pub(super) fn capture_rank(&self, object: ObjectId) -> Option<usize> {
+        self.painter_ranks
+            .get(*self.object_indices.get(&object)?)
+            .copied()
+            .filter(|rank| *rank != usize::MAX)
+    }
+
     pub(super) fn capture_items(&self, object: ObjectId) -> Option<&[RetainedRenderItem]> {
         if let Some(item) = self
             .object_indices

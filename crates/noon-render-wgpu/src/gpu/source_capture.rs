@@ -35,6 +35,7 @@ enum SourceDraw {
     Image {
         object_index: usize,
         resource: RasterImageResourceHandle,
+        bytes: std::ops::Range<u64>,
     },
 }
 
@@ -46,13 +47,16 @@ pub(super) struct PreparedSource {
 }
 
 impl PreparedSource {
+    /// Members must be a unique contiguous painter interval. Each divisor removes
+    /// only the opacity owned by the final capture placement; a composed scope
+    /// passes one to retain each child's own opacity inside its source image.
     pub(super) fn prepare(
         frame: &PreparedRetainedGpuFrame<'_>,
-        object: noon_core::ObjectId,
-        opacity: f32,
+        objects: &[(noon_core::ObjectId, f32)],
         silhouette: bool,
+        uniform_alignment: usize,
     ) -> Option<Self> {
-        if !opacity.is_finite() || opacity <= 0.0 {
+        if objects.is_empty() || !uniform_alignment.is_power_of_two() {
             return None;
         }
         let mut source = Self {
@@ -60,176 +64,197 @@ impl PreparedSource {
             bytes: Vec::new(),
             bounds: None,
         };
-        for item in frame.capture_items(object)? {
-            match item {
-                RetainedRenderItem::Geometry { batch, .. } => {
-                    let at = batch.instance_range.start as usize;
-                    let packed = match batch.primitive {
-                        RenderPrimitive::Circle => frame.geometry.circle_ids.get(at),
-                        RenderPrimitive::Rectangle => frame.geometry.rectangle_ids.get(at),
-                        RenderPrimitive::Path { .. } => frame.geometry.path_ids.get(at),
-                        _ => None,
-                    };
-                    // Retained mixed frames use private scratch identities. The
-                    // canonical source draw range proves their packed mapping.
-                    let paint = packed.filter(|_| !silhouette).and_then(|id| {
-                        frame
-                            .geometry
-                            .fill_paints
-                            .get(id)
-                            .map(|value| (*id, value.clone()))
-                    });
-                    let start = source.bytes.len() as u64;
-                    let mut local = batch.clone();
-                    local.instance_range = 0..batch.instance_range.len() as u32;
-                    let mesh = if let RenderPrimitive::Path { batch: at } = batch.primitive {
-                        Some(frame.geometry.path_batch_cache_indices[at])
-                    } else {
-                        None
-                    };
-                    for at in batch.instance_range.clone() {
-                        let at = at as usize;
-                        macro_rules! pack {
-                            ($value:expr, $bounds:expr) => {{
-                                let mut value = $value;
-                                source.include(transformed($bounds, value.transform)?);
-                                normalize(&mut value.style, opacity, silhouette);
-                                source.bytes.extend_from_slice(bytemuck::bytes_of(&value));
-                            }};
-                        }
-                        match batch.primitive {
-                            RenderPrimitive::Circle => {
-                                let v = frame.geometry.circles[at];
-                                let pad = stroke_pad(v.style, v.transform);
-                                let extent = v.radius + pad;
-                                pack!(
-                                    v,
-                                    Rect::new(
-                                        Vec2::new(-extent, -extent),
-                                        Vec2::new(extent, extent)
-                                    )
-                                );
-                            }
-                            RenderPrimitive::Rectangle => {
-                                let v = frame.geometry.rectangles[at];
-                                let pad = stroke_pad(v.style, v.transform);
-                                let half = Vec2::new(v.size[0] * 0.5 + pad, v.size[1] * 0.5 + pad);
-                                pack!(v, Rect::new(half * -1.0, half));
-                            }
-                            RenderPrimitive::Line => {
-                                let v = frame.geometry.lines[at];
-                                let pad = stroke_pad(v.style, v.transform);
-                                let bounds = Rect::new(
-                                    Vec2::new(
-                                        v.start[0].min(v.end[0]) - pad,
-                                        v.start[1].min(v.end[1]) - pad,
-                                    ),
-                                    Vec2::new(
-                                        v.start[0].max(v.end[0]) + pad,
-                                        v.start[1].max(v.end[1]) + pad,
-                                    ),
-                                );
-                                pack!(v, bounds);
-                            }
-                            RenderPrimitive::Path { batch: path } => {
-                                let mesh = &frame.geometry.path_mesh_cache
-                                    [frame.geometry.path_batch_cache_indices[path]];
-                                let Some([a, b]) = mesh.bounds else {
-                                    // A zero-progress reveal can have an empty
-                                    // tessellation while retaining its painter anchor.
-                                    continue;
-                                };
-                                // Cached tessellation bounds already include stroke joins/caps.
-                                pack!(
-                                    frame.geometry.paths[at],
-                                    Rect::new(
-                                        Vec2::new(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
-                                        Vec2::new(a.max.x.max(b.max.x), a.max.y.max(b.max.y))
-                                    )
-                                );
-                            }
-                            RenderPrimitive::MegaPath { .. } => return None,
-                        }
-                    }
-                    if source.bytes.len() as u64 > start {
-                        source.draws.push(SourceDraw::Geometry {
-                            batch: local,
-                            bytes: start..source.bytes.len() as u64,
-                            mesh,
-                            paint,
+        let mut previous_rank = None;
+        for &(object, opacity) in objects {
+            if !opacity.is_finite() || opacity <= 0.0 {
+                return None;
+            }
+            let rank = frame.capture_rank(object)?;
+            // Capture exactly one contiguous, unique painter interval. Never
+            // sort an aliased/interleaved request into a convenient group.
+            if previous_rank.is_some_and(|previous| rank != previous + 1) {
+                return None;
+            }
+            previous_rank = Some(rank);
+            for item in frame.capture_items(object)? {
+                match item {
+                    RetainedRenderItem::Geometry { batch, .. } => {
+                        let at = batch.instance_range.start as usize;
+                        let packed = match batch.primitive {
+                            RenderPrimitive::Circle => frame.geometry.circle_ids.get(at),
+                            RenderPrimitive::Rectangle => frame.geometry.rectangle_ids.get(at),
+                            RenderPrimitive::Path { .. } => frame.geometry.path_ids.get(at),
+                            _ => None,
+                        };
+                        // Retained mixed frames use private scratch identities. The
+                        // canonical source draw range proves their packed mapping.
+                        let paint = packed.filter(|_| !silhouette).and_then(|id| {
+                            frame
+                                .geometry
+                                .fill_paints
+                                .get(id)
+                                .map(|value| (*id, value.clone()))
                         });
-                    }
-                }
-                RetainedRenderItem::Glyph {
-                    object_index,
-                    run_index,
-                    ..
-                } => {
-                    for item in frame.text.glyph_batches(*object_index, *run_index) {
-                        let PreparedTextItem::GlyphBatch {
-                            plane,
-                            instance_range,
-                            ..
-                        } = item
-                        else {
-                            return None;
-                        };
-                        let quads = match plane {
-                            GlyphAtlasPlane::Mask => frame.text.mask_quads,
-                            GlyphAtlasPlane::Color => frame.text.color_quads,
-                        };
                         let start = source.bytes.len() as u64;
-                        for quad in
-                            quads.get(instance_range.start as usize..instance_range.end as usize)?
-                        {
-                            let mut quad = *quad;
-                            source.include(quad_bounds(quad)?);
-                            quad.color[3] /= opacity;
-                            if silhouette {
-                                quad.color = [1.0; 4];
+                        let mut local = batch.clone();
+                        local.instance_range = 0..batch.instance_range.len() as u32;
+                        let mesh = if let RenderPrimitive::Path { batch: at } = batch.primitive {
+                            Some(frame.geometry.path_batch_cache_indices[at])
+                        } else {
+                            None
+                        };
+                        for at in batch.instance_range.clone() {
+                            let at = at as usize;
+                            macro_rules! pack {
+                                ($value:expr, $bounds:expr) => {{
+                                    let mut value = $value;
+                                    source.include(transformed($bounds, value.transform)?);
+                                    normalize(&mut value.style, opacity, silhouette);
+                                    source.bytes.extend_from_slice(bytemuck::bytes_of(&value));
+                                }};
                             }
-                            source.bytes.extend_from_slice(bytemuck::bytes_of(&quad));
+                            match batch.primitive {
+                                RenderPrimitive::Circle => {
+                                    let v = frame.geometry.circles[at];
+                                    let pad = stroke_pad(v.style, v.transform);
+                                    let extent = v.radius + pad;
+                                    pack!(
+                                        v,
+                                        Rect::new(
+                                            Vec2::new(-extent, -extent),
+                                            Vec2::new(extent, extent)
+                                        )
+                                    );
+                                }
+                                RenderPrimitive::Rectangle => {
+                                    let v = frame.geometry.rectangles[at];
+                                    let pad = stroke_pad(v.style, v.transform);
+                                    let half =
+                                        Vec2::new(v.size[0] * 0.5 + pad, v.size[1] * 0.5 + pad);
+                                    pack!(v, Rect::new(half * -1.0, half));
+                                }
+                                RenderPrimitive::Line => {
+                                    let v = frame.geometry.lines[at];
+                                    let pad = stroke_pad(v.style, v.transform);
+                                    let bounds = Rect::new(
+                                        Vec2::new(
+                                            v.start[0].min(v.end[0]) - pad,
+                                            v.start[1].min(v.end[1]) - pad,
+                                        ),
+                                        Vec2::new(
+                                            v.start[0].max(v.end[0]) + pad,
+                                            v.start[1].max(v.end[1]) + pad,
+                                        ),
+                                    );
+                                    pack!(v, bounds);
+                                }
+                                RenderPrimitive::Path { batch: path } => {
+                                    let mesh = &frame.geometry.path_mesh_cache
+                                        [frame.geometry.path_batch_cache_indices[path]];
+                                    let Some([a, b]) = mesh.bounds else {
+                                        // A zero-progress reveal can have an empty
+                                        // tessellation while retaining its painter anchor.
+                                        continue;
+                                    };
+                                    // Cached tessellation bounds already include stroke joins/caps.
+                                    pack!(
+                                        frame.geometry.paths[at],
+                                        Rect::new(
+                                            Vec2::new(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
+                                            Vec2::new(a.max.x.max(b.max.x), a.max.y.max(b.max.y))
+                                        )
+                                    );
+                                }
+                                RenderPrimitive::MegaPath { .. } => return None,
+                            }
                         }
-                        let mut local = item.clone();
-                        if let PreparedTextItem::GlyphBatch {
-                            instance_range: range,
-                            ..
-                        } = &mut local
-                        {
-                            *range = 0..instance_range.len() as u32;
+                        if source.bytes.len() as u64 > start {
+                            source.draws.push(SourceDraw::Geometry {
+                                batch: local,
+                                bytes: start..source.bytes.len() as u64,
+                                mesh,
+                                paint,
+                            });
                         }
-                        source.draws.push(SourceDraw::Glyph {
-                            item: local,
-                            bytes: start..source.bytes.len() as u64,
+                    }
+                    RetainedRenderItem::Glyph {
+                        object_index,
+                        run_index,
+                        ..
+                    } => {
+                        for item in frame.text.glyph_batches(*object_index, *run_index) {
+                            let PreparedTextItem::GlyphBatch {
+                                plane,
+                                instance_range,
+                                ..
+                            } = item
+                            else {
+                                return None;
+                            };
+                            let quads = match plane {
+                                GlyphAtlasPlane::Mask => frame.text.mask_quads,
+                                GlyphAtlasPlane::Color => frame.text.color_quads,
+                            };
+                            let start = source.bytes.len() as u64;
+                            for quad in quads
+                                .get(instance_range.start as usize..instance_range.end as usize)?
+                            {
+                                let mut quad = *quad;
+                                source.include(quad_bounds(quad)?);
+                                quad.color[3] /= opacity;
+                                if silhouette {
+                                    quad.color = [1.0; 4];
+                                }
+                                source.bytes.extend_from_slice(bytemuck::bytes_of(&quad));
+                            }
+                            let mut local = item.clone();
+                            if let PreparedTextItem::GlyphBatch {
+                                instance_range: range,
+                                ..
+                            } = &mut local
+                            {
+                                *range = 0..instance_range.len() as u32;
+                            }
+                            source.draws.push(SourceDraw::Glyph {
+                                item: local,
+                                bytes: start..source.bytes.len() as u64,
+                            });
+                        }
+                    }
+                    RetainedRenderItem::Image { object_index, .. } => {
+                        // Each image keeps its immutable ordinary texture and its
+                        // own aligned uniform range in this capture's one buffer.
+                        let image = frame.capture_image(*object_index)?;
+                        if image.object != object {
+                            return None;
+                        }
+                        let half = Vec2::new(
+                            image.content.width() as f32 * 0.5,
+                            image.content.height() as f32 * 0.5,
+                        );
+                        source.include(transformed(
+                            Rect::new(half * -1.0, half),
+                            image.uniform.transform(),
+                        )?);
+                        // Texture alpha is intrinsic coverage, not paint modulation.
+                        // Both modes preserve cutouts; silhouette ignores fill alpha.
+                        let uniform = image.uniform.captured(
+                            image.paint_opacity,
+                            image.object_opacity / opacity,
+                            silhouette,
+                        );
+                        let start = source
+                            .bytes
+                            .len()
+                            .checked_next_multiple_of(uniform_alignment)?;
+                        source.bytes.resize(start, 0);
+                        source.bytes.extend_from_slice(bytemuck::bytes_of(&uniform));
+                        source.draws.push(SourceDraw::Image {
+                            object_index: *object_index,
+                            resource: image.content.resource(),
+                            bytes: start as u64..source.bytes.len() as u64,
                         });
                     }
-                }
-                RetainedRenderItem::Image { object_index, .. } => {
-                    // A leaf image owns exactly one canonical raster draw. Its
-                    // immutable texture stays in the ordinary image residency.
-                    if !source.draws.is_empty() {
-                        return None;
-                    }
-                    let image = frame.capture_image(*object_index)?;
-                    if image.object != object {
-                        return None;
-                    }
-                    let half = Vec2::new(
-                        image.content.width() as f32 * 0.5,
-                        image.content.height() as f32 * 0.5,
-                    );
-                    source.include(transformed(
-                        Rect::new(half * -1.0, half),
-                        image.uniform.transform(),
-                    )?);
-                    // Texture alpha is intrinsic coverage, not paint modulation.
-                    // Both modes preserve cutouts; silhouette ignores fill alpha.
-                    let uniform = image.uniform.captured(image.paint_opacity, silhouette);
-                    source.bytes.extend_from_slice(bytemuck::bytes_of(&uniform));
-                    source.draws.push(SourceDraw::Image {
-                        object_index: *object_index,
-                        resource: image.content.resource(),
-                    });
                 }
             }
         }
@@ -246,39 +271,53 @@ impl PreparedSource {
     }
 
     pub(super) fn set_capture_origin(&mut self, origin: [i32; 2]) {
-        if matches!(self.draws.first(), Some(SourceDraw::Image { .. })) {
-            let uniform = bytemuck::pod_read_unaligned::<ImageUniform>(&self.bytes)
-                .with_capture_origin(origin);
-            self.bytes.copy_from_slice(bytemuck::bytes_of(&uniform));
+        for draw in &self.draws {
+            if let SourceDraw::Image { bytes, .. } = draw {
+                let bytes = &mut self.bytes[bytes.start as usize..bytes.end as usize];
+                let uniform =
+                    bytemuck::pod_read_unaligned::<ImageUniform>(bytes).with_capture_origin(origin);
+                bytes.copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
         }
     }
 
     /// Rebind only when an immutable image resource or the capture buffer changes.
     /// Uniform-only edits keep both the texture and this GPU binding resident.
-    pub(super) fn prepare_image_binding(
+    pub(super) fn prepare_image_bindings(
         &self,
         renderer: &GpuRenderer,
         device: &wgpu::Device,
         instances: &wgpu::Buffer,
-        binding: &mut Option<CapturedImageBinding>,
+        bindings: &mut Vec<CapturedImageBinding>,
     ) -> Result<(), RasterImageDrawError> {
-        let Some(SourceDraw::Image {
-            object_index,
-            resource,
-        }) = self.draws.first()
-        else {
-            *binding = None;
-            return Ok(());
-        };
-        if binding.as_ref().is_none_or(|old| old.resource != *resource) {
-            *binding = Some(
-                renderer
+        let mut count = 0;
+        for draw in &self.draws {
+            let SourceDraw::Image {
+                object_index,
+                resource,
+                bytes,
+            } = draw
+            else {
+                continue;
+            };
+            if bindings
+                .get(count)
+                .is_none_or(|old| old.resource != *resource || old.offset != bytes.start)
+            {
+                let binding = renderer
                     .images
                     .as_ref()
                     .ok_or(RasterImageDrawError::NotUploaded)?
-                    .bind_captured(device, *object_index, *resource, instances)?,
-            );
+                    .bind_captured(device, *object_index, *resource, instances, bytes.start)?;
+                if count == bindings.len() {
+                    bindings.push(binding);
+                } else {
+                    bindings[count] = binding;
+                }
+            }
+            count += 1;
         }
+        bindings.truncate(count);
         Ok(())
     }
 
@@ -294,7 +333,7 @@ impl PreparedSource {
         camera: &wgpu::BindGroup,
         text_camera: &wgpu::BindGroup,
         instances: &wgpu::Buffer,
-        image: Option<&CapturedImageBinding>,
+        images: &[CapturedImageBinding],
     ) -> Result<(), RetainedDrawError> {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: multisampled,
@@ -314,6 +353,7 @@ impl PreparedSource {
             multiview_mask: None,
         });
         let mut binding = None;
+        let mut images = images.iter();
         for draw in &self.draws {
             match draw {
                 SourceDraw::Geometry {
@@ -368,7 +408,7 @@ impl PreparedSource {
                         .draw_captured(
                             &mut pass,
                             camera,
-                            image.ok_or(RasterImageDrawError::NotUploaded)?,
+                            images.next().ok_or(RasterImageDrawError::NotUploaded)?,
                             PATH_SAMPLE_COUNT,
                         );
                     binding = None;
@@ -450,3 +490,6 @@ fn finite(bounds: Rect) -> bool {
         .into_iter()
         .all(f32::is_finite)
 }
+
+#[cfg(test)]
+mod tests;

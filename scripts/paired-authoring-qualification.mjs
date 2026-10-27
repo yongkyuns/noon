@@ -15,7 +15,7 @@ import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels, prepareContext,
   browserName = "chromium", contextOptions }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const output = path.resolve(root, artifactDirectory);
+  const output = path.resolve(root, process.env.NOON_PAIRED_ARTIFACTS ?? artifactDirectory);
   assert.ok(["chromium", "webkit"].includes(browserName), `unknown camera browser: ${browserName}`);
   const selectedIds = process.env.NOON_PAIRED_CASES?.split(",").map(id => id.trim()).filter(Boolean);
   if (selectedIds) {

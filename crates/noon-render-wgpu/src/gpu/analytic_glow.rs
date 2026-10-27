@@ -136,8 +136,8 @@ struct ResidentEffect {
     silhouette: Option<CaptureImage>,
     source_buffer: wgpu::Buffer,
     silhouette_buffer: Option<wgpu::Buffer>,
-    source_image_binding: Option<super::raster_image_gpu::CapturedImageBinding>,
-    silhouette_image_binding: Option<super::raster_image_gpu::CapturedImageBinding>,
+    source_image_bindings: Vec<super::raster_image_gpu::CapturedImageBinding>,
+    silhouette_image_bindings: Vec<super::raster_image_gpu::CapturedImageBinding>,
     camera_buffer: wgpu::Buffer,
     camera_binding: wgpu::BindGroup,
     text_camera_binding: Option<wgpu::BindGroup>,
@@ -364,9 +364,9 @@ impl GpuRenderer {
         }
         let source = super::source_capture::PreparedSource::prepare(
             prepared,
-            object,
-            opacity.max(f32::MIN_POSITIVE),
+            &[(object, opacity.max(f32::MIN_POSITIVE))],
             false,
+            device.limits().min_uniform_buffer_offset_alignment as usize,
         )
         .ok_or(EffectPrepareError::UnsupportedCapture)?;
         let silhouette = if request.definitions.iter().any(|definition| {
@@ -377,9 +377,9 @@ impl GpuRenderer {
             Some(
                 super::source_capture::PreparedSource::prepare(
                     prepared,
-                    object,
-                    opacity.max(f32::MIN_POSITIVE),
+                    &[(object, opacity.max(f32::MIN_POSITIVE))],
                     true,
+                    device.limits().min_uniform_buffer_offset_alignment as usize,
                 )
                 .ok_or(EffectPrepareError::UnsupportedCapture)?,
             )
@@ -638,8 +638,8 @@ impl GpuRenderer {
                         silhouette,
                         source_buffer,
                         silhouette_buffer,
-                        source_image_binding: None,
-                        silhouette_image_binding: None,
+                        source_image_bindings: Vec::new(),
+                        silhouette_image_bindings: Vec::new(),
                         text_camera_binding: text
                             .map(|text| text.glyphs.capture_camera_binding(device, &camera_buffer)),
                         multisampled: (key.0 == 2).then(|| {
@@ -699,11 +699,11 @@ impl GpuRenderer {
                     SourceInstance::Draws { source, silhouette } => {
                         let text = text.expect("isolated text capture state");
                         source
-                            .prepare_image_binding(
+                            .prepare_image_bindings(
                                 self,
                                 device,
                                 &scope.source_buffer,
-                                &mut scope.source_image_binding,
+                                &mut scope.source_image_bindings,
                             )
                             .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         source
@@ -720,7 +720,7 @@ impl GpuRenderer {
                                     .as_ref()
                                     .expect("isolated text camera"),
                                 &scope.source_buffer,
-                                scope.source_image_binding.as_ref(),
+                                &scope.source_image_bindings,
                             )
                             .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         stats.source_passes = 1;
@@ -729,11 +729,11 @@ impl GpuRenderer {
                         {
                             queue.write_buffer(buffer, 0, &source.bytes);
                             source
-                                .prepare_image_binding(
+                                .prepare_image_bindings(
                                     self,
                                     device,
                                     buffer,
-                                    &mut scope.silhouette_image_binding,
+                                    &mut scope.silhouette_image_bindings,
                                 )
                                 .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             source
@@ -750,7 +750,7 @@ impl GpuRenderer {
                                         .as_ref()
                                         .expect("isolated text camera"),
                                     buffer,
-                                    scope.silhouette_image_binding.as_ref(),
+                                    &scope.silhouette_image_bindings,
                                 )
                                 .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             stats.source_passes += 1;
