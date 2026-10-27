@@ -632,6 +632,11 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 target,
                 target_state,
                 ..
+            }
+            | SemanticAnimationIntent::EffectTargetTo {
+                target,
+                target_state,
+                ..
             } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));

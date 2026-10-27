@@ -23,6 +23,7 @@ pub enum EffectTargetLoweringError {
     MissingEffectiveValue,
     UnsupportedContentChange,
     UnsupportedPulseOptions,
+    UnsupportedTargetOptions,
     Parameter(EffectParameterError),
     Timeline(TimelineError),
 }
@@ -37,6 +38,42 @@ impl std::fmt::Display for EffectTargetLoweringError {
     }
 }
 impl std::error::Error for EffectTargetLoweringError {}
+
+/// Common frozen-generation and activation-value projection for object and
+/// composed-family targets. Scheduling and track installation stay with the
+/// ordinary prepared animation path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepared_channels(
+    prepared: &noon_core::PreparedSemanticMutationTransaction<'_>,
+    animation: noon_core::SemanticTransactionNodeRef,
+    owner: noon_core::SemanticTransactionNodeRef,
+    target: noon_core::SemanticTransactionNodeRef,
+    current: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    newly_admitted: bool,
+    method_target: bool,
+    temporary: &HashSet<SemanticNodeId>,
+) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
+    let source = prepared
+        .animation_effect_snapshot(owner)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let target = prepared
+        .animation_effect_snapshot(target)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let snapshot = prepared
+        .transform_effect_snapshot(animation)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let effective = prepared_effective(current, &source, newly_admitted, |attachment| {
+        prepared.store().node(attachment).is_none()
+    })?;
+    channels(
+        snapshot,
+        &source,
+        &target,
+        effective.as_deref(),
+        method_target,
+        temporary,
+    )
+}
 
 pub(super) fn channels(
     snapshot: Option<&SemanticTransformEffectSnapshot>,

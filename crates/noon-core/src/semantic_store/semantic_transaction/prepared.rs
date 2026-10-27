@@ -346,6 +346,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 target,
                 target_state,
                 ..
+            }
+            | crate::SemanticTransactionAnimationIntent::EffectTargetTo {
+                target,
+                target_state,
+                ..
             } = animation.intent()
             {
                 let source = effects::effect_snapshot(store, &preflight, &planned_nodes, *target);

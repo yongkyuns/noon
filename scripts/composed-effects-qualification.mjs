@@ -6,7 +6,7 @@ import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 import { referenceRgbaGaussian } from "./gaussian-blur-reference.mjs";
 
-function reference(image, time) {
+function reference(image, time, animated) {
   // Green is unchanged by the pure-red outer halo. Match the two ordinary
   // coverage intervals to obtain the actual camera's integer translation.
   let leftMin = image.width, leftMax = -1, rightMin = image.width, rightMax = -1;
@@ -30,7 +30,9 @@ function reference(image, time) {
     source.fill(image.data[sample], rgba, rgba + 4);
   }
   assert.ok(source.some(value => value > 0), "reference must contain the mixed composition");
-  const intensity = time < 0.5 ? 1.25 : time < 1.5 ? 0.6 : 0;
+  const intensity = animated
+    ? time < 0.5 ? 1.25 : time < 1.5 ? Math.fround(1.25 + (Math.fround(0.6) - 1.25) * (time - 0.5)) : time < 2.5 ? 0.6 : 0
+    : time < 0.5 ? 1.25 : time < 1.5 ? 0.6 : 0;
   const blur = referenceRgbaGaussian(source, size, size, 3.25);
   let maximumError = 0, haloWitness = 0;
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
@@ -51,15 +53,20 @@ function reference(image, time) {
 }
 
 await qualifyPairedAuthoring({
-  cases: [0.25, 0.75, 1.25, 1.75, 2].map(sampleTime => ({
+  cases: [...[0.25, 0.75, 1.25, 1.75, 2].map(sampleTime => ({
     id: `composed-effects-${sampleTime}`, file: "composed_effects.py", factory: "createDirectComposedEffectsSmokeRenderer",
     duration: 2, sampleTime, playback: "live", canvasSize: [640, 360],
     directHeldSampleTime: sampleTime === 2 ? undefined : Math.floor(sampleTime * 2) / 2,
     boundaries: [0.5, 1, 1.5], stopAtSourceCompletion: sampleTime === 2,
-  })),
+  })), ...[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2.25, 2.75, 3].map(sampleTime => ({
+    id: `composed-animated-${sampleTime}`, file: "composed_effects_animated.py", factory: "createDirectComposedEffectsAnimatedSmokeRenderer",
+    duration: 3, sampleTime, playback: "live", canvasSize: [640, 360], animated: true,
+    directHeldSampleTime: sampleTime === 0.25 ? 0 : sampleTime === 1.75 ? 1.5 : sampleTime === 2.25 ? 2 : sampleTime === 2.75 ? 2.5 : undefined,
+    boundaries: [0.5, 1.5, 2, 2.5], stopAtSourceCompletion: sampleTime === 3,
+  }))],
   artifactDirectory: "browser-smoke-artifacts/composed-effects",
   prepareContext: disableAuthoringJspi,
   qualifyPixels({ fixture, rust, python }) {
-    return { rust: reference(rust, fixture.sampleTime), python: reference(python, fixture.sampleTime) };
+    return { rust: reference(rust, fixture.sampleTime, fixture.animated), python: reference(python, fixture.sampleTime, fixture.animated) };
   },
 });

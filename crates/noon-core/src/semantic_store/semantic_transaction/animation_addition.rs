@@ -46,6 +46,11 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         transform: crate::SemanticWorldTransform3D,
     },
+    EffectTargetTo {
+        target: SemanticTransactionNodeRef,
+        target_state: SemanticTransactionNodeRef,
+        method_target: bool,
+    },
     CameraProfileTo {
         target: SemanticTransactionNodeRef,
         profile: crate::ManimCamera3DProfile,
@@ -133,6 +138,11 @@ impl SemanticTransactionAnimationIntent {
                 target,
                 target_state,
                 ..
+            }
+            | Self::EffectTargetTo {
+                target,
+                target_state,
+                ..
             } => Some([Some(*target), Some(*target_state), None]),
             Self::WorldTransformTo { target, .. } => Some([Some(*target), None, None]),
             Self::CameraProfileTo { target, .. } => Some([Some(*target), None, None]),
@@ -168,6 +178,7 @@ impl SemanticTransactionAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
@@ -258,6 +269,15 @@ impl SemanticTransactionAnimation {
                 interpolation: *interpolation,
 
                 complete_priority: *complete_priority,
+            },
+            SemanticAnimationIntent::EffectTargetTo {
+                target,
+                target_state,
+                method_target,
+            } => SemanticTransactionAnimationIntent::EffectTargetTo {
+                target: (*target).into(),
+                target_state: (*target_state).into(),
+                method_target: *method_target,
             },
             SemanticAnimationIntent::WorldTransformTo { target, transform } => {
                 SemanticTransactionAnimationIntent::WorldTransformTo {
@@ -428,6 +448,15 @@ impl SemanticTransactionAnimation {
                 interpolation: *interpolation,
 
                 complete_priority: *complete_priority,
+            },
+            SemanticTransactionAnimationIntent::EffectTargetTo {
+                target,
+                target_state,
+                method_target,
+            } => SemanticAnimationIntent::EffectTargetTo {
+                target: resolve_node_ref(*target, committed),
+                target_state: resolve_node_ref(*target_state, committed),
+                method_target: *method_target,
             },
             SemanticTransactionAnimationIntent::WorldTransformTo { target, transform } => {
                 SemanticAnimationIntent::WorldTransformTo {
@@ -803,6 +832,30 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
             }
         }
+        SemanticTransactionAnimationIntent::EffectTargetTo {
+            target: source,
+            target_state,
+            ..
+        } => {
+            catalog.ensure_authoring_node(*source, index)?;
+            catalog.ensure_authoring_node(*target_state, index)?;
+            if source == target_state {
+                return Err(match source {
+                    SemanticTransactionNodeRef::Existing(node) => {
+                        SemanticMutationTransactionError::SameAnimationTargetAndTargetState {
+                            index,
+                            node: *node,
+                        }
+                    }
+                    SemanticTransactionNodeRef::Pending(_) => {
+                        SemanticMutationTransactionError::SamePendingAnimationTargetAndTargetState {
+                            index,
+                            node: *source,
+                        }
+                    }
+                });
+            }
+        }
         SemanticTransactionAnimationIntent::FamilyTransformTo {
             source,
             target_state,
@@ -1060,7 +1113,7 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::MoveAlongPath { target, path } => store
             .insert_semantic_move_along_path_animation(*target, *path, options)
             .expect("preflighted MoveAlongPath insertion must remain valid while transaction owns the store"),
-        SemanticAnimationIntent::TransformTo { .. } => {
+        SemanticAnimationIntent::TransformTo { .. } | SemanticAnimationIntent::EffectTargetTo { .. } => {
             // Final candidate correspondence was captured before publication.
             // All object/options references are covered by transaction preflight.
             store.insert_semantic_animation_state(state)

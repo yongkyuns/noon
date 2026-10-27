@@ -1595,6 +1595,29 @@ impl SemanticMutationTransaction {
         )
     }
 
+    /// Stage an existing-attachment target without manufacturing object geometry.
+    pub fn create_effect_target_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        method_target: bool,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::EffectTargetTo {
+                    target: target.into(),
+                    target_state: target_state.into(),
+                    method_target,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     pub fn create_move_along_path_animation(
         &mut self,
         target: impl Into<SemanticTransactionNodeRef>,

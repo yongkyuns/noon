@@ -1,8 +1,9 @@
 //! Nested mixed-source controls, paired with web/python/examples/composed_effects.py.
 use crate::{
     effects::{Blur, EffectUpdate, Pixels},
-    Color, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram, LiveSession,
-    MobjectFamily, RasterImageSampling, Scene,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, ImageMobjectOptions,
+    LiveContinuation, LiveProgram, LiveSession, MobjectFamily, RasterImageSampling, RateFunction,
+    Scene, SemanticAnimationCompositionKind,
 };
 
 pub struct ComposedEffects {
@@ -10,6 +11,7 @@ pub struct ComposedEffects {
     inner: MobjectFamily,
     outer: MobjectFamily,
     stage: u8,
+    animated: bool,
 }
 
 fn message(error: impl std::fmt::Display) -> String {
@@ -19,7 +21,63 @@ fn message(error: impl std::fmt::Display) -> String {
 impl LiveContinuation for ComposedEffects {
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
-        match self.stage {
+        if self.animated && self.stage == 1 {
+            let reference = live.copy_family(&self.reference).map_err(message)?;
+            let inner = live.copy_family(&self.inner).map_err(message)?;
+            let outer = live.copy_family(&self.outer).map_err(message)?;
+            for family in [reference.root(), inner.root()] {
+                live.set_effect(
+                    family,
+                    "soften",
+                    EffectUpdate::default().radius(Pixels(4.0)),
+                )
+                .map_err(message)?;
+            }
+            live.set_glow(outer.root(), EffectUpdate::default().intensity(0.6))
+                .map_err(message)?;
+            let options = AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear);
+            let segment = live
+                .declare_and_activate_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &[
+                        AnimationCompositionRequest::FamilyMethodTargetTo {
+                            source: &self.reference,
+                            target_state: reference.root(),
+                            options,
+                        },
+                        AnimationCompositionRequest::FamilyMethodTargetTo {
+                            source: &self.inner,
+                            target_state: inner.root(),
+                            options,
+                        },
+                        AnimationCompositionRequest::FamilyMethodTargetTo {
+                            source: &self.outer,
+                            target_state: outer.root(),
+                            options,
+                        },
+                    ],
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .map_err(message)?;
+            self.stage += 1;
+            return Ok(ContinuationStep::Await(segment));
+        }
+        if self.animated && self.stage == 2 {
+            self.stage += 1;
+            return live
+                .wait_segment(0.5)
+                .map(ContinuationStep::Await)
+                .map_err(message);
+        }
+        let stage = if self.animated && self.stage >= 3 {
+            self.stage - 1
+        } else {
+            self.stage
+        };
+        match stage {
             0 => {}
             1 => {
                 for family in [&self.reference, &self.inner] {
@@ -76,6 +134,14 @@ fn source(scene: &mut Scene, x: f64) -> Result<MobjectFamily, String> {
 }
 
 pub fn program() -> Result<LiveProgram<ComposedEffects>, String> {
+    build_program(false)
+}
+
+pub fn animated_program() -> Result<LiveProgram<ComposedEffects>, String> {
+    build_program(true)
+}
+
+fn build_program(animated: bool) -> Result<LiveProgram<ComposedEffects>, String> {
     let mut scene = Scene::new();
     let mut background = scene.rectangle(16.0, 9.0).map_err(message)?;
     background.set_fill(0.0, 0.0, 0.0, 1.0).map_err(message)?;
@@ -101,6 +167,7 @@ pub fn program() -> Result<LiveProgram<ComposedEffects>, String> {
             inner,
             outer,
             stage: 0,
+            animated,
         })
         .map_err(message)
 }

@@ -2139,6 +2139,13 @@ impl ExecutionSession {
         let mut callback_intervals = Vec::new();
         let mut family_colors = std::collections::BTreeMap::new();
         let mut family_styles = std::collections::BTreeMap::new();
+        let family_request = family_effect_target::root_options(store, request, play_options)?;
+        let request = family_request.as_ref().unwrap_or(request);
+        let play_options = if family_request.is_some() {
+            AnimationOptions::new()
+        } else {
+            play_options
+        };
         let specialized = self.specialize_layout_replace(store, request, play_options);
         let request = specialized.as_ref().unwrap_or(request);
         let animation = self.stage_composition_request(
@@ -2389,7 +2396,7 @@ impl ExecutionSession {
                 target_state,
                 options,
             } => {
-                family_effect_target::validate(store, *source, *target_state, false)?;
+                family_effect_target::reject_matching(store, *source, *target_state)?;
                 if !self.callback_schedule.is_empty() {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "matching family Transform does not yet support required host callbacks"
@@ -2457,15 +2464,11 @@ impl ExecutionSession {
                 target_state,
                 options,
             } => {
-                family_effect_target::validate(
-                    store,
-                    *source,
-                    *target_state,
-                    matches!(
-                        request,
-                        SemanticCompositionRequest::FamilyMethodTargetTo { .. }
-                    ),
-                )?;
+                let family_effects = family_effect_target::validate(store, *source, *target_state)?;
+                let method_target = matches!(
+                    request,
+                    SemanticCompositionRequest::FamilyMethodTargetTo { .. }
+                );
                 let is_flat_family = |family: SemanticNodeId| {
                     store
                         .semantic_family_members_checked(family)
@@ -2551,7 +2554,11 @@ impl ExecutionSession {
                 // The canonical family channel owns padding appearance, including restoration
                 // after an earlier unequal-family contraction. Curved equal-family transforms
                 // keep the per-leaf path below because each leaf owns the authored path arc.
-                if !curved && is_flat_family(*source) && is_flat_family(*target_state) {
+                if !family_effects
+                    && !curved
+                    && is_flat_family(*source)
+                    && is_flat_family(*target_state)
+                {
                     let source_count = store
                         .semantic_family_members_checked(*source)
                         .map_err(|error| {
@@ -2590,6 +2597,10 @@ impl ExecutionSession {
                             leaf_options = leaf_options.path_arc(path_arc);
                         }
                         let mut composition_options = *options;
+                        if family_effect_target::has_scope_effects(store, *source, *target_state)? {
+                            composition_options.run_time = Some(1.0);
+                            composition_options.rate_func = Some(RateFunction::Linear);
+                        }
                         // `path_arc` is Transform payload meaning, not composition
                         // timing. Each aligned leaf owns the same deterministic arc.
                         composition_options.path_arc = None;
@@ -2611,7 +2622,7 @@ impl ExecutionSession {
                                 .collect(),
                             options: composition_options,
                         };
-                        self.stage_composition_request(
+                        let geometry = self.stage_composition_request(
                             store,
                             root,
                             &expanded,
@@ -2624,6 +2635,15 @@ impl ExecutionSession {
                                 callback_intervals: &mut *callback_intervals,
                             },
                             false,
+                        )?;
+                        family_effect_target::compose(
+                            store,
+                            *source,
+                            *target_state,
+                            method_target,
+                            geometry,
+                            *options,
+                            declaration,
                         )
                     }
                     Err(error) => {

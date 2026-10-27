@@ -79,6 +79,10 @@ impl SemanticAnimationScheduleProjection {
 /// Payload kind retained by one scheduled published animation leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticScheduledAnimationPayload {
+    EffectTargetTo {
+        target_state: SemanticNodeId,
+        method_target: bool,
+    },
     MoveAlongPath {
         path: SemanticNodeId,
         path_execution_object_id: ObjectId,
@@ -250,6 +254,10 @@ impl PreparedSemanticAnimationScheduleProjection {
 /// Payload kind retained by one scheduled transaction-local animation leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PreparedSemanticScheduledAnimationPayload {
+    EffectTargetTo {
+        target_state: SemanticTransactionNodeRef,
+        method_target: bool,
+    },
     MoveAlongPath {
         path: SemanticTransactionNodeRef,
         path_execution_object_id: ObjectId,
@@ -841,6 +849,13 @@ fn published_payload(
     payload: ScheduledAnimationPayload<SemanticNodeId>,
 ) -> SemanticScheduledAnimationPayload {
     match payload {
+        ScheduledAnimationPayload::EffectTargetTo {
+            target_state,
+            method_target,
+        } => SemanticScheduledAnimationPayload::EffectTargetTo {
+            target_state,
+            method_target,
+        },
         ScheduledAnimationPayload::MoveAlongPath {
             path,
             path_execution_object_id,
@@ -927,6 +942,13 @@ fn prepared_payload(
     payload: ScheduledAnimationPayload<SemanticTransactionNodeRef>,
 ) -> PreparedSemanticScheduledAnimationPayload {
     match payload {
+        ScheduledAnimationPayload::EffectTargetTo {
+            target_state,
+            method_target,
+        } => PreparedSemanticScheduledAnimationPayload::EffectTargetTo {
+            target_state,
+            method_target,
+        },
         ScheduledAnimationPayload::MoveAlongPath {
             path,
             path_execution_object_id,
@@ -1017,6 +1039,11 @@ struct AnimationDeclaration<R> {
 
 #[derive(Clone, Debug)]
 enum AnimationDeclarationIntent<R> {
+    EffectTargetTo {
+        target: R,
+        target_state: R,
+        method_target: bool,
+    },
     MoveAlongPath {
         target: R,
         path: R,
@@ -1221,6 +1248,28 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     interpolation: *interpolation,
 
                     complete_priority: *complete_priority,
+                }
+            }
+            SemanticAnimationIntent::EffectTargetTo {
+                target,
+                target_state,
+                method_target,
+            } => {
+                for owner in [*target, *target_state] {
+                    if !self
+                        .store
+                        .node(owner)
+                        .is_some_and(|node| node.can_own_members())
+                    {
+                        return Err(SemanticAnimationError::Target(
+                            noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(owner),
+                        ));
+                    }
+                }
+                AnimationDeclarationIntent::EffectTargetTo {
+                    target: *target,
+                    target_state: *target_state,
+                    method_target: *method_target,
                 }
             }
             SemanticAnimationIntent::WorldTransformTo { target, transform } => {
@@ -1497,6 +1546,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
 
                         complete_priority: *complete_priority,
                     },
+                    SemanticAnimationIntent::EffectTargetTo {
+                        target,
+                        target_state,
+                        method_target,
+                    } => AnimationDeclarationIntent::EffectTargetTo {
+                        target: (*target).into(),
+                        target_state: (*target_state).into(),
+                        method_target: *method_target,
+                    },
                     SemanticAnimationIntent::WorldTransformTo { target, transform } => {
                         self.prepared
                             .object_state(*target)
@@ -1661,6 +1719,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
 
                         complete_priority: *complete_priority,
                     },
+                    SemanticTransactionAnimationIntent::EffectTargetTo {
+                        target,
+                        target_state,
+                        method_target,
+                    } => AnimationDeclarationIntent::EffectTargetTo {
+                        target: *target,
+                        target_state: *target_state,
+                        method_target: *method_target,
+                    },
                     SemanticTransactionAnimationIntent::WorldTransformTo { target, transform } => {
                         AnimationDeclarationIntent::WorldTransformTo {
                             target: *target,
@@ -1781,6 +1848,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
         };
         match &intent {
             AnimationDeclarationIntent::FamilyTransformTo { .. } => {}
+            AnimationDeclarationIntent::EffectTargetTo {
+                target,
+                target_state,
+                ..
+            } => {
+                for owner in [*target, *target_state] {
+                    self.prepared
+                        .animation_effect_snapshot(owner)
+                        .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+                }
+            }
             AnimationDeclarationIntent::MoveAlongPath { target, path } => {
                 self.prepared
                     .object_state(*target)
@@ -1929,6 +2007,10 @@ enum ScheduledAnimationLeaf<R> {
 
 #[derive(Clone, Copy, Debug)]
 enum ScheduledAnimationPayload<R> {
+    EffectTargetTo {
+        target_state: R,
+        method_target: bool,
+    },
     MoveAlongPath {
         path: R,
         path_execution_object_id: ObjectId,
@@ -2188,6 +2270,35 @@ where
                     source,
                     target_state,
                     mode,
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::EffectTargetTo {
+            target,
+            target_state,
+            method_target,
+        } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = resolve_transform_animation_options(
+                AnimationDefaults::MANIM,
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::EffectTargetTo {
+                        target_state,
+                        method_target,
+                    },
                     options,
                 },
             })

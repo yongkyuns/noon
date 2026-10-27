@@ -1,4 +1,5 @@
 //! Public Scene/LiveSession publication of composed scopes, without a transport.
+mod composed_effect_animation;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
     ExecutionSession, MobjectFamily, Scene,
@@ -376,7 +377,7 @@ fn initial_partial_scope_opacity_rejects_before_renderer_admission() {
 }
 
 #[test]
-fn family_effect_target_edit_rejects_atomically_instead_of_being_silently_ignored() {
+fn unsupported_family_effect_units_and_matching_targets_reject_atomically() {
     use noon::{AnimationCompositionRequest, AnimationOptions};
     let mut scene = Scene::new();
     let a = scene.circle(0.4).unwrap();
@@ -421,10 +422,10 @@ fn family_effect_target_edit_rejects_atomically_instead_of_being_silently_ignore
         let result = scene
             .live(&mut session)
             .declare_and_activate_composition(&request, AnimationOptions::new());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("composed-scope animation lowering"));
+        assert!(
+            result.is_err(),
+            "unsupported unit changes and matching profiles must reject"
+        );
         assert_eq!(session.frame(), &before);
         assert_eq!(scene.revision(), revision);
         assert_eq!(session.publication_context(), context);

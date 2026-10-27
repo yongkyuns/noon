@@ -593,6 +593,57 @@ where
         ) {
             continue;
         }
+        if let SemanticScheduledAnimationPayload::EffectTargetTo {
+            target_state,
+            method_target,
+        } = leaf.payload
+        {
+            let effect_error = |error| SemanticAffineAnimationTrackError::EffectTarget {
+                animation: leaf.animation,
+                error,
+            };
+            if leaf.options.introducer || leaf.options.remover || leaf.options.path_arc != 0.0 {
+                return Err(effect_error(
+                    super::glow_target::EffectTargetLoweringError::UnsupportedTargetOptions,
+                ));
+            }
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id) {
+                captured.clone()
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured.clone());
+                captured
+            };
+            let source = store
+                .animation_effect_snapshot(leaf.target)
+                .map_err(super::glow_target::EffectTargetLoweringError::Store)
+                .map_err(effect_error)?;
+            let target = store
+                .animation_effect_snapshot(target_state)
+                .map_err(super::glow_target::EffectTargetLoweringError::Store)
+                .map_err(effect_error)?;
+            let snapshot = store
+                .semantic_animation_state(leaf.animation)
+                .map_err(SemanticAffineAnimationTrackError::Animation)?
+                .transform_effect_snapshot();
+            let channels = super::glow_target::channels(
+                snapshot,
+                &source,
+                &target,
+                from.effects.as_deref(),
+                method_target,
+                &Default::default(),
+            )
+            .map_err(effect_error)?;
+            push_published_effect_channels(leaf, channels, &mut driven, &mut tracks)?;
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::WorldTransformTo { transform } = leaf.payload {
             let from = if let Some(captured) = captures.get(&leaf.execution_object_id).cloned() {
                 captured
@@ -919,6 +970,9 @@ where
 
                 complete_priority,
             } => (target_state, interpolation, complete_priority),
+            SemanticScheduledAnimationPayload::EffectTargetTo { .. } => {
+                unreachable!("effect-only target was lowered above")
+            }
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::TextGlyph { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
@@ -1007,34 +1061,7 @@ where
                 track.completion = completion;
             }
         }
-        for (property, values) in glow_channels {
-            super::glow_target::reserve(
-                &mut driven,
-                leaf.execution_object_id,
-                property,
-                &values,
-                leaf.animation,
-            )
-            .map_err(|first_animation| {
-                SemanticAffineAnimationTrackError::GlowDriverConflict {
-                    first_animation,
-                    next_animation: leaf.animation,
-                    property,
-                }
-            })?;
-            let mut timing = leaf.timing;
-            timing.reverse_rate_function = leaf.options.reverse_rate_function;
-            tracks.push(SemanticAffineAnimationTrack {
-                animation: leaf.animation,
-                target: leaf.target,
-                execution_object_id: leaf.execution_object_id,
-                property,
-                completion: super::glow_target::completion(&values, timing).map_err(glow_error)?,
-                values,
-                timing,
-                time_map: leaf.time_map.clone(),
-            });
-        }
+        push_published_effect_channels(leaf, glow_channels, &mut driven, &mut tracks)?;
         let priority_endpoint = if leaf.options.reverse_rate_function {
             from.z_index
         } else {
@@ -1291,6 +1318,19 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::EffectTargetTo {
+            target,
+            target_state,
+            method_target,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::EffectTargetTo {
+                    target_state: *target_state,
+                    method_target: *method_target,
+                } =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::Rotate {
             target,
             angle,
@@ -1437,6 +1477,48 @@ fn object_state<'a>(
             error,
         }
     })
+}
+
+fn push_published_effect_channels(
+    leaf: &SemanticScheduledAnimationLeaf,
+    channels: Vec<(Property, TrackValues)>,
+    driven: &mut DriverMap<SemanticNodeId>,
+    tracks: &mut Vec<SemanticAffineAnimationTrack>,
+) -> Result<(), SemanticAffineAnimationTrackError> {
+    for (property, values) in channels {
+        super::glow_target::reserve(
+            driven,
+            leaf.execution_object_id,
+            property,
+            &values,
+            leaf.animation,
+        )
+        .map_err(|first_animation| {
+            SemanticAffineAnimationTrackError::GlowDriverConflict {
+                first_animation,
+                next_animation: leaf.animation,
+                property,
+            }
+        })?;
+        let mut timing = leaf.timing;
+        timing.reverse_rate_function = leaf.options.reverse_rate_function;
+        tracks.push(SemanticAffineAnimationTrack {
+            animation: leaf.animation,
+            target: leaf.target,
+            execution_object_id: leaf.execution_object_id,
+            property,
+            completion: super::glow_target::completion(&values, timing).map_err(|error| {
+                SemanticAffineAnimationTrackError::EffectTarget {
+                    animation: leaf.animation,
+                    error,
+                }
+            })?,
+            values,
+            timing,
+            time_map: leaf.time_map.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn push_published_channel(

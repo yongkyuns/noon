@@ -336,6 +336,14 @@ pub enum SemanticAnimationIntent {
         /// Ordinary Transform leaves source priority unchanged.
         complete_priority: bool,
     },
+    /// Drive only existing effect attachments toward an authored target column.
+    /// This addresses either an object or an unrendered composed family owner;
+    /// geometry, membership and affine state are outside this operation.
+    EffectTargetTo {
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        method_target: bool,
+    },
     /// Animate an object's effective world pose to a typed spatial endpoint.
     /// The source pose is captured from the current effective frame at activation.
     WorldTransformTo {
@@ -444,6 +452,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { target, .. }
             | Self::MoveAlongPath { target, .. }
             | Self::TransformTo { target, .. }
+            | Self::EffectTargetTo { target, .. }
             | Self::WorldTransformTo { target, .. }
             | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
@@ -465,6 +474,7 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. }
+            | Self::EffectTargetTo { target_state, .. }
             | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
             Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
@@ -511,6 +521,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
@@ -536,6 +547,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }

@@ -396,6 +396,7 @@ where
             && matches!(
                 leaf.payload,
                 PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
+                    | PreparedSemanticScheduledAnimationPayload::EffectTargetTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::WorldTransformTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::CameraProfileTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::GlowPulse { .. }
@@ -420,6 +421,48 @@ where
             // Capturing the exact effective bounds-center offset requires the runtime's
             // current retained bounds. The activation coordinator appends this channel
             // through lower_prepared_path_motion_tracks after ordinary lowering.
+            continue;
+        }
+        if let PreparedSemanticScheduledAnimationPayload::EffectTargetTo {
+            target_state,
+            method_target,
+        } = leaf.payload
+        {
+            let effect_error = |error| PreparedSemanticAnimationLoweringError::EffectTarget {
+                animation: leaf.animation,
+                error,
+            };
+            if leaf.options.introducer || leaf.options.remover || leaf.options.path_arc != 0.0 {
+                return Err(effect_error(
+                    super::glow_target::EffectTargetLoweringError::UnsupportedTargetOptions,
+                ));
+            }
+            let from = captures
+                .get(leaf.execution_object_id)
+                .or_else(|| {
+                    let from = effective_properties(leaf.execution_object_id)?;
+                    captures.insert(leaf.execution_object_id, from);
+                    captures.get(leaf.execution_object_id)
+                })
+                .ok_or(
+                    PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+            let channels = super::glow_target::prepared_channels(
+                prepared,
+                leaf.animation,
+                leaf.target,
+                target_state,
+                from.effects,
+                admitted.contains(&leaf.target),
+                method_target,
+                &temporary_attachments,
+            )
+            .map_err(effect_error)?;
+            push_effect_channels(leaf, channels, &mut driven, &mut tracks)?;
             continue;
         }
         let source = prepared.object_state(leaf.target).map_err(|error| {
@@ -610,23 +653,11 @@ where
                     animation: leaf.animation,
                     error,
                 };
-                let source_effects = prepared
-                    .animation_effect_snapshot(leaf.target)
-                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
-                    .map_err(glow_error)?;
-                let target_effects = prepared
-                    .animation_effect_snapshot(target_state)
-                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
-                    .map_err(glow_error)?;
                 let snapshot = prepared
                     .transform_effect_snapshot(leaf.animation)
                     .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
-                if snapshot.is_some()
-                    || from.effects.is_some()
-                    || !source_effects.is_empty()
-                    || !target_effects.is_empty()
-                {
+                if snapshot.is_some() || from.effects.is_some() {
                     super::glow_target::validate_sources(
                         prepared.store(),
                         prepared
@@ -647,18 +678,13 @@ where
                 // Newly admitted detached sources likewise start from their
                 // canonical authored attachment. Existing runtime rows must use
                 // their effective generation/value; no stale-generation fallback.
-                let effective_glow = super::glow_target::prepared_effective(
+                let glow_channels = super::glow_target::prepared_channels(
+                    prepared,
+                    leaf.animation,
+                    leaf.target,
+                    target_state,
                     from.effects.clone(),
-                    &source_effects,
                     admitted.contains(&leaf.target),
-                    |attachment| prepared.store().node(attachment).is_none(),
-                )
-                .map_err(glow_error)?;
-                let glow_channels = super::glow_target::channels(
-                    snapshot,
-                    &source_effects,
-                    &target_effects,
-                    effective_glow.as_deref(),
                     complete_priority,
                     &temporary_attachments,
                 )
@@ -674,35 +700,7 @@ where
                         track.completion = completion;
                     }
                 }
-                for (property, values) in glow_channels {
-                    super::glow_target::reserve(
-                        &mut driven,
-                        leaf.execution_object_id,
-                        property,
-                        &values,
-                        leaf.animation,
-                    )
-                    .map_err(|first_animation| {
-                        PreparedSemanticAnimationLoweringError::GlowDriverConflict {
-                            first_animation,
-                            next_animation: leaf.animation,
-                            property,
-                        }
-                    })?;
-                    let mut timing = leaf.timing;
-                    timing.reverse_rate_function = leaf.options.reverse_rate_function;
-                    tracks.push(PreparedSemanticAnimationTrack {
-                        animation: leaf.animation,
-                        target: leaf.target,
-                        execution_object_id: leaf.execution_object_id,
-                        property,
-                        completion: super::glow_target::completion(&values, timing)
-                            .map_err(glow_error)?,
-                        values,
-                        timing,
-                        time_map: leaf.time_map.clone(),
-                    });
-                }
+                push_effect_channels(leaf, glow_channels, &mut driven, &mut tracks)?;
                 if complete_priority && from.z_index != target.z_index() {
                     if let Some(first_animation) = driven.insert(
                         driver_key(leaf.execution_object_id, Property::ZIndex),
@@ -1234,6 +1232,9 @@ where
                     },
                 }
             }
+            PreparedSemanticScheduledAnimationPayload::EffectTargetTo { .. } => {
+                unreachable!("effect-only targets were lowered without object geometry above")
+            }
             PreparedSemanticScheduledAnimationPayload::WorldTransformTo { .. } => {
                 unreachable!("world transform payload was emitted directly as a typed track")
             }
@@ -1433,6 +1434,48 @@ fn source_camera_profile(
         noon_core::SemanticProjection3D::Orthographic { .. } => return None,
     };
     Some((profile, near, far))
+}
+
+fn push_effect_channels(
+    leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
+    channels: Vec<(Property, TrackValues)>,
+    driven: &mut super::affine::DriverMap<SemanticTransactionNodeRef>,
+    tracks: &mut Vec<PreparedSemanticAnimationTrack>,
+) -> Result<(), PreparedSemanticAnimationLoweringError> {
+    for (property, values) in channels {
+        super::glow_target::reserve(
+            driven,
+            leaf.execution_object_id,
+            property,
+            &values,
+            leaf.animation,
+        )
+        .map_err(|first_animation| {
+            PreparedSemanticAnimationLoweringError::GlowDriverConflict {
+                first_animation,
+                next_animation: leaf.animation,
+                property,
+            }
+        })?;
+        let mut timing = leaf.timing;
+        timing.reverse_rate_function = leaf.options.reverse_rate_function;
+        tracks.push(PreparedSemanticAnimationTrack {
+            animation: leaf.animation,
+            target: leaf.target,
+            execution_object_id: leaf.execution_object_id,
+            property,
+            completion: super::glow_target::completion(&values, timing).map_err(|error| {
+                PreparedSemanticAnimationLoweringError::EffectTarget {
+                    animation: leaf.animation,
+                    error,
+                }
+            })?,
+            values,
+            timing,
+            time_map: leaf.time_map.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn push_prepared_channel(

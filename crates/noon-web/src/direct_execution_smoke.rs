@@ -815,6 +815,15 @@ pub async fn create_direct_composed_effects_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Animated nested family effects, paired with ordinary Python method targets.
+#[wasm_bindgen(js_name = createDirectComposedEffectsAnimatedSmokeRenderer)]
+pub async fn create_direct_composed_effects_animated_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::composed_effects::animated_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct shared Rust/WASM shadow program, paired with the ordinary Python scene.
 #[wasm_bindgen(js_name = createDirectShadowSmokeRenderer)]
 pub async fn create_direct_shadow_smoke_renderer(
