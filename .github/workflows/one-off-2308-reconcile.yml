@@ -8,6 +8,7 @@ on:
       - .github/ci/one-off-2308-gradient.patch
       - .github/ci/one-off-2308-pointer.patch
       - .github/ci/one-off-2308-fixture.patch
+      - .github/ci/one-off-2308-interactions.patch
       - .github/workflows/one-off-2308-reconcile.yml
 
 permissions:
@@ -30,6 +31,9 @@ jobs:
       FIXTURE_BASE_TREE: 4723c3d47c287c67498d5077d5e4b5d01012a5f5
       FIXTURE_TREE: d210c81f736d69b0660b08894502447d44d9ba01
       FIXTURE_PATCH_SHA256: 78a943fd0de8c6cd6a610ce5741e09fc2823ddfb87da7540737b7121dc7fd6aa
+      INTERACTIONS_BASE_TREE: d210c81f736d69b0660b08894502447d44d9ba01
+      INTERACTIONS_TREE: a9fcbdd982e1c617fea7f20ae0856d6841a2457d
+      INTERACTIONS_PATCH_SHA256: 823f8e9e9082279747608ff9a1e91dbc0b9a8f4917c2e29f40b58f0d8a8d45f1
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -227,6 +231,34 @@ jobs:
           (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
           print('Authenticated fixture-repair candidate tree:', tree)
           PYFIX
+      - name: Authenticate and repair historical prefix-interaction fixtures
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          python3 - <<'PYINTERACTIONS'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          baseline = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert baseline == os.environ['INTERACTIONS_BASE_TREE'], baseline
+          patch = Path(os.environ['GITHUB_WORKSPACE']) / '.github/ci/one-off-2308-interactions.patch'
+          payload = patch.read_bytes()
+          digest = hashlib.sha256(payload).hexdigest()
+          assert digest == os.environ['INTERACTIONS_PATCH_SHA256'], digest
+          subprocess.run(['git', 'apply', '--check', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check', os.environ['PIN_MASTER']], check=True)
+          tree = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert tree == os.environ['INTERACTIONS_TREE'], tree
+          manifest = json.loads((out / 'manifest.json').read_text())
+          manifest['interactions_baseline_tree'] = baseline
+          manifest['interactions_corrected_unformatted_tree'] = tree
+          manifest['interactions_patch_sha256'] = digest
+          manifest['interactions_repair_scope'] = 'Add missing fill_gradient and convert TextResource test Rect into DRect; preserve all 9 interaction regressions'
+          (out / 'interactions-repair.patch').write_bytes(payload)
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print('Authenticated prefix-interactions fixture candidate:', tree)
+          PYINTERACTIONS
       - name: Format isolated candidate and freeze its actual tested source
         id: formatted
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
@@ -234,9 +266,9 @@ jobs:
           set -euo pipefail
           cargo fmt --all 2>&1 | tee "$EVIDENCE/format.log"
           git add --all
-          git diff --cached --binary "$FIXTURE_TREE" > "$EVIDENCE/formatter.patch"
+          git diff --cached --binary "$INTERACTIONS_TREE" > "$EVIDENCE/formatter.patch"
           git diff --cached --check "$PIN_MASTER"
-          git commit -m 'Reconcile prepared playback and repair stale prefix test fixture for isolated qualification'
+          git commit -m 'Reconcile prepared playback and repair prefix interaction fixtures for isolated qualification'
           python3 - <<'PY'
           import hashlib, json, os, subprocess
           from pathlib import Path
@@ -327,6 +359,16 @@ jobs:
           cargo test --locked -p noon-runtime --features prepared-prefix --test prefix_bindings 2>&1 | tee "$EVIDENCE/prefix-bindings.log"
           grep -F 'rejected_binding_edits_preserve_history_and_an_active_effect ... ok' "$EVIDENCE/prefix-bindings.log"
           grep -F 'test result: ok. 5 passed; 0 failed; 0 ignored' "$EVIDENCE/prefix-bindings.log"
+      - name: Execute all nine prepared prefix interaction regressions
+        if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/interactions-tests.exit"; exit "$code"' EXIT
+          cargo test --locked -p noon-runtime --features prepared-prefix --test prefix_interactions -- --test-threads=1 2>&1 | tee "$EVIDENCE/interactions-tests.log"
+          grep -F 'test result: ok. 9 passed; 0 failed; 0 ignored' "$EVIDENCE/interactions-tests.log"
       - name: Run canonical fast gate without changing assertions
         if: ${{ !cancelled() && steps.formatted.outcome == 'success' }}
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
@@ -380,7 +422,7 @@ jobs:
           manifest = json.loads((out / 'manifest.json').read_text())
           assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip() == manifest['tested_candidate']['tree']
           manifest['command_exit_codes'] = {name: int(path.read_text()) if path.exists() else None
-              for name in ('gradient', 'pointer-tests', 'prefix-bindings', 'fast', 'prepared-input', 'wasm', 'web-preflight')
+              for name in ('gradient', 'pointer-tests', 'prefix-bindings', 'interactions-tests', 'fast', 'prepared-input', 'wasm', 'web-preflight')
               for path in [out / (name + '.exit')]}
           manifest['tracked_source_unchanged'] = True
           (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
