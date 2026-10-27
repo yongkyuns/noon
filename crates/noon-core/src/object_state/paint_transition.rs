@@ -2,8 +2,8 @@
 use std::sync::Arc;
 
 use crate::{
-    Color, GradientError, GradientStop, ImagePaint, ImagePaintError, LinearGradient, NoisePaint,
-    NoisePaintError, RadialGradient, SemanticPaint,
+    Color, GradientError, GradientStop, HatchPaint, HatchPaintError, ImagePaint, ImagePaintError,
+    LinearGradient, NoisePaint, NoisePaintError, RadialGradient, SemanticPaint,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,12 +16,13 @@ pub enum PaintTransitionError {
     Gradient(GradientError),
     Image(ImagePaintError),
     Noise(NoisePaintError),
+    Hatch(HatchPaintError),
 }
 
 impl std::fmt::Display for PaintTransitionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedPaint => f.write_str("paint transitions require compatible supported kinds, matching image resources and matching noise seeds"),
+            Self::UnsupportedPaint => f.write_str("paint transitions require compatible supported kinds, matching image resources, matching noise seeds and matching hatch topology"),
             Self::InvalidOpacity => f.write_str("paint transition opacity must be finite and in [0, 1]"),
             Self::InvalidProgress => f.write_str("paint transition progress must be finite and in [0, 1]"),
             Self::DifferentStopCounts => f.write_str("animated gradients require matching stop counts"),
@@ -29,6 +30,7 @@ impl std::fmt::Display for PaintTransitionError {
             Self::Gradient(error) => error.fmt(f),
             Self::Image(error) => error.fmt(f),
             Self::Noise(error) => error.fmt(f),
+            Self::Hatch(error) => error.fmt(f),
         }
     }
 }
@@ -50,11 +52,18 @@ impl From<NoisePaintError> for PaintTransitionError {
     }
 }
 
+impl From<HatchPaintError> for PaintTransitionError {
+    fn from(error: HatchPaintError) -> Self {
+        Self::Hatch(error)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum PreparedPaintTransition {
     Gradient([Arc<LinearGradient>; 2]),
     Radial([Arc<RadialGradient>; 2]),
     Noise([Arc<NoisePaint>; 2]),
+    Hatch([Arc<HatchPaint>; 2]),
     Image(Box<[ImagePaint; 2]>),
 }
 
@@ -112,6 +121,35 @@ impl PaintTransition {
                 to,
                 to_opacity,
                 prepared,
+            });
+        }
+        let hatch = |paint: &Option<SemanticPaint>| match paint {
+            Some(SemanticPaint::Hatch(value)) => Some(value.clone()),
+            _ => None,
+        };
+        if let Some(template) = hatch(&from).or_else(|| hatch(&to)) {
+            let promote = |paint: &Option<SemanticPaint>| match paint {
+                Some(SemanticPaint::Hatch(value)) => Ok(value.clone()),
+                Some(SemanticPaint::Solid(color)) => Ok(Arc::new(HatchPaint::new(
+                    *color,
+                    *color,
+                    template.options(),
+                )?)),
+                None => Ok(Arc::new(HatchPaint::new(
+                    Color::TRANSPARENT,
+                    Color::TRANSPARENT,
+                    template.options(),
+                )?)),
+                _ => Err(PaintTransitionError::UnsupportedPaint),
+            };
+            let values = [promote(&from)?, promote(&to)?];
+            values[0].interpolate(&values[1], 0.0)?;
+            return Ok(Self {
+                from,
+                from_opacity,
+                to,
+                to_opacity,
+                prepared: PreparedPaintTransition::Hatch(values),
             });
         }
         let noise = |paint: &Option<SemanticPaint>| match paint {
@@ -182,7 +220,8 @@ impl PaintTransition {
                     Some(
                         SemanticPaint::Image(_)
                         | SemanticPaint::RadialGradient(_)
-                        | SemanticPaint::Noise(_),
+                        | SemanticPaint::Noise(_)
+                        | SemanticPaint::Hatch(_),
                     ) => Err(PaintTransitionError::UnsupportedPaint),
                     Some(SemanticPaint::Solid(_)) | None => {
                         let color = match paint {
@@ -221,7 +260,8 @@ impl PaintTransition {
             PreparedPaintTransition::Gradient(gradients) => Some(gradients),
             PreparedPaintTransition::Image(_)
             | PreparedPaintTransition::Radial(_)
-            | PreparedPaintTransition::Noise(_) => None,
+            | PreparedPaintTransition::Noise(_)
+            | PreparedPaintTransition::Hatch(_) => None,
         }
     }
 
@@ -230,7 +270,8 @@ impl PaintTransition {
             PreparedPaintTransition::Radial(gradients) => Some(gradients),
             PreparedPaintTransition::Gradient(_)
             | PreparedPaintTransition::Image(_)
-            | PreparedPaintTransition::Noise(_) => None,
+            | PreparedPaintTransition::Noise(_)
+            | PreparedPaintTransition::Hatch(_) => None,
         }
     }
 
@@ -241,12 +282,20 @@ impl PaintTransition {
         }
     }
 
+    pub fn hatches(&self) -> Option<&[Arc<HatchPaint>; 2]> {
+        match &self.prepared {
+            PreparedPaintTransition::Hatch(values) => Some(values),
+            _ => None,
+        }
+    }
+
     pub fn images(&self) -> Option<&[ImagePaint; 2]> {
         match &self.prepared {
             PreparedPaintTransition::Image(images) => Some(images),
             PreparedPaintTransition::Gradient(_)
             | PreparedPaintTransition::Radial(_)
-            | PreparedPaintTransition::Noise(_) => None,
+            | PreparedPaintTransition::Noise(_)
+            | PreparedPaintTransition::Hatch(_) => None,
         }
     }
 
@@ -315,6 +364,12 @@ impl PaintTransition {
             PreparedPaintTransition::Noise([from, to]) => {
                 return Ok((
                     Some(SemanticPaint::Noise(Arc::new(from.interpolate(to, alpha)?))),
+                    opacity,
+                ));
+            }
+            PreparedPaintTransition::Hatch([from, to]) => {
+                return Ok((
+                    Some(SemanticPaint::Hatch(Arc::new(from.interpolate(to, alpha)?))),
                     opacity,
                 ));
             }

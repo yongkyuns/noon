@@ -185,6 +185,16 @@ impl InstalledRetainedExecutionMirror {
         if snapshot && validate_snapshot_resources {
             self.validate_snapshot_resources(&delta)?;
         }
+        let stale = self.wire.session() == Some(delta.session)
+            && self
+                .wire
+                .applied_sequence()
+                .is_some_and(|sequence| delta.sequence <= sequence);
+        if validate_snapshot_resources && !stale {
+            validate_hatch_geometry(&delta, |handle| {
+                self.resources.geometry_for_transport(handle)
+            })?;
+        }
 
         let (outcome, changes) = self.wire.apply(delta)?;
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
@@ -275,6 +285,13 @@ impl InstalledRetainedExecutionMirror {
                 .into());
             }
         }
+        // Validate the changed rows against the existing plus staged immutable
+        // geometry closure before publishing any resource or worker state.
+        validate_hatch_geometry(&delta.retained, |handle| {
+            additions
+                .geometry_for_transport(handle)
+                .or_else(|| self.resources.geometry_for_transport(handle))
+        })?;
         self.validate_render_geometry_replacements(
             &delta.retained,
             additions.render_geometry_updates(),
@@ -680,6 +697,43 @@ impl InstalledRetainedExecutionMirror {
     }
 }
 
+fn validate_hatch_geometry<'a>(
+    delta: &RetainedExecutionDeltaEnvelope,
+    mut lookup: impl FnMut(
+        crate::TransportGeometryResourceHandle,
+    ) -> Option<&'a noon_core::GeometryResource>,
+) -> Result<(), InstalledExecutionError> {
+    for object in &delta.objects {
+        let Some(hatch) = object
+            .fill_paint
+            .as_deref()
+            .and_then(noon_core::SemanticPaint::as_hatch)
+        else {
+            continue;
+        };
+        if let TransportObjectContent::Geometry {
+            resource: Some(handle),
+            ..
+        } = object.content
+        {
+            let resource = lookup(handle).ok_or(
+                RetainedExecutionTransportError::UnknownGeometryResource(handle),
+            )?;
+            let noon_core::GeometryResource::VectorPath(path) = resource else {
+                return Err(
+                    RetainedExecutionTransportError::InvalidObjectPatch(object.slot).into(),
+                );
+            };
+            let bounds = path.conservative_bounds().ok_or(
+                RetainedExecutionTransportError::InvalidObjectPatch(object.slot),
+            )?;
+            noon_compile::validate_hatch_bounds(hatch, bounds)
+                .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstalledExecutionError {
     Resource(RetainedResourceTransportError),
@@ -736,7 +790,7 @@ impl From<serde_json::Error> for InstalledExecutionError {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, GeometryRef, MeshResource, ObjectId,
+        Color, FamilyAnimationMode, FamilyAnimationState, GeometryRef, MeshResource, ObjectId,
         RateFunction, Transform2D, Vec2, VectorPath,
     };
 
@@ -767,6 +821,137 @@ mod tests {
             .unwrap();
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
             .unwrap()
+    }
+
+    #[test]
+    fn hatch_external_bounds_reject_before_worker_publication_and_recover_same_sequence() {
+        let mut scene = noon::Scene::new();
+        let mut source = scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-2.0, -1.0))
+                    .line_to(Vec2::new(2.0, -1.0))
+                    .line_to(Vec2::new(2.0, 1.0))
+                    .line_to(Vec2::new(-2.0, 1.0))
+                    .close(),
+                Default::default(),
+            )
+            .unwrap();
+        source
+            .set_fill_hatch(
+                noon::HatchPaint::new(Color::RED, Color::BLUE, noon::HatchPaintOptions::default())
+                    .unwrap(),
+                Some(0.7),
+            )
+            .unwrap();
+        scene.add(&source).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+                .unwrap();
+        let mut snapshot: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+        // Ordinary lowering may inline its resolved path. Explicitly exercise
+        // the versioned external-geometry form of the worker boundary as well.
+        let mut geometries = noon_core::GeometryResourceArena::new();
+        let path = |extent: f32| {
+            VectorPath::new()
+                .move_to(Vec2::new(-extent, -1.0))
+                .line_to(Vec2::new(extent, -1.0))
+                .line_to(Vec2::new(extent, 1.0))
+                .line_to(Vec2::new(-extent, 1.0))
+                .close()
+        };
+        let handle = geometries.insert_path(path(2.0));
+        let bundle = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [handle],
+            &noon_core::TextResourceArena::new(),
+            &geometries,
+            &noon_core::FontResourceArena::new(),
+            &crate::RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&bundle.encode_binary().unwrap())
+                .unwrap();
+        snapshot.retained.objects[0].content = TransportObjectContent::Geometry {
+            geometry: GeometryRef::External(handle.id),
+            resource: Some(handle.into()),
+        };
+        assert!(matches!(
+            snapshot.retained.objects[0].content,
+            TransportObjectContent::Geometry {
+                resource: Some(_),
+                ..
+            }
+        ));
+        let invalid = std::sync::Arc::new(noon_core::SemanticPaint::Hatch(std::sync::Arc::new(
+            noon::HatchPaint::new(
+                Color::RED,
+                Color::BLUE,
+                noon::HatchPaintOptions {
+                    spacing: 1e-6,
+                    width: 1e-7,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )));
+        let mut rejected = snapshot.clone();
+        rejected.retained.objects[0].fill_paint = Some(invalid.clone());
+        assert!(mirror.apply_family(rejected).is_err());
+        assert!(mirror.frame().is_none());
+        assert_eq!(mirror.wire.applied_sequence(), None);
+        mirror.apply_family(snapshot.clone()).unwrap();
+        let coherent = mirror.frame().unwrap().clone();
+        let mut next = snapshot;
+        next.retained.snapshot = false;
+        next.retained.sequence = 1;
+        let mut rejected = next.clone();
+        rejected.retained.objects[0].fill_paint = Some(invalid);
+        assert!(mirror.apply_family(rejected.clone()).is_err());
+        assert_eq!(mirror.frame(), Some(&coherent));
+        assert_eq!(mirror.wire.applied_sequence(), Some(0));
+        mirror.apply_family(next.clone()).unwrap();
+        assert_eq!(mirror.wire.applied_sequence(), Some(1));
+        // An old publication may reference obsolete geometry. Its hatch
+        // profile must not be revalidated after the sequence was superseded.
+        assert_eq!(
+            mirror.apply(rejected.retained).unwrap().0,
+            RetainedTransportApplyOutcome::DroppedStale
+        );
+        assert_eq!(mirror.wire.applied_sequence(), Some(1));
+        for (extent, accepted) in [(1_000_000.0, false), (1.5, true)] {
+            let handle = geometries.insert_path(path(extent));
+            let additions = RetainedResourceBundle::capture_additions_with_geometries(
+                [],
+                [handle],
+                &noon_core::TextResourceArena::new(),
+                &geometries,
+                &noon_core::FontResourceArena::new(),
+                &crate::RetainedResourceInventory::default(),
+            )
+            .unwrap();
+            let mut candidate = next.clone();
+            candidate.retained.sequence = 2;
+            candidate.retained.objects[0].content = TransportObjectContent::Geometry {
+                geometry: GeometryRef::External(handle.id),
+                resource: Some(handle.into()),
+            };
+            candidate.resource_additions = Some(additions);
+            let before = mirror.frame().unwrap().clone();
+            let geometry_count = mirror.resources.geometry_count();
+            if accepted {
+                mirror.apply_family(candidate).unwrap();
+                assert_eq!(mirror.wire.applied_sequence(), Some(2));
+                assert_eq!(mirror.resources.geometry_count(), geometry_count + 1);
+            } else {
+                assert!(mirror.apply_family(candidate).is_err());
+                assert_eq!(mirror.frame(), Some(&before));
+                assert_eq!(mirror.wire.applied_sequence(), Some(1));
+                assert_eq!(mirror.resources.geometry_count(), geometry_count);
+            }
+        }
     }
 
     #[test]

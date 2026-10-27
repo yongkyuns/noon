@@ -1,6 +1,8 @@
 """Immutable paint syntax over shared Rust values and ordinary fill operations."""
 from __future__ import annotations
 
+from math import pi
+
 from _noon_errors import engine_call
 from _noon_effects import _number
 
@@ -26,6 +28,51 @@ class LinearGradient:
         from pyodide.ffi import to_js
         self._definition = engine_call(noonLinearGradient, to_js(coordinates(start)),
                                        to_js(coordinates(end)), to_js(packed))
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+
+class HatchPaint:
+    """Parallel or crossed lines anchored to the object's local origin.
+
+    ``spacing`` and ``width`` are local scene lengths. ``angle`` is the line
+    direction in counterclockwise radians from local +X. ``phase`` advances
+    the two perpendicular line families in periods. ``cross=True`` enables
+    the second family. The default background is transparent.
+
+    Rust validates values and filters the physical pixel footprint. Matching
+    ``cross`` values animate spacing, width, angle, phase and colors through
+    ordinary ``animate.set_fill``. Static hatching owns no playback clock.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, color, background=None, *, spacing=0.25, width=0.04,
+                 angle=pi / 4, phase=(0.0, 0.0), cross=False):
+        from _manim_compat import _as_color
+        from js import noonHatchPaint
+        from pyodide.ffi import to_js
+        if not isinstance(cross, bool):
+            raise TypeError("hatch cross must be a bool")
+        colors = []
+        for value in (color, background):
+            if value is None:
+                colors.extend((0.0, 0.0, 0.0, 0.0))
+            else:
+                c = _as_color("hatch color", value)
+                colors.extend((c.red, c.green, c.blue, c.alpha))
+        if isinstance(phase, (str, bytes)):
+            raise TypeError("hatch phase requires two numbers")
+        phase = tuple(_number(v, "hatch phase") for v in phase)
+        self._definition = engine_call(
+            noonHatchPaint, _number(spacing, "hatch spacing"),
+            _number(width, "hatch width"), _number(angle, "hatch angle"),
+            to_js(phase), cross, to_js(colors),
+        )
 
     def __copy__(self):
         return self
@@ -109,6 +156,11 @@ def set_fill(value, paint, opacity):
             engine_call(handle.setFillImage, paint._definition, opacity)
         else:
             engine_call(context.liveSetFillImage, handle, paint._definition, opacity)
+    elif isinstance(paint, HatchPaint):
+        if context is None:
+            engine_call(handle.setFillHatch, paint._definition, opacity)
+        else:
+            engine_call(context.liveSetFillHatch, handle, paint._definition, opacity)
     elif isinstance(paint, NoisePaint):
         if context is None:
             engine_call(handle.setFillNoise, paint._definition, opacity)

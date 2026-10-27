@@ -1951,6 +1951,7 @@ _PUBLIC_EXPORTS = {
     "LinearGradient": "_noon_paints",
     "RadialGradient": "_noon_paints",
     "NoisePaint": "_noon_paints",
+    "HatchPaint": "_noon_paints",
     "ImagePaint": "_noon_paints",
     "ImageMapping": "_noon_paints",
     "GlowPulse": "_noon_effects",

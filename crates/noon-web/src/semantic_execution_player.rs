@@ -2031,6 +2031,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_fill_hatch(
+        &mut self,
+        mobject: &noon::Mobject,
+        paint: std::sync::Arc<noon::HatchPaint>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_fill_hatch(mobject, paint, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill_noise(
         &mut self,
         mobject: &noon::Mobject,

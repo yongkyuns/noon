@@ -5799,6 +5799,129 @@ mod tests {
         );
     }
     #[test]
+    fn hatch_fill_preflight_resolves_path_bounds_and_keeps_failed_rows_unpublished() {
+        let (mut frame, texts, fonts, mut geometries) = mixed_text_frame();
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-2.0, -1.0))
+            .line_to(Vec2::new(2.0, -1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-2.0, 1.0))
+            .close();
+        let bounds = path.conservative_bounds().unwrap();
+        let geometry = geometries.insert_path(path.clone());
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::External(geometry.id));
+        frame.objects[0].style.fill = Some(Color::WHITE);
+        frame.objects[0].style.stroke = None;
+        let paint = |spacing, width| {
+            Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
+                noon_core::HatchPaint::new(
+                    Color::RED,
+                    Color::rgba(0.0, 0.0, 1.0, 0.0),
+                    noon_core::HatchPaintOptions {
+                        spacing,
+                        width,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )))
+        };
+        let valid = paint(0.25, 0.04);
+        frame.objects[0].fill_paint = Some(valid.clone());
+        let (device, _) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    TextDeviceMetrics::uniform(10.0).unwrap(),
+                )
+                .unwrap();
+            assert!(prepared.images.paints.is_empty());
+            assert_eq!(prepared.geometry.fill_paints.len(), 1);
+            assert_eq!(
+                prepared
+                    .geometry
+                    .fill_paints
+                    .values()
+                    .next()
+                    .unwrap()
+                    .bounds,
+                bounds
+            );
+        }
+        let paints = preparer.geometry.fill_paints.clone();
+        let generation = preparer.images.generation;
+        // Both a finite-but-excessive cell span and a nonrepresentable inverse
+        // spacing must fail before the previous coherent prepared rows change.
+        for invalid in [paint(1e-6, 1e-7), paint(1e-100, 0.0)] {
+            frame.objects[0].fill_paint = Some(invalid);
+            for changes in [FrameChanges::objects(vec![0]), FrameChanges::default()] {
+                assert!(matches!(
+                    preparer.prepare_with_changes(
+                        &device,
+                        &frame,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        TextDeviceMetrics::uniform(10.0).unwrap(),
+                    ),
+                    Err(RetainedPrepareError::Image(
+                        RasterImagePrepareError::InvalidPaint(_)
+                    ))
+                ));
+                assert_eq!(preparer.geometry.fill_paints, paints);
+                assert_eq!(preparer.images.generation, generation);
+            }
+        }
+        frame.objects[0].fill_paint = Some(valid);
+        geometries.remove(geometry.id).unwrap();
+        assert!(preparer
+            .prepare_with_changes(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .is_err());
+        assert_eq!(preparer.geometry.fill_paints, paints);
+        let replacement = geometries.insert_path(path);
+        frame.objects[0].content =
+            ObjectContentRef::Geometry(GeometryRef::External(replacement.id));
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            prepared
+                .geometry
+                .fill_paints
+                .values()
+                .next()
+                .unwrap()
+                .bounds,
+            bounds
+        );
+        assert!(prepared.images.paints.is_empty());
+    }
+
+    #[test]
     fn encoded_frame_keeps_retired_image_and_compacted_paths_alive_until_submit() {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let path = GeometryRef::path(

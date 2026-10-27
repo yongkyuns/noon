@@ -319,11 +319,14 @@ pub use noon_core::{
 pub use noon_core::{
     GradientError, GradientStop, LinearGradient, PaintTransitionError, RadialGradient,
 };
+pub use noon_core::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
 #[cfg(test)]
 mod gradient_authoring_tests;
+#[cfg(test)]
+mod hatch_authoring_tests;
 #[cfg(test)]
 mod image_paint_authoring_tests;
 #[cfg(test)]

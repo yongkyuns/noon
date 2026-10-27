@@ -23,8 +23,8 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V25 binds composed rows to installed immutable source plans at the genuine
-// execution/render worker boundary. Older envelopes reject.
+// V26 carries ordered effects, composed source plans, seeded masks and checked
+// HatchPaint at the genuine execution/render worker boundary. Older envelopes reject.
 pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 26;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2104,6 +2104,39 @@ fn validate_object_fields(
     composed::validate_owner_fields(object)?;
     noon_compile::validate_fill_paint(object.object, object.fill_paint.as_deref())
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
+    if let Some(hatch) = object
+        .fill_paint
+        .as_deref()
+        .and_then(noon_core::SemanticPaint::as_hatch)
+    {
+        let invalid = || RetainedExecutionTransportError::InvalidObjectPatch(object.slot);
+        if object.spatial.is_some()
+            || object.reveal != 1.0
+            || object.morph != 0.0
+            || object.render_geometry.is_some()
+            || object.render_geometry_resource.is_some()
+        {
+            return Err(invalid());
+        }
+        match &object.content {
+            TransportObjectContent::Geometry { geometry, .. } => match geometry {
+                GeometryRef::Circle { .. }
+                | GeometryRef::Rectangle { .. }
+                | GeometryRef::VectorPath(_) => {
+                    noon_compile::validate_hatch_bounds(
+                        hatch,
+                        geometry.local_bounds().ok_or_else(invalid)?,
+                    )
+                    .map_err(|_| invalid())?;
+                }
+                // The installed-resource boundary validates these bounds before
+                // publishing the frame or consuming its sequence.
+                GeometryRef::External(_) => {}
+                GeometryRef::Line { .. } => return Err(invalid()),
+            },
+            _ => return Err(invalid()),
+        }
+    }
     if object.effects.len() > noon_core::MAX_EFFECT_STACK_LEN
         || object.effects.iter().enumerate().any(|(index, effect)| {
             effect.to_compiled().is_none()
@@ -2687,6 +2720,89 @@ mod tests {
             mirror.frame().unwrap().objects[0].effects,
             frame.objects[0].effects
         );
+    }
+
+    #[test]
+    fn hatch_worker_value_roundtrips_and_rejects_bad_profiles_without_consuming_sequence() {
+        let paint = Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
+            noon_core::HatchPaint::new(
+                Color::RED,
+                Color::rgba(0.0, 0.0, 1.0, 0.0),
+                noon_core::HatchPaintOptions {
+                    phase: [-0.173, 3.231],
+                    cross: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )));
+        let mut frame = mixed_frame();
+        frame.objects[0].fill_paint = Some(paint.clone());
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert!(value["objects"][0]["fill_paint"]["hatch"].is_object());
+        for (field, bad) in [
+            ("width", serde_json::json!(2.0)),
+            ("spacing", serde_json::json!(0.0)),
+            ("cross", serde_json::json!(1)),
+            ("unknown", serde_json::json!(true)),
+        ] {
+            let mut rejected = value.clone();
+            rejected["objects"][0]["fill_paint"]["hatch"]["options"][field] = bad;
+            assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(rejected).is_err());
+        }
+        let mut mirror = test_mirror();
+        let mut obsolete = snapshot.clone();
+        obsolete.protocol_version = 23;
+        assert_eq!(
+            mirror.apply(obsolete),
+            Err(RetainedExecutionTransportError::UnsupportedVersion(23))
+        );
+        assert!(mirror.frame().is_none());
+        mirror
+            .apply(serde_json::from_value(value).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].fill_paint.as_ref(),
+            Some(&paint)
+        );
+        frame.objects[0].fill_paint = None;
+        let delta = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut invalid = delta.clone();
+        invalid.objects[0].fill_paint = Some(Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
+            noon_core::HatchPaint::new(
+                Color::RED,
+                Color::BLUE,
+                noon_core::HatchPaintOptions {
+                    spacing: 1e-6,
+                    width: 1e-7,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        ))));
+        let coherent = mirror.frame().unwrap().clone();
+        assert!(mirror.apply(invalid).is_err());
+        assert_eq!(mirror.frame(), Some(&coherent));
+        assert_eq!(mirror.applied_sequence(), Some(0));
+        mirror.apply(delta).unwrap();
+        assert!(mirror.frame().unwrap().objects[0].fill_paint.is_none());
+        assert_eq!(mirror.applied_sequence(), Some(1));
     }
 
     #[test]

@@ -84,6 +84,60 @@ fn noise_field(point: vec2<f32>) -> f32 {
     return mix(value, 0.5, fade);
 }
 
+// Exact periodic-band overlap for an interval shorter than one cell. Working
+// in units of that interval keeps a tiny footprint meaningful at a band edge.
+fn hatch_partial_band(center: f32, width: f32, duty: f32) -> f32 {
+    let wrapped = center - floor(center + 0.5);
+    var coverage = 0.0;
+    for (var i = -1; i <= 1; i += 1) {
+        let offset = f32(i) - wrapped;
+        let hi = clamp((offset + duty * 0.5) / width + 0.5, 0.0, 1.0);
+        let lo = clamp((offset - duty * 0.5) / width + 0.5, 0.0, 1.0);
+        coverage += hi - lo;
+    }
+    return clamp(coverage, 0.0, 1.0);
+}
+
+fn hatch_band(center: f32, width: f32, duty: f32) -> f32 {
+    if duty <= 0.0 { return 0.0; }
+    if duty >= 1.0 { return 1.0; }
+    if width >= 256.0 { return duty; }
+    if width <= 0.0 {
+        return select(0.0, 1.0, fract(center + duty * 0.5) < duty);
+    }
+    if width < 1.0 { return hatch_partial_band(center, width, duty); }
+    let whole = floor(width);
+    let remainder = width - whole;
+    if remainder == 0.0 { return duty; }
+    // Complete periods contribute exactly their duty. Only the parity of that
+    // count changes the center of the remaining interval.
+    let residual_center = center - f32(u32(whole) & 1u) * 0.5;
+    let residual = hatch_partial_band(residual_center, remainder, duty);
+    return clamp((whole * duty + remainder * residual) / width, 0.0, 1.0);
+}
+
+fn hatch_field(local: vec2<f32>) -> f32 {
+    let pixel = vec2(2.0) / (camera.viewport_size * camera.clip_scale);
+    let c = paint.rotation.x;
+    let s = paint.rotation.y;
+    let dx = vec2(c, -s) * pixel.x / paint.transform.zw;
+    let dy = vec2(s, c) * pixel.y / paint.transform.zw;
+    // The reconstruction domain is the physical pixel's axis-aligned box in
+    // the perpendicular line coordinates, including inverse object pose.
+    let width = vec2(
+        abs(dot(paint.image_u.xy, dx)) + abs(dot(paint.image_u.xy, dy)),
+        abs(dot(paint.image_v.xy, dx)) + abs(dot(paint.image_v.xy, dy)),
+    );
+    // Reduce the local coordinate before adding phase, so a large integral
+    // cell does not erase the independently authored subcell displacement.
+    let q = fract(vec2(dot(paint.image_u.xy, local), dot(paint.image_v.xy, local)))
+        + vec2(paint.image_u.z, paint.image_v.z);
+    let first = hatch_band(q.x, width.x, paint.image_u.w);
+    if paint.metadata.z == 0u { return first; }
+    let second = hatch_band(q.y, width.y, paint.image_u.w);
+    return first + second - first * second;
+}
+
 // Return straight encoded-sRGB for the shared source quantizer. Interpolation
 // itself is premultiplied so invisible RGB cannot leak into visible samples.
 fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
@@ -96,7 +150,9 @@ fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
         return vec4(color.rgb / color.a, color.a * carrier.a);
     }
     var t: f32;
-    if paint.metadata.y == 3u {
+    if paint.metadata.y == 4u {
+        t = hatch_field(local);
+    } else if paint.metadata.y == 3u {
         t = noise_field(point);
     } else if paint.metadata.y == 2u {
         let delta = abs(point - paint.endpoints.xy);

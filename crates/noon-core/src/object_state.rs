@@ -7,6 +7,7 @@ pub use shadow::Shadow;
 pub(crate) mod effect_parameters;
 mod glow;
 mod gradient;
+mod hatch_paint;
 mod linear_gradient;
 mod noise_dissolve;
 mod noise_paint;
@@ -20,6 +21,7 @@ pub use effect_parameters::{
 };
 pub use glow::{Glow, GlowSource};
 pub use gradient::{GradientError, GradientStop};
+pub use hatch_paint::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use linear_gradient::LinearGradient;
 pub use noise_dissolve::{DissolveDirection, DissolveStyle, NoiseDissolve, NoiseDissolveError};
 pub use noise_paint::{NoisePaint, NoisePaintError};

@@ -882,6 +882,27 @@ pub async fn create_direct_image_fill_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+#[wasm_bindgen(js_name = createDirectHatchPaintSmokeRenderer)]
+pub async fn create_direct_hatch_paint_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::hatch_paint::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[wasm_bindgen(js_name = createDirectHatchPaintProfileSmokeRenderer)]
+pub async fn create_direct_hatch_paint_profile_smoke_renderer(
+    canvas: OffscreenCanvas,
+    profile: u32,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let scene = noon::example_scenes::hatch_paint::profile_scene(profile).map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(
+        canvas,
+        scene.into_execution().map_err(js_error)?,
+    )
+    .await
+}
+
 #[wasm_bindgen(js_name = createDirectNoisePaintSmokeRenderer)]
 pub async fn create_direct_noise_paint_smoke_renderer(
     canvas: OffscreenCanvas,
