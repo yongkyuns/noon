@@ -30,7 +30,12 @@ pub(super) struct ShadowScope {
     invalidated: bool,
 }
 impl ShadowScope {
-    #[cfg(test)]
+    pub fn scratch_bytes(&self) -> u64 {
+        self.gaussian.scratch_bytes()
+            + self.resources.as_ref().map_or(0, |r| {
+                u64::from(r.output.width()) * u64::from(r.output.height()) * 4
+            })
+    }
     pub fn output(&self) -> Option<&wgpu::Texture> {
         self.resources.as_ref().map(|r| &r.output)
     }

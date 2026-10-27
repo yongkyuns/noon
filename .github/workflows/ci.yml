@@ -230,6 +230,8 @@ jobs:
           cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
       - name: Qualify RGBA Gaussian pixels and retained raster resources
         run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
+      - name: Qualify ordered effect composition against independent RGBA references
+        run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
