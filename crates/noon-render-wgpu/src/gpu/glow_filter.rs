@@ -172,6 +172,9 @@ pub struct EffectCaptureTile {
 pub(super) struct CaptureDemand {
     pub required_by_parent: bool,
     pub isolate: bool,
+    /// A composed ancestor needs this scope's original coverage before its
+    /// authored paint filters, with the scope opacity applied by placement.
+    pub original_by_parent: bool,
 }
 
 impl EffectCaptureTile {
@@ -237,6 +240,7 @@ impl EffectCaptureTile {
         let CaptureDemand {
             required_by_parent,
             isolate,
+            original_by_parent,
         } = demand;
         if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
@@ -266,7 +270,7 @@ impl EffectCaptureTile {
         let mut support_radius = 0_u32;
         let mut active = false;
         let mut cost_per_pixel = 4_u64; // one RGBA8 source
-        let mut silhouette = false;
+        let mut silhouette = original_by_parent;
         for &definition in definitions {
             let value = EffectCaptureParameters {
                 definition,
@@ -297,7 +301,7 @@ impl EffectCaptureTile {
             }
         }
         cost_per_pixel += if silhouette { 4 } else { 0 };
-        if !isolate && (!active || parameters.scope_opacity == 0.0) {
+        if !isolate && !original_by_parent && (!active || parameters.scope_opacity == 0.0) {
             return Ok(None);
         }
         let mut start = [0_i64; 2];

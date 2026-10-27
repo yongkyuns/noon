@@ -80,9 +80,7 @@ pub(super) struct PreparedSource {
 }
 
 impl PreparedSource {
-    /// Members must be a unique contiguous painter interval. Each divisor removes
-    /// only the opacity owned by the final capture placement; a composed scope
-    /// passes one to retain each child's own opacity inside its source image.
+    #[cfg(test)]
     pub(super) fn prepare(
         frame: &PreparedRetainedGpuFrame<'_>,
         objects: &[(noon_core::ObjectId, f32)],
@@ -92,6 +90,11 @@ impl PreparedSource {
         Self::prepare_with_replacements(frame, objects, silhouette, uniform_alignment, &[])
     }
 
+    /// Members must be a unique contiguous painter interval. Each divisor removes
+    /// only the opacity owned by the final capture placement; a composed scope
+    /// passes one to retain each child's own opacity inside its source image.
+    /// Replacement images must already represent the requested painted/original
+    /// stream, including child scope opacity exactly once.
     pub(super) fn prepare_with_replacements(
         frame: &PreparedRetainedGpuFrame<'_>,
         objects: &[(noon_core::ObjectId, f32)],
@@ -136,19 +139,17 @@ impl PreparedSource {
         let mut replacements = replacements.iter().peekable();
         let mut skip_until = 0;
         for (index, &(object, opacity)) in objects.iter().enumerate() {
-            if !silhouette {
-                if index < skip_until {
-                    continue;
-                }
-                if replacements
-                    .peek()
-                    .is_some_and(|entry| entry.members.start == index)
-                {
-                    let replacement = replacements.next()?;
-                    source.push_filtered(&replacement.capture, uniform_alignment)?;
-                    skip_until = replacement.members.end;
-                    continue;
-                }
+            if index < skip_until {
+                continue;
+            }
+            if replacements
+                .peek()
+                .is_some_and(|entry| entry.members.start == index)
+            {
+                let replacement = replacements.next()?;
+                source.push_filtered(&replacement.capture, uniform_alignment)?;
+                skip_until = replacement.members.end;
+                continue;
             }
             for item in frame.capture_items(object)? {
                 match item {

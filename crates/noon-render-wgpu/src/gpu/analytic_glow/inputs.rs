@@ -1,4 +1,4 @@
-//! Borrow already filtered child images as ordinary parent-capture draws.
+//! Borrow painted or original child images as ordinary parent-capture draws.
 use super::super::source_capture::{FilteredCapture, SourceReplacement};
 use super::*;
 
@@ -9,6 +9,17 @@ impl GpuRenderer {
                 && scope.camera == self.camera
                 && scope.viewport == self.viewport_size
         })
+    }
+
+    pub(in crate::gpu) fn retained_original_is_ready(
+        &self,
+        index: usize,
+        object: ObjectId,
+    ) -> bool {
+        self.retained_input_is_ready(index, object)
+            && self
+                .retained_input(index, object)
+                .is_some_and(|scope| scope.silhouette.is_some())
     }
 
     fn retained_input(&self, index: usize, object: ObjectId) -> Option<&ResidentEffect> {
@@ -24,6 +35,7 @@ impl GpuRenderer {
         &self,
         index: usize,
         object: ObjectId,
+        original: bool,
     ) -> Result<Option<FilteredCapture>, EffectPrepareError> {
         let Some(scope) = self.retained_input(index, object) else {
             return Ok(None);
@@ -31,11 +43,13 @@ impl GpuRenderer {
         if scope.camera != self.camera || scope.viewport != self.viewport_size {
             return Err(EffectPrepareError::PublicationMismatch);
         }
-        let texture = scope
-            .placement_output
-            .as_ref()
-            .ok_or(EffectPrepareError::PublicationMismatch)?
-            .clone();
+        let texture = if original {
+            scope.silhouette.as_ref().map(|image| &image.texture)
+        } else {
+            scope.placement_output.as_ref()
+        }
+        .ok_or(EffectPrepareError::PublicationMismatch)?
+        .clone();
         let origin = scope.tile.origin;
         let size = scope.tile.size;
         let x = |pixel: f64| {
@@ -50,16 +64,28 @@ impl GpuRenderer {
                     * f64::from(self.camera.world_size.y)
                     / f64::from(self.viewport_size[1])) as f32
         };
-        let bounds = noon_core::Rect::new(
-            Vec2::new(
-                x(scope.contribution_bounds.min[0]),
-                y(scope.contribution_bounds.max[1]),
-            ),
-            Vec2::new(
-                x(scope.contribution_bounds.max[0]),
-                y(scope.contribution_bounds.min[1]),
-            ),
-        );
+        let contribution = if original {
+            scope.original_bounds
+        } else {
+            scope.contribution_bounds
+        };
+        let bounds = if original {
+            match &scope.effective {
+                SourceInstance::Draws {
+                    silhouette: Some(source),
+                    ..
+                } => source.bounds,
+                _ => None,
+            }
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            noon_core::Rect::new(
+                Vec2::new(x(contribution.min[0]), y(contribution.max[1])),
+                Vec2::new(x(contribution.max[0]), y(contribution.min[1])),
+            )
+        });
         Ok(Some(FilteredCapture {
             object,
             texture,
@@ -76,6 +102,7 @@ impl GpuRenderer {
         prepared: &super::super::retained_text::PreparedRetainedGpuFrame<'_>,
         owner: usize,
         members: &[ObjectId],
+        original: bool,
     ) -> Result<Vec<SourceReplacement>, EffectPrepareError> {
         let mut replacements = Vec::new();
         let mut at = 0;
@@ -93,9 +120,16 @@ impl GpuRenderer {
                 if first != object || count > members.len() - at {
                     return Err(EffectPrepareError::PublicationMismatch);
                 }
-                (self.filtered_input(index, owner)?, count)
+                (self.filtered_input(index, owner, original)?, count)
             } else {
-                (self.filtered_input(index, object)?, 1)
+                (
+                    if original {
+                        None
+                    } else {
+                        self.filtered_input(index, object, false)?
+                    },
+                    1,
+                )
             };
             if let Some(capture) = capture {
                 replacements.push(SourceReplacement {

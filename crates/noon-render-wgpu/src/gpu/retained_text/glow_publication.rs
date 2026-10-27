@@ -88,6 +88,33 @@ impl RetainedEffectPublication {
         Ok(active && opacity > 0.0)
     }
 
+    fn has_original_mask(frame: &noon_runtime::FrameState, index: usize) -> bool {
+        frame.objects[index].effects.as_ref().is_some_and(|stack| {
+            stack.definitions().iter().any(|definition| {
+                definition
+                    .as_glow()
+                    .is_some_and(|glow| glow.source() == noon_core::GlowSource::Silhouette)
+            })
+        })
+    }
+
+    fn original_by_parent(
+        &self,
+        frame: &noon_runtime::FrameState,
+        index: usize,
+        view: (Camera2D, [u32; 2]),
+    ) -> Result<bool, EffectPrepareError> {
+        if !self.composed.scopes.contains_key(&index) {
+            return Ok(false);
+        }
+        for parent in self.composed.ancestors(index) {
+            if Self::has_original_mask(frame, parent) && Self::active_source(frame, parent, view)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn required_by_parent(
         &self,
         frame: &noon_runtime::FrameState,
@@ -451,7 +478,9 @@ impl GpuRenderer {
             };
             if !RetainedEffectPublication::active_source(frame, index, view)?
                 || (!self.retained_effects.capture_dirty.contains(&index)
-                    && self.retained_input_is_ready(index, scope.owner))
+                    && self.retained_input_is_ready(index, scope.owner)
+                    && (!RetainedEffectPublication::has_original_mask(frame, index)
+                        || self.retained_original_is_ready(index, scope.owner)))
             {
                 continue;
             }
@@ -470,8 +499,12 @@ impl GpuRenderer {
         }
         for index in demanded {
             if let Some(&object) = self.retained_effects.sources.get(&index) {
-                if !self.retained_input_is_ready(index, object)
-                    && RetainedEffectPublication::active_source(frame, index, view)?
+                let original = self
+                    .retained_effects
+                    .original_by_parent(frame, index, view)?;
+                if (!self.retained_input_is_ready(index, object)
+                    || (original && !self.retained_original_is_ready(index, object)))
+                    && (original || RetainedEffectPublication::active_source(frame, index, view)?)
                 {
                     self.retained_effects.dirty.insert(index);
                 }
@@ -641,9 +674,15 @@ impl GpuRenderer {
         });
         for (index, mapped) in sources {
             if let Some((object, scratch, definitions, observation)) = mapped {
-                let required_by_parent = self
-                    .retained_effects
-                    .required_by_parent(frame, index, view)?;
+                let demand = super::super::glow_filter::CaptureDemand {
+                    required_by_parent: self
+                        .retained_effects
+                        .required_by_parent(frame, index, view)?,
+                    original_by_parent: self
+                        .retained_effects
+                        .original_by_parent(frame, index, view)?,
+                    isolate: false,
+                };
                 let packed = observation
                     .as_ref()
                     .map_or(object, |observation| observation.object);
@@ -660,7 +699,7 @@ impl GpuRenderer {
                         &prepared.geometry,
                         request,
                         observation,
-                        required_by_parent,
+                        demand,
                     )?
                 } else {
                     self.prepare_draw_source_effect(
@@ -678,7 +717,7 @@ impl GpuRenderer {
                             .get(&index)
                             .map(|scope| scope.source.clone()),
                         self.retained_effects.capture_dirty.contains(&index),
-                        required_by_parent,
+                        demand,
                     )?
                 };
                 stats.accumulate(value);

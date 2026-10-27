@@ -100,6 +100,14 @@ impl SourceInstance {
             Self::Draws { source, .. } => &source.bytes,
         }
     }
+    fn silhouette_bytes_len(&self) -> usize {
+        match self {
+            Self::Draws { silhouette, .. } => {
+                silhouette.as_ref().map_or(0, |source| source.bytes.len())
+            }
+            _ => self.bytes().len(),
+        }
+    }
     fn style_mut(&mut self) -> &mut PackedStyle {
         match self {
             Self::Circle(value) => &mut value.style,
@@ -168,6 +176,7 @@ struct ResidentEffect {
     // Finite contribution before capacity rounding/high-water reuse. Ancestor
     // bounds must never feed retained transparent storage back into capture size.
     contribution_bounds: EffectPixelBounds,
+    original_bounds: EffectPixelBounds,
     camera: Camera2D,
     viewport: [u32; 2],
     effective: SourceInstance,
@@ -327,7 +336,7 @@ impl GpuRenderer {
             prepared,
             request,
             observation,
-            false,
+            super::glow_filter::CaptureDemand::default(),
         )
     }
 
@@ -340,7 +349,7 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         request: EffectCaptureRequest<'_>,
         observation: crate::PreparedGeometryObjectObservation,
-        required_by_parent: bool,
+        demand: super::glow_filter::CaptureDemand,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
@@ -406,8 +415,7 @@ impl GpuRenderer {
             bounds,
             observation.style.opacity,
             None,
-            required_by_parent,
-            false,
+            demand,
         )
     }
 
@@ -424,7 +432,7 @@ impl GpuRenderer {
         opacity: f32,
         composed: Option<Arc<noon_core::ComposedSource>>,
         recapture: bool,
-        required_by_parent: bool,
+        demand: super::glow_filter::CaptureDemand,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         if !matches!(
             self.target_format,
@@ -432,11 +440,24 @@ impl GpuRenderer {
         ) {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
-        let needs_silhouette = request.definitions.iter().any(|definition| {
-            definition
-                .as_glow()
-                .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
-        });
+        let mut own_capture = composed.is_some() && opacity != 1.0;
+        for &definition in request.definitions {
+            let parameters = crate::EffectCaptureParameters {
+                definition,
+                output_height: self.viewport_size[1],
+                world_view_height: f64::from(self.camera.world_size.y),
+                scope_opacity: opacity,
+            };
+            own_capture |=
+                opacity > 0.0 && !parameters.is_neutral_at_sigma(parameters.sigma_pixels()?);
+        }
+        let needs_silhouette = demand.original_by_parent
+            || (own_capture
+                && request.definitions.iter().any(|definition| {
+                    definition
+                        .as_glow()
+                        .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
+                }));
         let cached = composed.as_ref().filter(|_| !recapture).and_then(|_| {
             self.effect_captures
                 .as_deref()?
@@ -447,7 +468,10 @@ impl GpuRenderer {
                     SourceInstance::Draws { source, silhouette }
                         if !needs_silhouette || silhouette.is_some() =>
                     {
-                        Some((source.clone(), silhouette.clone()))
+                        Some((
+                            source.clone(),
+                            silhouette.clone().filter(|_| needs_silhouette),
+                        ))
                     }
                     _ => None,
                 })
@@ -469,6 +493,7 @@ impl GpuRenderer {
                     prepared,
                     request.object_index,
                     composed.members(),
+                    false,
                 )?
             } else {
                 Vec::new()
@@ -483,11 +508,21 @@ impl GpuRenderer {
             .ok_or(EffectPrepareError::UnsupportedCapture)?;
             let silhouette = if needs_silhouette {
                 Some(
-                    super::source_capture::PreparedSource::prepare(
+                    super::source_capture::PreparedSource::prepare_with_replacements(
                         prepared,
                         members,
                         true,
                         device.limits().min_uniform_buffer_offset_alignment as usize,
+                        &if let Some(composed) = &composed {
+                            self.prepare_composed_replacements(
+                                prepared,
+                                request.object_index,
+                                composed.members(),
+                                true,
+                            )?
+                        } else {
+                            Vec::new()
+                        },
                     )
                     .ok_or(EffectPrepareError::UnsupportedCapture)?,
                 )
@@ -544,8 +579,10 @@ impl GpuRenderer {
             bounds,
             opacity,
             Some(text),
-            required_by_parent,
-            composed.is_some() && opacity != 1.0,
+            super::glow_filter::CaptureDemand {
+                isolate: composed.is_some() && opacity != 1.0,
+                ..demand
+            },
         )
     }
 
@@ -563,8 +600,7 @@ impl GpuRenderer {
         bounds: EffectPixelBounds,
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
-        required_by_parent: bool,
-        isolate: bool,
+        demand: super::glow_filter::CaptureDemand,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let parameters = EffectStackParameters {
             output_height: self.viewport_size[1],
@@ -580,10 +616,7 @@ impl GpuRenderer {
             parameters,
             device.limits().max_texture_dimension_2d,
             request.texture_budget_bytes,
-            super::glow_filter::CaptureDemand {
-                required_by_parent,
-                isolate,
-            },
+            demand,
         )?;
         let Some(mut tile) = tile else {
             // Retain warmed storage for neutral fades; exact ordinary submission
@@ -719,11 +752,12 @@ impl GpuRenderer {
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
         } // apply final scope opacity once
-        let needs_silhouette = request.definitions.iter().any(|definition| {
-            definition
-                .as_glow()
-                .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
-        });
+        let needs_silhouette = demand.original_by_parent
+            || request.definitions.iter().any(|definition| {
+                definition
+                    .as_glow()
+                    .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
+            });
         let capture_camera = tile_camera(self.camera, self.viewport_size, tile)?;
         let camera_uniform = capture_camera.uniform(tile.size);
         let placement = Placement {
@@ -744,6 +778,10 @@ impl GpuRenderer {
                     || s.tile.size != tile.size
                     || s.silhouette.is_some() != needs_silhouette
                     || s.source_buffer.size() < source_instance.bytes().len() as u64
+                    || (needs_silhouette
+                        && s.silhouette_buffer.as_ref().is_none_or(|buffer| {
+                            buffer.size() < source_instance.silhouette_bytes_len() as u64
+                        }))
             });
             let mut stats = EffectCaptureStats::default();
             if replace {
@@ -752,7 +790,7 @@ impl GpuRenderer {
                     .then(|| CaptureImage::new(device, self.target_format, tile.size));
                 let source_buffer = instance_buffer(device, source_instance.bytes().len());
                 let silhouette_buffer = needs_silhouette
-                    .then(|| instance_buffer(device, source_instance.bytes().len()));
+                    .then(|| instance_buffer(device, source_instance.silhouette_bytes_len()));
                 let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Noon local glow camera"),
                     size: size_of::<CameraUniform>() as u64,
@@ -779,6 +817,7 @@ impl GpuRenderer {
                         object,
                         tile,
                         contribution_bounds,
+                        original_bounds: bounds,
                         camera: self.camera,
                         viewport: self.viewport_size,
                         effective: effective.clone(),
@@ -837,6 +876,7 @@ impl GpuRenderer {
                 glows.scopes.remove(&previous_key);
             }
             let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
+            scope.original_bounds = bounds;
             let source_changed = scope.invalidated
                 || !scope.source_instance.same_source(&source_instance)
                 || scope.tile.origin != tile.origin

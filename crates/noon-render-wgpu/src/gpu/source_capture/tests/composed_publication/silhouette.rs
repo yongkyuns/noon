@@ -19,13 +19,34 @@ fn glow(source: GlowSource, intensity: f64) -> Arc<CompiledEffectStack> {
     )
 }
 
-fn reference(images: &[Vec<u8>; 2], silhouette: bool, intensity: f64) -> Vec<u8> {
+fn reference(
+    images: &[Vec<u8>; 2],
+    silhouette: bool,
+    intensity: f64,
+    child_opacity: f64,
+    child_blur: bool,
+) -> Vec<u8> {
+    let apply_opacity = |pixels: Vec<u8>| {
+        pixels
+            .into_iter()
+            .map(|value| (f64::from(value) * child_opacity).round() as u8)
+            .collect::<Vec<_>>()
+    };
     let mut layers = reference_layers(images, false);
     layers[0] = blur_with_opacity(&layers[0], 1.0);
-    let inner = blur_with_opacity(&nested::source_over_layers(&layers[..2]), 1.0);
+    let inner = nested::source_over_layers(&layers[..2]);
+    let inner = apply_opacity(if child_blur {
+        blur_with_opacity(&inner, 1.0)
+    } else {
+        inner
+    });
     let source = nested::source_over_layers(&[inner, layers[2].clone()]);
     let mask = if silhouette {
-        compose(&reference_layers(images, true))
+        let original = reference_layers(images, true);
+        nested::source_over_layers(&[
+            apply_opacity(nested::source_over_layers(&original[..2])),
+            original[2].clone(),
+        ])
     } else {
         source.clone()
     };
@@ -91,9 +112,53 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
     );
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
-    for step in 0..3 {
+    let mut warm_bytes = 0;
+    for step in 0..14 {
         let silhouette = step > 0;
-        let intensity = if step == 2 { 1.25 } else { 1.5 };
+        let intensity = if step == 10 || step == 11 {
+            0.0
+        } else if step >= 9 {
+            1.0
+        } else if step >= 2 {
+            1.25
+        } else {
+            1.5
+        };
+        let child_blur = step < 5;
+        let child_opacity = match step {
+            3 | 5 => 0.5,
+            4 => 0.0,
+            8..=10 => 0.25,
+            11..=13 => 0.75,
+            _ => 1.0,
+        };
+        if step >= 3 {
+            let child = ObjectId::new(70);
+            let mut style = runtime
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.id == child)
+                .unwrap()
+                .style;
+            style.opacity = child_opacity as f32;
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetStyle {
+                    object: child,
+                    style,
+                    fill_paint: None,
+                })
+                .unwrap();
+        }
+        if step == 5 {
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                    object: ObjectId::new(70),
+                    expected: vec![ATTACHMENT].into_boxed_slice(),
+                    effects: None,
+                })
+                .unwrap();
+        }
         let effects = glow(
             if silhouette {
                 GlowSource::Silhouette
@@ -141,7 +206,38 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
                 4_000_000,
             )
             .unwrap();
-        assert_eq!(work.source_passes, [3, 2, 0][step]);
+        // Switching to an original mask also captures the child's original
+        // coverage. Later child opacity edits reuse both child images and only
+        // recapture the two parent streams.
+        eprintln!("nested work step={step}: {work:?}");
+        assert_eq!(
+            work.source_passes,
+            [3, 4, 0, 2, 2, 4, 2, 0, 4, 0, 0, 1, 4, 0][step]
+        );
+        if step == 1 {
+            warm_bytes = work.retained_texture_bytes;
+        }
+        if (2..=4).contains(&step) {
+            assert_eq!(work.texture_allocations, 0);
+            assert_eq!(work.retained_texture_bytes, warm_bytes);
+        }
+        if step == 7 || step == 13 {
+            assert_eq!(
+                (
+                    work.sources_prepared,
+                    work.source_passes,
+                    work.blur_passes,
+                    work.composite_passes,
+                    work.bytes_uploaded,
+                    work.texture_allocations,
+                    work.rows_examined
+                ),
+                (0, 0, 0, 0, 0, 0, 0)
+            );
+        }
+        if step > 0 {
+            assert_eq!(prepared.geometry.stats.full_rebuilds, 0);
+        }
         let output = target(&device, 1);
         renderer
             .encode_retained(
@@ -159,12 +255,31 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
             )
             .unwrap();
         queue.submit([encoder.finish()]);
-        let expected = reference(&images, silhouette, intensity);
-        let witness = maximum_error(&expected, &reference(&images, !silhouette, intensity));
-        assert!(
-            witness > 5,
-            "original-mask and filtered-alpha oracles must disagree"
+        let expected = reference(&images, silhouette, intensity, child_opacity, child_blur);
+        let witness = maximum_error(
+            &expected,
+            &reference(&images, !silhouette, intensity, child_opacity, child_blur),
         );
+        if child_opacity == 0.0 || intensity == 0.0 {
+            assert_eq!(
+                witness, 0,
+                "zero contribution has identical rendered mask references"
+            );
+        } else {
+            assert!(
+                witness > 5,
+                "original-mask and filtered-alpha oracles must disagree"
+            );
+        }
+        if child_opacity != 1.0 {
+            assert!(
+                maximum_error(
+                    &expected,
+                    &reference(&images, silhouette, intensity, 1.0, child_blur)
+                ) > 5,
+                "ignoring child opacity must change the independent reference"
+            );
+        }
         let error = maximum_error(&read(&device, &queue, &output), &expected);
         assert!(
             error <= 2,
