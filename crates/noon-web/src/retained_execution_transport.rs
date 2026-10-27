@@ -14,16 +14,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{TransportImageResourceHandle, TransportImageSampling, TransportSlotId};
 
+mod composed;
 pub(crate) mod incremental_render_resources;
+use composed::PublishedComposedSource;
 
 /// Resource-aware execution channel for the retained geometry/text runtime.
 ///
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V24 carries ordered, generation-checked leaf effect bindings across the
-// genuine execution/render worker boundary. Older envelopes reject.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 24;
+// V25 binds composed rows to installed immutable source plans at the genuine
+// execution/render worker boundary. Older envelopes reject.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -163,6 +165,9 @@ impl TransportTextResourceHandle {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransportObjectContent {
+    Composed {
+        source: crate::TransportComposedSourceHandle,
+    },
     Image {
         image: TransportImageResourceHandle,
         sampling: TransportImageSampling,
@@ -384,9 +389,8 @@ impl TryFrom<&ObjectContentRef> for TransportObjectContent {
     type Error = RetainedExecutionTransportError;
     fn try_from(value: &ObjectContentRef) -> Result<Self, Self::Error> {
         Ok(match value {
-            // A composed plan must cross once as an immutable installed resource,
-            // not be copied into every parameter row. That worker capability is
-            // not admitted until its plan/resource publication is qualified.
+            // Bare conversion has no session/sequence-qualified resource key.
+            // Only the resource-aware encoder can bind a composed source.
             ObjectContentRef::Composed(_) => {
                 return Err(RetainedExecutionTransportError::UnsupportedComposedSource)
             }
@@ -515,6 +519,9 @@ pub enum RetainedTransportApplyOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
     UnsupportedComposedSource,
+    UnknownComposedSource(crate::TransportComposedSourceHandle),
+    InvalidComposedSourceHandle(TransportSlotId),
+    InvalidComposedSource(noon_compile::CompiledComposedSourceError),
     UnknownImageResource(TransportImageResourceHandle),
     ImageRenderGeometry(TransportSlotId),
     InvalidChannel(String),
@@ -561,7 +568,10 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedComposedSource => write!(formatter,"composed source plans are not installed in this worker profile"),
+            Self::UnknownComposedSource(handle) => write!(formatter, "unknown immutable composed source {handle:?}"),
+            Self::InvalidComposedSourceHandle(slot) => write!(formatter, "invalid composed source provenance or owner profile at {slot:?}"),
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
+            Self::UnsupportedComposedSource => write!(formatter,"composed source conversion requires a publication resource key"),
             Self::InvalidEffectState(slot) => write!(
                 formatter,
                 "retained worker slot {}:{} contains invalid or unsupported effect stack",
@@ -712,6 +722,7 @@ pub struct RetainedExecutionDeltaEncoder {
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
     render_geometry_indices: Option<HashMap<usize, u64>>,
     published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
+    published_composed_sources: Vec<Option<PublishedComposedSource>>,
 }
 
 impl RetainedExecutionDeltaEncoder {
@@ -728,6 +739,7 @@ impl RetainedExecutionDeltaEncoder {
             render_geometries: None,
             render_geometry_indices: None,
             published_render_geometries: Vec::new(),
+            published_composed_sources: Vec::new(),
         }
     }
 
@@ -774,7 +786,12 @@ impl RetainedExecutionDeltaEncoder {
                 .as_ref()
                 .is_some_and(|items| (index as usize) < items.len())
         }));
-        let mut object = transport_object(frame, index, resource)?;
+        let mut object = transport_object(
+            frame,
+            index,
+            resource,
+            self.composed_source_handle(frame, index),
+        )?;
         let render_geometry = render_geometry_identity(frame, index);
         if reuse_inline_geometry
             && resource.is_none()
@@ -826,6 +843,7 @@ impl RetainedExecutionDeltaEncoder {
         let indices = indices.into_iter().collect::<Vec<_>>();
         let mut orders = vec![None; frame.objects.len()];
         let mut render_geometries = vec![None; frame.objects.len()];
+        let mut composed_sources = vec![None; frame.objects.len()];
         let objects = indices
             .into_iter()
             .enumerate()
@@ -838,6 +856,7 @@ impl RetainedExecutionDeltaEncoder {
                     .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
                 orders[index] = Some(object.order);
                 render_geometries[index] = render_geometry_identity(frame, index);
+                composed_sources[index] = composed::published_source(frame, index, &object.content);
                 Ok(object)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -845,6 +864,7 @@ impl RetainedExecutionDeltaEncoder {
         self.initialized = true;
         self.snapshot_orders = orders;
         self.published_render_geometries = render_geometries;
+        self.published_composed_sources = composed_sources;
         Ok(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
@@ -931,10 +951,7 @@ impl RetainedExecutionDeltaEncoder {
             .removed_indices()
             .iter()
             .copied()
-            .map(|index| {
-                self.transport_object(frame, index, true)
-                    .map(|object| (index, object.slot))
-            })
+            .map(|index| transport_slot(frame, index).map(|slot| (index, slot)))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|(index, _)| !final_live_indices.contains(index))
@@ -978,8 +995,7 @@ impl RetainedExecutionDeltaEncoder {
                                 RetainedExecutionTransportError::InvalidObjectIndex(index)
                             })?;
                             updates.push((index, rank));
-                            self.transport_object(frame, index, true)
-                                .map(|object| object.slot)
+                            transport_slot(frame, index)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok::<_, RetainedExecutionTransportError>((
@@ -1020,6 +1036,7 @@ impl RetainedExecutionDeltaEncoder {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
+        self.commit_composed_sources(frame, &objects, &excluded_indices);
         for (index, _) in &removed_rows {
             if let Some(order) = self.snapshot_orders.get_mut(*index) {
                 *order = None;
@@ -1085,6 +1102,11 @@ pub struct RetainedExecutionFrameMirror {
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     geometry_handles:
         HashMap<crate::TransportGeometryResourceHandle, noon_core::GeometryResourceHandle>,
+    composed_sources: HashMap<crate::TransportComposedSourceHandle, Arc<noon_core::ComposedSource>>,
+    composed_dependencies: noon_compile::ComposedDependencies,
+    composed_handles: HashMap<ObjectId, crate::TransportComposedSourceHandle>,
+    #[cfg(test)]
+    last_composed_validation: noon_compile::ComposedValidationStats,
     camera: Camera2DState,
     publication_context: PublicationContext,
     inset_2d_views: Vec<Inset2DViewState>,
@@ -1200,6 +1222,14 @@ impl RetainedExecutionFrameMirror {
         content: &TransportObjectContent,
     ) -> Result<ObjectContentRef, RetainedExecutionTransportError> {
         match content {
+            TransportObjectContent::Composed { source } => self
+                .composed_sources
+                .get(source)
+                .cloned()
+                .map(ObjectContentRef::Composed)
+                .ok_or(RetainedExecutionTransportError::UnknownComposedSource(
+                    *source,
+                )),
             TransportObjectContent::Image { image, sampling } => self
                 .image_handles
                 .get(image)
@@ -1349,6 +1379,7 @@ impl RetainedExecutionFrameMirror {
         }
 
         self.validate_inset_2d_views(&delta)?;
+        self.validate_composed_handles(&delta)?;
 
         let next_sequence = delta
             .sequence
@@ -1368,6 +1399,7 @@ impl RetainedExecutionFrameMirror {
         } else {
             self.apply_incremental(&delta)?
         };
+        self.commit_composed_handles(&delta);
         self.session = Some(delta.session);
         self.next_sequence = next_sequence;
         self.publication_context = delta.publication_context;
@@ -1497,6 +1529,7 @@ impl RetainedExecutionFrameMirror {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let composed_dependencies = self.preflight_composed_snapshot(&frame_objects, &objects)?;
         let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
         let slot_indices = slots
             .iter()
@@ -1512,6 +1545,7 @@ impl RetainedExecutionFrameMirror {
         self.slots = slots;
         self.slot_indices = slot_indices;
         self.object_indices = object_indices;
+        self.composed_dependencies = composed_dependencies;
         self.painter_order = (0..objects.len() as u32).collect();
         self.painter_ranks = (0..objects.len() as u32).map(Some).collect();
         self.frame = Some(FrameState {
@@ -1596,7 +1630,13 @@ impl RetainedExecutionFrameMirror {
                 self.resolve_render_geometry(object, delta.session)?
             };
             let fill_paint = self.resolve_fill_paint(object.fill_paint.as_ref())?;
-            updates.push((index, added, object, geometry, content, fill_paint));
+            updates.push(composed::ResolvedRow {
+                index,
+                added,
+                wire: object,
+                geometry,
+                state: frame_object(object, content, fill_paint)?,
+            });
         }
         let mut seen_removed = HashSet::with_capacity(delta.removed_slots.len());
         let _validated_removed_indices = delta
@@ -1628,6 +1668,20 @@ impl RetainedExecutionFrameMirror {
                 return Err(RetainedExecutionTransportError::SlotIdentityChanged(
                     patch.slot,
                 ));
+            }
+            if frame.objects[index].content.composed_source().is_some()
+                && (patch
+                    .transform
+                    .is_some_and(|transform| transform != Transform2D::IDENTITY)
+                    || patch.style.is_some_and(|style| {
+                        style.fill.is_some() || style.stroke.is_some() || style.opacity != 1.0
+                    })
+                    || patch.morph.is_some_and(|morph| morph != 0.0)
+                    || patch.render_translation.is_some())
+            {
+                return Err(
+                    RetainedExecutionTransportError::InvalidComposedSourceHandle(patch.slot),
+                );
             }
             if patch.transform.is_none()
                 && patch.style.is_none()
@@ -1664,6 +1718,11 @@ impl RetainedExecutionFrameMirror {
             &seen_removed,
             &seen_slots,
         )?;
+        let composed_update = self.preflight_composed_incremental(
+            &updates,
+            &_validated_removed_indices,
+            painter_update.as_ref(),
+        )?;
         let mut camera_rows = frame
             .objects
             .iter()
@@ -1691,30 +1750,41 @@ impl RetainedExecutionFrameMirror {
         validate_single_camera(camera_rows)?;
         let added_indices = updates
             .iter()
-            .filter_map(|(index, added, _, _, _, _)| {
-                (*added || self.painter_ranks.get(*index).copied().flatten().is_none())
-                    .then_some(*index)
+            .filter_map(|row| {
+                (row.added
+                    || self
+                        .painter_ranks
+                        .get(row.index)
+                        .copied()
+                        .flatten()
+                        .is_none())
+                .then_some(row.index)
             })
             .collect::<Vec<_>>();
         let removed_indices = _validated_removed_indices;
         let frame = self.frame.as_mut().expect("validated retained frame");
         let mut changed = Vec::with_capacity(updates.len() + patch_updates.len());
-        for (index, is_added, object, geometry, content, fill_paint) in updates {
+        for composed::ResolvedRow {
+            index,
+            added: is_added,
+            wire: object,
+            geometry,
+            state,
+        } in updates
+        {
             if is_added {
                 debug_assert_eq!(index, frame.objects.len());
                 self.slots.push(object.slot);
                 self.slot_indices.insert(object.slot, index);
                 self.object_indices.insert(object.object, index);
-                frame
-                    .objects
-                    .push(frame_object(object, content, fill_paint)?);
+                frame.objects.push(state);
                 frame.presences.push(object.presence);
                 frame.reveals.push(object.reveal);
                 frame.morphs.push(object.morph);
                 frame.render_geometries.push(geometry);
                 frame.render_transforms.push(object.render_transform);
             } else {
-                frame.objects[index] = frame_object(object, content, fill_paint)?;
+                frame.objects[index] = state;
                 frame.presences[index] = object.presence;
                 frame.reveals[index] = object.reveal;
                 frame.morphs[index] = object.morph;
@@ -1742,6 +1812,12 @@ impl RetainedExecutionFrameMirror {
             changed.push(index);
         }
         for &index in &removed_indices {
+            if frame.objects[index].content.composed_source().is_some() {
+                // A retired row retains its identity for re-entry, but must not
+                // retain the immutable member allocation after its last root.
+                frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(0.0));
+                frame.objects[index].effects = None;
+            }
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
             frame.render_transforms[index] = None;
@@ -1770,6 +1846,11 @@ impl RetainedExecutionFrameMirror {
         if let Some(range) = painter_range {
             changes = changes.with_painter_order(range);
         }
+        #[cfg(test)]
+        {
+            self.last_composed_validation = composed_update.stats;
+        }
+        composed_update.commit(&mut self.composed_dependencies);
         Ok(changes)
     }
 
@@ -1896,10 +1977,25 @@ fn render_geometry_identity(frame: &FrameState, index: usize) -> Option<Arc<Geom
     frame.render_geometries.get(index).cloned().flatten()
 }
 
+fn transport_slot(
+    frame: &FrameState,
+    index: usize,
+) -> Result<TransportSlotId, RetainedExecutionTransportError> {
+    if index >= frame.objects.len() {
+        return Err(RetainedExecutionTransportError::InvalidObjectIndex(index));
+    }
+    Ok(TransportSlotId {
+        slot: u32::try_from(index)
+            .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?,
+        generation: 0,
+    })
+}
+
 fn transport_object(
     frame: &FrameState,
     index: usize,
     render_geometry_resource: Option<u64>,
+    composed_source: Option<crate::TransportComposedSourceHandle>,
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
     let object = frame
         .objects
@@ -1927,7 +2023,10 @@ fn transport_object(
             })
             .unwrap_or_default(),
         z_index: object.z_index,
-        content: (&object.content).try_into()?,
+        content: match composed_source {
+            Some(source) => TransportObjectContent::Composed { source },
+            None => (&object.content).try_into()?,
+        },
         transform: object.transform,
         spatial: object
             .spatial
@@ -1973,6 +2072,7 @@ fn validate_object_state(
 fn validate_object_fields(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
+    composed::validate_owner_fields(object)?;
     noon_compile::validate_fill_paint(object.object, object.fill_paint.as_deref())
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
     if object.effects.len() > noon_core::MAX_EFFECT_STACK_LEN
@@ -2041,6 +2141,7 @@ fn validate_object_fields(
 
 fn glow_content_is_supported(content: &TransportObjectContent) -> bool {
     match content {
+        TransportObjectContent::Composed { .. } => true,
         TransportObjectContent::Geometry { geometry, resource } => match geometry {
             GeometryRef::Circle { radius } => {
                 resource.is_none() && radius.is_finite() && *radius > 0.0
@@ -2274,7 +2375,7 @@ mod tests {
     }
 
     #[test]
-    fn uninstalled_composed_plan_rejects_without_consuming_sequence_or_snapshot_state() {
+    fn invalid_composed_owner_rejects_without_consuming_sequence_or_snapshot_state() {
         let frame = mixed_frame();
         let camera = Camera2DState::default();
         let context = PublicationContext::default();
@@ -2292,8 +2393,17 @@ mod tests {
         ));
         unsupported.objects[1].draw_enabled = false;
         assert_eq!(
-            encoder.encode_snapshot_with_context(&unsupported, camera, context),
+            TransportObjectContent::try_from(&unsupported.objects[1].content),
             Err(RetainedExecutionTransportError::UnsupportedComposedSource)
+        );
+        assert_eq!(
+            encoder.encode_snapshot_with_context(&unsupported, camera, context),
+            Err(
+                RetainedExecutionTransportError::InvalidComposedSourceHandle(TransportSlotId {
+                    slot: 1,
+                    generation: 0
+                })
+            )
         );
         assert_eq!(encoder.snapshot_orders, orders);
         assert_eq!(encoder.published_render_geometries, geometries);
@@ -2586,7 +2696,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 24);
+        assert_eq!(snapshot.protocol_version, 25);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -2659,7 +2769,7 @@ mod tests {
         // Every predecessor, including the former single-binding schema,
         // rejects rather than silently discarding ordered effects.
         let next_sequence = mirror.next_sequence;
-        for version in 14..24 {
+        for version in 14..25 {
             let mut old = snapshot.clone();
             old.protocol_version = version;
             assert_eq!(

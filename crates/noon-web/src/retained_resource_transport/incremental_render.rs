@@ -160,6 +160,14 @@ impl InstalledRetainedResources {
 }
 
 impl PreparedRetainedResourceAdditionsWithRender {
+    pub(crate) fn composed_source_remap(
+        &self,
+    ) -> std::collections::HashMap<
+        crate::TransportComposedSourceHandle,
+        Arc<noon_core::ComposedSource>,
+    > {
+        self.ordinary.composed_source_remap()
+    }
     pub(crate) fn image_handle_remap(&self) -> super::images::ImageHandles {
         self.ordinary.image_handle_remap()
     }

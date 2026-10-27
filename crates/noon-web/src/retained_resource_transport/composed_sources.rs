@@ -102,6 +102,9 @@ impl RetainedResourceBundle {
 }
 
 impl InstalledRetainedResources {
+    pub(crate) fn composed_source_remap(&self) -> ComposedSources {
+        self.composed_sources.clone()
+    }
     pub fn composed_source_count(&self) -> usize {
         self.composed_sources.len()
     }
@@ -110,6 +113,12 @@ impl InstalledRetainedResources {
         handle: TransportComposedSourceHandle,
     ) -> Option<&Arc<ComposedSource>> {
         self.composed_sources.get(&handle)
+    }
+}
+
+impl PreparedRetainedResourceAdditions {
+    pub(crate) fn composed_source_remap(&self) -> ComposedSources {
+        self.installed.composed_source_remap()
     }
 }
 

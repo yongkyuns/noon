@@ -10,6 +10,7 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceRoot {
+    Composed(crate::TransportComposedSourceHandle),
     Image(TransportImageResourceHandle),
     Text(TransportTextResourceHandle),
     Geometry(TransportGeometryResourceHandle),
@@ -19,6 +20,7 @@ pub(crate) enum ResourceRoot {
 impl ResourceRoot {
     fn from_object(object: &RetainedTransportObjectState) -> Option<Self> {
         match &object.content {
+            TransportObjectContent::Composed { source } => Some(Self::Composed(*source)),
             TransportObjectContent::Image { image, .. } => Some(Self::Image(*image)),
             TransportObjectContent::Text { text } => Some(Self::Text(*text)),
             TransportObjectContent::Geometry { resource, .. } => resource
@@ -136,6 +138,7 @@ impl ResourceResidency {
                 return;
             }
             match root {
+                ResourceRoot::Composed(source) => retired.composed_sources.push(source),
                 ResourceRoot::Image(image) => retired.images.push(image),
                 ResourceRoot::Text(text) => retired.texts.push(text),
                 ResourceRoot::Geometry(geometry) => retired.geometries.push(geometry),

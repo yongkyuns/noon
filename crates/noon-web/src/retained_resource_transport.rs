@@ -337,6 +337,9 @@ pub(crate) struct RetainedResourceInventory {
 }
 
 impl RetainedResourceInventory {
+    pub(crate) fn contains_composed_source(&self, handle: TransportComposedSourceHandle) -> bool {
+        self.composed_sources.contains(&handle)
+    }
     pub(crate) fn contains_image(&self, handle: TransportImageResourceHandle) -> bool {
         self.images.contains(&handle)
     }
@@ -1756,6 +1759,8 @@ impl FontResourceLookup for InstalledRetainedResources {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedResourceTransportError {
+    RetiredLiveComposedSource(TransportComposedSourceHandle),
+    MissingComposedSourceRetirement(TransportComposedSourceHandle),
     DuplicateRetiredComposedSource,
     DuplicateComposedSource(TransportComposedSourceHandle),
     InvalidComposedSource {
@@ -1802,6 +1807,13 @@ pub enum RetainedResourceTransportError {
 impl fmt::Display for RetainedResourceTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RetiredLiveComposedSource(handle) => {
+                write!(formatter, "retired live composed source {handle:?}")
+            }
+            Self::MissingComposedSourceRetirement(handle) => write!(
+                formatter,
+                "missing retirement of released composed source {handle:?}"
+            ),
             Self::DuplicateRetiredComposedSource => {
                 formatter.write_str("duplicate retired composed source")
             }
