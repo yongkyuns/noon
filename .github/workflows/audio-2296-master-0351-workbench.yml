@@ -1,0 +1,121 @@
+name: Audio 2296 latest-master integration workbench
+
+# Temporary source-pinned conflict check and qualification. Never merge this workflow.
+on:
+  push:
+    branches:
+      - codex/audio-2296-master-0351-workbench
+    paths:
+      - .github/workflows/audio-2296-master-0351-workbench.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-2296-master-0351-workbench
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Merge source and full gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write
+    env:
+      PR_SOURCE: 7a250ae785602b6a92ac15186c98a4f4c8a7fb98
+      NEW_MASTER: 0351da54754cd2d5f95a7624aacd10872a5b8499
+      CANDIDATE_BRANCH: codex/audio-2296-master-0351-candidate
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout exact draft source with full ancestry
+        uses: actions/checkout@v7
+        with:
+          ref: 7a250ae785602b6a92ac15186c98a4f4c8a7fb98
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Verify exact source and untouched fixture
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "$PR_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = 9198ad2e688a88493a76bb931b8e31ee333f70f5
+          test -z "$(git status --porcelain)"
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+          printf 'pr_source=%s\nprior_tree=%s\nnew_master=%s\n' "$PR_SOURCE" 9198ad2e688a88493a76bb931b8e31ee333f70f5 "$NEW_MASTER" > evidence/source.txt
+      - name: Integrate pinned master without discarding either parent
+        run: |
+          set -euo pipefail
+          git config user.name "Noon integration workbench"
+          git config user.email "noreply@example.invalid"
+          git fetch origin "$NEW_MASTER"
+          test "$(git cat-file -t "$NEW_MASTER")" = commit
+          if ! git merge --no-ff --no-edit "$NEW_MASTER"; then
+            git status --short | tee evidence/conflict-status.txt
+            git diff --name-only --diff-filter=U | tee evidence/unmerged-paths.txt
+            exit 1
+          fi
+          test "$(git rev-list --parents -n 1 HEAD | awk '{print $2}')" = "$PR_SOURCE"
+          test "$(git rev-list --parents -n 1 HEAD | awk '{print $3}')" = "$NEW_MASTER"
+          git merge-base --is-ancestor "$PR_SOURCE" HEAD
+          git merge-base --is-ancestor "$NEW_MASTER" HEAD
+          test -z "$(git status --porcelain)"
+          git diff --check "$NEW_MASTER" HEAD
+          git show -s --format=fuller HEAD > evidence/integration-commit.txt
+          git diff --name-only "$PR_SOURCE" HEAD > evidence/updated-master-files.txt
+          printf 'merged_head=%s\nmerged_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" >> evidence/source.txt
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+      - name: Install repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+          rustc --version --verbose | tee evidence/rustc.txt
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install native audio build prerequisites
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Validate exact merged source through complete repository gate
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh full "$NEW_MASTER" 2>&1 | tee evidence/full-gate.log
+          printf 'passed\n' > evidence/full-gate.result
+      - name: Publish only fully qualified merge to isolated candidate branch
+        run: |
+          set -euo pipefail
+          test "$(cat evidence/full-gate.result)" = passed
+          test -z "$(git status --porcelain --untracked-files=no)"
+          remote=$(git ls-remote --heads origin "refs/heads/$CANDIDATE_BRANCH" | cut -f1)
+          printf 'candidate_remote_before=%s\n' "$remote" >> evidence/source.txt
+          test "$remote" = "$PR_SOURCE"
+          git push origin "HEAD:refs/heads/$CANDIDATE_BRANCH"
+          printf 'published_head=%s\n' "$(git rev-parse HEAD)" >> evidence/source.txt
+      - name: Retain merge diagnostics and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-master-0351-integration-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 7
