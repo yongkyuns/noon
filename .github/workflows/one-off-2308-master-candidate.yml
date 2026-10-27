@@ -1,0 +1,134 @@
+name: One-off 2308 current-master compiler integration qualification
+
+on:
+  push:
+    branches: [agent/2308-current-master-candidate-20261027]
+    paths:
+      - .github/ci/one-off-2308-master-candidate.py
+      - .github/workflows/one-off-2308-master-candidate.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qualify:
+    name: Authenticate and validate compiler conflict resolution
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PIN_PR2308: b3a4b7f484e607a4b14bc57e70f4947f8520ca42
+      PIN_OLD_MASTER: f102a74b9bf28440f4862e799604a57c7882fa68
+      PIN_CURRENT_MASTER: f71a4c121bc29921133f790ae9783e89e962e7d9
+      ARCHIVE_SHA256: 3418f98c4a7b3d3d96a9c9601b006783041ca68129bc9e566a418277d0ec8d0c
+      CANDIDATE_TREE: 8fc9ebda64ded6c777362b61ac8c2b1b7b307efa
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Checkout isolated runner with no retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download qualified pinned candidate source
+        uses: actions/download-artifact@v8
+        with:
+          name: noon-2308-reconciled-source-qualification
+          run-id: 40521242855
+          repository: yongkyuns/noon
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/noon2308-source
+      - name: Authenticate input and resolve the four named compiler conflicts
+        id: stage
+        run: python3 .github/ci/one-off-2308-master-candidate.py
+      - name: Install repository-pinned Rust
+        if: ${{ steps.stage.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose | tee "$RUNNER_TEMP/noon2308-current-master-evidence/rust-version.log"
+      - name: Restore cargo registry
+        if: ${{ steps.stage.outcome == 'success' }}
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-reconcile-2308
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Use read-only compiler cache
+        if: ${{ steps.stage.outcome == 'success' }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install native audio dependencies
+        if: ${{ steps.stage.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Pin rustfmt output as exact tested source
+        id: formatted
+        if: ${{ steps.stage.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        run: |
+          set -euo pipefail
+          cargo fmt --all 2>&1 | tee "$RUNNER_TEMP/noon2308-current-master-evidence/format.log"
+          git add --all
+          git diff --cached --check
+          git diff --cached --binary HEAD > "$RUNNER_TEMP/noon2308-current-master-evidence/formatter.patch"
+          if ! git diff --cached --quiet; then git commit -m 'Apply pinned rustfmt to isolated current-master integration'; fi
+          git show -s --format='%H%n%T%n%P' HEAD > "$RUNNER_TEMP/noon2308-current-master-evidence/qualified-head.txt"
+      - name: Run canonical fast gate against pinned latest master
+        id: fast
+        if: ${{ steps.formatted.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$RUNNER_TEMP/noon2308-current-master-evidence/fast.exit"; exit "$code"' EXIT
+          bash scripts/check.sh fast "$PIN_CURRENT_MASTER" 2>&1 | tee "$RUNNER_TEMP/noon2308-current-master-evidence/fast.log"
+      - name: Qualify existing prepared compiler and runtime regressions
+        if: ${{ steps.fast.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$RUNNER_TEMP/noon2308-current-master-evidence/prepared.exit"; exit "$code"' EXIT
+          cargo test --locked -p noon-runtime --features prepared-prefix --test prefix_interactions --test prefix_bindings --test prefix_lifecycle 2>&1 | tee "$RUNNER_TEMP/noon2308-current-master-evidence/prepared.log"
+          cargo test --locked -p noon --features prepared-prefix --test prepared_prefix_interactions --test prepared_prefix_lifecycle 2>&1 | tee -a "$RUNNER_TEMP/noon2308-current-master-evidence/prepared.log"
+      - name: Check WASM compiler boundary with and without renderer
+        if: ${{ steps.fast.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$RUNNER_TEMP/noon2308-current-master-evidence/wasm.exit"; exit "$code"' EXIT
+          cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$RUNNER_TEMP/noon2308-current-master-evidence/wasm.log"
+          cargo check --locked -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee -a "$RUNNER_TEMP/noon2308-current-master-evidence/wasm.log"
+      - name: Retain exact source, checks and immutable candidate evidence
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-compiler-reconciled
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/noon2308-current-master-evidence"
+          git diff --exit-code
+          git diff --cached --exit-code
+          git rev-parse HEAD > "$EVIDENCE/final-commit.txt"
+          git rev-parse HEAD^{tree} > "$EVIDENCE/final-tree.txt"
+          git archive --format=tar.gz --output="$EVIDENCE/current-master-candidate-source.tar.gz" HEAD
+          sha256sum "$EVIDENCE/current-master-candidate-source.tar.gz" > "$EVIDENCE/current-master-source.sha256"
+          git status --porcelain > "$EVIDENCE/status.txt"
+      - name: Upload source-bound diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-current-master-source-qualification
+          path: ${{ runner.temp }}/noon2308-current-master-evidence
+          retention-days: 3
+          if-no-files-found: warn
