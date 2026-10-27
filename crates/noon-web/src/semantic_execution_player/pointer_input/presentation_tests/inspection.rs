@@ -277,6 +277,7 @@ fn worker_scroll_does_not_bypass_a_pending_callback_and_retries_after_completion
         session: &mut p.session,
         semantics: p.semantics.as_ref().unwrap(),
         translation_drag_undo: &mut p.translation_drag_undo,
+        control_publication: None,
     };
     p.worker_pointer_presentation
         .set_view(
