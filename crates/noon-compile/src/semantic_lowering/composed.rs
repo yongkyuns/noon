@@ -150,14 +150,17 @@ pub(super) fn prepare_initial(
                 },
             ))
             .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?;
+        if node.family_style().expect("family style").object_opacity != 1.0 {
+            return Err(error(
+                owner,
+                "partial scope opacity requires composition qualification",
+            ));
+        }
         let opacity = super::projection::lower_scalar_f32(
             super::SemanticExecutionField::ObjectOpacity,
             node.family_style().expect("family style").object_opacity,
         )
         .map_err(|error| error.with_node(owner))?;
-        if !(0.0..=1.0).contains(&opacity) {
-            return Err(error(owner, "scope opacity is outside zero to one"));
-        }
         intervals.push((start, end, owner));
         prepared.push(PreparedComposedSource {
             owner,

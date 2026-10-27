@@ -895,6 +895,25 @@ impl ExecutionSession {
         self.last_structural_publication
     }
 
+    /// Borrow the published attachment column for a drawable or composed owner.
+    /// A composed controller has no object geometry and cannot use layout queries.
+    pub(crate) fn effective_effects(
+        &self,
+        store: &SemanticStore,
+        node: SemanticNodeId,
+    ) -> Result<Option<&noon_compile::CompiledEffectStack>, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        store
+            .node(node)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let index = self
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| self.runtime.frame_index_for_object(object))
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        Ok(self.runtime.frame().objects[index].effects.as_deref())
+    }
+
     /// Query a live semantic object through its originating store in indexed time.
     /// Both provenance and scene revision must match this published session.
     pub fn effective_semantic_object(

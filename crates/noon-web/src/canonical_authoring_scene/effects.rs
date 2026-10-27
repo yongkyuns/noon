@@ -9,6 +9,9 @@ use crate::{
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
+mod family;
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveSetGlow)]
@@ -104,6 +107,104 @@ impl CanonicalAuthoringSceneContext {
 mod tests {
     use super::super::*;
     use noon::effects::{EffectUpdate, Glow};
+
+    #[test]
+    fn family_adapter_preserves_one_live_owner_and_exact_attachment_generations() {
+        let mut context = CanonicalAuthoringScene::default();
+        let dot = context.scene.circle(0.4).unwrap();
+        let family = context.scene.family(&[(&dot).into()]).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Family(family.clone())],
+                bindings: vec![(ObjectId::new(0), dot.clone())],
+            })
+            .unwrap();
+        context.live_player(1.0).unwrap();
+        let player = context.active_live_player().unwrap();
+        let identity = player.ownership_identity();
+        let member = player
+            .session_mut_for_test()
+            .execution_object_id(dot.node_id())
+            .unwrap();
+        player
+            .live_add_effect(
+                &family,
+                noon::effects::Blur::new(
+                    EffectUpdate::default().radius(noon::effects::Pixels(2.0)),
+                )
+                .unwrap()
+                .into(),
+                "soften",
+            )
+            .unwrap();
+        let original = family.get_effect("soften").unwrap();
+        let owner = player
+            .session_mut_for_test()
+            .execution_object_id(family.node_id())
+            .unwrap();
+        player
+            .live_set_effect(
+                &family,
+                (&original).into(),
+                EffectUpdate::default().radius(noon::effects::Pixels(4.0)),
+            )
+            .unwrap();
+        let copied = player.live_copy_family(&family, &[]).unwrap();
+        let independent = copied.root().get_effect("soften").unwrap();
+        assert_ne!(independent.node_id(), original.node_id());
+        assert_eq!(
+            independent.authored_definition().unwrap(),
+            original.authored_definition().unwrap()
+        );
+        let before = player.session_mut_for_test().frame().clone();
+        assert!(player
+            .live_set_effect(copied.root(), (&original).into(), EffectUpdate::default())
+            .is_err());
+        assert_eq!(player.session_mut_for_test().frame(), &before);
+        player
+            .live_set_glow(&family, EffectUpdate::default().intensity(0.6))
+            .unwrap();
+        player
+            .live_remove_effect(&family, (&original).into())
+            .unwrap();
+        assert!(original.authored_definition().is_err());
+        assert!(player
+            .live_remove_effect(&family, (&original).into())
+            .is_err());
+        player.live_remove_glow(&family).unwrap();
+        player
+            .live_add_effect(&family, noon::effects::Blur::default().into(), "soften")
+            .unwrap();
+        assert_ne!(
+            family.get_effect("soften").unwrap().node_id(),
+            original.node_id()
+        );
+        assert_eq!(
+            player
+                .session_mut_for_test()
+                .execution_object_id(family.node_id()),
+            Some(owner)
+        );
+        assert_eq!(
+            player
+                .session_mut_for_test()
+                .execution_object_id(dot.node_id()),
+            Some(member)
+        );
+        assert_eq!(player.ownership_identity(), identity);
+        assert_eq!(player.time(), 0.0);
+        let mut foreign_scene = noon::Scene::new();
+        let foreign_dot = foreign_scene.circle(0.3).unwrap();
+        let foreign = foreign_scene.family(&[(&foreign_dot).into()]).unwrap();
+        let before = player.session_mut_for_test().frame().clone();
+        assert!(player
+            .live_add_effect(&foreign, Glow::default().into(), "foreign")
+            .is_err());
+        assert_eq!(player.session_mut_for_test().frame(), &before);
+        assert!(foreign.get_effect("foreign").is_err());
+    }
 
     #[test]
     fn adapter_rejects_unsupported_glow_profile_without_poisoning_publication() {

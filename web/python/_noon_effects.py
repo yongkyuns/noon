@@ -1,7 +1,7 @@
 """Noon-native effect syntax over the shared Rust authoring handles.
 
 Definitions are immutable Rust values; attachments and targets live in Rust.
-The finite glow profile executes through the shared Rust scene and renderer.
+Finite ordered effects execute through the shared Rust scene and renderer.
 Shared execution/publication admission remains authoritative. No Python interpolation,
 attachment table, family traversal, or callback-local shadow state is provided.
 """
@@ -237,23 +237,41 @@ class EffectHandle:
 
 
 def _target(value, scope=None):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import (
+        _handle_for, _is_shared_family, _live_mutation_context, _live_constructor_context,
+    )
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("effect edits in callbacks require shared staged effect publication")
-    if scope is not None or _is_shared_family(value):
-        raise NotImplementedError("this effect profile supports leaf declarations only; group/view execution is unavailable")
-    handle = _handle_for(value)
+    family = _is_shared_family(value)
+    if scope is not None and not (family and scope == "composed"):
+        raise NotImplementedError("explicit effect scope requires a composed family target")
+    handle = value._semantic_family_handle if family else _handle_for(value)
     if handle is None:
         raise RuntimeError("effects require a current shared Rust object handle")
-    return handle, _live_mutation_context(value)
+    context = _live_mutation_context(value)
+    if context is None and family:
+        context = _live_constructor_context("family effect")
+    return handle, context, family
+
+
+_FAMILY_LIVE_METHODS = {
+    "setGlow": "liveSetFamilyGlow",
+    "addEffect": "liveAddFamilyEffect",
+    "setEffect": "liveSetFamilyEffect",
+    "setEffectHandle": "liveSetFamilyEffectHandle",
+    "removeEffect": "liveRemoveFamilyEffect",
+    "removeEffectHandle": "liveRemoveFamilyEffectHandle",
+    "removeGlow": "liveRemoveFamilyGlow",
+}
 
 
 def _call(value, method, *args, scope=None):
-    handle, context = _target(value, scope)
+    handle, context, family = _target(value, scope)
     if context is None:
         return engine_call(getattr(handle, method), *args)
-    return engine_call(getattr(context, "live" + method[0].upper() + method[1:]), handle, *args)
+    live_method = _FAMILY_LIVE_METHODS[method] if family else "live" + method[0].upper() + method[1:]
+    return engine_call(getattr(context, live_method), handle, *args)
 
 
 def _selector(selector):
@@ -282,7 +300,7 @@ def add_effect(value, definition, *, name, scope=None):
 def get_effect(value, name):
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
-    handle, _context = _target(value)
+    handle, _context, _family = _target(value)
     # Explicit authored attachment lookup, not an effective frame read.
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 

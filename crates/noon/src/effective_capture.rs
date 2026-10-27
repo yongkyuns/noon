@@ -184,15 +184,22 @@ pub(crate) fn stage_effect_copy(
     target: noon_core::SemanticLocalNodeToken,
     transaction: &mut noon_core::SemanticMutationTransaction,
 ) -> Result<(), AuthoringError> {
+    let node = store
+        .node(source)
+        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
+    if node.effect_ids().is_empty() {
+        // Ordinary unrendered family roots intentionally have no execution row.
+        // There is no attachment state to capture or allocate for those roots.
+        return Ok(());
+    }
     if !execution.semantic_object_is_reachable(source) {
         store.copy_effects_into(source, target, transaction)?;
         return Ok(());
     }
-    let observed = execution.effective_semantic_object(store, source)?;
-    let node = store
-        .node(source)
-        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.effects.as_deref()) {
+    match (
+        node.effect_ids(),
+        execution.effective_effects(store, source)?,
+    ) {
         ([], None) => Ok(()),
         (attachments, Some(effects)) if attachments == effects.attachments() => {
             for effect in effects.iter() {

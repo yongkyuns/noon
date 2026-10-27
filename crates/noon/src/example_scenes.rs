@@ -18,6 +18,7 @@ pub mod circle_surround;
 pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
 pub mod code_block;
+pub mod composed_effects;
 pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;

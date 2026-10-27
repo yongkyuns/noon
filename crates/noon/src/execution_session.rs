@@ -1,6 +1,7 @@
 mod callback;
 mod completion;
 mod effective_content;
+mod family_effect_target;
 mod family_transform;
 #[cfg(test)]
 mod family_transform_tests;
@@ -2455,6 +2456,15 @@ impl ExecutionSession {
                 target_state,
                 options,
             } => {
+                family_effect_target::validate(
+                    store,
+                    *source,
+                    *target_state,
+                    matches!(
+                        request,
+                        SemanticCompositionRequest::FamilyMethodTargetTo { .. }
+                    ),
+                )?;
                 let is_flat_family = |family: SemanticNodeId| {
                     store
                         .semantic_family_members_checked(family)

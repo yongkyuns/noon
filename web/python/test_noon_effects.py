@@ -36,6 +36,7 @@ class EffectFacadeTests(unittest.TestCase):
         self.enter(patch.object(handles, "_handle_for", side_effect=lambda value: self.handle))
         self.enter(patch.object(handles, "_is_shared_family", return_value=False))
         self.enter(patch.object(handles, "_live_mutation_context", side_effect=lambda value: self.context))
+        self.enter(patch.object(handles, "_live_constructor_context", return_value=None))
         token = updaters._ACTIVE_CANONICAL_CONTEXT.set(None)
         self.addCleanup(updaters._ACTIVE_CANONICAL_CONTEXT.reset, token)
 
@@ -209,9 +210,6 @@ class EffectFacadeTests(unittest.TestCase):
         for scope in ("each", "composed", "view", "family", "unknown"):
             with self.subTest(scope=scope), self.assertRaises(NotImplementedError):
                 self.object.add_effect(glow, name="accent", scope=scope)
-        with patch.object(handles, "_is_shared_family", return_value=True):
-            with self.assertRaises(NotImplementedError):
-                self.object.set_glow(intensity=1.4)
         token = updaters._ACTIVE_CANONICAL_CONTEXT.set(object())
         try:
             with self.assertRaises(NotImplementedError):
@@ -221,6 +219,65 @@ class EffectFacadeTests(unittest.TestCase):
         self.handle.addEffect.assert_not_called()
         self.handle.setGlow.assert_not_called()
         self.handle.removeGlow.assert_not_called()
+
+    def family(self):
+        class NoWalkGroup(noon.VGroup):
+            @property
+            def submobjects(self):
+                raise AssertionError("effect routing must not walk Python children")
+        value = object.__new__(NoWalkGroup)
+        value._semantic_family_handle = self.handle
+        return value
+
+    def test_composed_family_controls_use_one_shared_handle_without_child_expansion(self):
+        family = self.family()
+        with patch.object(handles, "_is_shared_family", return_value=True):
+            self.assertIs(family.set_glow(intensity=1.4, scope="composed"), family)
+            blur = noon.Blur(radius=noon.Pixels(4.5))
+            self.assertIs(family.add_effect(blur, name="soften"), family)
+            bound = family.get_effect("soften")
+            family.set_effect(bound, radius=noon.Pixels(0))
+            family.remove_effect(bound)
+            family.remove_glow()
+        self.handle.setGlow.assert_called_once_with(self.request)
+        self.handle.addEffect.assert_called_once_with(blur._definition, "soften")
+        self.handle.setEffectHandle.assert_called_once_with(bound._handle, self.request)
+        self.handle.removeEffectHandle.assert_called_once_with(bound._handle)
+        self.handle.removeGlow.assert_called_once_with()
+
+    def test_live_family_calls_use_the_same_owner_and_never_raw_fallback(self):
+        family = self.family()
+        self.context = Mock()
+        with patch.object(handles, "_is_shared_family", return_value=True):
+            family.set_glow(intensity=1.4)
+            family.add_effect(noon.Blur(), name="soften")
+            bound = family.get_effect("soften")
+            family.set_effect("soften", radius=noon.Pixels(4))
+            family.set_effect(bound, radius=noon.Pixels(3))
+            family.remove_effect("soften")
+            family.remove_effect(bound)
+            family.remove_glow()
+            self.context.liveSetFamilyGlow.side_effect = RuntimeError("transferred player")
+            with self.assertRaisesRegex(RuntimeError, "transferred"):
+                family.set_glow(intensity=1)
+        self.context.liveAddFamilyEffect.assert_called_once()
+        self.context.liveSetFamilyEffect.assert_called_once_with(self.handle, "soften", self.request)
+        self.context.liveSetFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle, self.request)
+        self.context.liveRemoveFamilyEffect.assert_called_once_with(self.handle, "soften")
+        self.context.liveRemoveFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle)
+        self.context.liveRemoveFamilyGlow.assert_called_once_with(self.handle)
+        self.handle.setGlow.assert_not_called()
+        self.handle.setEffect.assert_not_called()
+
+    def test_detached_family_after_bootstrap_routes_via_current_constructor_owner(self):
+        family = self.family()
+        context = Mock()
+        with patch.object(handles, "_is_shared_family", return_value=True), patch.object(
+            handles, "_live_constructor_context", return_value=context
+        ):
+            family.set_glow(intensity=0.5)
+        context.liveSetFamilyGlow.assert_called_once_with(self.handle, self.request)
+        self.handle.setGlow.assert_not_called()
 
     def test_existing_animate_builder_composes_motion_and_effect_updates(self):
         # Only boundary routing is mocked. Do not simulate copy/interpolation in Python.

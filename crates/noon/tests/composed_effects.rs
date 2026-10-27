@@ -353,3 +353,108 @@ fn provisional_nested_scopes_bind_one_final_identity_and_parent_graph() {
     assert_eq!(plan(&session, outer).members().len(), 2);
     assert!(row(&session, a).is_some() && row(&session, b).is_some());
 }
+
+#[test]
+fn initial_partial_scope_opacity_rejects_before_renderer_admission() {
+    for opacity in [0.0, 0.5, 1.0 - f64::EPSILON] {
+        let mut scene = Scene::new();
+        let a = scene.circle(0.4).unwrap();
+        let mut family = scene.family(&[(&a).into()]).unwrap();
+        let mut style = family.own_style().unwrap();
+        style.object_opacity = opacity;
+        let mut tx = SemanticMutationTransaction::new();
+        tx.set_family_style(family.node_id(), style);
+        tx.apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        family.add_effect(Blur::default(), "soften").unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        assert!(
+            scene.execution_session().is_err(),
+            "unsupported own opacity {opacity}"
+        );
+    }
+}
+
+#[test]
+fn family_effect_target_edit_rejects_atomically_instead_of_being_silently_ignored() {
+    use noon::{AnimationCompositionRequest, AnimationOptions};
+    let mut scene = Scene::new();
+    let a = scene.circle(0.4).unwrap();
+    let mut family = scene.family(&[(&a).into()]).unwrap();
+    family.add_effect(Blur::default(), "soften").unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let target = scene.live(&mut session).copy_family(&family).unwrap();
+    scene
+        .live(&mut session)
+        .set_effect(
+            target.root(),
+            "soften",
+            EffectUpdate::default().radius(Pixels(4.0)),
+        )
+        .unwrap();
+    let before = session.frame().clone();
+    let revision = scene.revision();
+    let context = session.publication_context();
+    let result = scene.live(&mut session).declare_and_activate_composition(
+        &AnimationCompositionRequest::FamilyMethodTargetTo {
+            source: &family,
+            target_state: target.root(),
+            options: AnimationOptions::new(),
+        },
+        AnimationOptions::new(),
+    );
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("composed-scope animation lowering"));
+    assert_eq!(session.frame(), &before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(session.publication_context(), context);
+}
+
+#[test]
+fn unchanged_family_effect_copy_can_animate_member_motion_without_rebinding_scope() {
+    use noon::{AnimationCompositionRequest, AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let a = scene.circle(0.4).unwrap();
+    let mut family = scene.family(&[(&a).into()]).unwrap();
+    family.add_effect(Blur::default(), "soften").unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    let original = family.get_effect("soften").unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let owner = session.execution_object_id(family.node_id()).unwrap();
+    let target = scene.live(&mut session).copy_family(&family).unwrap();
+    scene
+        .live(&mut session)
+        .shift_family(target.root(), 2.0, 0.0)
+        .unwrap();
+    let segment = scene
+        .live(&mut session)
+        .declare_and_activate_composition(
+            &AnimationCompositionRequest::FamilyMethodTargetTo {
+                source: &family,
+                target_state: target.root(),
+                options: AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            },
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        row(&session, a.node_id()).unwrap().transform.translation.x,
+        1.0
+    );
+    assert_eq!(session.execution_object_id(family.node_id()), Some(owner));
+    assert_eq!(
+        row(&session, family.node_id())
+            .unwrap()
+            .effects
+            .as_ref()
+            .unwrap()
+            .attachments(),
+        &[original.node_id()]
+    );
+}
