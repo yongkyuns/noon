@@ -1,0 +1,30 @@
+diff --git a/crates/noon-web/src/semantic_execution_player/pointer_input.rs b/crates/noon-web/src/semantic_execution_player/pointer_input.rs
+index 04f2aa6..51de2db 100644
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input.rs
+@@ -28,21 +28,21 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
+             .map(|_| ())
+     }
+     fn has_native_pointer_subscribers(&self) -> bool {
+-        (&*self.session).has_native_pointer_subscribers()
++        self.session.has_native_pointer_subscribers()
+     }
+     fn translation_drag_active(&self) -> bool {
+-        (&*self.session).translation_drag_active()
++        self.session.translation_drag_active()
+     }
+     fn inspection_camera(
+         &self,
+     ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
+-        (&*self.session).inspection_camera()
++        self.session.inspection_camera()
+     }
+     fn capture_pointer_frame(
+         &self,
+         view: noon::integration::PointerFrameView,
+     ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError> {
+-        (&*self.session).capture_pointer_frame(view)
++        self.session.capture_pointer_frame(view)
+     }
+     fn validate_pointer_frame(
+         &self,

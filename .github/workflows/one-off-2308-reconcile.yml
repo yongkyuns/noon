@@ -9,6 +9,7 @@ on:
       - .github/ci/one-off-2308-pointer.patch
       - .github/ci/one-off-2308-fixture.patch
       - .github/ci/one-off-2308-interactions.patch
+      - .github/ci/one-off-2308-clippy.patch
       - .github/workflows/one-off-2308-reconcile.yml
 
 permissions:
@@ -34,6 +35,9 @@ jobs:
       INTERACTIONS_BASE_TREE: d210c81f736d69b0660b08894502447d44d9ba01
       INTERACTIONS_TREE: a9fcbdd982e1c617fea7f20ae0856d6841a2457d
       INTERACTIONS_PATCH_SHA256: 823f8e9e9082279747608ff9a1e91dbc0b9a8f4917c2e29f40b58f0d8a8d45f1
+      CLIPPY_BASE_TREE: a9fcbdd982e1c617fea7f20ae0856d6841a2457d
+      CLIPPY_TREE: 8fc9ebda64ded6c777362b61ac8c2b1b7b307efa
+      CLIPPY_PATCH_SHA256: b4800d207cc6103cc3ec1ce19cae18720a9b41d869a666bfddd4613cf328052b
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -259,6 +263,36 @@ jobs:
           (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
           print('Authenticated prefix-interactions fixture candidate:', tree)
           PYINTERACTIONS
+      - name: Authenticate and repair borrowed pointer read-only methods
+        working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCLIPPY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE'])
+          baseline = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert baseline == os.environ['CLIPPY_BASE_TREE'], baseline
+          patch = Path(os.environ['GITHUB_WORKSPACE']) / '.github/ci/one-off-2308-clippy.patch'
+          payload = patch.read_bytes()
+          digest = hashlib.sha256(payload).hexdigest()
+          assert digest == os.environ['CLIPPY_PATCH_SHA256'], digest
+          subprocess.run(['git', 'apply', '--check', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check', os.environ['PIN_MASTER']], check=True)
+          tree = subprocess.check_output(['git', 'write-tree']).decode().strip()
+          assert tree == os.environ['CLIPPY_TREE'], tree
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only', baseline]).decode().splitlines()
+          assert changed == ['crates/noon-web/src/semantic_execution_player/pointer_input.rs'], changed
+          manifest = json.loads((out / 'manifest.json').read_text())
+          manifest['clippy_baseline_tree'] = baseline
+          manifest['clippy_corrected_unformatted_tree'] = tree
+          manifest['clippy_patch_sha256'] = digest
+          manifest['clippy_repair_scope'] = 'Replace four unnecessary &*self.session read-only receiver expressions; preserve pointer ownership and existing tests'
+          (out / 'clippy-repair.patch').write_bytes(payload)
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print('Authenticated Clippy-only candidate tree:', tree)
+          PYCLIPPY
       - name: Format isolated candidate and freeze its actual tested source
         id: formatted
         working-directory: ${{ runner.temp }}/noon-2308-reconcile/work
@@ -266,9 +300,9 @@ jobs:
           set -euo pipefail
           cargo fmt --all 2>&1 | tee "$EVIDENCE/format.log"
           git add --all
-          git diff --cached --binary "$INTERACTIONS_TREE" > "$EVIDENCE/formatter.patch"
+          git diff --cached --binary "$CLIPPY_TREE" > "$EVIDENCE/formatter.patch"
           git diff --cached --check "$PIN_MASTER"
-          git commit -m 'Reconcile prepared playback and repair prefix interaction fixtures for isolated qualification'
+          git commit -m 'Reconcile prepared playback with source-bound pointer read fixes for isolated qualification'
           python3 - <<'PY'
           import hashlib, json, os, subprocess
           from pathlib import Path
