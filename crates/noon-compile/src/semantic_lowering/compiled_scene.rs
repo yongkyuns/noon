@@ -17,6 +17,7 @@ use super::{
 /// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
+    InvalidComposedSource(crate::CompiledComposedSourceError),
     TooManyObjects(usize),
     TooManyGraphDependencies(usize),
     InvalidPresentation {
@@ -46,6 +47,7 @@ pub enum SemanticCompiledSceneError {
 impl std::fmt::Display for SemanticCompiledSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidPresentation { node } => write!(
                 formatter,
                 "semantic object {}:{} contains a non-finite z-index",
@@ -406,6 +408,7 @@ fn materialize_semantic_projection(
         object_indices,
         retired_object_indices: BTreeMap::new(),
         inset_2d_views: projection.inset_2d_views.clone(),
+        composed_dependencies: Default::default(),
         track_locators: BTreeMap::new(),
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),
@@ -427,6 +430,9 @@ fn materialize_semantic_projection(
         resources,
     };
     compiled.rebuild_spatial_anchor_groups();
+    compiled
+        .rebuild_composed_dependencies()
+        .map_err(SemanticCompiledSceneError::InvalidComposedSource)?;
     if let Some(store) = store {
         let anchors = compiled.spatial_anchor_families();
         for anchor in anchors {

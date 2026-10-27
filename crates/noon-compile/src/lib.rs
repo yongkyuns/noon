@@ -8,6 +8,10 @@ use order_index::{move_order_row, reposition_order_row};
 mod audio;
 pub use audio::CompiledAudioClip;
 mod compaction;
+mod composed_dependencies;
+pub use composed_dependencies::{
+    CompiledComposedSourceError, CompiledComposedSourceErrorKind, ComposedValidationStats,
+};
 mod effect_attachment;
 pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};
 mod execution_patch;
@@ -898,6 +902,7 @@ pub struct CompiledPatchStats {
 /// Existing geometry/track payloads are never cloned for staging.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CompiledTransactionPreflightStats {
+    pub composed: ComposedValidationStats,
     /// Existing object identities resolved through the sparse transaction overlay.
     pub objects_indexed: usize,
     /// Existing track identities resolved through the sparse transaction overlay.
@@ -1078,6 +1083,7 @@ pub struct CompiledScene {
     // Keyed by stable identity, so compaction needs no row remapping. Ordinary
     // scenes allocate no entries and ordinary frame rows carry no view payload.
     inset_2d_views: BTreeMap<ObjectId, CompiledInset2DView>,
+    composed_dependencies: composed_dependencies::ComposedDependencies,
     /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
     family_order: Vec<u32>,
     family_ranks: Vec<Option<u32>>,
@@ -1159,6 +1165,7 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
+    InvalidComposedSource(CompiledComposedSourceError),
     InvalidZIndex(ObjectId),
     TooManyObjects(usize),
     DuplicateObject(ObjectId),
@@ -1174,6 +1181,7 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidZIndex(id) => {
                 write!(formatter, "object {} has non-finite z-index", id.get())
             }
@@ -1226,6 +1234,7 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    InvalidComposedSource(CompiledComposedSourceError),
     InvalidEffectAttachmentChange {
         object: ObjectId,
     },
@@ -1286,6 +1295,7 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidInset2DView(object) => write!(formatter, "inset display {} cannot capture itself as its camera", object.get()),
             Self::ReplaySealed => formatter
                 .write_str("sealed replay is read-only; discard its retention before editing"),
@@ -1673,6 +1683,7 @@ impl CompiledScene {
             object_indices,
             retired_object_indices: BTreeMap::new(),
             inset_2d_views: BTreeMap::new(),
+            composed_dependencies: Default::default(),
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
@@ -1694,6 +1705,9 @@ impl CompiledScene {
             resources: CompiledResources::default(),
         };
         compiled.rebuild_spatial_anchor_groups();
+        compiled
+            .rebuild_composed_dependencies()
+            .map_err(CompileError::InvalidComposedSource)?;
         Ok(compiled)
     }
 
@@ -2174,6 +2188,37 @@ impl CompiledScene {
     }
 
     pub fn apply_execution_patch_with_stats(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
+        self.preflight_composed_mutations(std::slice::from_ref(patch))?;
+        self.commit_preflighted_execution_patch_with_stats(patch)
+    }
+
+    /// Internal commit lane after the caller validated the complete transaction.
+    /// In particular, composed references may name rows installed later in that
+    /// same atomic publication. Ordinary per-patch payload checks still apply.
+    #[doc(hidden)]
+    pub fn commit_preflighted_execution_patch_with_stats(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
+        let owner = match patch {
+            ExecutionPatch::CreateObject(row) => Some(row.id),
+            ExecutionPatch::RemoveObject(id) | ExecutionPatch::SetContent { object: id, .. } => {
+                Some(*id)
+            }
+            _ => None,
+        };
+        let previous = owner.and_then(|id| self.composed_plan(id));
+        let stats = self.apply_execution_patch_inner(patch)?;
+        if let Some(owner) = owner {
+            self.update_composed_dependency(owner, previous);
+        }
+        Ok(stats)
+    }
+
+    fn apply_execution_patch_inner(
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<CompiledPatchStats, CompilePatchError> {

@@ -1,7 +1,9 @@
 //! Actual execution publication -> capture -> whole-interval painter proof.
 //! The flat, fully present profile is deliberately narrower than #1897 closure.
 use super::*;
-use noon_compile::{CompiledEffect, CompiledEffectStack, ExecutionPatch};
+use noon_compile::{
+    CompiledEffect, CompiledEffectStack, ExecutionMutationTransaction, ExecutionPatch,
+};
 use noon_core::{ComposedSource, ObjectContentRef, SemanticNodeId};
 use std::sync::Arc;
 
@@ -84,6 +86,20 @@ fn reference(pixels: &[Vec<u8>; 2], filtered: bool) -> Vec<u8> {
 
 fn qualify_composed_publication(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
     let (mut runtime, images) = grouped_fixture();
+    // The two priority writes have one valid final interval. Controller metadata
+    // must stay out of that interval during runtime ordering and source capture.
+    runtime
+        .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetZIndex {
+                object: ObjectId::new(2),
+                value: 0.25,
+            },
+            ExecutionPatch::SetZIndex {
+                object: ObjectId::new(3),
+                value: 0.5,
+            },
+        ]))
+        .unwrap();
     let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.set_viewport(device, queue, SIZE[0], SIZE[1]);
     renderer.set_camera(
@@ -259,11 +275,11 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
                 }
             }
         };
-        if case == 5 {
+        if matches!(case, 0 | 3 | 4 | 5) {
             let before = runtime.frame().clone();
             assert!(
                 runtime.apply_execution_patch(&patch).is_err(),
-                "self-parent plans reject at the earlier compiled-publication barrier"
+                "invalid source graphs reject at the compiled-publication barrier"
             );
             assert_eq!(runtime.frame(), &before);
             continue;

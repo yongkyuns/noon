@@ -919,6 +919,7 @@ pub(super) fn preflight_transaction_with_resources(
     }
 
     Ok(CompiledTransactionPreflightStats {
+        composed: scene.preflight_composed_mutations(transaction.mutations())?,
         objects_indexed: overlay.seen_objects.len(),
         tracks_indexed: overlay.seen_tracks.len(),
         track_metadata_visits: overlay.track_metadata_visits,

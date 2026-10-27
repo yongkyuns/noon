@@ -770,6 +770,8 @@ impl SceneInstance {
             self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
         }
+        self.compiled
+            .preflight_composed_mutations(std::slice::from_ref(patch))?;
         self.apply_patch_unpublished(patch)?;
         self.publish_execution_change();
         Ok(&self.frame)
@@ -992,7 +994,9 @@ impl SceneInstance {
             _ => unreachable!("structural patch helper accepts only create/remove"),
         };
 
-        let compiled_stats = self.compiled.apply_execution_patch_with_stats(patch)?;
+        let compiled_stats = self
+            .compiled
+            .commit_preflighted_execution_patch_with_stats(patch)?;
         let mut patch_stats = RuntimePatchStats {
             object_slots_appended: compiled_stats.object_slots_appended,
             object_slots_reactivated: compiled_stats.object_slots_reactivated,
@@ -1297,7 +1301,8 @@ impl SceneInstance {
         };
         let style_spatial_before = matches!(patch, ExecutionPatch::SetStyle { .. })
             .then(|| FrameRowState::from_frame(&self.frame, index));
-        self.compiled.apply_execution_patch(patch)?;
+        self.compiled
+            .commit_preflighted_execution_patch_with_stats(patch)?;
 
         match patch {
             ExecutionPatch::SetContent { .. } => {
@@ -1633,9 +1638,21 @@ impl SceneInstance {
         self.painter_order = self.compiled.painter_order().to_vec();
         self.painter_order.sort_by(|&a, &b| {
             self.frame.objects[a as usize]
-                .z_index
-                .partial_cmp(&self.frame.objects[b as usize].z_index)
-                .expect("finite priorities")
+                .content
+                .composed_source()
+                .is_some()
+                .cmp(
+                    &self.frame.objects[b as usize]
+                        .content
+                        .composed_source()
+                        .is_some(),
+                )
+                .then_with(|| {
+                    self.frame.objects[a as usize]
+                        .z_index
+                        .partial_cmp(&self.frame.objects[b as usize].z_index)
+                        .expect("finite priorities")
+                })
                 .then_with(|| {
                     self.compiled
                         .family_rank(a)
@@ -1656,9 +1673,21 @@ impl SceneInstance {
             index as u32,
             |a, b| {
                 self.frame.objects[a as usize]
-                    .z_index
-                    .partial_cmp(&self.frame.objects[b as usize].z_index)
-                    .expect("finite priorities")
+                    .content
+                    .composed_source()
+                    .is_some()
+                    .cmp(
+                        &self.frame.objects[b as usize]
+                            .content
+                            .composed_source()
+                            .is_some(),
+                    )
+                    .then_with(|| {
+                        self.frame.objects[a as usize]
+                            .z_index
+                            .partial_cmp(&self.frame.objects[b as usize].z_index)
+                            .expect("finite priorities")
+                    })
                     .then_with(|| {
                         self.compiled
                             .family_rank(a)
