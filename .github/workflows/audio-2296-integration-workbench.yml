@@ -28,7 +28,7 @@ jobs:
         env:
           BASE: d6afd19037d8eb421fcbd3ddc222fa20f150922b
           HEAD: 5cc7e16e2df651e62fe66e71b1b607e4e418f90e
-          MASTER: f102a74b9bf28440f4862e799604a57c7882fa68
+          MASTER: f71a4c121bc29921133f790ae9783e89e962e7d9
         run: |
           set -euo pipefail
           mkdir -p snapshot
