@@ -7,6 +7,7 @@ import { referenceRgbaGaussian } from "./gaussian-blur-reference.mjs";
 import { dissolveCoverage } from "./dissolve-mask-reference.mjs";
 
 const cache = new Map();
+const exactBaselines = new Map();
 function parameters(time) {
   let opacity = time < 0.5 ? 0.5 : time < 1 ? 0.25 : time < 1.5 ? 0 : time < 2.5 ? 1 : time < 4.5 ? 0.5 : 1;
   let outer = time < 4 ? 0.6 : 1;
@@ -31,7 +32,7 @@ function parameters(time) {
   const progress = time < 10.5 || time >= 13 ? 0 : time < 11.5 ? time - 10.5 : time < 12 ? 1 : 13 - time;
   return {opacity, outer, blur:time >= 3 && time < 3.5, halo, progress};
 }
-function reference(image, time) {
+function reference(image, time, host) {
   assert.equal(image.width,640); assert.equal(image.height,360);
   const p = parameters(time), key = JSON.stringify(p);
   let expected = cache.get(key);
@@ -70,8 +71,15 @@ function reference(image, time) {
   for (let at=0;at<expected.length;at++) maximumError=Math.max(maximumError,Math.abs(expected[at]-image.data[at]));
   assert.ok(maximumError<=2,`scope opacity t=${time}: maximum byte error ${maximumError}`);
   if (p.opacity===0 || p.progress===1) assert.equal(maximumError,0,"empty applies to child color and ancestor silhouette");
-  if (time===9.75 || time===14) assert.equal(maximumError,0,"restoration returns exact ordinary drawing");
-  return {maximumError,...p,channels:expected.length};
+  const baselineTime = time===8.75 ? 8.25 : time===8.875 ? 8.125
+    : [9.75,13.75,14].includes(time) ? 4.75 : time===13.25 ? 10.25 : undefined;
+  if (baselineTime!==undefined) {
+    const baseline=exactBaselines.get(`${host}/${baselineTime}`);
+    assert.ok(baseline,`required same-backend baseline ${host}/${baselineTime} must be captured`);
+    assert.deepEqual(Buffer.from(image.data),baseline,`exact returning/restoration identity at ${host}/${time}`);
+  }
+  if ([4.75,8.125,8.25,10.25].includes(time)) exactBaselines.set(`${host}/${time}`,Buffer.from(image.data));
+  return {maximumError,...p,channels:expected.length,exactBaselineTime:baselineTime};
 }
 function held(time) {
   if (time<5) return Math.floor(time*2)/2;
@@ -90,5 +98,8 @@ await qualifyPairedAuthoring({
     stopAtSourceCompletion:sampleTime===14,
   })),
   artifactDirectory:"browser-smoke-artifacts/scope-opacity",prepareContext:disableAuthoringJspi,
-  qualifyPixels({fixture,rust,python}) {return {rust:reference(rust,fixture.sampleTime),python:reference(python,fixture.sampleTime)};},
+  qualifyPixels({fixture,backend,rust,python}) {return {
+    rust:reference(rust,fixture.sampleTime,`${backend}/rust-wasm`),
+    python:reference(python,fixture.sampleTime,`${backend}/python`),
+  };},
 });
