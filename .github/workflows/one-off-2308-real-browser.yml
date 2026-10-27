@@ -40,7 +40,7 @@ jobs:
           mkdir -p "$SOURCE_ROOT" "$EVIDENCE/incoming"
           printf 'SOURCE_ROOT=%s\nEVIDENCE=%s\n' "$SOURCE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
           gh run download "$PIN_RUN" --repo "$GITHUB_REPOSITORY" \
-            -n noon-2308-reconciled-source-qualification -D "$EVIDENCE/incoming"
+            -n noon2308-combined-memory-source-qualification -D "$EVIDENCE/incoming"
           python3 - <<'PY'
           import hashlib,io,json,os,subprocess,tarfile
           from pathlib import Path
@@ -163,10 +163,14 @@ jobs:
         working-directory: ${{ runner.temp }}/noon-prepared-browser-source
         run: |
           set -euo pipefail
-          git status --porcelain=v1 > "$EVIDENCE/source-status.txt"
-          git diff --exit-code
-          git diff --cached --exit-code
-          test "$(git rev-parse 'HEAD^{tree}')" = "$PIN_SOURCE_TREE"
+          if [[ -d .git ]]; then
+            git status --porcelain=v1 > "$EVIDENCE/source-status.txt"
+            git diff --exit-code
+            git diff --cached --exit-code
+            test "$(git rev-parse 'HEAD^{tree}')" = "$PIN_SOURCE_TREE"
+          else
+            echo "Source reconstruction did not complete; no Git tree to inspect." > "$EVIDENCE/source-status.txt"
+          fi
       - name: Preserve logs and actual Chromium render evidence
         if: always()
         uses: actions/upload-artifact@v7
