@@ -41,7 +41,7 @@ class FamilyOpacity(MovingCameraScene):
         self.wait(0.5)
         group.set_object_opacity(0.5)
         parent.set_object_opacity(0.6)
-        parent.add_effect(Glow(radius=Pixels(2), source="silhouette", color="#ff0000"), name="halo", scope="composed")
+        parent.add_effect(Glow(radius=Pixels(2), intensity=1, source="silhouette", color="#ff0000"), name="halo", scope="composed")
         self.wait(0.5)
         self.play(Dissolve(group, seed=7, softness=0.2, remover=False), run_time=1, rate_func=linear)
         self.wait(0.5)

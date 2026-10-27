@@ -153,7 +153,8 @@ impl LiveContinuation for FamilyOpacity {
                         EffectUpdate::default()
                             .radius(Pixels(2.0))
                             .source(GlowSource::Silhouette)
-                            .color(crate::Color::RED),
+                            .intensity(1.0)
+                            .color(crate::Color::rgba(1.0, 0.0, 0.0, 1.0)),
                     )
                     .map_err(message)?,
                     "halo",
