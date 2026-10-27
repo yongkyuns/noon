@@ -2,6 +2,35 @@ use super::*;
 use crate::{Color, SemanticPaint};
 
 #[test]
+fn partial_family_opacity_cardinality_tracks_style_clone_materialization_and_retirement() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    assert!(!store.has_composed_source_declarations());
+    let set = |store: &mut SemanticStore, opacity: f64| {
+        let mut style = store.node(family).unwrap().family_style().unwrap().clone();
+        style.object_opacity = opacity;
+        let mut tx = SemanticMutationTransaction::new();
+        tx.set_family_style(family, style);
+        tx.apply(store).unwrap();
+    };
+    set(&mut store, 0.5);
+    assert!(store.has_composed_source_declarations());
+    assert!(store.clone().has_composed_source_declarations());
+    let mut materialized = store.clone();
+    let mut content = SemanticMutationTransaction::new();
+    content.replace_content(family, StoredGeometry::Circle { radius: 1.0 });
+    content.apply(&mut materialized).unwrap();
+    assert!(!materialized.has_composed_source_declarations());
+    set(&mut store, 1.0);
+    assert!(!store.has_composed_source_declarations());
+    set(&mut store, 0.0);
+    let mut remove = SemanticMutationTransaction::new();
+    remove.remove_node(family);
+    remove.apply(&mut store).unwrap();
+    assert!(!store.has_composed_source_declarations());
+}
+
+#[test]
 fn family_style_is_a_separate_atomic_root_slot() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();

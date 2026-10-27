@@ -168,6 +168,12 @@ pub struct EffectCaptureTile {
     pub capture_and_scratch_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CaptureDemand {
+    pub required_by_parent: bool,
+    pub isolate: bool,
+}
+
 impl EffectCaptureTile {
     /// Check before any GPU allocation. Return None only for validated
     /// neutral contributions or tiles whose entire halo misses the output.
@@ -213,7 +219,7 @@ impl EffectCaptureTile {
             parameters,
             maximum_texture_dimension,
             memory_budget_bytes,
-            false,
+            CaptureDemand::default(),
         )
     }
 
@@ -226,8 +232,12 @@ impl EffectCaptureTile {
         parameters: super::EffectStackParameters,
         maximum_texture_dimension: u32,
         memory_budget_bytes: u64,
-        required_by_parent: bool,
+        demand: CaptureDemand,
     ) -> Result<Option<Self>, EffectPrepareError> {
+        let CaptureDemand {
+            required_by_parent,
+            isolate,
+        } = demand;
         if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
         }
@@ -287,7 +297,7 @@ impl EffectCaptureTile {
             }
         }
         cost_per_pixel += if silhouette { 4 } else { 0 };
-        if !active || parameters.scope_opacity == 0.0 {
+        if !isolate && (!active || parameters.scope_opacity == 0.0) {
             return Ok(None);
         }
         let mut start = [0_i64; 2];

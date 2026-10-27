@@ -26,6 +26,7 @@ pub(super) struct FilteredCapture {
     pub object: noon_core::ObjectId,
     pub texture: wgpu::Texture,
     pub revision: u64,
+    pub opacity: f32,
     pub origin: [i32; 2],
     pub size: [u32; 2],
     pub bounds: Rect,
@@ -370,7 +371,8 @@ impl PreparedSource {
                     ],
                     size: capture.size,
                     viewport: size,
-                    padding: [0; 2],
+                    opacity: capture.opacity,
+                    padding: 0,
                 };
                 self.bytes[bytes.start as usize..bytes.end as usize]
                     .copy_from_slice(bytemuck::bytes_of(&placement));

@@ -1315,6 +1315,11 @@ impl RetainedExecutionFrameMirror {
         self.slot_indices.get(&slot).copied()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn has_composed_source_rows(&self) -> bool {
+        !self.composed_handles.is_empty()
+    }
+
     pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
@@ -1695,7 +1700,10 @@ impl RetainedExecutionFrameMirror {
                     .transform
                     .is_some_and(|transform| transform != Transform2D::IDENTITY)
                     || patch.style.is_some_and(|style| {
-                        style.fill.is_some() || style.stroke.is_some() || style.opacity != 1.0
+                        style.fill.is_some()
+                            || style.stroke.is_some()
+                            || !style.opacity.is_finite()
+                            || !(0.0..=1.0).contains(&style.opacity)
                     })
                     || patch.morph.is_some_and(|morph| morph != 0.0)
                     || patch.render_translation.is_some())

@@ -12,7 +12,8 @@ impl PreparedSource {
             origin: capture.origin,
             size: capture.size,
             viewport: [0; 2],
-            padding: [0; 2],
+            opacity: capture.opacity,
+            padding: 0,
         };
         self.bytes.resize(start, 0);
         self.bytes.extend_from_slice(bytemuck::bytes_of(&placement));

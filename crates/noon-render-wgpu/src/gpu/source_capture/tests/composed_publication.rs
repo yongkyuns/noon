@@ -296,6 +296,16 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
         }
         runtime.apply_execution_patch(&patch).unwrap();
         let publication = runtime.take_renderer_publication();
+        if case == 2 {
+            assert_eq!(
+                renderer
+                    .effect_source_visibility(&publication, &[0, 1, 2, 3])
+                    .unwrap(),
+                &[0, 1, 2, 3],
+                "final scope opacity is now admitted; native pixel oracles qualify its composition"
+            );
+            continue;
+        }
         assert!(
             renderer
                 .effect_source_visibility(&publication, &[0, 1, 2, 3])
@@ -350,6 +360,19 @@ fn stale_interleaved_and_unqualified_group_profiles_fail_before_encoding() {
             ] {
                 runtime.apply_execution_patch(&patch).unwrap();
             }
+            assert!(renderer.effect_source_visibility(&runtime.take_renderer_publication(), &[0, 2, 3]).is_err(),
+                "partial opacity still requires drawable capture inputs after the last effect retires");
+            runtime
+                .apply_execution_patch(&ExecutionPatch::SetStyle {
+                    object: OWNER,
+                    style: Style {
+                        fill: None,
+                        stroke: None,
+                        ..Style::default()
+                    },
+                    fill_paint: None,
+                })
+                .unwrap();
             assert!(renderer
                 .effect_source_visibility(&runtime.take_renderer_publication(), &[0, 2, 3])
                 .is_ok());

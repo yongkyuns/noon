@@ -67,10 +67,14 @@ impl RetainedEffectPublication {
         index: usize,
         view: (Camera2D, [u32; 2]),
     ) -> Result<bool, EffectPrepareError> {
-        let Some(effects) = frame.objects[index].effects.as_ref() else {
+        let row = &frame.objects[index];
+        let opacity = crate::pack_style(row).opacity;
+        if row.content.composed_source().is_some() && opacity != 1.0 {
+            return Ok(true);
+        }
+        let Some(effects) = row.effects.as_ref() else {
             return Ok(false);
         };
-        let opacity = crate::pack_style(&frame.objects[index]).opacity;
         let mut active = false;
         for &definition in effects.definitions() {
             let parameters = crate::EffectCaptureParameters {
@@ -179,7 +183,8 @@ impl RetainedEffectPublication {
                     self.composed
                         .install(publication, &self.painter_ranks, index)?;
                 }
-                if row.effects.is_some()
+                if (row.effects.is_some()
+                    || row.content.composed_source().is_some() && row.style.opacity != 1.0)
                     && (frame.is_drawable(index)
                         || (row.content.composed_source().is_some() && frame.is_present(index)))
                 {
@@ -221,7 +226,8 @@ impl RetainedEffectPublication {
                     .objects
                     .get(index)
                     .filter(|row| {
-                        row.effects.is_some()
+                        (row.effects.is_some()
+                            || row.content.composed_source().is_some() && row.style.opacity != 1.0)
                             && (frame.is_drawable(index)
                                 || (row.content.composed_source().is_some()
                                     && frame.is_present(index)))
@@ -485,10 +491,10 @@ impl GpuRenderer {
                 {
                     return Err(EffectPrepareError::PublicationMismatch);
                 }
-                let effect = row
+                let definitions = row
                     .effects
                     .as_ref()
-                    .ok_or(EffectPrepareError::PublicationMismatch)?;
+                    .map_or(&[][..], |effects| effects.definitions());
                 if composed {
                     let anchor = self.retained_effects.composed.scopes[&index]
                         .source
@@ -500,9 +506,13 @@ impl GpuRenderer {
                     {
                         return Err(EffectPrepareError::UnsupportedCapture);
                     }
-                    sources.push((index, Some((object, index, effect.definitions(), None))));
+                    sources.push((index, Some((object, index, definitions, None))));
                     continue;
                 }
+                let effect = row
+                    .effects
+                    .as_ref()
+                    .ok_or(EffectPrepareError::PublicationMismatch)?;
                 let analytic = matches!(
                     row.geometry(),
                     Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })

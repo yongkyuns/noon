@@ -4,9 +4,9 @@ use crate::{
     semantic_mobject::{
         edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
         edit_color, edit_fade, edit_fade_occurrences, edit_fade_to_occurrences, edit_fill_color,
-        edit_fill_opacity, edit_manim_opacity, edit_stroke_color, edit_stroke_opacity,
-        edit_stroke_width, fade_factor, interpolate_manim_color, interpolate_manim_scalar,
-        interpolate_manim_vmobject_style_values, PaintStyleEdit,
+        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke_color,
+        edit_stroke_opacity, edit_stroke_width, fade_factor, interpolate_manim_color,
+        interpolate_manim_scalar, interpolate_manim_vmobject_style_values, PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
 };
@@ -412,6 +412,26 @@ impl MobjectFamily {
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(AuthoringError::from)
+    }
+
+    /// Multiply the final composed family image once. Child paint and object
+    /// opacities remain independent, including when this family has no effects.
+    pub fn set_object_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
+        self.object_opacity_transaction(opacity)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn object_opacity_transaction(
+        &self,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        let mut style = self.own_style()?;
+        edit_object_opacity(&mut style, opacity)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style(self.node_id(), style);
+        Ok(transaction)
     }
 
     pub(crate) fn own_opacity_transaction(

@@ -32,8 +32,8 @@ impl GpuRenderer {
             return Err(EffectPrepareError::PublicationMismatch);
         }
         let texture = scope
-            .filter
-            .output()
+            .placement_output
+            .as_ref()
             .ok_or(EffectPrepareError::PublicationMismatch)?
             .clone();
         let origin = scope.tile.origin;
@@ -64,6 +64,7 @@ impl GpuRenderer {
             object,
             texture,
             revision: scope.output_revision,
+            opacity: scope.placement.opacity,
             origin,
             size,
             bounds,

@@ -98,7 +98,8 @@ pub(super) fn validate_owner_fields(
             || row.fill_paint.is_some()
             || row.style.fill.is_some()
             || row.style.stroke.is_some()
-            || row.style.opacity != 1.0
+            || !row.style.opacity.is_finite()
+            || !(0.0..=1.0).contains(&row.style.opacity)
             || row.appearance != 1.0
             || !row.presence
             || row.reveal != 1.0

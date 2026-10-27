@@ -9,7 +9,9 @@ use crate::SemanticLoweringError;
 
 fn has_execution_row(node: &noon_core::SemanticNode) -> bool {
     node.semantic_object_state().is_some()
-        || (matches!(node.kind(), SemanticNodeKind::Family(_)) && !node.effect_ids().is_empty())
+        || (matches!(node.kind(), SemanticNodeKind::Family(_))
+            && (!node.effect_ids().is_empty()
+                || node.family_style().expect("family style").object_opacity != 1.0))
 }
 
 /// Compiler-owned reachability metadata for the semantic -> execution boundary.
@@ -279,6 +281,7 @@ impl SemanticExecutionReachability {
                     self.remove_node(node, &mut journal);
                 }
                 SemanticMutationImpact::ObjectContent { object }
+                | SemanticMutationImpact::FamilyStyle { node: object }
                 | SemanticMutationImpact::EffectAttachment { owner: object, .. } => {
                     let owns_content = store.node(object).is_some_and(has_execution_row);
                     if self
@@ -307,7 +310,6 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::FamilyColor { .. }
-                | SemanticMutationImpact::FamilyStyle { .. }
                 | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::DrawEnabled { .. }

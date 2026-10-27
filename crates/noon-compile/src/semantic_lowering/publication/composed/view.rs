@@ -11,7 +11,8 @@ pub(super) fn old_scope(store: &noon_core::SemanticStore, node: SemanticNodeId) 
     store.node(node).is_some_and(|node| {
         matches!(node.kind(), SemanticNodeKind::Family(_))
             && node.semantic_object_state().is_none()
-            && !node.effect_ids().is_empty()
+            && (!node.effect_ids().is_empty()
+                || node.family_style().expect("family style").object_opacity != 1.0)
     })
 }
 
@@ -73,8 +74,9 @@ impl<'a, 'store> View<'a, 'store> {
         if self.prepared.node_is_removed(node) {
             return Ok(false);
         }
-        Ok(!self.prepared.animation_effect_snapshot(node)?.is_empty()
-            && unrendered_family(self.prepared, node)?)
+        Ok(unrendered_family(self.prepared, node)?
+            && (!self.prepared.animation_effect_snapshot(node)?.is_empty()
+                || self.prepared.family_style(node)?.object_opacity != 1.0))
     }
 
     pub(super) fn reachable(

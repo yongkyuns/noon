@@ -3429,6 +3429,18 @@ impl<'a> LiveSession<'a> {
         self.apply(family.own_style_transaction(update)?)
     }
 
+    /// Publish one final family-composite multiplier through the shared source
+    /// plan and ordinary style publication, without rewriting child styles.
+    pub fn set_family_object_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.object_opacity_transaction(opacity)?)
+    }
+
     /// Interpolate only a VGroup root's authored style and background stroke.
     /// Source/receiver family membership and descendant styles are untouched.
     pub fn interpolate_family_manim_style(

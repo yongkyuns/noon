@@ -88,7 +88,8 @@ pub(super) fn lower_changes(
         // Removing its last attachment is an ordinary execution membership exit.
         if !reachability.is_object_reachable(owner)
             || (super::composed::unrendered_family(prepared, owner.into())?
-                && prepared.animation_effect_snapshot(owner)?.is_empty())
+                && prepared.animation_effect_snapshot(owner)?.is_empty()
+                && prepared.family_style(owner)?.object_opacity == 1.0)
         {
             continue;
         }

@@ -18,12 +18,6 @@ pub(super) fn entry(
     let mut view = View::new(prepared, reachability);
     let id = view.id(object)?;
     let style = prepared.family_style(object)?;
-    if style.object_opacity != 1.0 {
-        return Err(view.error(
-            object,
-            "partial scope opacity requires composition qualification",
-        ));
-    }
     let mut leaves = view
         .leaves(object)?
         .into_iter()
@@ -55,6 +49,11 @@ pub(super) fn entry(
         Style {
             fill: None,
             stroke: None,
+            opacity: super::super::projection::lower_scalar_f32(
+                super::super::SemanticExecutionField::ObjectOpacity,
+                style.object_opacity,
+            )
+            .map_err(|error| error.with_node(id))?,
             ..Style::default()
         },
     );
@@ -160,9 +159,35 @@ pub(super) fn prepare(
                 ancestors(&mut view, *family, &mut candidates)?;
             }
             SemanticMutation::SetZIndex { node, .. }
-            | SemanticMutation::SetDrawEnabled { node, .. }
-            | SemanticMutation::SetFamilyStyle { node, .. } => {
+            | SemanticMutation::SetDrawEnabled { node, .. } => {
                 ancestors(&mut view, *node, &mut candidates)?;
+            }
+            SemanticMutation::SetFamilyStyle { node, .. } => {
+                let old = node
+                    .existing()
+                    .is_some_and(|id| old_scope(prepared.store(), id));
+                let new = view.scope(*node)?;
+                if old != new {
+                    ancestors(&mut view, *node, &mut candidates)?;
+                    subtree(&mut view, *node, &mut candidates)?;
+                } else if new && view.reachable(*node)? {
+                    let id = view.id(*node)?;
+                    let opacity = super::super::projection::lower_scalar_f32(
+                        super::super::SemanticExecutionField::ObjectOpacity,
+                        prepared.family_style(*node)?.object_opacity,
+                    )
+                    .map_err(|error| error.with_node(id))?;
+                    values.push(ExecutionPatch::SetStyle {
+                        object: semantic_execution_object_id(id),
+                        style: Style {
+                            fill: None,
+                            stroke: None,
+                            opacity,
+                            ..Style::default()
+                        },
+                        fill_paint: None,
+                    });
+                }
             }
             SemanticMutation::AddNode {
                 creation: SemanticNodeCreation::Effect { owner, .. },
@@ -200,7 +225,7 @@ pub(super) fn prepare(
     // A changed physical member must remain capturable even when it has no
     // attachment of its own. Validate only that changed value and its ancestor
     // edges; ordinary transform/style edits do not rebuild any source plan.
-    if prepared.store().has_effect_attachments() {
+    if prepared.store().has_composed_source_declarations() {
         for (node, state) in prepared.object_updates() {
             if prepared.node_is_removed(node) || !view.reachable(node.into())? {
                 continue;

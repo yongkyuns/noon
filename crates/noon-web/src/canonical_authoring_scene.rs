@@ -11669,6 +11669,18 @@ mod wasm {
                 .live_set_family_own_opacity(&source.semantic_family()?, opacity)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyObjectOpacity)]
+        pub fn live_set_family_object_opacity(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_object_opacity(&source.semantic_family()?, opacity)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
         pub fn live_match_family_style(
             &mut self,

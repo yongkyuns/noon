@@ -1225,7 +1225,8 @@ fn collect_prepared_entry_leaves(
                 noon_core::SemanticSceneOperationError::NotSemanticObject(_),
             ),
         ) => {
-            if !prepared.animation_effect_snapshot(node)?.is_empty()
+            if (!prepared.animation_effect_snapshot(node)?.is_empty()
+                || prepared.family_style(node)?.object_opacity != 1.0)
                 && node
                     .existing()
                     .is_none_or(|id| !reachability.is_object_reachable(id))

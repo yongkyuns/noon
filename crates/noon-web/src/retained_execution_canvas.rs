@@ -509,11 +509,20 @@ mod wasm {
 
             // Mark only validated, accepted source glow publications. Once seen,
             // keep the path active long enough to retire removed GPU scopes.
-            let received_glow = delta
-                .retained
-                .objects
-                .iter()
-                .any(|row| !row.effects.is_empty());
+            let received_glow = delta.retained.objects.iter().any(|row| {
+                !row.effects.is_empty()
+                    || matches!(row.content, crate::TransportObjectContent::Composed { .. })
+                        && row.style.opacity != 1.0
+            }) || self.mirror.transport_mirror().has_composed_source_rows()
+                && delta.retained.object_patches.iter().any(|patch| {
+                    patch.style.is_some_and(|style| style.opacity != 1.0)
+                        && self
+                            .mirror
+                            .transport_mirror()
+                            .frame_index_for_slot(patch.slot)
+                            .and_then(|index| self.mirror.frame()?.objects.get(index))
+                            .is_some_and(|row| row.content.composed_source().is_some())
+                });
             let pointer_view = delta.pointer_view;
             let mirror = &mut self.mirror;
             let preparer = &mut self.preparer;

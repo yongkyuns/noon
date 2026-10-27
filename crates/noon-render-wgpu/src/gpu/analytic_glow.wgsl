@@ -5,7 +5,8 @@ struct Placement {
     origin: vec2<i32>,
     size: vec2<u32>,
     viewport: vec2<u32>,
-    padding: vec2<u32>,
+    opacity: f32,
+    padding: u32,
 }
 @group(0) @binding(0) var<uniform> placement: Placement;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -23,5 +24,5 @@ fn vs_tile(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs_tile(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
-    return textureLoad(image, vec2<i32>(pixel.xy) - placement.origin, 0);
+    return textureLoad(image, vec2<i32>(pixel.xy) - placement.origin, 0) * placement.opacity;
 }

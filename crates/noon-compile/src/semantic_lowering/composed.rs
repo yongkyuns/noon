@@ -14,7 +14,7 @@ use std::{
 pub(super) struct PreparedComposedSource {
     pub(super) owner: SemanticNodeId,
     source: Arc<ComposedSource>,
-    effects: Arc<CompiledEffectStack>,
+    effects: Option<Arc<CompiledEffectStack>>,
     opacity: f32,
     presentation: SemanticPresentation,
 }
@@ -26,7 +26,7 @@ impl PreparedComposedSource {
             execution_id,
             content: SemanticExecutionContent::Composed(self.source),
             fill_paint: None,
-            effects: Some(self.effects),
+            effects: self.effects,
             base_transform: Transform2D::IDENTITY,
             base_style: Style {
                 fill: None,
@@ -54,7 +54,7 @@ pub(super) fn prepare_initial(
     roots: &[SemanticNodeId],
     leaf_values: impl IntoIterator<Item = (SemanticNodeId, f64)>,
 ) -> Result<Vec<PreparedComposedSource>, SemanticLoweringError> {
-    if !store.has_effect_attachments() {
+    if !store.has_composed_source_declarations() {
         return Ok(Vec::new());
     }
     let mut candidates = Vec::new();
@@ -67,7 +67,8 @@ pub(super) fn prepare_initial(
             let node = store.node(owner).expect("validated traversal");
             if matches!(node.kind(), SemanticNodeKind::Family(_))
                 && node.semantic_object_state().is_none()
-                && !node.effect_ids().is_empty()
+                && (!node.effect_ids().is_empty()
+                    || node.family_style().expect("family style").object_opacity != 1.0)
             {
                 candidates.push(owner);
             }
@@ -142,20 +143,18 @@ pub(super) fn prepare_initial(
             ancestor.map(super::semantic_execution_object_id),
         )
         .map_err(|_| error(owner, "duplicate source member"))?;
-        let effects =
-            CompiledEffectStack::new(store.animation_effect_snapshot(owner)?.into_iter().map(
-                |effect| CompiledEffect {
+        let effects = store.animation_effect_snapshot(owner)?;
+        let effects = if effects.is_empty() {
+            None
+        } else {
+            Some(Arc::new(
+                CompiledEffectStack::new(effects.into_iter().map(|effect| CompiledEffect {
                     attachment: effect.attachment,
                     definition: effect.definition,
-                },
+                }))
+                .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?,
             ))
-            .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?;
-        if node.family_style().expect("family style").object_opacity != 1.0 {
-            return Err(error(
-                owner,
-                "partial scope opacity requires composition qualification",
-            ));
-        }
+        };
         let opacity = super::projection::lower_scalar_f32(
             super::SemanticExecutionField::ObjectOpacity,
             node.family_style().expect("family style").object_opacity,
@@ -165,7 +164,7 @@ pub(super) fn prepare_initial(
         prepared.push(PreparedComposedSource {
             owner,
             source: Arc::new(source),
-            effects: Arc::new(effects),
+            effects,
             opacity,
             presentation: node.presentation().expect("family presentation"),
         });

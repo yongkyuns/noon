@@ -54,7 +54,7 @@ impl<'a> View<'a> {
             let Some(row) = self.row(owner) else {
                 continue;
             };
-            if row.state.effects.is_none() {
+            if row.state.effects.is_none() && row.state.style.opacity == 1.0 {
                 continue;
             }
             let Some(source) = self.source(owner) else {
@@ -260,6 +260,7 @@ impl RetainedExecutionFrameMirror {
                     || old.draw_enabled != row.state.draw_enabled
                     || frame.presences[row.index] != row.wire.presence
                     || old.effects.is_some() != row.state.effects.is_some()
+                    || (old.style.opacity != 1.0) != (row.state.style.opacity != 1.0)
             }) {
                 changed.insert(row.state.id);
             }

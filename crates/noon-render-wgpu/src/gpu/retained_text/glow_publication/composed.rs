@@ -36,17 +36,15 @@ impl ComposedCaptures {
             self.remove(index);
             return Ok(());
         }
-        // #1897: composite opacity and presence-changing membership are still
-        // unqualified. Nested inputs themselves share this exact capture path.
+        // Presence-changing membership remains a separate profile. Final
+        // composite opacity is applied by the common placement draw.
         // Without attachments this row records containment only; capture-only
         // eligibility must not change ordinary drawing after effect removal.
         if row.transform != Transform2D::IDENTITY
             || row.spatial.is_some()
             || row.draw_enabled
-            || (row.effects.is_some()
-                && (row.style.opacity != 1.0
-                    || row.appearance != 1.0
-                    || !publication.frame().is_present(index)))
+            || ((row.effects.is_some() || row.style.opacity != 1.0)
+                && (row.appearance != 1.0 || !publication.frame().is_present(index)))
         {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
@@ -79,7 +77,11 @@ impl ComposedCaptures {
             let member = publication
                 .object_index(object)
                 .ok_or(EffectPrepareError::PublicationMismatch)?;
-            self.validate_member(publication, member, row.effects.is_some())?;
+            self.validate_member(
+                publication,
+                member,
+                row.effects.is_some() || row.style.opacity != 1.0,
+            )?;
             let rank = ranks[member];
             if rank == usize::MAX
                 || previous.is_some_and(|previous: usize| previous.checked_add(1) != Some(rank))
@@ -316,7 +318,8 @@ impl ComposedCaptures {
         let Some(scope) = self.scopes.get(&index) else {
             return Ok(());
         };
-        let require_drawable = publication.frame().objects[index].effects.is_some();
+        let row = &publication.frame().objects[index];
+        let require_drawable = row.effects.is_some() || row.style.opacity != 1.0;
         for (&object, &member) in scope.source.members().iter().zip(&scope.members) {
             if publication.object_index(object) != Some(member) {
                 return Err(EffectPrepareError::PublicationMismatch);

@@ -10,6 +10,27 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class SharedFamilyPaintTests(unittest.TestCase):
+    def test_final_family_opacity_dispatches_one_shared_root_operation(self):
+        for live in (False, True):
+            group = identity_only_wrapper(compat.VGroup, submobjects=[])
+            family = group._semantic_family_handle = Mock()
+            context = Mock() if live else None
+            with patch.object(handles, "_live_mutation_context", return_value=context), \
+                 patch.object(handles, "_live_constructor_context", return_value=None):
+                self.assertIs(group.set_object_opacity(0.25), group)
+                calls = list(family.method_calls)
+                context_calls = list(context.method_calls) if live else []
+                for invalid in (-0.1, 1.1, float("nan"), float("inf")):
+                    with self.assertRaises((ValueError, TypeError)):
+                        group.set_object_opacity(invalid)
+                self.assertEqual(family.method_calls, calls)
+                if live:
+                    context.liveSetFamilyObjectOpacity.assert_called_once_with(family, 0.25)
+                    self.assertEqual(context.method_calls, context_calls)
+                    family.setObjectOpacity.assert_not_called()
+                else:
+                    family.setObjectOpacity.assert_called_once_with(0.25)
+
     def test_constructor_drawing_intent_follows_public_vector_inheritance(self):
         class Generic(compat.Group):
             pass

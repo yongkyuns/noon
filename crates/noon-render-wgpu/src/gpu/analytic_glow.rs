@@ -129,7 +129,8 @@ pub(super) struct Placement {
     pub origin: [i32; 2],
     pub size: [u32; 2],
     pub viewport: [u32; 2],
-    pub padding: [u32; 2],
+    pub opacity: f32,
+    pub padding: u32,
 }
 
 #[derive(Debug)]
@@ -406,6 +407,7 @@ impl GpuRenderer {
             observation.style.opacity,
             None,
             required_by_parent,
+            false,
         )
     }
 
@@ -543,6 +545,7 @@ impl GpuRenderer {
             opacity,
             Some(text),
             required_by_parent,
+            composed.is_some() && opacity != 1.0,
         )
     }
 
@@ -561,6 +564,7 @@ impl GpuRenderer {
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
         required_by_parent: bool,
+        isolate: bool,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         let parameters = EffectStackParameters {
             output_height: self.viewport_size[1],
@@ -576,7 +580,10 @@ impl GpuRenderer {
             parameters,
             device.limits().max_texture_dimension_2d,
             request.texture_budget_bytes,
-            required_by_parent,
+            super::glow_filter::CaptureDemand {
+                required_by_parent,
+                isolate,
+            },
         )?;
         let Some(mut tile) = tile else {
             // Retain warmed storage for neutral fades; exact ordinary submission
@@ -723,7 +730,8 @@ impl GpuRenderer {
             origin: tile.origin,
             size: tile.size,
             viewport: self.viewport_size,
-            padding: [0; 2],
+            opacity,
+            padding: 0,
         };
         // Everything that can reject input is checked before installing caches.
         let mut glows = self.effect_captures.take().unwrap_or_default();
@@ -976,20 +984,30 @@ impl GpuRenderer {
                 EffectStackParameters {
                     output_height: parameters.output_height,
                     world_view_height: parameters.world_view_height,
-                    scope_opacity: opacity,
+                    // Keep the captured/filter image independent of final
+                    // placement opacity, including when a parent consumes it.
+                    scope_opacity: 1.0,
                     scratch_budget_bytes: request.texture_budget_bytes,
                     source_bounds: Some(source_bounds),
                 },
             )?;
             stats.filter = upload;
-            if source_changed || stats.filter.composite_passes > 0 {
+            let output = scope
+                .filter
+                .output()
+                .unwrap_or(&scope.source.texture)
+                .clone();
+            if source_changed
+                || stats.filter.composite_passes > 0
+                || scope.placement.opacity != placement.opacity
+                || scope.placement_output.as_ref() != Some(&output)
+            {
                 scope.output_revision = scope
                     .output_revision
                     .checked_add(1)
                     .expect("effect output revision exhausted");
             }
-            if scope.placement_output.as_ref() != scope.filter.output()
-                || scope.placement_binding.is_none()
+            if scope.placement_output.as_ref() != Some(&output) || scope.placement_binding.is_none()
             {
                 scope.placement_binding =
                     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1003,12 +1021,12 @@ impl GpuRenderer {
                             wgpu::BindGroupEntry {
                                 binding: 1,
                                 resource: wgpu::BindingResource::TextureView(
-                                    scope.filter.output_view().expect("active glow output"),
+                                    scope.filter.output_view().unwrap_or(&scope.source.view),
                                 ),
                             },
                         ],
                     }));
-                scope.placement_output = scope.filter.output().cloned();
+                scope.placement_output = Some(output);
             }
             glows.bytes = total;
             scope.effective = effective;

@@ -2226,6 +2226,13 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_object_opacity(opacity)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = ownFillOpacity)]
         pub fn own_fill_opacity(&self) -> Result<f64, JsValue> {
             self.semantic_family()?

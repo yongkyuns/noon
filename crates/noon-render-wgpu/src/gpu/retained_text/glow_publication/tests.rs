@@ -263,8 +263,9 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
                 faded.composite_passes,
                 faded.texture_allocations
             ),
-            (1, 0, 0, 1, 0)
+            (1, 0, 0, 0, 0)
         );
+        assert_eq!(faded.bytes_uploaded, 32, "only placement opacity changes");
         assert_eq!(
             fixture.last_image_upload.textures_uploaded
                 + fixture.last_image_upload.pixel_bytes_uploaded,
@@ -1004,8 +1005,9 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
                 faded.composite_passes,
                 faded.texture_allocations
             ),
-            (1, 0, 0, 1, 0)
+            (1, 0, 0, 0, 0)
         );
+        assert_eq!(faded.bytes_uploaded, 32, "only placement opacity changes");
         assert_eq!(faded.retained_texture_bytes, first.retained_texture_bytes);
         runtime
             .apply_execution_patch(&ExecutionPatch::RemoveObject(object))
