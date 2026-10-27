@@ -898,6 +898,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     }
 
     /// Observe staged own vector style on an existing or pending family.
+    pub fn family_opacity_copy_provenance(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Option<crate::SemanticFamilyOpacityCopyProvenance>, SemanticTransactionReadError>
+    {
+        let node = node.into();
+        self.family_style(node)?;
+        Ok(self
+            .preflight
+            .staged_family_opacity_copies
+            .get(&node)
+            .copied()
+            .unwrap_or_else(|| {
+                node.existing()
+                    .and_then(|id| self.store.node(id))
+                    .and_then(|node| node.family_opacity_copy_provenance())
+            }))
+    }
+
     pub fn family_style(
         &self,
         node: impl Into<SemanticTransactionNodeRef>,
@@ -1751,7 +1770,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     background_stroke_color,
                     background_stroke_width,
                     background_stroke_opacity,
+                    ..
                 } => {
+                    let copy = preflight.staged_family_opacity_copies[&node];
                     let node = resolve_node_ref(node, &committed_nodes);
                     store.mutate_semantic_style(node, |family| {
                         family.set_family_style(style);
@@ -1760,6 +1781,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                             background_stroke_width,
                             background_stroke_opacity,
                         );
+                        family.set_family_opacity_copy_provenance(copy);
                     });
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyStyle { node });

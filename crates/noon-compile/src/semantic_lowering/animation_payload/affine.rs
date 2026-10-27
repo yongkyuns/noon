@@ -714,11 +714,15 @@ where
                 .node(leaf.target)
                 .is_some_and(|node| node.semantic_object_state().is_none())
             {
-                if let Some(channel) = lower_object_opacity_channel(
+                if let Some(channel) = lower_family_object_opacity_channel(
+                    leaf.target,
                     family_opacity(leaf.target)?,
                     family_opacity(target_state)?,
                     from.style.opacity,
-                    false,
+                    store
+                        .node(target_state)
+                        .and_then(|node| node.family_opacity_copy_provenance()),
+                    method_target,
                 ) {
                     push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
@@ -1685,7 +1689,32 @@ pub(super) fn lower_object_opacity_channel(
     effective: f32,
     bound: bool,
 ) -> Option<LoweredAffineChannel> {
-    (source != target || !bound && effective != target as f32).then_some(LoweredAffineChannel {
+    (source != target || !bound && effective != target as f32)
+        .then(|| object_opacity_channel(effective, target))
+}
+
+pub(super) fn lower_family_object_opacity_channel(
+    owner: SemanticNodeId,
+    source: f64,
+    target: f64,
+    effective: f32,
+    copy: Option<noon_core::SemanticFamilyOpacityCopyProvenance>,
+    method_target: bool,
+) -> Option<LoweredAffineChannel> {
+    let copy = copy.filter(|copy| copy.source() == owner);
+    let selected = match (method_target, copy) {
+        (true, Some(copy)) => copy.writes_object_opacity() || target != copy.copied_opacity(),
+        (_, copy) => {
+            copy.is_some_and(|copy| copy.writes_object_opacity())
+                || source != target
+                || effective != target as f32
+        }
+    };
+    selected.then(|| object_opacity_channel(effective, target))
+}
+
+fn object_opacity_channel(effective: f32, target: f64) -> LoweredAffineChannel {
+    LoweredAffineChannel {
         property: Property::Opacity,
         conflict_property: SemanticObjectProperty::ObjectOpacity,
         completion: SemanticAnimationCompletion::Property {
@@ -1696,7 +1725,7 @@ pub(super) fn lower_object_opacity_channel(
             from: effective,
             to: target as f32,
         },
-    })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3331,6 +3360,48 @@ mod tests {
 
     use super::*;
     use crate::{lower_semantic_animation_schedule, SemanticExecutionIndex};
+
+    #[test]
+    fn family_opacity_target_selection_uses_copy_intent_and_exact_source_generation() {
+        let mut store = SemanticStore::new();
+        let owner = store.insert_family();
+        let target = store.insert_family();
+        let style = store.node(target).unwrap().family_style().unwrap().clone();
+        let mut copy = noon_core::SemanticMutationTransaction::new();
+        copy.set_copied_family_style_with_background_stroke_update(
+            target,
+            owner,
+            style.clone(),
+            None,
+            None,
+            None,
+        );
+        copy.apply(&mut store).unwrap();
+        let copied = store.node(target).unwrap().family_opacity_copy_provenance();
+        assert!(lower_family_object_opacity_channel(owner, 0.5, 1.0, 0.3, copied, true).is_none(),
+            "an untouched copied method domain remains omitted even when authored and effective values differ");
+        let full =
+            lower_family_object_opacity_channel(owner, 1.0, 1.0, 0.3, copied, false).unwrap();
+        assert_eq!(full.property, Property::Opacity);
+        assert_eq!(full.values, TrackValues::Scalar { from: 0.3, to: 1.0 });
+        let mut explicit = noon_core::SemanticMutationTransaction::new();
+        explicit.set_family_style_with_explicit_object_opacity(target, style);
+        explicit.apply(&mut store).unwrap();
+        let selected = store.node(target).unwrap().family_opacity_copy_provenance();
+        let equal =
+            lower_family_object_opacity_channel(owner, 1.0, 1.0, 1.0, selected, true).unwrap();
+        assert_eq!(equal.values, TrackValues::Scalar { from: 1.0, to: 1.0 });
+        let mut retire = noon_core::SemanticMutationTransaction::new();
+        retire.remove_node(owner);
+        retire.apply(&mut store).unwrap();
+        let fresh = store.insert_family();
+        assert_eq!(fresh.slot(), owner.slot());
+        assert_ne!(fresh, owner);
+        assert!(
+            lower_family_object_opacity_channel(fresh, 1.0, 1.0, 1.0, selected, true).is_none(),
+            "slot reuse cannot inherit the retired generation's explicit driver selection"
+        );
+    }
 
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {

@@ -342,6 +342,7 @@ impl SemanticStore {
     pub const fn has_composed_source_declarations(&self) -> bool {
         self.effect_nodes != 0
             || self.partial_opacity_families != 0
+            || self.explicit_family_opacity_targets != 0
             || self.appearance_target_animations != 0
     }
 

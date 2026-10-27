@@ -375,8 +375,9 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             family_background_stroke_width,
             family_background_stroke_opacity,
         ) {
-            transaction.set_family_style_with_background_stroke_update(
+            transaction.set_copied_family_style_with_background_stroke_update(
                 pending,
+                id,
                 style,
                 Some(background_stroke_color),
                 Some(background_stroke_width),
@@ -623,6 +624,13 @@ mod owned_root_fallback_copy_tests {
                     f64::from(effective),
                     "copy preparation captures owned composite opacity"
                 );
+                let copy = prepared
+                    .family_opacity_copy_provenance(pending.root_token())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(copy.source(), family.node_id());
+                assert_eq!(copy.copied_opacity(), f64::from(effective));
+                assert!(!copy.writes_object_opacity());
             }
             assert_eq!(family.own_style().unwrap().object_opacity, start);
             assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);

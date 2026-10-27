@@ -599,6 +599,40 @@ pub struct SemanticFamilyPresentation {
     pub own_color: crate::Color,
     pub own_style: SemanticStyle,
     pub own_sheen_direction: SemanticSheenDirection,
+    pub(crate) opacity_copy: Option<SemanticFamilyOpacityCopyProvenance>,
+}
+
+/// Weak copied-target intent for the owned composite opacity domain. Values
+/// remain on the family style; this baseline distinguishes omitted fields from
+/// explicit writes without borrowing the source's identity or lifetime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticFamilyOpacityCopyProvenance {
+    source: crate::SemanticNodeId,
+    copied_opacity: f64,
+    written: bool,
+}
+
+impl SemanticFamilyOpacityCopyProvenance {
+    pub(crate) const fn new(source: crate::SemanticNodeId, copied_opacity: f64) -> Self {
+        Self {
+            source,
+            copied_opacity,
+            written: false,
+        }
+    }
+    pub const fn source(self) -> crate::SemanticNodeId {
+        self.source
+    }
+    pub const fn copied_opacity(self) -> f64 {
+        self.copied_opacity
+    }
+    pub const fn writes_object_opacity(self) -> bool {
+        self.written
+    }
+    pub(crate) const fn with_object_opacity_write(mut self) -> Self {
+        self.written = true;
+        self
+    }
 }
 
 impl Default for SemanticFamilyState {
@@ -614,6 +648,7 @@ impl Default for SemanticFamilyPresentation {
             own_color: crate::Color::WHITE,
             own_style: SemanticStyle::manim_family_root(crate::Color::WHITE),
             own_sheen_direction: SemanticSheenDirection::DEFAULT,
+            opacity_copy: None,
         }
     }
 }

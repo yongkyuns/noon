@@ -173,6 +173,11 @@ pub enum SemanticMutation {
     SetFamilyStyle {
         node: SemanticTransactionNodeRef,
         style: SemanticStyle,
+        /// A selected opacity write remains intent even when its value equals
+        /// a copied baseline. Ordinary paint metadata edits omit this domain.
+        opacity_write: bool,
+        /// Initialize weak copy intent from this exact source generation.
+        copy_source: Option<SemanticNodeId>,
         background_stroke_color: Option<crate::Color>,
         background_stroke_width: Option<f64>,
         background_stroke_opacity: Option<f64>,
@@ -692,6 +697,8 @@ pub(super) struct SemanticTransactionPreflight {
     pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
     staged_family_colors: HashMap<SemanticTransactionNodeRef, crate::Color>,
     staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle>,
+    staged_family_opacity_copies:
+        HashMap<SemanticTransactionNodeRef, Option<crate::SemanticFamilyOpacityCopyProvenance>>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_drawing: HashMap<SemanticTransactionNodeRef, bool>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
@@ -1192,9 +1199,53 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
+            opacity_write: false,
+            copy_source: None,
             background_stroke_color: None,
             background_stroke_width: None,
             background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// Replace the style with an explicitly selected composite-opacity domain.
+    /// This retains same-valued writes on copied targets without claiming any
+    /// other style field as a new animation driver.
+    pub fn set_family_style_with_explicit_object_opacity(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            opacity_write: true,
+            copy_source: None,
+            background_stroke_color: None,
+            background_stroke_width: None,
+            background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// One copied family style plus its weak appearance-target provenance.
+    pub fn set_copied_family_style_with_background_stroke_update(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        source: SemanticNodeId,
+        style: SemanticStyle,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            opacity_write: false,
+            copy_source: Some(source),
+            background_stroke_color,
+            background_stroke_width,
+            background_stroke_opacity,
         });
         self
     }
@@ -1229,6 +1280,8 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
+            opacity_write: false,
+            copy_source: None,
             background_stroke_color,
             background_stroke_width,
             background_stroke_opacity,
@@ -2451,6 +2504,10 @@ impl SemanticMutationTransaction {
         let mut staged_family_colors = HashMap::new();
         let mut staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle> =
             HashMap::new();
+        let mut staged_family_opacity_copies: HashMap<
+            SemanticTransactionNodeRef,
+            Option<crate::SemanticFamilyOpacityCopyProvenance>,
+        > = HashMap::new();
         let mut staged_sheen_directions = HashMap::new();
         let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
@@ -3174,6 +3231,8 @@ impl SemanticMutationTransaction {
                 SemanticMutation::SetFamilyStyle {
                     node,
                     style,
+                    opacity_write,
+                    copy_source,
                     background_stroke_color,
                     background_stroke_width,
                     background_stroke_opacity,
@@ -3184,6 +3243,18 @@ impl SemanticMutationTransaction {
                         &mut staged_object_order,
                         *node,
                     );
+                    if let Some(source) = copy_source {
+                        catalog.ensure_family((*source).into(), index)?;
+                        if staged_objects.contains_key(node) {
+                            return Err(
+                                SemanticMutationTransactionError::UnsupportedPropertyWrite {
+                                    index,
+                                    object: *node,
+                                    property: SemanticObjectProperty::ObjectOpacity,
+                                },
+                            );
+                        }
+                    }
                     if !style.is_finite() {
                         return Err(invalid_style_error(index, *node));
                     }
@@ -3223,7 +3294,32 @@ impl SemanticMutationTransaction {
                     if let Some(opacity) = background_stroke_opacity {
                         next_style.background_stroke_opacity = *opacity;
                     }
-                    changed.push(previous_style != next_style || previous_color != next_color);
+                    let previous_copy = staged_family_opacity_copies
+                        .get(node)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            node.existing()
+                                .and_then(|id| store.node(id))
+                                .and_then(|node| node.family_opacity_copy_provenance())
+                        });
+                    let next_copy = if let Some(source) = copy_source {
+                        Some(crate::SemanticFamilyOpacityCopyProvenance::new(
+                            *source,
+                            next_style.object_opacity,
+                        ))
+                    } else if *opacity_write
+                        || previous_style.object_opacity != next_style.object_opacity
+                    {
+                        previous_copy.map(|copy| copy.with_object_opacity_write())
+                    } else {
+                        previous_copy
+                    };
+                    changed.push(
+                        previous_style != next_style
+                            || previous_color != next_color
+                            || previous_copy != next_copy,
+                    );
+                    staged_family_opacity_copies.insert(*node, next_copy);
                     if let Some(state) = staged_objects.get_mut(node) {
                         state.style = next_style.clone();
                     }
@@ -3952,6 +4048,7 @@ impl SemanticMutationTransaction {
             staged_effects,
             staged_family_colors,
             staged_family_styles,
+            staged_family_opacity_copies,
             staged_family_z,
             staged_drawing,
             changed,

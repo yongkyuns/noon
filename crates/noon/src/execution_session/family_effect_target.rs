@@ -14,20 +14,28 @@ fn has_effects(
     if !store.has_composed_source_declarations() {
         return Ok(false);
     }
-    for root in [source, target] {
-        if store
-            .ordered_authoring_nodes(root)
-            .map_err(error)?
-            .into_iter()
-            .any(|node| {
-                let node = store.node(node).expect("validated family traversal");
-                !node.effect_ids().is_empty()
-                    || node.semantic_object_state().is_none()
-                        && node
-                            .family_style()
-                            .is_some_and(|style| style.object_opacity != 1.0)
-            })
-        {
+    let source_nodes = store.ordered_authoring_nodes(source).map_err(error)?;
+    let source_ids = source_nodes
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    for (nodes, destination) in [
+        (source_nodes, false),
+        (store.ordered_authoring_nodes(target).map_err(error)?, true),
+    ] {
+        if nodes.into_iter().any(|node| {
+            let node = store.node(node).expect("validated family traversal");
+            !node.effect_ids().is_empty()
+                || node.semantic_object_state().is_none()
+                    && (node
+                        .family_style()
+                        .is_some_and(|style| style.object_opacity != 1.0)
+                        || !destination && store.has_family_appearance_target(node.id())
+                        || destination
+                            && node.family_opacity_copy_provenance().is_some_and(|copy| {
+                                source_ids.contains(&copy.source()) && copy.writes_object_opacity()
+                            }))
+        }) {
             return Ok(true);
         }
     }
@@ -75,14 +83,21 @@ pub(super) fn has_scope_effects(
         .map_err(error)?
         .into_iter()
         .any(|(source, target)| {
-            [source, target].into_iter().any(|owner| {
-                let node = store.node(owner).expect("validated root");
-                node.semantic_object_state().is_none()
-                    && (!node.effect_ids().is_empty()
-                        || node
-                            .family_style()
-                            .is_some_and(|style| style.object_opacity != 1.0))
-            })
+            [(source, false), (target, true)]
+                .into_iter()
+                .any(|(owner, destination)| {
+                    let node = store.node(owner).expect("validated root");
+                    node.semantic_object_state().is_none()
+                        && (!node.effect_ids().is_empty()
+                            || node
+                                .family_style()
+                                .is_some_and(|style| style.object_opacity != 1.0)
+                            || !destination && store.has_family_appearance_target(owner)
+                            || destination
+                                && node.family_opacity_copy_provenance().is_some_and(|copy| {
+                                    copy.source() == source && copy.writes_object_opacity()
+                                }))
+                })
         }))
 }
 
@@ -149,13 +164,21 @@ pub(super) fn compose(
         if !seen.insert(owner) {
             continue;
         }
-        if [owner, target].into_iter().all(|id| {
-            let node = store.node(id).expect("validated family pair");
-            node.effect_ids().is_empty()
-                && node
-                    .family_style()
-                    .is_none_or(|style| style.object_opacity == 1.0)
-        }) {
+        if [(owner, false), (target, true)]
+            .into_iter()
+            .all(|(id, destination)| {
+                let node = store.node(id).expect("validated family pair");
+                node.effect_ids().is_empty()
+                    && node
+                        .family_style()
+                        .is_none_or(|style| style.object_opacity == 1.0)
+                    && (destination || !store.has_family_appearance_target(id))
+                    && (!destination
+                        || node.family_opacity_copy_provenance().is_none_or(|copy| {
+                            copy.source() != owner || !copy.writes_object_opacity()
+                        }))
+            })
+        {
             continue;
         }
         // Rendered roots already own effects in the nested per-leaf expansion.
@@ -186,4 +209,85 @@ pub(super) fn compose(
         children,
         root_options,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_identity_scope_full_target_captures_current_effective_opacity() {
+        let mut scene = crate::Scene::new();
+        let leaf = scene.circle(0.4).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        let snapshot = family.copy_family().unwrap();
+        // A real replayable appearance declaration requires the identity scope,
+        // independently from its authored opacity or attachment column.
+        let _declaration = scene
+            .declare_animation(
+                noon_core::SemanticAnimationIntent::EffectTargetTo {
+                    target: family.node_id(),
+                    target_state: snapshot.root().node_id(),
+                    method_target: false,
+                },
+                AnimationOptions::new().run_time(1.0),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let object = session.execution_object_id(family.node_id()).unwrap();
+        let id = session.next_activation_track_id.unwrap();
+        // Install an ordinary typed runtime timeline, as other activation tests
+        // do. The authored root remains one while the effective endpoint is .5.
+        session
+            .runtime
+            .apply_execution_transaction(
+                &noon_compile::ExecutionMutationTransaction::from_mutations(vec![
+                    noon_compile::ExecutionPatch::AddTrack(noon_core::TrackDefinition {
+                        id: noon_core::TrackId::new(id),
+                        object,
+                        property: noon_core::Property::Opacity,
+                        values: noon_core::TrackValues::Scalar { from: 1.0, to: 0.5 },
+                        timing: noon_core::TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                        time_map: noon_core::CompositionTimeMap::identity(),
+                    }),
+                ]),
+            )
+            .unwrap();
+        session.next_activation_track_id = id.checked_add(1);
+        session.seek(1.0).unwrap();
+        assert_eq!(
+            session
+                .runtime
+                .effective_object(object)
+                .unwrap()
+                .style
+                .opacity,
+            0.5
+        );
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_composition(
+                &crate::AnimationCompositionRequest::FamilyTransformTo {
+                    source: &family,
+                    target_state: snapshot.root(),
+                    options: AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                },
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        session.advance_segment_to(segment, 1.5).unwrap();
+        assert_eq!(
+            session
+                .runtime
+                .effective_object(object)
+                .unwrap()
+                .style
+                .opacity,
+            0.75
+        );
+        assert_eq!(family.own_style().unwrap().object_opacity, 1.0);
+    }
 }

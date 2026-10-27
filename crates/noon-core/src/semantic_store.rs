@@ -559,6 +559,27 @@ impl SemanticNode {
         matches!(&self.kind, SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state))
             if state.own_style.object_opacity != 1.0)
     }
+
+    pub fn family_opacity_copy_provenance(&self) -> Option<SemanticFamilyOpacityCopyProvenance> {
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => state.opacity_copy,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_family_opacity_copy_provenance(
+        &mut self,
+        copy: Option<SemanticFamilyOpacityCopyProvenance>,
+    ) {
+        if let SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) = &mut self.kind {
+            state.opacity_copy = copy;
+        }
+    }
+
+    pub(crate) fn has_explicit_family_opacity_target(&self) -> bool {
+        self.family_opacity_copy_provenance()
+            .is_some_and(|copy| copy.writes_object_opacity())
+    }
     pub fn family_background_stroke_opacity(&self) -> Option<f64> {
         self.family_style()
             .map(|style| style.background_stroke_opacity)
@@ -849,6 +870,7 @@ pub struct SemanticStore {
     // the declaration-only effect profile reject execution without scene scans.
     effect_nodes: usize,
     partial_opacity_families: usize,
+    explicit_family_opacity_targets: usize,
     appearance_target_animations: usize,
     audio_clip_nodes: usize,
     scene_head: Option<SemanticNodeId>,
@@ -991,6 +1013,7 @@ impl Clone for SemanticStore {
             live_nodes: self.live_nodes,
             effect_nodes: self.effect_nodes,
             partial_opacity_families: self.partial_opacity_families,
+            explicit_family_opacity_targets: self.explicit_family_opacity_targets,
             appearance_target_animations: self.appearance_target_animations,
             audio_clip_nodes: self.audio_clip_nodes,
             scene_head: self.scene_head,
@@ -1318,6 +1341,13 @@ impl SemanticStore {
                 .as_ref()
                 .expect("inserted node")
                 .has_partial_family_opacity(),
+        );
+        self.explicit_family_opacity_targets += usize::from(
+            self.slots[slot_index as usize]
+                .node
+                .as_ref()
+                .expect("inserted node")
+                .has_explicit_family_opacity_target(),
         );
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -1994,6 +2024,8 @@ impl SemanticStore {
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
         self.partial_opacity_families -= usize::from(removed.has_partial_family_opacity());
+        self.explicit_family_opacity_targets -=
+            usize::from(removed.has_explicit_family_opacity_target());
         self.appearance_target_animations -= usize::from(matches!(&removed.kind,
             SemanticNodeKind::Animation(state) if matches!(state.intent(), SemanticAnimationIntent::EffectTargetTo { .. })));
         self.effect_nodes -= usize::from(matches!(removed.kind, SemanticNodeKind::Effect(_)));

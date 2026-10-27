@@ -554,11 +554,22 @@ where
                     .family_style(target_state)
                     .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(effect_error)?;
-                if let Some(channel) = super::affine::lower_object_opacity_channel(
+                let owner = prepared.planned_node_id(leaf.target).ok_or_else(|| {
+                    effect_error(
+                        super::glow_target::EffectTargetLoweringError::MissingEffectiveValue,
+                    )
+                })?;
+                let copy = prepared
+                    .family_opacity_copy_provenance(target_state)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
+                    .map_err(effect_error)?;
+                if let Some(channel) = super::affine::lower_family_object_opacity_channel(
+                    owner,
                     source_style.object_opacity,
                     target_style.object_opacity,
                     from.style.opacity,
-                    false,
+                    copy,
+                    method_target,
                 ) {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }

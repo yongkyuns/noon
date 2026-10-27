@@ -181,6 +181,14 @@ pub(super) fn prepare(
                         prepared.family_style(*node)?.object_opacity,
                     )
                     .map_err(|error| error.with_node(id))?;
+                    if prepared
+                        .store()
+                        .node(id)
+                        .and_then(|node| node.family_style())
+                        .is_some_and(|style| style.object_opacity as f32 == opacity)
+                    {
+                        continue;
+                    }
                     values.push(ExecutionPatch::SetStyle {
                         object: semantic_execution_object_id(id),
                         style: Style {

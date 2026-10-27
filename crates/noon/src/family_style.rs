@@ -430,7 +430,7 @@ impl MobjectFamily {
         let mut style = self.own_style()?;
         edit_object_opacity(&mut style, opacity)?;
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_family_style(self.node_id(), style);
+        transaction.set_family_style_with_explicit_object_opacity(self.node_id(), style);
         Ok(transaction)
     }
 
