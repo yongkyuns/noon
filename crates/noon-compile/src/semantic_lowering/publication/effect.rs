@@ -89,7 +89,8 @@ pub(super) fn lower_changes(
         if !reachability.is_object_reachable(owner)
             || (super::composed::unrendered_family(prepared, owner.into())?
                 && prepared.animation_effect_snapshot(owner)?.is_empty()
-                && prepared.family_style(owner)?.object_opacity == 1.0)
+                && prepared.family_style(owner)?.object_opacity == 1.0
+                && !prepared.has_family_appearance_target(owner))
         {
             continue;
         }

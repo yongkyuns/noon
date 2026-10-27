@@ -7,11 +7,12 @@ use noon_core::{
 
 use crate::SemanticLoweringError;
 
-fn has_execution_row(node: &noon_core::SemanticNode) -> bool {
+fn has_execution_row(store: &SemanticStore, node: &noon_core::SemanticNode) -> bool {
     node.semantic_object_state().is_some()
         || (matches!(node.kind(), SemanticNodeKind::Family(_))
             && (!node.effect_ids().is_empty()
-                || node.family_style().expect("family style").object_opacity != 1.0))
+                || node.family_style().expect("family style").object_opacity != 1.0
+                || store.has_family_appearance_target(node.id())))
 }
 
 /// Compiler-owned reachability metadata for the semantic -> execution boundary.
@@ -282,8 +283,11 @@ impl SemanticExecutionReachability {
                 }
                 SemanticMutationImpact::ObjectContent { object }
                 | SemanticMutationImpact::FamilyStyle { node: object }
+                | SemanticMutationImpact::FamilyAppearanceScope { node: object }
                 | SemanticMutationImpact::EffectAttachment { owner: object, .. } => {
-                    let owns_content = store.node(object).is_some_and(has_execution_row);
+                    let owns_content = store
+                        .node(object)
+                        .is_some_and(|node| has_execution_row(store, node));
                     if self
                         .nodes
                         .get(&object)
@@ -401,7 +405,10 @@ impl SemanticExecutionReachability {
             if before || !after {
                 continue;
             }
-            if store.node(*id).is_none_or(|node| !has_execution_row(node)) {
+            if store
+                .node(*id)
+                .is_none_or(|node| !has_execution_row(store, node))
+            {
                 return Err(SemanticLoweringError::MissingSemanticObjectState(*id));
             }
         }
@@ -447,7 +454,7 @@ impl SemanticExecutionReachability {
         ))?;
         let object = match node.kind() {
             SemanticNodeKind::AuthoringObject => true,
-            SemanticNodeKind::Family(_) => has_execution_row(node),
+            SemanticNodeKind::Family(_) => has_execution_row(store, node),
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
             | SemanticNodeKind::AudioClip(_)

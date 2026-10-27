@@ -120,6 +120,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::FamilyColor { .. }
                 | SemanticMutationImpact::FamilyStyle { .. }
+                | SemanticMutationImpact::FamilyAppearanceScope { .. }
                 | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::DrawEnabled { .. }

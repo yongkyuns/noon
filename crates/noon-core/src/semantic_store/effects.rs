@@ -340,7 +340,9 @@ impl SemanticStore {
     /// Constant-time gate for declarations that can require an isolated family
     /// image. The cardinalities are maintained with the same semantic nodes.
     pub const fn has_composed_source_declarations(&self) -> bool {
-        self.effect_nodes != 0 || self.partial_opacity_families != 0
+        self.effect_nodes != 0
+            || self.partial_opacity_families != 0
+            || self.appearance_target_animations != 0
     }
 
     pub fn semantic_effect_state(

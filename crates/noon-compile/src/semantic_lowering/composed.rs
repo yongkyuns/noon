@@ -68,7 +68,8 @@ pub(super) fn prepare_initial(
             if matches!(node.kind(), SemanticNodeKind::Family(_))
                 && node.semantic_object_state().is_none()
                 && (!node.effect_ids().is_empty()
-                    || node.family_style().expect("family style").object_opacity != 1.0)
+                    || node.family_style().expect("family style").object_opacity != 1.0
+                    || store.has_family_appearance_target(owner))
             {
                 candidates.push(owner);
             }

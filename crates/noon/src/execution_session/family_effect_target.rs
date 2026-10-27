@@ -1,4 +1,4 @@
-//! Family targets stage ordinary effect-only semantic leaves alongside their
+//! Family targets stage ordinary appearance semantic leaves alongside their
 //! existing geometric animation, sharing one schedule and completion barrier.
 use super::*;
 
@@ -11,7 +11,7 @@ fn has_effects(
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<bool, ExecutionSessionAnimationError> {
-    if !store.has_effect_attachments() {
+    if !store.has_composed_source_declarations() {
         return Ok(false);
     }
     for root in [source, target] {
@@ -20,11 +20,12 @@ fn has_effects(
             .map_err(error)?
             .into_iter()
             .any(|node| {
-                !store
-                    .node(node)
-                    .expect("validated family traversal")
-                    .effect_ids()
-                    .is_empty()
+                let node = store.node(node).expect("validated family traversal");
+                !node.effect_ids().is_empty()
+                    || node.semantic_object_state().is_none()
+                        && node
+                            .family_style()
+                            .is_some_and(|style| style.object_opacity != 1.0)
             })
         {
             return Ok(true);
@@ -39,7 +40,7 @@ pub(super) fn reject_matching(
     target: SemanticNodeId,
 ) -> Result<(), ExecutionSessionAnimationError> {
     if has_effects(store, source, target)? {
-        return Err(error("matching effect-bearing family targets require composed-scope animation lowering qualification (#1897)"));
+        return Err(error("matching appearance-bearing family targets require composed-scope animation lowering qualification (#1897)"));
     }
     Ok(())
 }
@@ -76,7 +77,11 @@ pub(super) fn has_scope_effects(
         .any(|(source, target)| {
             [source, target].into_iter().any(|owner| {
                 let node = store.node(owner).expect("validated root");
-                node.semantic_object_state().is_none() && !node.effect_ids().is_empty()
+                node.semantic_object_state().is_none()
+                    && (!node.effect_ids().is_empty()
+                        || node
+                            .family_style()
+                            .is_some_and(|style| style.object_opacity != 1.0))
             })
         }))
 }
@@ -133,23 +138,24 @@ pub(super) fn compose(
         .ordered_family_root_pairs(source, target)
         .map_err(error)?;
     let mut children = vec![geometry];
-    let effect_options = AnimationOptions::new().rate_func(RateFunction::Linear);
+    // This is a derived fanout, not an authored AnimationGroup. Keep the
+    // family's easing on its actual parameter leaf so returning rates retain
+    // the ordinary terminal sample and completion policy.
+    let effect_options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(options.rate_func.unwrap_or(RateFunction::Smooth));
     let mut seen = std::collections::HashSet::new();
     for (owner, target) in pairs {
         if !seen.insert(owner) {
             continue;
         }
-        if store
-            .node(owner)
-            .expect("validated source")
-            .effect_ids()
-            .is_empty()
-            && store
-                .node(target)
-                .expect("validated target")
-                .effect_ids()
-                .is_empty()
-        {
+        if [owner, target].into_iter().all(|id| {
+            let node = store.node(id).expect("validated family pair");
+            node.effect_ids().is_empty()
+                && node
+                    .family_style()
+                    .is_none_or(|style| style.object_opacity == 1.0)
+        }) {
             continue;
         }
         // Rendered roots already own effects in the nested per-leaf expansion.
@@ -172,7 +178,7 @@ pub(super) fn compose(
         return Ok(geometry);
     }
     let mut root_options = options;
-    root_options.rate_func = Some(options.rate_func.unwrap_or(RateFunction::Smooth));
+    root_options.rate_func = Some(RateFunction::Linear);
     root_options.path_arc = None;
     root_options.lag_ratio = None;
     Ok(declaration.create_animation_composition(

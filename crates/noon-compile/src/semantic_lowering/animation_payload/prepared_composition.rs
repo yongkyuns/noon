@@ -337,6 +337,12 @@ where
     let mut driven = super::affine::DriverMap::<SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
     let mut admitted = HashSet::new();
+    admitted.extend(
+        prepared
+            .family_appearance_scope_changes()
+            .into_iter()
+            .filter(|owner| prepared.has_family_appearance_target(*owner)),
+    );
     for member in prepared
         .candidate_mutations()
         .filter_map(|mutation| match mutation {
@@ -488,10 +494,39 @@ where
                     super::glow_target::EffectTargetLoweringError::UnsupportedTargetOptions,
                 ));
             }
+            let source_style = if prepared.object_state(leaf.target).is_err() {
+                Some(
+                    prepared
+                        .family_style(leaf.target)
+                        .map_err(super::glow_target::EffectTargetLoweringError::Read)
+                        .map_err(effect_error)?,
+                )
+            } else {
+                None
+            };
             let from = captures
                 .get(leaf.execution_object_id)
                 .or_else(|| {
-                    let from = effective_properties(leaf.execution_object_id)?;
+                    let from = effective_properties(leaf.execution_object_id).or_else(|| {
+                        admitted
+                            .contains(&leaf.target)
+                            .then_some(EffectiveAnimationProperties {
+                                fill_paint: None,
+                                effects: None,
+                                z_index: prepared.z_index(leaf.target).ok()?,
+                                transform: noon_core::Transform2D::IDENTITY,
+                                style: noon_core::Style {
+                                    fill: None,
+                                    stroke: None,
+                                    opacity: source_style.as_ref()?.object_opacity as f32,
+                                    ..noon_core::Style::default()
+                                },
+                                appearance: 1.0,
+                                reveal: 1.0,
+                                world_transform: None,
+                                camera_profile: None,
+                            })
+                    })?;
                     captures.insert(leaf.execution_object_id, from);
                     captures.get(leaf.execution_object_id)
                 })
@@ -514,6 +549,20 @@ where
             )
             .map_err(effect_error)?;
             push_effect_channels(leaf, channels, &mut driven, &mut tracks)?;
+            if let Some(source_style) = source_style {
+                let target_style = prepared
+                    .family_style(target_state)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
+                    .map_err(effect_error)?;
+                if let Some(channel) = super::affine::lower_object_opacity_channel(
+                    source_style.object_opacity,
+                    target_style.object_opacity,
+                    from.style.opacity,
+                    false,
+                ) {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+            }
             continue;
         }
         let source = prepared.object_state(leaf.target).map_err(|error| {

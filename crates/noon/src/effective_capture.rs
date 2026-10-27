@@ -174,6 +174,25 @@ pub(crate) fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
     }
 }
 
+/// Unrendered family roots own composite opacity independently from child
+/// paints. Capture that one runtime value, preserving exact authored precision
+/// when lowering has not changed it. Membership and capture scheduling stay in
+/// the existing root-local semantic copy preparation.
+pub(crate) fn capture_family_style(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+    style: &mut SemanticStyle,
+) -> Result<(), AuthoringError> {
+    if execution.semantic_object_is_reachable(source) {
+        preserve_or_capture_f32(
+            &mut style.object_opacity,
+            execution.effective_family_opacity(store, source)?,
+        );
+    }
+    Ok(())
+}
+
 /// Stage one independent attachment copy at the same coherent publication as
 /// the target's object state. Detached sources retain authored declarations;
 /// resident sources copy the effective value without borrowing their identity.

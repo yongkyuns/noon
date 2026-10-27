@@ -175,6 +175,11 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
     capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
+    capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
     copy_effects: impl FnMut(
         &SemanticStore,
         SemanticNodeId,
@@ -187,6 +192,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         references,
         CopyRootMembership::Preserve,
         capture,
+        capture_family_style,
         copy_effects,
     )
 }
@@ -204,6 +210,11 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
     references: &[MobjectTarget<'_>],
     root_membership: CopyRootMembership,
     mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
+    mut capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
     mut copy_effects: impl FnMut(
         &SemanticStore,
         SemanticNodeId,
@@ -236,7 +247,7 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             family_z,
             draw_enabled,
             family_color,
-            family_style,
+            mut family_style,
             family_background_stroke_color,
             family_background_stroke_width,
             family_background_stroke_opacity,
@@ -314,6 +325,13 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
                 .borrow()
                 .node(id)
                 .is_some_and(|node| node.semantic_object_state().is_some());
+        if !has_content {
+            capture_family_style(
+                &store.borrow(),
+                id,
+                family_style.as_mut().expect("family style"),
+            )?;
+        }
         let state = if has_content {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
             let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
@@ -508,6 +526,7 @@ fn authored_copy<R>(
         source,
         references,
         |mobject, _| mobject.state(),
+        |_, _, _| Ok(()),
         |store, source, target, transaction| {
             store
                 .copy_effects_into(source, target, transaction)
@@ -520,7 +539,97 @@ fn authored_copy<R>(
 
 #[cfg(test)]
 mod owned_root_fallback_copy_tests {
+    use super::*;
     use crate::{Color, MobjectFamily, Scene};
+
+    #[test]
+    fn prepared_family_copy_captures_effective_scope_opacity_without_crossing_live_barrier() {
+        use crate::{AnimationCompositionRequest, AnimationOptions, RateFunction};
+        for start in [0.512345678901, 1.0] {
+            let mut scene = Scene::new();
+            let leaf = scene.circle(0.4).unwrap();
+            let family = scene.family(&[(&leaf).into()]).unwrap();
+            family.set_object_opacity(start).unwrap();
+            scene.add_many(&[(&family).into()]).unwrap();
+            let mut session = scene.execution_session().unwrap();
+            let target = scene.live(&mut session).copy_family(&family).unwrap();
+            assert_eq!(target.root().own_style().unwrap().object_opacity, start);
+            scene
+                .live(&mut session)
+                .set_family_object_opacity(target.root(), 0.25)
+                .unwrap();
+            let segment = scene
+                .live(&mut session)
+                .declare_and_activate_composition(
+                    &AnimationCompositionRequest::FamilyTransformTo {
+                        source: &family,
+                        target_state: target.root(),
+                        options: AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    },
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            session.advance_segment_to(segment, 0.5).unwrap();
+            let object = session.execution_object_id(family.node_id()).unwrap();
+            let effective = session
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.id == object)
+                .unwrap()
+                .style
+                .opacity;
+            let before = session.publication_context();
+            let count = scene.integration_store().borrow().len();
+            assert!(
+                scene.live(&mut session).copy_family(&family).is_err(),
+                "copy publication retains the ordinary pending-completion barrier"
+            );
+            let (copy, pending) = prepare_semantic_copy::<AuthoringError>(
+                (&family).into(),
+                &[],
+                |object, graph_row| {
+                    crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                        scene.integration_store(),
+                        &session,
+                        object,
+                        graph_row,
+                    )
+                },
+                |store, source, style| {
+                    crate::effective_capture::capture_family_style(store, &session, source, style)
+                },
+                |store, source, target, transaction| {
+                    crate::effective_capture::stage_effect_copy(
+                        store,
+                        &session,
+                        source,
+                        target,
+                        transaction,
+                    )
+                },
+            )
+            .unwrap();
+            {
+                let mut store = scene.integration_store().borrow_mut();
+                let prepared = copy.prepare(&mut store).unwrap();
+                assert_eq!(
+                    prepared
+                        .family_style(pending.root_token())
+                        .unwrap()
+                        .object_opacity,
+                    f64::from(effective),
+                    "copy preparation captures owned composite opacity"
+                );
+            }
+            assert_eq!(family.own_style().unwrap().object_opacity, start);
+            assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(scene.integration_store().borrow().len(), count);
+        }
+    }
 
     fn fallback(family: &MobjectFamily) -> Color {
         let store = family.integration_store().borrow();

@@ -1,6 +1,249 @@
 //! Public family-target animation, identity and atomicity qualification.
 use super::*;
 
+fn qualify_family_opacity_target(start: f64) {
+    use noon::{AnimationCompositionRequest, AnimationOptions, RateFunction};
+    for method in [false, true] {
+        let mut scene = Scene::new();
+        let a = scene.circle(0.4).unwrap();
+        let b = scene.square(0.5).unwrap();
+        let source = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+        source.set_object_opacity(start).unwrap();
+        scene.add_many(&[(&source).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let target = scene.live(&mut session).copy_family(&source).unwrap();
+        let end = 0.234567890123;
+        scene
+            .live(&mut session)
+            .set_family_object_opacity(target.root(), end)
+            .unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let request = if method {
+            AnimationCompositionRequest::FamilyMethodTargetTo {
+                source: &source,
+                target_state: target.root(),
+                options,
+            }
+        } else {
+            AnimationCompositionRequest::FamilyTransformTo {
+                source: &source,
+                target_state: target.root(),
+                options,
+            }
+        };
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+        session.advance_segment_to(segment, 0.5).unwrap();
+        let scope = row(&session, source.node_id())
+            .expect("family opacity animation needs its real composed controller");
+        assert!(
+            (f64::from(scope.style.opacity) - (start + end) * 0.5).abs() < 1e-6,
+            "start={start} method={method}: family opacity must use the shared root clock; got {}",
+            scope.style.opacity
+        );
+        session.advance_segment_to(segment, 1.0).unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+        assert_eq!(
+            source.own_style().unwrap().object_opacity,
+            end,
+            "completion preserves exact authored opacity"
+        );
+    }
+}
+
+#[test]
+fn family_opacity_target_interpolates_an_existing_scope() {
+    qualify_family_opacity_target(0.5);
+}
+
+#[test]
+fn family_opacity_target_admits_the_default_full_opacity_scope() {
+    qualify_family_opacity_target(1.0);
+}
+
+#[test]
+fn parallel_family_opacity_targets_reject_conflicting_drivers_before_scope_admission() {
+    use noon::{
+        AnimationCompositionRequest, AnimationOptions, RateFunction,
+        SemanticAnimationCompositionKind,
+    };
+    for start in [1.0, 0.5] {
+        let mut scene = Scene::new();
+        let leaf = scene.circle(0.4).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        family.set_object_opacity(start).unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let a = scene.live(&mut session).copy_family(&family).unwrap();
+        let b = scene.live(&mut session).copy_family(&family).unwrap();
+        scene
+            .live(&mut session)
+            .set_family_object_opacity(a.root(), 0.25)
+            .unwrap();
+        scene
+            .live(&mut session)
+            .set_family_object_opacity(b.root(), 0.75)
+            .unwrap();
+        let before = session.frame().clone();
+        let context = session.publication_context();
+        let revision = scene.revision();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[
+                    AnimationCompositionRequest::FamilyMethodTargetTo {
+                        source: &family,
+                        target_state: a.root(),
+                        options,
+                    },
+                    AnimationCompositionRequest::FamilyMethodTargetTo {
+                        source: &family,
+                        target_state: b.root(),
+                        options,
+                    },
+                ],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            );
+        assert!(result.is_err());
+        assert_eq!(session.frame(), &before);
+        assert_eq!(session.publication_context(), context);
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(family.own_style().unwrap().object_opacity, start);
+        assert_eq!(row(&session, family.node_id()).is_some(), start != 1.0);
+    }
+}
+
+#[test]
+fn family_opacity_uses_root_clock_with_member_lag_backward_seek_and_returning_completion() {
+    use noon::{AnimationCompositionRequest, AnimationOptions, RateFunction};
+    for method in [false, true] {
+        let mut scene = Scene::new();
+        let a = scene.circle(0.4).unwrap();
+        let b = scene.square(0.5).unwrap();
+        let source = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+        scene.add_many(&[(&source).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let target = scene.live(&mut session).copy_family(&source).unwrap();
+        scene
+            .live(&mut session)
+            .set_family_object_opacity(target.root(), 0.25)
+            .unwrap();
+        scene
+            .live(&mut session)
+            .shift_family(target.root(), 2.0, 0.0)
+            .unwrap();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let request = if method {
+            AnimationCompositionRequest::FamilyMethodTargetTo {
+                source: &source,
+                target_state: target.root(),
+                options,
+            }
+        } else {
+            AnimationCompositionRequest::FamilyTransformTo {
+                source: &source,
+                target_state: target.root(),
+                options,
+            }
+        };
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_composition(
+                &request,
+                AnimationOptions::new()
+                    .run_time(4.0)
+                    .rate_func(RateFunction::ThereAndBack)
+                    .lag_ratio(0.5),
+            )
+            .unwrap();
+        assert_eq!(segment.end_time(), 4.0);
+        for (time, opacity) in [(0.0, 1.0), (2.0, 0.25), (4.0, 1.0), (2.0, 0.25), (0.0, 1.0)] {
+            session.seek(time).unwrap();
+            assert_eq!(
+                row(&session, source.node_id()).unwrap().style.opacity,
+                opacity
+            );
+        }
+        session.advance_segment_to(segment, 4.0).unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+        assert_eq!(source.own_style().unwrap().object_opacity, 1.0);
+        assert_eq!(row(&session, source.node_id()).unwrap().style.opacity, 1.0);
+    }
+}
+
+#[test]
+fn declared_opacity_scope_retires_when_its_last_declaration_is_cascade_removed() {
+    use noon::{AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let leaf = scene.circle(0.4).unwrap();
+    let source = scene.family(&[(&leaf).into()]).unwrap();
+    scene.add_many(&[(&source).into()]).unwrap();
+    let target = source.copy_family().unwrap();
+    target.root().set_object_opacity(0.25).unwrap();
+    let declaration = scene
+        .declare_animation(
+            noon_core::SemanticAnimationIntent::EffectTargetTo {
+                target: source.node_id(),
+                target_state: target.root().node_id(),
+                method_target: true,
+            },
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    assert_eq!(row(&session, source.node_id()).unwrap().style.opacity, 1.0);
+    let segment = scene
+        .live(&mut session)
+        .play_animation(&declaration)
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        row(&session, source.node_id()).unwrap().style.opacity,
+        0.625
+    );
+    session.advance_segment_to(segment, 1.0).unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene
+        .live(&mut session)
+        .set_family_object_opacity(&source, 1.0)
+        .unwrap();
+    assert!(
+        row(&session, source.node_id()).is_some(),
+        "live declaration retains the identity scope for replay"
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.remove_node(target.root().node_id());
+    let before = scene.revision();
+    scene.live(&mut session).apply(transaction).unwrap();
+    assert_ne!(scene.revision(), before);
+    assert!(
+        declaration.options().is_err(),
+        "the target dependency retires its declaration"
+    );
+    assert!(
+        row(&session, source.node_id()).is_none(),
+        "no declaration, opacity or effect still requires isolation"
+    );
+    assert!(row(&session, leaf.node_id()).is_some());
+    assert_eq!(
+        session.last_structural_publication_stats().exited_objects,
+        1
+    );
+}
+
 #[test]
 fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generations() {
     use noon::{AnimationCompositionRequest, AnimationOptions, RateFunction};

@@ -2609,7 +2609,6 @@ impl ExecutionSession {
                         let mut composition_options = *options;
                         if family_effect_target::has_scope_effects(store, *source, *target_state)? {
                             composition_options.run_time = Some(1.0);
-                            composition_options.rate_func = Some(RateFunction::Linear);
                         }
                         // `path_arc` is Transform payload meaning, not composition
                         // timing. Each aligned leaf owns the same deterministic arc.
@@ -4721,6 +4720,18 @@ impl ExecutionSession {
         // validates the ordered attachments before AddTrack and commits atomically.
         let mut staged_effects = BTreeMap::new();
         let mut entering_scope_owners = std::collections::BTreeSet::new();
+        entering_scope_owners.extend(
+            prepared
+                .family_appearance_scope_changes()
+                .into_iter()
+                .filter(|owner| prepared.has_family_appearance_target(*owner))
+                .filter_map(|owner| owner.existing())
+                .filter(|owner| {
+                    prepared.store().node(*owner).is_some_and(|node| {
+                        node.semantic_object_state().is_none() && node.family_style().is_some()
+                    })
+                }),
+        );
         for mutation in prepared.candidate_mutations() {
             let noon_core::SemanticMutation::AddNode {
                 token,

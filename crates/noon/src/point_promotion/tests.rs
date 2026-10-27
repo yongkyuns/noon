@@ -97,6 +97,7 @@ fn root_only_preparation_does_not_capture_existing_children_or_unrelated_objects
             captured.push(object.node_id());
             object.state()
         },
+        |_, _, _| Ok(()),
         |_, id, _, _| {
             effects.push(id);
             Ok(())
@@ -193,6 +194,7 @@ fn structured_root_rejects_before_copy_capture_or_publication() {
         graph.family().into(),
         &[],
         |_, _| panic!("structured root must reject before capture"),
+        |_, _, _| panic!("structured root must reject before family capture"),
         |_, _, _, _| panic!("structured root must reject before effect copy"),
     );
     assert!(matches!(

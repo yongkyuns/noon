@@ -565,6 +565,10 @@ pub enum SemanticMutationImpact {
     FamilyStyle {
         node: SemanticNodeId,
     },
+    /// A real family appearance animation began or ceased requiring a row.
+    FamilyAppearanceScope {
+        node: SemanticNodeId,
+    },
     ZIndex {
         node: SemanticNodeId,
     },
@@ -700,6 +704,7 @@ pub(super) struct SemanticTransactionPreflight {
     family_edges: FamilyEdgePreflight,
     pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
     pending_animations: HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation>,
+    appearance_targets: HashSet<SemanticTransactionNodeRef>,
     staged_signal_scope_additions: Vec<(SemanticTransactionNodeRef, SemanticTransactionNodeRef)>,
     staged_foreground: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     removed_existing: HashSet<SemanticNodeId>,
@@ -3960,6 +3965,7 @@ impl SemanticMutationTransaction {
             staged_foreground,
             pending_creations,
             pending_animations,
+            appearance_targets: HashSet::new(),
             removed_existing: removed_nodes,
             removed_pending,
             spatial_anchor_cleared,

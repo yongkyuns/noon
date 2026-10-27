@@ -342,6 +342,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             if !planned_nodes.contains_key(token) {
                 continue;
             }
+            if let crate::SemanticTransactionAnimationIntent::EffectTargetTo { target, .. } =
+                animation.intent()
+            {
+                preflight.appearance_targets.insert(*target);
+            }
             if let crate::SemanticTransactionAnimationIntent::TransformTo {
                 target,
                 target_state,
@@ -574,6 +579,46 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .iter()
             .zip(&self.preflight.changed)
             .filter_map(|(mutation, changed)| changed.then_some(mutation))
+    }
+
+    /// Sparse declaration dependency read, including transaction-local targets
+    /// and reverse-reference removal closure. No scene or animation scan.
+    pub fn has_family_appearance_target(
+        &self,
+        owner: impl Into<SemanticTransactionNodeRef>,
+    ) -> bool {
+        let owner = owner.into();
+        !self.node_is_removed(owner)
+            && (self.preflight.appearance_targets.contains(&owner)
+                || owner.existing().is_some_and(|id| {
+                    self.store
+                        .family_appearance_animations(id)
+                        .any(|animation| !self.preflight.removed_existing.contains(&animation))
+                }))
+    }
+
+    pub fn family_appearance_scope_changes(&self) -> Vec<SemanticTransactionNodeRef> {
+        let mut owners = self.preflight.appearance_targets.clone();
+        for removed in &self.preflight.removed_existing {
+            if let Ok(state) = self.store.semantic_animation_state(*removed) {
+                if let crate::SemanticAnimationIntent::EffectTargetTo { target, .. } =
+                    state.intent()
+                {
+                    owners.insert((*target).into());
+                }
+            }
+        }
+        let mut owners = owners
+            .into_iter()
+            .filter(|owner| {
+                owner
+                    .existing()
+                    .is_some_and(|id| self.store.has_family_appearance_target(id))
+                    != self.has_family_appearance_target(*owner)
+            })
+            .collect::<Vec<_>>();
+        owners.sort_by_key(|owner| self.planned_node_id(*owner));
+        owners
     }
 
     /// Staged callback registrations computed by the semantic transaction's own
@@ -1398,6 +1443,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// semantic identity once, then bind those local names without reacquiring or
     /// revalidating a separate store reference.
     pub fn commit_with_store(self) -> (SemanticMutationTransactionResult, &'a mut SemanticStore) {
+        let appearance_scope_changes = self.family_appearance_scope_changes();
         let Self {
             store,
             mut transaction,
@@ -2032,6 +2078,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
         }
 
+        for owner in appearance_scope_changes {
+            let node = resolve_node_ref(owner, &committed_nodes);
+            if store.node(node).is_some_and(|node| {
+                node.semantic_object_state().is_none() && node.family_style().is_some()
+            }) {
+                impacts.push(SemanticMutationImpact::FamilyAppearanceScope { node });
+            }
+        }
         for (node, source_identity) in pending_source_assignments {
             store
                 .set_source_identity(node, Some(source_identity))

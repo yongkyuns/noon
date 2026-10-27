@@ -1226,7 +1226,8 @@ fn collect_prepared_entry_leaves(
             ),
         ) => {
             if (!prepared.animation_effect_snapshot(node)?.is_empty()
-                || prepared.family_style(node)?.object_opacity != 1.0)
+                || prepared.family_style(node)?.object_opacity != 1.0
+                || prepared.has_family_appearance_target(node))
                 && node
                     .existing()
                     .is_none_or(|id| !reachability.is_object_reachable(id))

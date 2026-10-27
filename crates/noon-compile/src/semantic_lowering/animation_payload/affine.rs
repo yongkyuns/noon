@@ -699,6 +699,30 @@ where
             )
             .map_err(effect_error)?;
             push_published_effect_channels(leaf, channels, &mut driven, &mut tracks)?;
+            let family_opacity = |owner| {
+                store
+                    .node(owner)
+                    .and_then(|node| node.family_style())
+                    .map(|style| style.object_opacity)
+                    .ok_or_else(|| {
+                        effect_error(
+                            super::glow_target::EffectTargetLoweringError::MissingEffectiveValue,
+                        )
+                    })
+            };
+            if store
+                .node(leaf.target)
+                .is_some_and(|node| node.semantic_object_state().is_none())
+            {
+                if let Some(channel) = lower_object_opacity_channel(
+                    family_opacity(leaf.target)?,
+                    family_opacity(target_state)?,
+                    from.style.opacity,
+                    false,
+                ) {
+                    push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+            }
             continue;
         }
         if let SemanticScheduledAnimationPayload::WorldTransformTo { transform } = leaf.payload {
@@ -1653,6 +1677,28 @@ pub struct LoweredAffineChannel {
     pub values: TrackValues,
 }
 
+/// Object and isolated-family opacity use the same ordinary style channel and
+/// exact authored completion. The runtime owns interpolation in both cases.
+pub(super) fn lower_object_opacity_channel(
+    source: f64,
+    target: f64,
+    effective: f32,
+    bound: bool,
+) -> Option<LoweredAffineChannel> {
+    (source != target || !bound && effective != target as f32).then_some(LoweredAffineChannel {
+        property: Property::Opacity,
+        conflict_property: SemanticObjectProperty::ObjectOpacity,
+        completion: SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::ObjectOpacity,
+            value: SemanticSignalValue::Scalar(target),
+        },
+        values: TrackValues::Scalar {
+            from: effective,
+            to: target as f32,
+        },
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredSubsetDisplayPhase {
     pub channel: LoweredAffineChannel,
@@ -1910,24 +1956,22 @@ pub(super) fn lower_affine_channels(
         width_changed,
         &mut channels,
     )?;
-    let opacity_changed = source.style.object_opacity != target.style.object_opacity
-        || (from.style.opacity != target_style.opacity
-            && !has_binding(source, SemanticObjectProperty::ObjectOpacity));
-    push_affine_channel(
-        source,
-        SemanticObjectProperty::ObjectOpacity,
-        Property::Opacity,
-        TrackValues::Scalar {
-            from: from.style.opacity,
-            to: target_style.opacity,
-        },
-        SemanticAnimationCompletion::Property {
-            property: SemanticObjectProperty::ObjectOpacity,
-            value: SemanticSignalValue::Scalar(target.style.object_opacity),
-        },
-        opacity_changed,
-        &mut channels,
-    )?;
+    if let Some(channel) = lower_object_opacity_channel(
+        source.style.object_opacity,
+        target.style.object_opacity,
+        from.style.opacity,
+        has_binding(source, SemanticObjectProperty::ObjectOpacity),
+    ) {
+        push_affine_channel(
+            source,
+            channel.conflict_property,
+            channel.property,
+            channel.values,
+            channel.completion,
+            true,
+            &mut channels,
+        )?;
+    }
     Ok(channels)
 }
 

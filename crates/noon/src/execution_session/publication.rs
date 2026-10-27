@@ -914,6 +914,25 @@ impl ExecutionSession {
         Ok(self.runtime.frame().objects[index].effects.as_deref())
     }
 
+    /// Read an isolated family's owned opacity from the indexed coherent row.
+    pub(crate) fn effective_family_opacity(
+        &self,
+        store: &SemanticStore,
+        node: SemanticNodeId,
+    ) -> Result<f32, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        store
+            .node(node)
+            .and_then(|node| node.family_style())
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let object = self
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| self.runtime.effective_object(object))
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        Ok(object.style.opacity)
+    }
+
     /// Query a live semantic object through its originating store in indexed time.
     /// Both provenance and scene revision must match this published session.
     pub fn effective_semantic_object(

@@ -18,6 +18,11 @@ pub(crate) fn prepare_point_promotion<E: From<AuthoringError>>(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
     mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
+    capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
     copy_effects: impl FnMut(
         &SemanticStore,
         SemanticNodeId,
@@ -59,6 +64,7 @@ pub(crate) fn prepare_point_promotion<E: From<AuthoringError>>(
             }
             Ok(state)
         },
+        capture_family_style,
         copy_effects,
     )?;
     // CE replaces the public list when appending. Existing readers retain the
@@ -98,6 +104,7 @@ impl MobjectTarget<'_> {
             *self,
             references,
             |object, _| object.state(),
+            |_, _, _| Ok(()),
             |store, source, target, transaction| {
                 store
                     .copy_effects_into(source, target, transaction)

@@ -146,6 +146,10 @@ pub(super) fn prepare(
 ) -> Result<(), SemanticPublicationLoweringError> {
     let mut view = View::new(prepared, reachability);
     let mut candidates = HashSet::new();
+    for owner in prepared.family_appearance_scope_changes() {
+        ancestors(&mut view, owner, &mut candidates)?;
+        subtree(&mut view, owner, &mut candidates)?;
+    }
     for mutation in prepared.candidate_mutations() {
         match mutation {
             SemanticMutation::AddMember { family, member }
