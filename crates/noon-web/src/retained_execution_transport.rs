@@ -23,8 +23,9 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V26 carries ordered effects, composed source plans, seeded masks and checked
-// HatchPaint at the genuine execution/render worker boundary. Older envelopes reject.
+// V27 carries ordered bindings, composed source plans, seeded masks, HatchPaint
+// and exact private Visibility roles across the genuine worker boundary. Older
+// envelopes reject; native and direct Rust/WASM execution remain typed in process.
 pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 27;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2795,6 +2796,88 @@ mod tests {
         assert_eq!(
             mirror.frame().unwrap().objects[0].effects,
             frame.objects[0].effects
+        );
+    }
+
+    #[test]
+    fn hatch_and_ordered_effects_share_current_schema_and_reject_both_v24_layouts_atomically() {
+        let mut frame = mixed_frame();
+        let paint = Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
+            noon_core::HatchPaint::new(Color::RED, Color::BLUE, Default::default()).unwrap(),
+        )));
+        frame.objects[0].fill_paint = Some(paint.clone());
+        frame.objects[0].effects = Some(Arc::new(
+            noon_compile::CompiledEffectStack::new([
+                noon_compile::CompiledEffect {
+                    attachment: SemanticNodeId::new(111, 3),
+                    definition: Glow::default().into(),
+                },
+                noon_compile::CompiledEffect {
+                    attachment: SemanticNodeId::new(112, 5),
+                    definition: noon_core::Blur::new(
+                        EffectUpdate::default().radius(noon_core::Pixels(1.5)),
+                    )
+                    .unwrap()
+                    .into(),
+                },
+            ])
+            .unwrap(),
+        ));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        assert_eq!(snapshot.protocol_version, 27);
+        let encoded = serde_json::to_value(&snapshot).unwrap();
+        let decoded: RetainedExecutionDeltaEnvelope =
+            serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded.objects[0].effects.len(), 2);
+        assert_eq!(decoded.objects[0].fill_paint.as_ref(), Some(&paint));
+        let mut mirror = test_mirror();
+        mirror.apply(decoded).unwrap();
+        let coherent = mirror.frame().unwrap().clone();
+        let mut legacy = encoded.clone();
+        legacy["protocol_version"] = serde_json::json!(24);
+        legacy["sequence"] = serde_json::json!(1);
+        let object = legacy["objects"][0].as_object_mut().unwrap();
+        let effects = object.remove("effects").unwrap();
+        object.insert("effect".into(), effects[0].clone());
+        // Preserve the existing closed object schema as well as the version
+        // gate. A legacy single-effect field must never be ignored.
+        assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(legacy).is_err());
+        assert_eq!(mirror.frame(), Some(&coherent));
+        assert_eq!(mirror.applied_sequence(), Some(0));
+        for hatch in [false, true] {
+            let mut legacy = encoded.clone();
+            legacy["protocol_version"] = serde_json::json!(24);
+            legacy["sequence"] = serde_json::json!(1);
+            let object = legacy["objects"][0].as_object_mut().unwrap();
+            // The ordered V24 profile has no Hatch value. The Hatch V24
+            // profile may omit its single optional effect altogether.
+            object.remove(if hatch { "effects" } else { "fill_paint" });
+            let legacy: RetainedExecutionDeltaEnvelope = serde_json::from_value(legacy).unwrap();
+            assert_eq!(
+                mirror.apply(legacy),
+                Err(RetainedExecutionTransportError::UnsupportedVersion(24))
+            );
+            assert_eq!(mirror.frame(), Some(&coherent));
+            assert_eq!(mirror.applied_sequence(), Some(0));
+        }
+        let mut next = snapshot;
+        next.sequence = 1;
+        mirror.apply(next).unwrap();
+        assert_eq!(mirror.applied_sequence(), Some(1));
+        assert_eq!(
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
         );
     }
 
