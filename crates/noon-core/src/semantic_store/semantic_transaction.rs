@@ -769,7 +769,22 @@ impl SemanticMutationTransaction {
     ) -> SemanticLocalNodeToken {
         self.create_node(SemanticNodeCreation::Effect {
             owner: owner.into(),
-            name: name.into(),
+            name: crate::SemanticEffectName::Authored(name.into()),
+            definition: definition.into(),
+            copy_provenance: None,
+        })
+    }
+
+    /// Internal semantic visibility role; normal authored names remain distinct.
+    /// Allocation and validation use the same effect-node transaction path.
+    pub fn create_visibility_effect(
+        &mut self,
+        owner: impl Into<SemanticTransactionNodeRef>,
+        definition: crate::NoiseDissolve,
+    ) -> SemanticLocalNodeToken {
+        self.create_node(SemanticNodeCreation::Effect {
+            owner: owner.into(),
+            name: crate::SemanticEffectName::Visibility,
             definition: definition.into(),
             copy_provenance: None,
         })
@@ -3636,13 +3651,27 @@ impl SemanticMutationTransaction {
                             }
                         }
                     }
-                    if let SemanticNodeCreation::Effect { owner, name, .. } = creation {
+                    if let SemanticNodeCreation::Effect {
+                        owner,
+                        name,
+                        definition,
+                        ..
+                    } = creation
+                    {
                         catalog.ensure_authoring_node(*owner, index)?;
-                        if name.is_empty() {
+                        if name.authored().is_some_and(str::is_empty) {
                             return Err(
                                 SemanticMutationTransactionError::InvalidEffectAttachment {
                                     index,
                                     reason: "effect name is empty",
+                                },
+                            );
+                        }
+                        if name.is_visibility() && definition.as_noise_dissolve().is_none() {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidEffectAttachment {
+                                    index,
+                                    reason: "visibility requires a checked mask definition",
                                 },
                             );
                         }
@@ -3653,7 +3682,7 @@ impl SemanticMutationTransaction {
                                 }
                                 if !removed_pending.contains(token)
                                     && store
-                                        .effect_by_name(*owner, name)
+                                        .effect_by_attachment_name(*owner, name)
                                         .map_err(|error| SemanticMutationTransactionError::Node {
                                             index,
                                             error,

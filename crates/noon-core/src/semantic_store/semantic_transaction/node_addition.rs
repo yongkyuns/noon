@@ -143,7 +143,7 @@ pub enum SemanticNodeCreation {
     /// Non-renderable attachment; owner must precede it when both are pending.
     Effect {
         owner: super::SemanticTransactionNodeRef,
-        name: std::sync::Arc<str>,
+        name: crate::SemanticEffectName,
         definition: crate::EffectDefinition,
         copy_provenance: Option<crate::SemanticEffectCopyProvenance>,
     },

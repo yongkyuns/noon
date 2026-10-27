@@ -4060,7 +4060,7 @@ impl ExecutionSession {
             (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
                 match target_effects.as_slice() {
                     [effect]
-                        if effect.name.as_ref() == "glow"
+                        if effect.name.authored() == Some("glow")
                             && effect.definition.as_glow().is_some() =>
                     {
                         let destination = effect.definition;
@@ -4324,7 +4324,7 @@ impl ExecutionSession {
                 let effect = prepared.store().semantic_effect_state(attachment).ok()?;
                 let definition = effect.definition().as_glow()?;
                 (Some(effect.owner()) == leaf.target.existing()
-                    && effect.name() == "glow"
+                    && effect.name() == Some("glow")
                     && definition.intensity() == 0.0)
                     .then_some(attachment)
             })

@@ -132,7 +132,7 @@ impl ExecutionSession {
                 continue;
             };
             if self.execution_object_id(effect.owner()) == Some(retirement.object)
-                && effect.name() == "glow"
+                && effect.name() == Some("glow")
                 && store.effect_by_name(effect.owner(), "glow").ok().flatten()
                     == Some(retirement.attachment)
             {
@@ -181,7 +181,7 @@ impl ExecutionSession {
                     ..
                 } => {
                     let owner = owner.existing();
-                    name.as_ref() == "glow"
+                    name.authored() == Some("glow")
                         && *definition == EffectDefinition::Glow(neutral)
                         && copy_provenance.is_none()
                         && owner.is_some_and(|owner| {
@@ -206,7 +206,7 @@ impl ExecutionSession {
                             .semantic_effect_state(attachment)
                             .ok()
                             .is_some_and(|effect| {
-                                effect.name() == "glow"
+                                effect.name() == Some("glow")
                                     && self.execution_object_id(effect.owner()).is_some_and(
                                         |object| {
                                             self.runtime.transient_glow_attachment(object)

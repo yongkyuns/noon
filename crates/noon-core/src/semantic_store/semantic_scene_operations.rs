@@ -211,7 +211,7 @@ impl SemanticStore {
                     .expect("source attachment is live");
                 (
                     attachment,
-                    std::sync::Arc::<str>::from(effect.name()),
+                    effect.attachment_name().clone(),
                     effect.definition(),
                 )
             })

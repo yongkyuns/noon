@@ -241,13 +241,48 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
     }
 }
 
-/// One named attachment. Identity is the containing node's ordinary NodeId.
+/// Attachment keys share one owner-local namespace. Visibility is a distinct
+/// semantic role, so an animation cannot overwrite an authored name or be
+/// followed by a filter that resurrects an otherwise hidden contribution.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticEffectName {
+    Authored(Arc<str>),
+    Visibility,
+}
+impl SemanticEffectName {
+    pub fn authored(&self) -> Option<&str> {
+        match self {
+            Self::Authored(name) => Some(name),
+            Self::Visibility => None,
+        }
+    }
+    pub const fn is_visibility(&self) -> bool {
+        matches!(self, Self::Visibility)
+    }
+}
+impl From<Arc<str>> for SemanticEffectName {
+    fn from(value: Arc<str>) -> Self {
+        Self::Authored(value)
+    }
+}
+impl From<&str> for SemanticEffectName {
+    fn from(value: &str) -> Self {
+        Self::Authored(value.into())
+    }
+}
+impl From<String> for SemanticEffectName {
+    fn from(value: String) -> Self {
+        Self::Authored(value.into())
+    }
+}
+
+/// One appearance attachment. Identity is the containing node's ordinary NodeId.
 /// A family owns a composed treatment; it is never silently expanded into
 /// independent child attachments. Execution validates source/isolation support.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticEffectState {
     owner: SemanticNodeId,
-    name: Arc<str>,
+    name: SemanticEffectName,
     definition: EffectDefinition,
     copy_provenance: Option<SemanticEffectCopyProvenance>,
 }
@@ -257,11 +292,11 @@ impl SemanticEffectState {
         self.owner
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> Option<&str> {
+        self.name.authored()
     }
 
-    pub(crate) fn shared_name(&self) -> &Arc<str> {
+    pub fn attachment_name(&self) -> &SemanticEffectName {
         &self.name
     }
 
@@ -324,28 +359,96 @@ impl SemanticStore {
         Ok(node.effect_ids().iter().copied().find(|effect| {
             self.node(*effect)
                 .and_then(SemanticNode::semantic_effect_state)
-                .is_some_and(|state| state.name() == name)
+                .is_some_and(|state| state.name() == Some(name))
         }))
+    }
+
+    /// One bounded visibility binding, always last in this owner's stack.
+    pub fn visibility_effect(
+        &self,
+        owner: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticStoreError> {
+        let node = self
+            .node(owner)
+            .ok_or(SemanticStoreError::UnknownNode(owner))?;
+        Ok(node.effect_ids().last().copied().filter(|id| {
+            self.semantic_effect_state(*id)
+                .is_ok_and(|state| state.attachment_name().is_visibility())
+        }))
+    }
+
+    /// Stage creation or replacement of one visibility value. Repeated
+    /// operations reuse its exact generation until ordinary node retirement.
+    /// No animation, clock or completion ownership is introduced by this helper.
+    pub fn stage_visibility_mask(
+        &self,
+        owner: impl Into<crate::SemanticTransactionNodeRef>,
+        definition: NoiseDissolve,
+        transaction: &mut crate::SemanticMutationTransaction,
+    ) -> Result<crate::SemanticTransactionNodeRef, SemanticStoreError> {
+        let owner = owner.into();
+        if let crate::SemanticTransactionNodeRef::Existing(id) = owner {
+            if let Some(attachment) = self.visibility_effect(id)? {
+                transaction.update_effect(
+                    attachment,
+                    EffectUpdate::default()
+                        .progress(definition.progress())
+                        .softness(definition.softness())
+                        .seed(definition.seed()),
+                );
+                return Ok(attachment.into());
+            }
+        }
+        Ok(transaction
+            .create_visibility_effect(owner, definition)
+            .into())
+    }
+
+    pub(crate) fn effect_by_attachment_name(
+        &self,
+        owner: SemanticNodeId,
+        name: &SemanticEffectName,
+    ) -> Result<Option<SemanticNodeId>, SemanticStoreError> {
+        match name {
+            SemanticEffectName::Authored(name) => self.effect_by_name(owner, name),
+            SemanticEffectName::Visibility => self.visibility_effect(owner),
+        }
     }
 
     pub(crate) fn insert_semantic_effect(
         &mut self,
         owner: SemanticNodeId,
-        name: Arc<str>,
+        name: SemanticEffectName,
         definition: EffectDefinition,
         copy_provenance: Option<SemanticEffectCopyProvenance>,
     ) -> SemanticNodeId {
+        let last_is_visibility = self
+            .node(owner)
+            .expect("preflighted effect owner")
+            .effect_ids()
+            .last()
+            .is_some_and(|id| {
+                self.semantic_effect_state(*id)
+                    .expect("live attachment")
+                    .attachment_name()
+                    .is_visibility()
+            });
+        let insert_before_visibility = !name.is_visibility() && last_is_visibility;
         let effect = self.insert_kind(SemanticNodeKind::Effect(SemanticEffectState {
             owner,
             name,
             definition,
             copy_provenance,
         }));
-        self.node_mut(owner)
+        let effects = self
+            .node_mut(owner)
             .expect("preflighted effect owner")
             .effects
-            .get_or_insert_with(|| Box::new(Vec::new()))
-            .push(effect);
+            .get_or_insert_with(|| Box::new(Vec::new()));
+        effects.insert(
+            effects.len() - usize::from(insert_before_visibility),
+            effect,
+        );
         self.register_semantic_references_for_owner(effect);
         effect
     }

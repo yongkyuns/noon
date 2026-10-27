@@ -28,7 +28,7 @@ pub(super) fn values(
         .map_err(EffectTargetLoweringError::Profile)?;
     let attachment = attachments
         .iter()
-        .find(|effect| effect.name.as_ref() == "glow")
+        .find(|effect| effect.name.authored() == Some("glow"))
         .ok_or(EffectTargetLoweringError::UnsupportedTopology)?;
     let effective = effective
         .and_then(|stack| stack.get(attachment.attachment))

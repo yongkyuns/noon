@@ -4,6 +4,7 @@ use super::*;
 use noon::{effects::Blur, MobjectFamily};
 
 mod animation;
+mod visibility;
 
 fn soften(scene: &mut Scene, session: &mut ExecutionSession, family: &MobjectFamily) {
     scene

@@ -49,6 +49,18 @@ pub(super) fn effect_snapshot(
             copy_provenance: *copy_provenance,
         });
     }
+    // Named additions precede the one visibility binding even when they were
+    // staged later. Match committed insertion without sorting authored order.
+    let mut visibility = None;
+    result.retain(|effect| {
+        if effect.name.is_visibility() {
+            visibility = Some(effect.clone());
+            false
+        } else {
+            true
+        }
+    });
+    result.extend(visibility);
     result
 }
 

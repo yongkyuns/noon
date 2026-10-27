@@ -320,7 +320,7 @@ where
             )?;
         if let [attachment] = attachments.as_slice() {
             let definition = attachment.definition;
-            if attachment.name.as_ref() == "glow"
+            if attachment.name.authored() == Some("glow")
                 && definition
                     .as_glow()
                     .is_some_and(|effect| effect.intensity() == 0.0)
