@@ -2,6 +2,39 @@ use super::*;
 use crate::{lower_semantic_execution_root, SemanticExecutionIndex};
 use noon_core::{Color, GradientStop};
 
+#[test]
+fn radial_profile_rejects_unrepresentable_radii_and_moving_stop_gaps() {
+    let make = |radii, position| {
+        Arc::new(
+            noon_core::RadialGradient::new(
+                [0.5; 2],
+                radii,
+                [
+                    GradientStop::new(0.0, Color::WHITE).unwrap(),
+                    GradientStop::new(position, Color::BLACK).unwrap(),
+                    GradientStop::new(1.0, Color::WHITE).unwrap(),
+                ],
+            )
+            .unwrap(),
+        )
+    };
+    for radius in [1e-60, 1e100] {
+        assert!(validate_radial(&make([radius, 0.5], 0.5)).is_err());
+    }
+    let transition = noon_core::PaintTransition::new(
+        Some(SemanticPaint::RadialGradient(make([0.5; 2], 0.0))),
+        1.0,
+        Some(SemanticPaint::RadialGradient(make([0.75; 2], 0.5))),
+        1.0,
+    )
+    .unwrap();
+    assert!(
+        validate_transition(&transition).is_err(),
+        "opening hard edges need arbitrarily small GPU stop intervals"
+    );
+    validate_radial(&make([0.75; 2], 0.5)).unwrap();
+}
+
 fn paint(start: [f64; 2], end: [f64; 2]) -> Arc<LinearGradient> {
     Arc::new(
         LinearGradient::new(

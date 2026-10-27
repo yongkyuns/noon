@@ -6,8 +6,10 @@ mod shadow;
 pub use shadow::Shadow;
 pub(crate) mod effect_parameters;
 mod glow;
+mod gradient;
 mod linear_gradient;
 mod paint_transition;
+mod radial_gradient;
 pub use blur::Blur;
 pub(crate) use effect_parameters::sealed as effect_value_sealed;
 pub use effect_parameters::{
@@ -15,8 +17,10 @@ pub use effect_parameters::{
     Pixels, PreparedEffectUpdate,
 };
 pub use glow::{Glow, GlowSource};
-pub use linear_gradient::{GradientStop, LinearGradient, LinearGradientError};
+pub use gradient::{GradientError, GradientStop};
+pub use linear_gradient::LinearGradient;
 pub use paint_transition::{PaintTransition, PaintTransitionError};
+pub use radial_gradient::RadialGradient;
 mod image_paint;
 pub use image_paint::{
     ImageAddressMode, ImageFit, ImageMapping, ImagePaint, ImagePaintError, ImageUvTransform,

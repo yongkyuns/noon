@@ -1684,7 +1684,10 @@ impl<'a> LiveSession<'a> {
         }
         if !matches!(
             mobject.state()?.style.fill,
-            Some(noon_core::SemanticPaint::LinearGradient(_))
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+            )
         ) {
             mobject.manim_color().map_err(LiveSessionError::from)?;
         }
@@ -3126,6 +3129,24 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Set an immutable local gradient and optional fill opacity in one publication.
+    pub fn set_fill_radial_gradient(
+        &mut self,
+        mobject: &Mobject,
+        gradient: impl Into<std::sync::Arc<noon_core::RadialGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state = crate::semantic_mobject::prepare_fill_paint_value(
+            &self.store.borrow(),
+            mobject.node_id(),
+            mobject.state()?,
+            noon_core::SemanticPaint::RadialGradient(gradient.into()),
+            opacity,
+        )?;
+        self.replace_style(mobject, state.style)
+    }
+
+    /// Set an immutable linear gradient and optional fill opacity in one publication.
     pub fn set_fill_gradient(
         &mut self,
         mobject: &Mobject,

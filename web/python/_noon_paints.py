@@ -35,6 +35,35 @@ class LinearGradient:
         return self
 
 
+class RadialGradient:
+    """Elliptical local-box paint with ordered ``(position, color)`` stops.
+
+    Radii are positive lengths along normalized local x/y axes. Equal radii
+    produce ellipses on nonsquare boxes. Rust owns validation and sampling.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, stops, *, center=(0.5, 0.5), radii=(0.5, 0.5)):
+        from _manim_compat import _as_color
+        coordinates = lambda value: [_number(v, "radial gradient coordinate") for v in value]
+        packed = []
+        for position, color in stops:
+            color = _as_color("gradient stop color", color)
+            packed.extend((_number(position, "gradient stop position"),
+                           color.red, color.green, color.blue, color.alpha))
+        from js import noonRadialGradient
+        from pyodide.ffi import to_js
+        self._definition = engine_call(noonRadialGradient, to_js(coordinates(center)),
+                                       to_js(coordinates(radii)), to_js(packed))
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+
 def set_fill(value, paint, opacity):
     from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
@@ -52,6 +81,11 @@ def set_fill(value, paint, opacity):
             engine_call(handle.setFillImage, paint._definition, opacity)
         else:
             engine_call(context.liveSetFillImage, handle, paint._definition, opacity)
+    elif isinstance(paint, RadialGradient):
+        if context is None:
+            engine_call(handle.setFillRadialGradient, paint._definition, opacity)
+        else:
+            engine_call(context.liveSetFillRadialGradient, handle, paint._definition, opacity)
     elif context is None:
         engine_call(handle.setFillGradient, paint._definition, opacity)
     else:

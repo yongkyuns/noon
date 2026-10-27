@@ -13,6 +13,34 @@ import _manim_updaters as updaters
 
 
 class PaintFacadeTests(unittest.TestCase):
+    def test_radial_value_uses_the_shared_cold_live_and_target_fill_operation(self):
+        definition = object()
+        js = types.ModuleType("js")
+        js.noonRadialGradient = Mock(return_value=definition)
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = tuple
+        handle, context = Mock(), Mock()
+        value = object.__new__(noon.Mobject)
+        with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
+             patch.object(handles, "_handle_for", return_value=handle), \
+             patch.object(handles, "_is_shared_family", return_value=False), \
+             patch.object(handles, "_live_mutation_context", return_value=None):
+            paint = noon.RadialGradient([(0, noon.Color(1, 0, 0)), (1, noon.Color(0, 0, 1))],
+                                        center=(0.25, 0.75), radii=(0.5, 0.25))
+            js.noonRadialGradient.assert_called_once_with((0.25, 0.75), (0.5, 0.25),
+                                                        (0.0, 1, 0, 0, 1, 1.0, 0, 0, 1, 1))
+            self.assertIs(copy.copy(paint), paint)
+            self.assertIs(copy.deepcopy(paint), paint)
+            self.assertIs(value.set_fill(paint), value)
+            handle.setFillRadialGradient.assert_called_once_with(definition, None)
+            with patch.object(handles, "_live_mutation_context", return_value=context):
+                value.set_fill(paint, opacity=0.25)
+                context.liveSetFillRadialGradient.assert_called_once_with(handle, definition, 0.25)
+            updaters._canonical_vmobject_set_fill(value, paint, 0.5)
+            self.assertEqual(handle.setFillRadialGradient.call_args.args, (definition, 0.5))
+            with self.assertRaises(TypeError):
+                noon.RadialGradient([(0, noon.Color(1, 0, 0))], radii=(True, 0.5))
+
     def test_immutable_value_and_ordinary_cold_live_and_target_fill_routing(self):
         definition = object()
         make = Mock(return_value=definition)

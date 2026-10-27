@@ -35,10 +35,21 @@ fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
         if color.a <= 0.0 { return vec4(0.0); }
         return vec4(color.rgb / color.a, color.a * carrier.a);
     }
-    let axis = paint.endpoints.zw - paint.endpoints.xy;
-    let extent = max(abs(axis.x), abs(axis.y));
-    let scaled = axis / extent;
-    let t = (dot(point - paint.endpoints.xy, scaled) / dot(scaled, scaled)) / extent;
+    var t: f32;
+    if paint.metadata.y == 2u {
+        let delta = abs(point - paint.endpoints.xy);
+        let radii = paint.endpoints.zw;
+        // Outside either radius the field is already in the pad region.
+        // Divide only interior components, avoiding overflow when squaring
+        // a large finite radial coordinate in length().
+        if any(delta >= radii) { t = 1.0; }
+        else { t = length(delta / radii); }
+    } else {
+        let axis = paint.endpoints.zw - paint.endpoints.xy;
+        let extent = max(abs(axis.x), abs(axis.y));
+        let scaled = axis / extent;
+        t = (dot(point - paint.endpoints.xy, scaled) / dot(scaled, scaled)) / extent;
+    }
     let count = paint.metadata.x;
     var color = paint.stops[0].color;
     if t >= paint.stops[0].position.x {

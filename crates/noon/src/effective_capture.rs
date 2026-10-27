@@ -95,7 +95,11 @@ pub(crate) fn target_style_from_effective(
 ) -> Result<SemanticStyle, AuthoringError> {
     if matches!(
         authored.stroke.as_ref(),
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_))
+        Some(
+            SemanticPaint::LinearGradient(_)
+                | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Image(_)
+        )
     ) {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::CaptureResourcePaint,

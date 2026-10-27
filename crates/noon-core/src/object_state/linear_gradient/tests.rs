@@ -1,4 +1,5 @@
 use super::*;
+use crate::Color;
 
 #[test]
 fn padding_before_a_duplicate_zero_stop_keeps_the_first_color() {
@@ -210,7 +211,7 @@ fn reject_invalid_values_before_a_definition_exists() {
     for value in [f64::NAN, f64::INFINITY, -f64::INFINITY, -0.1, 1.1] {
         assert_eq!(
             GradientStop::new(value, Color::rgb(1.0, 0.0, 0.0)),
-            Err(LinearGradientError::InvalidStopPosition)
+            Err(GradientError::InvalidStopPosition)
         );
         assert_eq!(
             LinearGradient::new(
@@ -221,7 +222,7 @@ fn reject_invalid_values_before_a_definition_exists() {
                     stop(1.0, Color::rgb(0.0, 0.0, 1.0))
                 ]
             ),
-            Err(LinearGradientError::InvalidEndpoints)
+            Err(GradientError::InvalidEndpoints)
         );
     }
     for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
@@ -230,7 +231,7 @@ fn reject_invalid_values_before_a_definition_exists() {
             rgba[channel] = value;
             assert_eq!(
                 GradientStop::new(0.0, Color::rgba(rgba[0], rgba[1], rgba[2], rgba[3])),
-                Err(LinearGradientError::InvalidColor)
+                Err(GradientError::InvalidColor)
             );
         }
     }
@@ -243,12 +244,12 @@ fn reject_invalid_values_before_a_definition_exists() {
                 stop(1.0, Color::rgb(0.0, 0.0, 1.0))
             ]
         ),
-        Err(LinearGradientError::DegenerateAxis)
+        Err(GradientError::DegenerateAxis)
     );
     for stops in [vec![], vec![stop(0.0, Color::rgb(1.0, 0.0, 0.0))]] {
         assert_eq!(
             LinearGradient::new([0.0; 2], [1.0; 2], stops),
-            Err(LinearGradientError::TooFewStops)
+            Err(GradientError::TooFewStops)
         );
     }
     assert_eq!(
@@ -260,12 +261,12 @@ fn reject_invalid_values_before_a_definition_exists() {
                 stop(0.2, Color::rgb(0.0, 0.0, 1.0))
             ]
         ),
-        Err(LinearGradientError::UnorderedStops)
+        Err(GradientError::UnorderedStops)
     );
     for invalid in [f64::NAN, f64::INFINITY, -f64::INFINITY] {
         assert_eq!(
             paint([0.0; 2], [1.0; 2]).sample_premultiplied([invalid, 0.0]),
-            Err(LinearGradientError::InvalidSamplePoint)
+            Err(GradientError::InvalidSamplePoint)
         );
     }
 }

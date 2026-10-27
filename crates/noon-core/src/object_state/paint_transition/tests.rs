@@ -1,6 +1,88 @@
 use super::*;
 
 #[test]
+fn radial_transition_preserves_exact_endpoints_and_positive_radii() {
+    let radial = |center, radii, color| {
+        SemanticPaint::RadialGradient(Arc::new(
+            RadialGradient::new(
+                center,
+                radii,
+                [
+                    GradientStop::new(0.0, color).unwrap(),
+                    GradientStop::new(1.0, Color::rgb(0.0, 0.0, 1.0)).unwrap(),
+                ],
+            )
+            .unwrap(),
+        ))
+    };
+    let from = radial(
+        [0.25; 2],
+        [f64::from_bits(1), 0.5],
+        Color::rgba(1.0, 0.0, 0.0, 0.5),
+    );
+    let to = radial(
+        [0.75; 2],
+        [f64::from_bits(1), 1.0],
+        Color::rgb(0.0, 1.0, 0.0),
+    );
+    let transition =
+        PaintTransition::new(Some(from.clone()), 0.25, Some(to.clone()), 0.75).unwrap();
+    assert_eq!(transition.sample(0.0).unwrap(), (Some(from), 0.25));
+    assert_eq!(transition.sample(1.0).unwrap(), (Some(to), 0.75));
+    let (Some(SemanticPaint::RadialGradient(middle)), opacity) = transition.sample(0.5).unwrap()
+    else {
+        panic!("radial")
+    };
+    assert_eq!(middle.center(), [0.5; 2]);
+    assert_eq!(middle.radii(), [f64::from_bits(1), 0.75]);
+    assert_eq!(opacity, 0.5);
+    assert_eq!(middle.stops()[0].color().alpha, 0.75);
+    assert!((f64::from(middle.stops()[0].color().red) * 0.75 - 0.25).abs() < 1e-7);
+    assert!((f64::from(middle.stops()[0].color().green) * 0.75 - 0.5).abs() < 1e-7);
+}
+
+#[test]
+fn radial_promotes_solid_and_absent_values_and_rejects_other_paint_kinds() {
+    let radial = SemanticPaint::RadialGradient(Arc::new(
+        RadialGradient::new(
+            [0.5; 2],
+            [0.5; 2],
+            [
+                GradientStop::new(0.0, Color::WHITE).unwrap(),
+                GradientStop::new(1.0, Color::BLACK).unwrap(),
+            ],
+        )
+        .unwrap(),
+    ));
+    for from in [None, Some(SemanticPaint::Solid(Color::WHITE))] {
+        let transition =
+            PaintTransition::new(from.clone(), 0.2, Some(radial.clone()), 0.8).unwrap();
+        assert_eq!(transition.sample(0.0).unwrap(), (from, 0.2));
+        assert!(matches!(
+            transition.sample(0.5).unwrap().0,
+            Some(SemanticPaint::RadialGradient(_))
+        ));
+    }
+    let linear = SemanticPaint::LinearGradient(Arc::new(
+        LinearGradient::new(
+            [0.0; 2],
+            [1.0; 2],
+            [
+                GradientStop::new(0.0, Color::WHITE).unwrap(),
+                GradientStop::new(1.0, Color::BLACK).unwrap(),
+            ],
+        )
+        .unwrap(),
+    ));
+    for (from, to) in [(radial.clone(), linear.clone()), (linear, radial)] {
+        assert_eq!(
+            PaintTransition::new(Some(from), 1.0, Some(to), 1.0),
+            Err(PaintTransitionError::UnsupportedPaint)
+        );
+    }
+}
+
+#[test]
 fn independent_literal_temporal_vectors_match_shared_rust_sampling() {
     let numbers = |field: &str| {
         field

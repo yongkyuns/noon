@@ -1278,7 +1278,9 @@ fn lower_paint(
     };
 
     match paint {
-        SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) => {
+        SemanticPaint::LinearGradient(_)
+        | SemanticPaint::RadialGradient(_)
+        | SemanticPaint::Image(_) => {
             if paint_field != SemanticExecutionField::FillPaint {
                 return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
                     field: paint_field,
