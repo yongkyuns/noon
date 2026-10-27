@@ -61,6 +61,7 @@ pub(crate) fn validate_definition(
         SemanticPaint::LinearGradient(gradient) => validate_gradient(gradient),
         SemanticPaint::RadialGradient(gradient) => validate_radial(gradient),
         SemanticPaint::Noise(noise) => validate_noise(noise),
+        SemanticPaint::Hatch(hatch) => project_hatch_mapping(hatch).map(|_| ()),
         SemanticPaint::Image(image) => validate_image(image),
         SemanticPaint::Solid(_) => Err(SemanticExecutionValueError::UnsupportedPaintProfile {
             field: SemanticExecutionField::FillPaint,
@@ -75,6 +76,53 @@ pub(crate) fn validate_noise(
         .frequency()
         .into_iter()
         .any(|v| v > 256.0 || (v as f32) < f32::MIN_POSITIVE)
+    {
+        return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+            field: SemanticExecutionField::FillPaint,
+        });
+    }
+    Ok(())
+}
+
+/// Finite GPU projection of object-local hatch coordinates. Authored phase and
+/// angle remain f64 until this derived renderer input is prepared.
+/// Rows contain normal/spacing, periodic phase, then duty (row zero only).
+pub fn project_hatch_mapping(
+    hatch: &noon_core::HatchPaint,
+) -> Result<[[f32; 4]; 2], SemanticExecutionValueError> {
+    let invalid = || SemanticExecutionValueError::UnsupportedPaintProfile {
+        field: SemanticExecutionField::FillPaint,
+    };
+    let inverse = hatch.spacing().recip();
+    let duty = hatch.width() / hatch.spacing();
+    if !(inverse as f32).is_finite() || (inverse as f32) < 4.0 * f32::MIN_POSITIVE {
+        return Err(invalid());
+    }
+    let (s, c) = hatch.angle().sin_cos();
+    let phase = hatch.phase_wrapped();
+    let rows = [
+        [-s * inverse, c * inverse, phase[0], duty],
+        [c * inverse, s * inverse, phase[1], 0.0],
+    ];
+    if rows.iter().flatten().any(|v| !(*v as f32).is_finite()) {
+        return Err(invalid());
+    }
+    Ok(rows.map(|row| row.map(|v| v as f32)))
+}
+
+/// A rotation-independent cell bound also covers intermediate animated angles.
+/// Spacing varies convexly, so endpoint minimum spacing bounds its whole sweep.
+pub fn validate_hatch_bounds(
+    hatch: &noon_core::HatchPaint,
+    bounds: noon_core::Rect,
+) -> Result<(), SemanticExecutionValueError> {
+    project_hatch_mapping(hatch)?;
+    let x = f64::from(bounds.min.x.abs().max(bounds.max.x.abs()));
+    let y = f64::from(bounds.min.y.abs().max(bounds.max.y.abs()));
+    if [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y]
+        .into_iter()
+        .any(|value| !value.is_finite())
+        || (x + y) / hatch.spacing() > 65_536.0
     {
         return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
             field: SemanticExecutionField::FillPaint,
@@ -158,6 +206,11 @@ pub(crate) fn validate_transition(
         validate_noise(to)?;
         return Ok(());
     }
+    if let Some([from, to]) = transition.hatches() {
+        project_hatch_mapping(from)?;
+        project_hatch_mapping(to)?;
+        return Ok(());
+    }
     let [from, to] = transition
         .gradients()
         .expect("closed checked gradient/image transition");
@@ -220,6 +273,7 @@ pub fn lower_fill(
         paint @ (SemanticPaint::LinearGradient(_)
         | SemanticPaint::RadialGradient(_)
         | SemanticPaint::Noise(_)
+        | SemanticPaint::Hatch(_)
         | SemanticPaint::Image(_)),
     ) = state.style.fill.as_ref()
     else {
@@ -266,6 +320,9 @@ pub fn lower_fill(
             [resource.width(), resource.height()],
         )
         .map_err(|_| invalid())?;
+    }
+    if let SemanticPaint::Hatch(hatch) = paint {
+        validate_hatch_bounds(hatch, bounds).map_err(|_| invalid())?;
     }
     Ok(Some(Arc::new(paint.clone())))
 }

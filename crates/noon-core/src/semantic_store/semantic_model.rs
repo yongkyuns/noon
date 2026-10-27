@@ -247,6 +247,8 @@ pub enum SemanticPaint {
     RadialGradient(std::sync::Arc<crate::RadialGradient>),
     /// Seeded stateless procedural color field.
     Noise(std::sync::Arc<crate::NoisePaint>),
+    /// Periodic stripes or crosshatching in object-local scene lengths.
+    Hatch(std::sync::Arc<crate::HatchPaint>),
     /// Local image mapping over an existing immutable raster resource.
     Image(std::sync::Arc<crate::ImagePaint>),
 }
@@ -255,32 +257,51 @@ impl SemanticPaint {
     pub fn as_linear_gradient(&self) -> Option<&std::sync::Arc<crate::LinearGradient>> {
         match self {
             Self::LinearGradient(gradient) => Some(gradient),
-            Self::Solid(_) | Self::RadialGradient(_) | Self::Noise(_) | Self::Image(_) => None,
+            Self::Solid(_)
+            | Self::RadialGradient(_)
+            | Self::Noise(_)
+            | Self::Hatch(_)
+            | Self::Image(_) => None,
         }
     }
 
     pub fn as_radial_gradient(&self) -> Option<&std::sync::Arc<crate::RadialGradient>> {
         match self {
             Self::RadialGradient(gradient) => Some(gradient),
-            Self::Solid(_) | Self::LinearGradient(_) | Self::Noise(_) | Self::Image(_) => None,
+            Self::Solid(_)
+            | Self::LinearGradient(_)
+            | Self::Noise(_)
+            | Self::Hatch(_)
+            | Self::Image(_) => None,
         }
     }
 
     pub fn as_noise(&self) -> Option<&std::sync::Arc<crate::NoisePaint>> {
         match self {
             Self::Noise(noise) => Some(noise),
-            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) | Self::Image(_) => {
-                None
-            }
+            Self::Solid(_)
+            | Self::LinearGradient(_)
+            | Self::RadialGradient(_)
+            | Self::Hatch(_)
+            | Self::Image(_) => None,
+        }
+    }
+
+    pub fn as_hatch(&self) -> Option<&std::sync::Arc<crate::HatchPaint>> {
+        match self {
+            Self::Hatch(value) => Some(value),
+            _ => None,
         }
     }
 
     pub fn as_image(&self) -> Option<&crate::ImagePaint> {
         match self {
             Self::Image(image) => Some(image),
-            Self::Solid(_) | Self::LinearGradient(_) | Self::RadialGradient(_) | Self::Noise(_) => {
-                None
-            }
+            Self::Solid(_)
+            | Self::LinearGradient(_)
+            | Self::RadialGradient(_)
+            | Self::Noise(_)
+            | Self::Hatch(_) => None,
         }
     }
 }
@@ -411,6 +432,7 @@ impl SemanticStyle {
                     SemanticPaint::LinearGradient(_)
                         | SemanticPaint::RadialGradient(_)
                         | SemanticPaint::Noise(_)
+                        | SemanticPaint::Hatch(_)
                         | SemanticPaint::Image(_)
                 )
             )
@@ -433,6 +455,7 @@ impl SemanticStyle {
                 SemanticPaint::LinearGradient(_)
                 | SemanticPaint::RadialGradient(_)
                 | SemanticPaint::Noise(_)
+                | SemanticPaint::Hatch(_)
                 | SemanticPaint::Image(_),
             )
             | None => true,
@@ -511,6 +534,7 @@ impl SemanticStyle {
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
             | SemanticPaint::Noise(_)
+            | SemanticPaint::Hatch(_)
             | SemanticPaint::Image(_) => None,
         }
     }

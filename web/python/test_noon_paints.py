@@ -13,6 +13,44 @@ import _manim_updaters as updaters
 
 
 class PaintFacadeTests(unittest.TestCase):
+    def test_hatching_uses_shared_values_and_ordinary_cold_live_target_fills(self):
+        definition = object()
+        js = types.ModuleType("js")
+        js.noonHatchPaint = Mock(return_value=definition)
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = tuple
+        handle, context = Mock(), Mock()
+        value = object.__new__(noon.Mobject)
+        with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
+             patch.object(handles, "_handle_for", return_value=handle), \
+             patch.object(handles, "_is_shared_family", return_value=False), \
+             patch.object(handles, "_live_mutation_context", return_value=None):
+            paint = noon.HatchPaint(noon.Color(1, 0, 0, 0.5), spacing=0.4,
+                                    width=0.08, angle=0.7, phase=(-0.173, 3.231), cross=True)
+            js.noonHatchPaint.assert_called_once_with(
+                0.4, 0.08, 0.7, (-0.173, 3.231), True,
+                (1, 0, 0, 0.5, 0, 0, 0, 0),
+            )
+            self.assertIs(copy.copy(paint), paint)
+            self.assertIs(copy.deepcopy(paint), paint)
+            self.assertIs(value.set_fill(paint), value)
+            handle.setFillHatch.assert_called_once_with(definition, None)
+            with patch.object(handles, "_live_mutation_context", return_value=context):
+                value.set_fill(paint, opacity=0.25)
+                context.liveSetFillHatch.assert_called_once_with(handle, definition, 0.25)
+            updaters._canonical_vmobject_set_fill(value, paint, 0.5)
+            self.assertEqual(handle.setFillHatch.call_args.args, (definition, 0.5))
+            for options in ({"spacing": True}, {"width": False}, {"angle": True},
+                            {"phase": (0, True)}, {"phase": "01"}, {"cross": 1}):
+                with self.subTest(options=options), self.assertRaises(TypeError):
+                    noon.HatchPaint(noon.Color(1, 0, 0), **options)
+            token = updaters._ACTIVE_CANONICAL_CONTEXT.set(object())
+            try:
+                with self.assertRaises(NotImplementedError):
+                    value.set_fill(paint)
+            finally:
+                updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+
     def test_seeded_noise_routes_only_coercion_and_the_ordinary_fill_operation(self):
         definition = object()
         js = types.ModuleType("js")

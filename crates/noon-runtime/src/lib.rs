@@ -2921,6 +2921,7 @@ fn apply_paint_track(
             paint @ (noon_core::SemanticPaint::LinearGradient(_)
             | noon_core::SemanticPaint::RadialGradient(_)
             | noon_core::SemanticPaint::Noise(_)
+            | noon_core::SemanticPaint::Hatch(_)
             | noon_core::SemanticPaint::Image(_)),
         ) => (
             Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)),

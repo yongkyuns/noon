@@ -956,6 +956,13 @@ impl InstalledRetainedResources {
         self
     }
 
+    pub(crate) fn geometry_for_transport(
+        &self,
+        handle: TransportGeometryResourceHandle,
+    ) -> Option<&GeometryResource> {
+        GeometryResourceLookup::get(self, *self.geometry_handles.get(&handle)?)
+    }
+
     pub(crate) fn geometry_handle_remap(
         &self,
     ) -> HashMap<TransportGeometryResourceHandle, GeometryResourceHandle> {
@@ -1564,6 +1571,13 @@ pub(crate) struct PreparedRetainedResourceAdditions {
 }
 
 impl PreparedRetainedResourceAdditions {
+    pub(crate) fn geometry_for_transport(
+        &self,
+        handle: TransportGeometryResourceHandle,
+    ) -> Option<&GeometryResource> {
+        self.installed.geometry_for_transport(handle)
+    }
+
     pub(crate) fn text_handle_remap(
         &self,
     ) -> HashMap<TransportTextResourceHandle, TextResourceHandle> {
