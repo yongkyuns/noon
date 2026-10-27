@@ -1,0 +1,51 @@
+name: One-off 2308 current-master and memory-stack inventory
+
+on:
+  push:
+    branches: [agent/2308-current-master-memory-inventory-20261027]
+    paths:
+      - ".github/workflows/one-off-2308-current-inventory.yml"
+      - ".github/ci/one-off-2308-current-inventory.py"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inventory:
+    name: Compare authenticated reconciled source against current master and memory stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PIN_PR2308: b3a4b7f484e607a4b14bc57e70f4947f8520ca42
+      PIN_MASTER_OLD: f102a74b9bf28440f4862e799604a57c7882fa68
+      PIN_MASTER_CURRENT: f71a4c121bc29921133f790ae9783e89e962e7d9
+      PIN_MEMORY: 472a61fadfdabba44756b75caaa184cee8c4be57
+      ARCHIVE_SHA256: 79caa8a019ea07e644cc699c2c69c158971b30cc428ee8ae301fba8314f6224c
+      CANDIDATE_BASE_TREE: a9fcbdd982e1c617fea7f20ae0856d6841a2457d
+      CANDIDATE_CLIPPY_TREE: 8fc9ebda64ded6c777362b61ac8c2b1b7b307efa
+      CLIPPY_PATCH_SHA256: b4800d207cc6103cc3ec1ce19cae18720a9b41d869a666bfddd4613cf328052b
+    steps:
+      - name: Checkout isolated inventory helper without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download authenticated prior candidate source
+        uses: actions/download-artifact@v8
+        with:
+          name: noon-2308-reconciled-source-qualification
+          run-id: 40503810362
+          repository: yongkyuns/noon
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/noon2308-evidence
+      - name: Reconstruct exact source and inventory actual Git merges
+        run: python3 .github/ci/one-off-2308-current-inventory.py
+      - name: Preserve read-only conflict inventory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-2308-current-master-and-memory-conflicts
+          path: ${{ runner.temp }}/noon2308-current-inventory
+          retention-days: 3
+          if-no-files-found: warn
