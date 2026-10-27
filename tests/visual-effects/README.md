@@ -1458,3 +1458,44 @@ the sampling operator is independently checked separately. The browser helper
 retains complete paired images and reports. This is a distortion filter over its
 explicit object/group input; backdrop dependencies, HDR/bloom and custom WGSL
 remain separate #1897 gates. Source/build-qualified results live in its issue/PR.
+
+
+### Clipped backdrop replacement operator prerequisite
+
+The renderer's `BackdropCompositeFilter` consumes three explicit, aligned
+encoded-premultiplied RGBA inputs: processed painter prefix, target paint before
+final owner opacity, and the target's original coverage. It clips paint to that
+coverage and partitions the panel into painted and glass-only areas. It first
+attenuates the existing destination by covered panel opacity, then adds the
+prepared contribution. This replaces the backdrop through transparent content;
+ordinary source-over would duplicate background alpha. Panel opacity applies
+once to the entire result. This finite profile uses RGBA8/BGRA8 unorm,
+single-sample 2D inputs and a single-sample output attachment. It applies no
+additional color transfer and does not qualify HDR or sRGB attachments.
+
+Two retained RGBA8 images cost eight bytes per capture pixel. Three lazy shared
+pipelines prepare both images in one MRT pass and place them with erase/add
+draws. Warm input/opacity edits reuse the images, buffer and pipelines; placement
+changes upload only the uniform. Clean preparation uploads and encodes nothing.
+Cold zero opacity allocates nothing; warmed zero opacity retains and charges its
+resources but emits no draw. Retiring a scope releases them. All checked input,
+budget, placement and revision failures precede mutation; abandoning preparation
+requires invalidation before retry, as for the other retained raster operators.
+
+`cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests --
+--include-ignored --nocapture` checks retained lifecycle/locality and actual GPU
+pixels against an independent f64 scalar layer-area mixture. RGBA/BGRA input and
+output profiles cover transparent/nonblack fields, soft coverage, paint outside
+the clip, opacity endpoints, negative placement and viewport clipping. The byte
+bound is two per channel; zero-opacity and fully offscreen images are exact.
+Actual corrupted shaders prove the same oracle rejects ordinary source-over
+and double scope opacity. Set `NOON_BACKDROP_ARTIFACT_DIR` to retain every
+input, actual/reference RGBA buffer and exact profile, including seeded defects.
+CI runs these tests on its raster adapter and retains these raw artifacts.
+
+This operator does not select or validate painter-prefix dependencies and does
+not expose a creator-facing backdrop attachment. Semantic admission, local
+prefix dependency/bounds invalidation, capture ordering/clear color, nested
+isolation, radius-zero exact bypass, paired Rust/Python scripts, WebGPU/WebGL2
+and export qualification remain required before claiming `BackdropBlur` support
+under #1897. Ordinary object/group filters keep their existing input roles.

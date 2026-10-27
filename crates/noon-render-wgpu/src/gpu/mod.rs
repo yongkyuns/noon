@@ -5,6 +5,11 @@ use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
+mod backdrop_composite;
+pub use backdrop_composite::{
+    BackdropCompositeFilter, BackdropCompositeInputs, BackdropCompositeParameters,
+    BackdropCompositeScope,
+};
 mod derived_display;
 mod paint;
 mod source_capture;
