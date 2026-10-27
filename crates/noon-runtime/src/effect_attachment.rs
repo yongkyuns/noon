@@ -41,7 +41,7 @@ impl SceneInstance {
         self.frame.objects[index].effect = next;
         // Halo coverage is renderer-derived. Semantic geometry, spatial queries,
         // object motion, painter order and all unrelated rows stay untouched.
-        self.changes.insert(index);
+        self.mark_nonspatial_changed(index);
         self.last_stats = EvaluationStats::default();
         self.last_patch_stats = stats;
         Ok(())

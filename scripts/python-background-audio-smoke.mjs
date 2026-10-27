@@ -35,7 +35,7 @@ const report = {
   revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   sourcePath: entry.path, sourceSha256: hash(source), cases: [], browserErrors: [], consoleErrors: [],
-  failedResponses: [],
+  failedResponses: [], sceneControlGestures: [],
 };
 await mkdir(artifacts, { recursive: true });
 let browser, server, page, context, cache;
@@ -106,6 +106,112 @@ async function play() {
   await page.getByRole("button", { name: "Play animation", exact: true }).click();
   await waitForBrowserObservation(page, async () => (await audioQualification.execution.state()).playing);
   return audible();
+}
+
+// Only this qualification knows the authored button coordinates. Production
+// input still crosses the normal collector, displayed-frame receipt and Rust
+// picker; no test supplies a semantic target or dispatches its action directly.
+const sceneControls = { previous: -3.6, play: -1.8, next: 0, restart: 1.8, mute: 3.6 };
+async function scenePosition(x, y = -3.45) {
+  const canvas = page.locator("#scene");
+  await canvas.scrollIntoViewIfNeeded();
+  assert.notEqual(await canvas.evaluate(element => getComputedStyle(element).pointerEvents), "none",
+    "physical interaction qualification requires the canvas's normal pointer-event policy");
+  const box = await canvas.boundingBox();
+  assert.ok(box, "scene canvas must have a visible surface");
+  return { x: box.x + box.width / 2 + x * box.height / 8,
+    y: box.y + box.height / 2 - y * box.height / 8 };
+}
+
+async function hoverScenePosition(x, y = -3.45) {
+  const position = await scenePosition(x, y);
+  await page.mouse.move(position.x, position.y);
+  // Hover allows a real viewport change to complete its ordinary presentation
+  // handshake before this test begins a new physical press/release gesture.
+  await page.waitForFunction(() => audioQualification.pointerPlayer?.pointerPresentation != null &&
+    audioQualification.pointerInputs.every(input => input.status !== "pending"));
+  return position;
+}
+
+async function pointerCompletion(first, kind = "release") {
+  // The physical operation has returned, so its DOM samples are already
+  // collected. A rejected press may retire the source before mouseup arrives;
+  // waiting for a release that the normal collector suppressed would hang.
+  await page.waitForFunction(first => audioQualification.pointerInputs.slice(first)
+    .every(input => input.status !== "pending"), first);
+  const inputs = await page.evaluate(first => audioQualification.pointerInputs.slice(first), first);
+  assert.ok(inputs.length > 0, "the physical gesture must reach the canvas collector");
+  assert.ok(inputs.every(input => input.status === "fulfilled"),
+    `physical pointer delivery failed: ${JSON.stringify(inputs)}`);
+  assert.ok(inputs.some(input => input.input.kind === kind) ||
+    (kind === "release" && inputs.some(input => input.input.kind === "press" &&
+      input.result.pointerInputAccepted === false)),
+    `physical ${kind} is missing without an explicitly rejected press: ${JSON.stringify(inputs)}`);
+  return inputs;
+}
+
+async function clickSceneControl(name, { settle = true, y = -3.45 } = {}) {
+  assert.ok(Object.hasOwn(sceneControls, name), "known authored scene control");
+  let retiredSource = null;
+  for (let attempt = 1; attempt <= (settle ? 8 : 1); attempt++) {
+    await hoverScenePosition(sceneControls[name], y);
+    const first = await page.evaluate(() => audioQualification.pointerInputs.length);
+    // Hover has already positioned the real pointer. Do not add mouse.click's
+    // redundant move between the acknowledged hover and this fresh gesture.
+    await page.mouse.down();
+    await page.mouse.up();
+    if (!settle) return first;
+    const inputs = await pointerCompletion(first);
+    const press = inputs.find(input => input.input.kind === "press");
+    assert.ok(press, "a scene-control attempt must collect a physical press");
+    if (retiredSource !== null) assert.ok(press.input.source_id > retiredSource,
+      "a rejected occurrence may only be followed by a fresh DOM pointer source");
+    const applied = inputs.some(input => input.result.sceneControlApplied === true);
+    const rejected = inputs.some(input => input.result.pointerInputAccepted === false);
+    const carriesAction = inputs.some(input => input.result.sceneControl !== undefined ||
+      input.result.sceneControlAction !== undefined || input.result.sceneControlApplied === true);
+    const observation = { control: name, world: [sceneControls[name], y], attempt,
+      outcome: applied ? "applied" : rejected ? "rejected" : "admitted-without-action", inputs };
+    report.sceneControlGestures.push(observation);
+    if (applied) return inputs;
+    assert.ok(rejected && !carriesAction,
+      `an admitted or pending scene action must never be retried: ${JSON.stringify(observation)}`);
+    assert.ok(attempt < 8, `eight distinct scene ${name} gestures were rejected`);
+    retiredSource = press.input.source_id;
+    const receipts = inputs.map(input => input.presentation).filter(Boolean);
+    assert.ok(receipts.length > 0, "a rejected gesture must retain its collected presentation receipt");
+    const latest = receipts.reduce((a, b) => a.presentation > b.presentation ? a : b);
+    // This is a new physical attempt after an explicit rejection, not replay or
+    // relabelling. Wait for an actually newer picture before collecting it.
+    await page.waitForFunction(previous => {
+      const current = audioQualification.pointerPlayer?.pointerPresentation;
+      return current?.session === previous.session && current.presentation > previous.presentation;
+    }, latest);
+  }
+  throw new Error("scene control gesture bound exhausted");
+}
+
+async function scenePlay() {
+  await clickSceneControl("play");
+  await waitForBrowserObservation(page, async () => (await audioQualification.execution.state()).playing);
+  return audible();
+}
+
+async function authoredRevisions() {
+  const { publication } = await command("debugFrame");
+  assert.notEqual(publication?.scene_revision, undefined);
+  assert.notEqual(publication?.execution_revision, undefined);
+  return { scene: publication.scene_revision, execution: publication.execution_revision };
+}
+
+async function pausedSceneTime(time) {
+  await waitForBrowserObservation(page, async time => {
+    const result = await audioQualification.execution.state();
+    return result.time === time && !result.playing;
+  }, time);
+  const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  near(Number(metrics.metrics.time), time, "scene command's retained picture time", 0);
+  return state();
 }
 
 async function pausedSeek(time) {
@@ -225,6 +331,27 @@ try {
       audioQualification.execution = this;
       return original.apply(this, args);
     };
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    const submitPointer = ExecutionWorkerClient.prototype.submitBrowserPointerInput;
+    audioQualification.pointerInputs = [];
+    ExecutionWorkerClient.prototype.submitBrowserPointerInput = function (input) {
+      audioQualification.pointerPlayer = this;
+      const observation = { input: structuredClone(input),
+        presentation: structuredClone(this.pointerPresentation), status: "pending" };
+      audioQualification.pointerInputs.push(observation);
+      // Observation only: invoke the production method in this same gesture turn
+      // so browser activation is neither delayed nor synthesized by the harness.
+      const result = submitPointer.call(this, input);
+      return result.then(value => {
+        observation.status = "fulfilled";
+        observation.result = structuredClone(value);
+        return value;
+      }, error => {
+        observation.status = "rejected";
+        observation.error = String(error);
+        throw error;
+      });
+    };
     const { WasmWorkerAudioOutput } = await import("./pkg/noon_web.js");
     const start = WasmWorkerAudioOutput.prototype.start;
     audioQualification.anchors = [];
@@ -274,8 +401,28 @@ try {
     return { initial };
   });
 
-  await record("trusted Play produces original stereo music with authored fades", async () => {
-    const running = await play();
+  await record("a superseded scene Play cannot resume after its delayed device unlock", async () => {
+    const revision = await authoredRevisions();
+    await page.evaluate(() => { audioQualification.holdNextResume = true; });
+    const first = await clickSceneControl("play", { settle: false });
+    await page.waitForFunction(() => audioQualification.pendingResumes.length === 1);
+    const pending = await state();
+    assert.equal(pending.transport.playing, false, "device preparation cannot advance the worker");
+    assert.equal(pending.starts.length, 0);
+    await command("pause");
+    await page.evaluate(() => { for (const resolve of audioQualification.pendingResumes.splice(0)) resolve(); });
+    const inputs = await pointerCompletion(first);
+    const cancelled = await pausedSceneTime(0);
+    assert.equal(cancelled.starts.length, 0, "superseded unlock must not start a source");
+    assert.ok(inputs.some(input => input.input.kind === "release" &&
+      input.result.sceneControlApplied === false), "the held gesture must report nonfatal cancellation");
+    assert.deepEqual(await authoredRevisions(), revision);
+    await quiet();
+    return { revision, pending, cancelled, inputs };
+  });
+
+  await record("trusted scene Play produces original stereo music with authored fades", async () => {
+    const running = await scenePlay();
     assert.equal(running.transport.audioReady, true);
     assert.equal(running.output.length, 1);
     assert.equal(running.starts.length, 1);
@@ -298,6 +445,10 @@ try {
   await record("exact seek preserves native input/output bindings and a real gallery poster", async () => {
     const starts = (await state()).starts.length;
     const canvas = page.locator("#scene");
+    const pointerPolicy = await canvas.evaluate(element => ({
+      value: element.style.getPropertyValue("pointer-events"),
+      priority: element.style.getPropertyPriority("pointer-events"),
+    }));
     await page.getByRole("slider", { name: "Animation playhead", exact: true }).fill("8");
     await waitForBrowserObservation(page, async () => {
       const result = await audioQualification.execution.state();
@@ -339,6 +490,12 @@ try {
     assertRetainedPoster(entry, posterRecord, source, poster, report.runtimeBuildIdentity);
     assert.equal((await state()).starts.length, starts, "paused seeks must not start device sources");
     await quiet();
+    // The capture-only layout intentionally disables hit testing. Restore the
+    // exact prior policy before subsequent real scene-button qualification.
+    await canvas.evaluate((element, policy) => {
+      if (policy.value) element.style.setProperty("pointer-events", policy.value, policy.priority);
+      else element.style.removeProperty("pointer-events");
+    }, pointerPolicy);
     return {
       samples, forwardSamples,
       held: { time: 30, points: held.points, pngSha256: hash(held.bytes),
@@ -362,6 +519,125 @@ try {
     const phase = correctedPhase(running, source, 13);
     assertEnvelope(running, source, [[0, 0.5], [27.5 - phase, 0.5], [30 - phase, 0]]);
     return { previous, next, restart, running };
+  });
+
+  await record("scene section buttons seek the actual picture and music with preserved play state", async () => {
+    const revision = await authoredRevisions();
+    await clickSceneControl("play");
+    const paused = await state();
+    assert.equal(paused.transport.playing, false);
+    await quiet();
+    await page.waitForTimeout(100);
+    near((await state()).transport.time, paused.transport.time, "scene pause freezes authored time", 0);
+    await clickSceneControl("restart");
+    await pausedSceneTime(0);
+    await clickSceneControl("previous");
+    await pausedSceneTime(0);
+    const starts = (await state()).starts.length;
+    await clickSceneControl("next");
+    const positive = await pausedSceneTime(10);
+    const positivePicture = await currentPicture(2, "scene-next-10.png");
+    await clickSceneControl("next");
+    const negative = await pausedSceneTime(20);
+    const negativePicture = await currentPicture(-2, "scene-next-20.png");
+    await clickSceneControl("next");
+    await pausedSceneTime(20);
+    await clickSceneControl("previous");
+    const previous = await pausedSceneTime(10);
+    assert.equal(previous.starts.length, starts, "paused scene navigation stays silent");
+    await quiet();
+    const running = await scenePlay();
+    correctedPhase(running, running.starts.at(-1), 10);
+    const nextInputs = await clickSceneControl("next");
+    const nextWhilePlaying = await audible();
+    assert.equal(nextWhilePlaying.transport.playing, true);
+    assert.equal(nextWhilePlaying.starts.length, running.starts.length + 1);
+    correctedPhase(nextWhilePlaying, nextWhilePlaying.starts.at(-1), 20);
+    const restartInputs = await clickSceneControl("restart");
+    const restarted = await audible();
+    assert.equal(restarted.transport.playing, true);
+    assert.equal(restarted.starts.length, nextWhilePlaying.starts.length + 1);
+    assert.ok(correctedPhase(restarted, restarted.starts.at(-1), 0) < 1.5);
+    assert.equal(restarted.buffers.length, 1, "scene controls reuse the original immutable PCM");
+    assert.deepEqual(await authoredRevisions(), revision);
+    return { revision, paused, positive, negative, previous, running, nextWhilePlaying, restarted,
+      pictures: { positive: positivePicture.points, negative: negativePicture.points },
+      nextInputs, restartInputs };
+  });
+
+  await record("scene Sound changes only viewer gain and keeps the same device source", async () => {
+    const revision = await authoredRevisions();
+    const before = await state();
+    const activeSource = before.starts.at(-1);
+    assert.ok(activeSource, "scene mute qualification requires an active device source");
+    // Restart may still be retiring the preceding graph. Track only the live
+    // source while retaining every old-source stop in each reported snapshot.
+    const activeStops = snapshot => snapshot.stops.filter(stop =>
+      stop.context === activeSource.context && stop.node === activeSource.node).length;
+    await clickSceneControl("mute");
+    await quiet();
+    const muted = await state();
+    assert.equal(muted.transport.audioMuted, true);
+    assert.equal(muted.transport.playing, true);
+    assert.equal(muted.starts.length, before.starts.length, "scene mute must not restart clip phase");
+    assert.equal(activeStops(muted), 0, "scene mute must not stop the active device source");
+    assert.ok(muted.transport.time > before.transport.time);
+    await clickSceneControl("mute");
+    const unmuted = await state();
+    assert.equal(unmuted.starts.length, before.starts.length, "scene unmute must preserve the current device source");
+    assert.equal(activeStops(unmuted), 0, "scene unmute must not stop the active device source");
+    const restored = await audible();
+    assert.equal(restored.transport.audioMuted, false);
+    assert.equal(restored.starts.length, before.starts.length, "scene mute must not restart clip phase");
+    assert.equal(activeStops(restored), 0, "scene mute recovery must preserve the active device source");
+    assert.equal(restored.transport.audioVolume, before.transport.audioVolume);
+    assert.deepEqual(await authoredRevisions(), revision);
+    return { revision, activeSource, before, muted, unmuted, restored };
+  });
+
+  await record("background, dragged and cancelled gestures cannot activate a scene button", async () => {
+    await clickSceneControl("play");
+    await clickSceneControl("restart");
+    const before = await pausedSceneTime(0);
+    const revision = await authoredRevisions();
+    const background = await hoverScenePosition(5.8, 2);
+    let first = await page.evaluate(() => audioQualification.pointerInputs.length);
+    await page.mouse.click(background.x, background.y);
+    const backgroundInputs = await pointerCompletion(first);
+    const afterBackground = await pausedSceneTime(0);
+    const button = await hoverScenePosition(sceneControls.play);
+    first = await page.evaluate(() => audioQualification.pointerInputs.length);
+    await page.mouse.down();
+    await pointerCompletion(first, "press");
+    await page.mouse.move(button.x + 30, button.y, { steps: 3 });
+    await page.mouse.move(button.x, button.y, { steps: 3 });
+    await page.mouse.up();
+    const dragInputs = await pointerCompletion(first);
+    const afterDrag = await pausedSceneTime(0);
+    first = await page.evaluate(() => audioQualification.pointerInputs.length);
+    await page.mouse.down();
+    const presses = await pointerCompletion(first, "press");
+    const pointerId = presses.find(input => input.input.kind === "press").input.pointer_id;
+    // Supply only the browser cancellation occurrence, never a target/action.
+    // The later physical release must not reconstruct a successful gesture.
+    await page.locator("#scene").dispatchEvent("pointercancel", {
+      pointerId, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0,
+      clientX: button.x, clientY: button.y,
+    });
+    await page.mouse.up();
+    const cancelInputs = await pointerCompletion(first, "cancel");
+    const afterCancel = await pausedSceneTime(0);
+    for (const snapshot of [afterBackground, afterDrag, afterCancel]) {
+      assert.equal(snapshot.starts.length, before.starts.length);
+      assert.equal(snapshot.transport.playing, false);
+    }
+    assert.deepEqual(await authoredRevisions(), revision);
+    await quiet();
+    const fresh = await scenePlay();
+    assert.equal(fresh.starts.length, before.starts.length + 1,
+      "a fresh complete click must still work after cancellation");
+    return { revision, before, afterBackground, afterDrag, afterCancel, fresh,
+      backgroundInputs, dragInputs, cancelInputs };
   });
 
   await record("viewer volume and mute affect the device without restarting the music", async () => {
@@ -446,6 +722,32 @@ try {
     return { before, replaced };
   });
 
+  await record("Run retires a delayed scene Play without reviving either audio owner", async () => {
+    const before = await state();
+    await page.evaluate(async () => {
+      await audioQualification.contexts.at(-1).context.suspend();
+      audioQualification.holdNextResume = true;
+    });
+    const first = await clickSceneControl("play", { settle: false });
+    await page.waitForFunction(() => audioQualification.pendingResumes.length === 1);
+    assert.equal((await state()).transport.playing, false);
+    await page.evaluate(() => window.__noonExampleGallery.run());
+    await waitReady();
+    await page.evaluate(() => { for (const resolve of audioQualification.pendingResumes.splice(0)) resolve(); });
+    await page.waitForFunction(first => audioQualification.pointerInputs.slice(first)
+      .every(input => input.status !== "pending"), first);
+    const replaced = await pausedSceneTime(0);
+    assert.equal(replaced.starts.length, before.starts.length,
+      "old unlock completion cannot start old or replacement output");
+    assert.equal(replaced.buffers.length, before.buffers.length + 1,
+      "replacement owns its independently prepared immutable device buffer");
+    assert.ok(replaced.output.slice(0, -1).every(output => output.state === "closed"),
+      "every retired audio owner must close its context");
+    await quiet();
+    const inputs = await page.evaluate(first => audioQualification.pointerInputs.slice(first), first);
+    return { before, replaced, inputs };
+  });
+
   await record("decoded Python PCM crosses once and drives overlapping trimmed loops", async () => {
     const fixture = `from array import array
 from math import sin, tau
@@ -510,6 +812,75 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     return { fixtureSha256: hash(fixture), prepared, running };
   });
 
+  await record("finite scene controls also work without allocating an audio device", async () => {
+    const fixture = `from noon import BLUE, PlaybackControl, Rectangle, Scene
+
+result = Scene()
+for x, action in [(-3.6, PlaybackControl.PREVIOUS_SECTION),
+                  (-1.8, PlaybackControl.TOGGLE_PLAYBACK),
+                  (0, PlaybackControl.NEXT_SECTION),
+                  (1.8, PlaybackControl.RESTART),
+                  (3.6, PlaybackControl.TOGGLE_AUDIO_MUTED)]:
+    button = Rectangle(width=1.55, height=0.48).set_fill(BLUE, opacity=1)
+    result.add(button.move_to((x, 0, 0)))
+    result.on_click_playback(button, action)
+for name in ["First", "Second", "Third"]:
+    result.next_section(name)
+    result.declare_wait(2)
+`;
+    const before = await state();
+    await page.evaluate(async source => {
+      const editor = document.querySelector("#python-scene-source");
+      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("ordinary Python editor is unavailable");
+      editor.value = source;
+      await window.__noonExampleGallery.run();
+    }, fixture);
+    await page.waitForFunction(() => {
+      const patch = document.querySelector("#patch-status");
+      if (patch?.dataset.state === "error") throw new Error(patch.value || patch.textContent);
+      return patch?.dataset.state === "applied" && !window.__noonExampleGallery?.runInFlight;
+    });
+    // Keep this fixture independent of the visual-only viewer's autoplay policy.
+    await command("pause");
+    await command("seek", 0);
+    const prepared = await pausedSceneTime(0);
+    assert.notEqual(prepared.transport.hasAudio, true);
+    const revision = await authoredRevisions();
+    await command("seek", 3);
+    await clickSceneControl("next", { y: 0 });
+    const next = await pausedSceneTime(4);
+    await clickSceneControl("previous", { y: 0 });
+    const previous = await pausedSceneTime(2);
+    await clickSceneControl("restart", { y: 0 });
+    const restarted = await pausedSceneTime(0);
+    await clickSceneControl("play", { y: 0 });
+    await waitForBrowserObservation(page, async () => {
+      const result = await audioQualification.execution.state();
+      return result.playing && result.time > 0;
+    });
+    await clickSceneControl("play", { y: 0 });
+    const paused = await state();
+    assert.equal(paused.transport.playing, false);
+    await page.waitForTimeout(100);
+    near((await state()).transport.time, paused.transport.time, "silent scene pause freezes time", 0);
+    await command("seek", 5.75);
+    await clickSceneControl("play", { y: 0 });
+    await pausedSceneTime(6);
+    await clickSceneControl("play", { y: 0 });
+    await waitForBrowserObservation(page, async () => {
+      const result = await audioQualification.execution.state();
+      return result.playing && result.time >= 0 && result.time < 2;
+    });
+    await clickSceneControl("play", { y: 0 });
+    const final = await state();
+    assert.equal(final.transport.playing, false);
+    assert.equal(final.buffers.length, before.buffers.length, "visual-only controls create no PCM buffer");
+    assert.equal(final.output.length, before.output.length, "visual-only controls create no AudioContext");
+    assert.equal(final.starts.length, before.starts.length);
+    assert.deepEqual(await authoredRevisions(), revision);
+    return { fixtureSha256: hash(fixture), revision, prepared, next, previous, restarted, paused, final };
+  });
+
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");
   assert.deepEqual(report.consoleErrors, [], "no browser audio/GPU errors");
   report.status = "passed";
@@ -542,6 +913,11 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
   if (hasExecution) {
     report.failureFrame = await command("debugFrame").catch(error => ({ unavailable: String(error) }));
     report.failureMetrics = await command("metrics").catch(error => ({ unavailable: String(error) }));
+    report.failurePointerInput = await page.evaluate(() => ({
+      inputs: audioQualification.pointerInputs,
+      presentation: audioQualification.pointerPlayer?.pointerPresentation ?? null,
+      canvasPointerEvents: getComputedStyle(document.querySelector("#scene")).pointerEvents,
+    })).catch(error => ({ unavailable: String(error) }));
   }
   await page?.screenshot({ path: path.join(artifacts, "failure.png"), fullPage: true }).catch(() => {});
 } finally {

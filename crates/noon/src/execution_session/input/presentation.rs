@@ -10,6 +10,9 @@ use noon_runtime::RuntimeIdentity;
 use super::{ExecutionSession, ExecutionSessionInputError, NativePointerInputToken};
 use crate::ExecutionSessionCameraError;
 
+mod damage;
+pub(in crate::execution_session) use damage::PointerFrameDamage;
+
 /// The actual camera and logical content viewport used for one presentation.
 ///
 /// The host must change `revision` on mapping/lifecycle changes, including resize,
@@ -62,7 +65,7 @@ impl PointerFrameView {
 /// This value cannot be constructed from caller-supplied publication/runtime IDs.
 /// Capturing it does not consume renderer dirtiness, acknowledge input, configure
 /// a pointer, advance authored time or claim that anything has been displayed.
-/// Hosts retain only their last successfully presented snapshot and invalidate it
+/// Hosts retain bounded successfully presented metadata and invalidate it
 /// when their surface is lost/replaced. Worker hosts must additionally associate
 /// each occurrence with the receipt visible at collection time; they must not
 /// substitute a newer receipt when draining a delayed occurrence.
@@ -72,6 +75,16 @@ pub struct PointerFrameSnapshot {
     publication: PublicationContext,
     view: PointerFrameView,
     inspection_revision: u64,
+    damage_stamp: Option<u64>,
+}
+
+/// A point-specific proof for one current input transaction, never a new receipt.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PointerPositionProof {
+    pub(super) publication: PublicationContext,
+    pub(super) position: NativePointerPosition,
+    pub(super) damage_stamp: Option<u64>,
+    pub(super) inspection_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +93,7 @@ pub enum PointerFrameError {
     ViewChanged,
     CameraMismatch,
     PositionOutOfRange,
+    PickingChanged,
     Camera(ExecutionSessionCameraError),
     Input(ExecutionSessionInputError),
     Inspection(crate::InspectionViewError),
@@ -99,6 +113,9 @@ impl std::fmt::Display for PointerFrameError {
             ),
             Self::PositionOutOfRange => {
                 f.write_str("pointer frame projection is nonfinite or outside the coordinate range")
+            }
+            Self::PickingChanged => {
+                f.write_str("the displayed point no longer has unchanged picking evidence")
             }
             Self::Camera(error) => error.fmt(f),
             Self::Input(error) => error.fmt(f),
@@ -123,20 +140,29 @@ impl ExecutionSession {
     ///
     /// The caller retains this value only after presenting the same publication
     /// with this view. Failed acquisition, encoding, submission or presentation
-    /// must not replace the last presented snapshot. This is a read-only O(1)
-    /// operation, independent of the number of scene objects or input subscribers.
+    /// must not replace the last presented snapshot. Capture checkpoints pending
+    /// spatial changes in the existing index and bounded damage journal. Work is
+    /// proportional to dirty rows; the returned metadata has constant size.
     pub fn capture_pointer_frame(
-        &self,
+        &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
         if view.camera != self.inspection_camera()? {
             return Err(PointerFrameError::CameraMismatch);
         }
+        self.sync_spatial_index();
         Ok(PointerFrameSnapshot {
             runtime: self.runtime_identity(),
             publication: self.publication_context(),
             view,
             inspection_revision: self.inspection_view_revision(),
+            damage_stamp: if self.derived_display_plan.is_some()
+                || !self.derived_display_objects.is_empty()
+            {
+                None
+            } else {
+                self.pointer_frame_damage.stamp()
+            },
         })
     }
 }
@@ -152,6 +178,20 @@ impl PointerFrameSnapshot {
     }
     pub const fn view(&self) -> PointerFrameView {
         self.view
+    }
+
+    /// Whether a fresh capture can replace obsolete input evidence at this view.
+    ///
+    /// Hosts combine this with their normal publication/view freshness check.
+    /// Policy or same-time seek barriers may leave publication IDs unchanged.
+    /// Unsupported derived presentation and exhausted journals cannot be repaired
+    /// by a receipt-only redraw, so they must not create a refresh feedback loop.
+    /// This is a wake hint, never positional input or presentation admission.
+    pub fn needs_input_refresh(&self, session: &ExecutionSession) -> bool {
+        session.derived_display_plan.is_none()
+            && session.derived_display_objects.is_empty()
+            && session.pointer_frame_damage.stamp().is_some()
+            && self.damage_stamp != session.pointer_frame_damage.stamp()
     }
 
     /// Map one occurrence-local logical position using the captured view only.
@@ -187,9 +227,75 @@ impl PointerFrameSnapshot {
         self.validate_presentation(session, current_view)
     }
 
+    /// Prove that the original displayed point has the same picking inputs now.
+    ///
+    /// Authored/execution revisions and mapping must match. Effective frames may
+    /// advance only when every intervening recorded change excludes this point.
+    /// Missing or expired evidence rejects input. This neither picks a target nor
+    /// replaces the original publication, and it never claims presentation.
+    pub fn validate_position(
+        &self,
+        session: &mut ExecutionSession,
+        current_view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), PointerFrameError> {
+        self.validate_input_mapping(session, current_view)?;
+        let current = session.publication_context();
+        if self.publication.scene_revision() != current.scene_revision()
+            || self.publication.execution_revision() != current.execution_revision()
+        {
+            return Err(PointerFrameError::Input(
+                ExecutionSessionInputError::StalePointerPublication {
+                    expected: current,
+                    actual: self.publication,
+                },
+            ));
+        }
+        let position = self.position(surface)?;
+        session.sync_spatial_index();
+        if session.derived_display_plan.is_some()
+            || !session.derived_display_objects.is_empty()
+            || !session
+                .pointer_frame_damage
+                .unchanged_since(self.damage_stamp, position.scene())
+        {
+            return Err(PointerFrameError::PickingChanged);
+        }
+        Ok(())
+    }
+
+    /// Mint a point-specific token while preserving the collected publication.
+    ///
+    /// Hosts validate before binding and call this again after binding, because
+    /// resetting an older source can change effective state. The private proof
+    /// expires on any subsequent publication, policy change or point substitution.
+    /// Precise picking and action/driver admission still use the current runtime.
+    pub fn input_token_at(
+        &self,
+        session: &mut ExecutionSession,
+        current_view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, PointerFrameError> {
+        self.validate_position(session, current_view, surface)?;
+        let mut token = session
+            .native_pointer_input_token()
+            .map_err(PointerFrameError::Input)?;
+        if token.context().view_revision != self.view.revision {
+            return Err(PointerFrameError::ViewChanged);
+        }
+        token.context.publication = self.publication;
+        token.position_proof = Some(PointerPositionProof {
+            publication: session.publication_context(),
+            position: self.position(surface)?,
+            damage_stamp: session.pointer_frame_damage.stamp(),
+            inspection_revision: session.inspection_view_revision(),
+        });
+        Ok(token)
+    }
+
     /// Validate publication/view identity without admitting input or evaluating
-    /// callbacks. Hosts use this after presentation; ordinary input still uses
-    /// `validate_current`, which enforces its existing callback barriers first.
+    /// callbacks. Hosts use this after presentation; positional input separately
+    /// enforces callback barriers and validates the exact collected point.
     pub fn validate_presentation(
         &self,
         session: &ExecutionSession,
@@ -229,6 +335,14 @@ impl PointerFrameSnapshot {
     /// session has already acquired its own gesture capture; it is not an
     /// alternative admission path for a new positional input or a new pick.
     pub fn validate_captured_gesture(
+        &self,
+        session: &ExecutionSession,
+        current_view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        self.validate_input_mapping(session, current_view)
+    }
+
+    fn validate_input_mapping(
         &self,
         session: &ExecutionSession,
         current_view: PointerFrameView,
@@ -282,3 +396,6 @@ impl PointerFrameSnapshot {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod compatibility_tests;

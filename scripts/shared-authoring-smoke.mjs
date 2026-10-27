@@ -2477,6 +2477,7 @@ class GlowPulseEndpoint(Scene):
     canvas.height = 360;
     document.body.append(canvas);
     let execution = null;
+    let startPromise = null;
     let registration = null;
     let settled = false;
     let sourceError = null;
@@ -2487,22 +2488,28 @@ class GlowPulseEndpoint(Scene):
         }
         registration = next;
         execution = new harness.AuthoringExecutionClient(canvas);
-        await execution.startSemanticExecution(next.semanticExecution, {
+        startPromise = execution.startSemanticExecution(next.semanticExecution, {
           authoringClient: harness.authoring,
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
+        await startPromise;
       },
     });
     authoredPromise.then(() => { settled = true; }, (error) => { sourceError = String(error); });
     for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (startPromise !== null) break;
       if (sourceError !== null) throw new Error(sourceError);
-      if (execution !== null && registration !== null) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     if (execution === null || registration === null) {
       throw new Error("scalar continuation source did not register its semantic continuation");
     }
+    // Startup uses the suite's existing attachment bound. Spend the original
+    // midpoint observation budget only after the client can expose its player.
+    const attachment = harness.createExecutionAttachment("scalar continuation");
+    startPromise.then(attachment.resolve, attachment.reject);
+    await attachment.ready;
     harness.scalarContinuation = {
       authoredPromise,
       execution,
@@ -2848,6 +2855,7 @@ class GlowPulseEndpoint(Scene):
     let registration = null;
     let settled = false;
     let authoringFailure = null;
+    const attachment = harness.createExecutionAttachment("sparse callback");
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2856,18 +2864,22 @@ class GlowPulseEndpoint(Scene):
         registration = next;
         execution = new harness.AuthoringExecutionClient(canvas);
         harness.callbackSparseReadsExecution = execution;
-        await execution.startSemanticExecution(next.semanticExecution, {
+        const startPromise = execution.startSemanticExecution(next.semanticExecution, {
           authoringClient: harness.authoring,
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
+        await startPromise;
+        attachment.resolve();
       },
     });
     authoredPromise.then(() => { settled = true; }, (error) => {
       settled = true;
       authoringFailure = String(error?.message ?? error);
+      attachment.reject(error);
     });
     harness.callbackSparseReadsAuthoredPromise = authoredPromise;
+    await attachment.ready;
 
     let trackMidpoint = null;
     for (let attempt = 0; attempt < 180; attempt += 1) {

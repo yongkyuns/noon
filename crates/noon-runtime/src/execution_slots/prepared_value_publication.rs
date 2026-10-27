@@ -265,7 +265,7 @@ impl SceneInstance {
                     .commit_prepared_effect_value(object_index as u32, effect);
                 if self.frame.objects[object_index].effect.as_deref() != Some(effective.as_ref()) {
                     self.frame.objects[object_index].effect = Some(effective);
-                    self.changes.insert(object_index);
+                    self.mark_nonspatial_changed(object_index);
                 }
                 continue;
             }
@@ -371,7 +371,7 @@ impl SceneInstance {
                 if before.spatially_differs_from_frame(&self.frame, object_index) {
                     self.mark_changed(object_index);
                 } else {
-                    self.changes.insert(object_index);
+                    self.mark_nonspatial_changed(object_index);
                 }
             }
         }

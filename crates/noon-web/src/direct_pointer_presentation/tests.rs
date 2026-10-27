@@ -1,9 +1,9 @@
 use super::*;
 use crate::browser_pointer_input::BrowserPointerKind;
 use noon_core::{
-    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
-    SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticSignalValue,
-    SemanticStore, SemanticVec3,
+    NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
+    SemanticMutationTransaction, SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId,
+    SemanticSignalValue, SemanticStore, SemanticVec3,
 };
 
 const SIZE: Vec2 = Vec2::new(800.0, 400.0);
@@ -65,13 +65,8 @@ impl Fixture {
         }
     }
     fn present(&mut self) {
-        let frame = self
-            .host
-            .capture(
-                self.execution.session(),
-                self.execution.session().camera().unwrap(),
-            )
-            .unwrap();
+        let camera = self.execution.session().camera().unwrap();
+        let frame = self.host.capture(&mut self.execution, camera).unwrap();
         self.execution.session_mut().take_renderer_publication();
         self.host.did_present(frame);
     }
@@ -96,13 +91,8 @@ fn capture_alone_never_authorizes_input_or_consumes_publication() {
     let mut f = Fixture::new();
     let before = f.execution.session().frame().clone();
     let wake = f.execution.session().wake_state();
-    let captured = f
-        .host
-        .capture(
-            f.execution.session(),
-            f.execution.session().camera().unwrap(),
-        )
-        .unwrap();
+    let camera = f.execution.session().camera().unwrap();
+    let captured = f.host.capture(&mut f.execution, camera).unwrap();
     assert!(captured.is_some());
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
     assert!(f.binding.is_none());
@@ -205,7 +195,7 @@ fn consumed_but_unpresented_round_trip_rejects_and_cancels_stationary_press() {
 }
 
 #[test]
-fn same_time_selection_clear_preserves_compatible_receipt() {
+fn same_time_seek_requires_fresh_presentation_even_with_unchanged_publication() {
     let mut f = Fixture::new();
     f.present();
     f.click();
@@ -213,7 +203,15 @@ fn same_time_selection_clear_preserves_compatible_receipt() {
     f.execution.seek(0.0).unwrap();
     assert_eq!(f.execution.session().publication_context(), publication);
     assert!(f.execution.session().selected_pointer_target().is_none());
-    f.click();
+    assert!(f.host.needs_refresh(f.execution.session()));
+    assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
+    assert!(f.host.refresh_pending);
+    f.present();
+    for kind in [BrowserPointerKind::Press, BrowserPointerKind::Release] {
+        let mut wire = input(kind);
+        wire.source_id = 2;
+        assert!(f.send(wire).unwrap());
+    }
     assert_eq!(
         f.execution.session().selected_pointer_target(),
         Some(f.target)
@@ -221,10 +219,10 @@ fn same_time_selection_clear_preserves_compatible_receipt() {
 }
 
 #[test]
-fn stale_capture_cannot_be_replaced_by_newer_execution_during_admission() {
+fn seek_retired_capture_cannot_be_replaced_during_admission() {
     let mut f = Fixture::new();
     f.present();
-    f.execution.session_mut().evaluate(0.25).unwrap();
+    f.execution.seek(0.25).unwrap();
     let publication = f.execution.session().publication_context();
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
     assert_eq!(f.execution.session().publication_context(), publication);
@@ -289,14 +287,8 @@ fn hidden_view_retires_receipt_and_preserves_revision_high_watermark() {
     f.present();
     f.host.set_view(9, Vec2::ZERO).unwrap();
     assert!(f.host.viewport().is_none());
-    assert!(f
-        .host
-        .capture(
-            f.execution.session(),
-            f.execution.session().camera().unwrap()
-        )
-        .unwrap()
-        .is_none());
+    let camera = f.execution.session().camera().unwrap();
+    assert!(f.host.capture(&mut f.execution, camera).unwrap().is_none());
     assert!(f.host.set_view(8, SIZE).is_err());
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
 }
@@ -363,11 +355,7 @@ fn manual_camera_mismatch_cannot_mint_a_receipt_or_spin_forever() {
         center: Vec2::new(2.0, 0.0),
         height: 8.0,
     };
-    assert!(f
-        .host
-        .capture(f.execution.session(), camera)
-        .unwrap()
-        .is_none());
+    assert!(f.host.capture(&mut f.execution, camera).unwrap().is_none());
     f.host.did_present(None);
     assert!(!f.host.refresh_pending);
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
@@ -420,8 +408,25 @@ fn signal(
     tx.apply(store).unwrap().resolve(pending).unwrap()
 }
 
+fn event_signal(
+    store: &mut SemanticStore,
+    root: SemanticNodeId,
+    source: NativeEventSource,
+) -> SemanticNodeId {
+    let mut transaction = SemanticMutationTransaction::new();
+    let pending = transaction.create_node(
+        SemanticNodeCreation::native_input_signal(
+            SemanticSignalValue::Scalar(0.0),
+            SemanticNativeInputSource::Event(source),
+        )
+        .unwrap(),
+    );
+    transaction.scope_signal(root, pending);
+    transaction.apply(store).unwrap().resolve(pending).unwrap()
+}
+
 #[test]
-fn binding_reset_is_revalidated_before_positional_admission() {
+fn signal_only_binding_reset_preserves_the_collected_context_and_delivers_once() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let button = signal(
@@ -436,6 +441,11 @@ fn binding_reset_is_revalidated_before_positional_admission() {
         NativeStateSource::PointerPosition,
         SemanticSignalValue::Vec3(SemanticVec3::ZERO),
     );
+    let down = event_signal(
+        &mut store,
+        root,
+        NativeEventSource::PointerDown { button: 0 },
+    );
     let scene =
         noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
             .unwrap();
@@ -449,34 +459,108 @@ fn binding_reset_is_revalidated_before_positional_admission() {
         .unwrap();
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
-    let frame = host
-        .capture(execution.session(), execution.session().camera().unwrap())
-        .unwrap();
+    let camera = execution.session().camera().unwrap();
+    let frame = host.capture(&mut execution, camera).unwrap();
     host.did_present(frame);
+    let displayed = host.presented.clone().unwrap();
     let mut binding = None;
     let mut sequence = 0;
     let mut wire = input(BrowserPointerKind::Press);
     wire.surface_x = Some(600.0);
-    assert!(!host
+    let publication = host
         .submit(&mut execution, &mut binding, &mut sequence, wire)
         .unwrap()
-        .is_some());
+        .expect("a reset of unrendered signals preserves the displayed pick");
+    assert_eq!(
+        publication.input().context().publication,
+        displayed.publication()
+    );
+    assert_ne!(publication.previous_publication(), displayed.publication());
     assert_eq!(
         execution.session().effective_signal_value(button).unwrap(),
-        &ReactiveValue::Bool(false)
+        &ReactiveValue::Bool(true)
     );
     assert_eq!(
         execution
             .session()
             .effective_signal_value(position)
             .unwrap(),
-        &ReactiveValue::Vec2(Vec2::ZERO)
+        &ReactiveValue::Vec2(Vec2::new(4.0, 0.0))
+    );
+    assert_eq!(
+        execution.session().effective_signal_value(down).unwrap(),
+        &ReactiveValue::Scalar(1.0)
+    );
+    assert_eq!(sequence, 1);
+    assert_eq!(host.presented, Some(displayed));
+    assert!(!host.refresh_pending);
+}
+
+#[test]
+fn binding_reset_that_removes_the_displayed_target_rejects_the_press() {
+    let mut fixture = noon::example_scenes::pointer_input_trace::Fixture::signals_only();
+    fixture
+        .store
+        .bind_semantic_signal(
+            fixture.button,
+            fixture.target,
+            noon_core::SemanticObjectProperty::Presence,
+        )
+        .unwrap();
+    let scene = noon::Scene::with_integration_root(
+        std::rc::Rc::new(std::cell::RefCell::new(fixture.store)),
+        fixture.root,
+    )
+    .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
+        .enable_pointer_fill_selection(4.0)
+        .unwrap();
+    execution
+        .session_mut()
+        .set_native_state_input(
+            NativeStateSource::PointerButton { button: 0 },
+            NativeInputValue::Bool(true),
+        )
+        .unwrap();
+    let mut host = DirectPointerPresentation::default();
+    host.set_view(1, SIZE).unwrap();
+    let camera = execution.session().camera().unwrap();
+    let frame = host.capture(&mut execution, camera).unwrap();
+    host.did_present(frame);
+    let displayed = host.presented.clone();
+    let mut binding = None;
+    let mut sequence = 0;
+
+    assert!(host
+        .submit(
+            &mut execution,
+            &mut binding,
+            &mut sequence,
+            input(BrowserPointerKind::Press),
+        )
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        execution.session().effective_signal_value(fixture.button),
+        Some(&ReactiveValue::Bool(false))
+    );
+    assert_eq!(
+        execution.session().effective_signal_value(fixture.down),
+        Some(&ReactiveValue::Scalar(0.0))
+    );
+    assert_eq!(
+        execution.session().effective_signal_value(fixture.position),
+        Some(&ReactiveValue::Vec2(Vec2::ZERO))
     );
     assert_eq!(
         sequence, 1,
-        "only cleanup cancellation, never the offered press"
+        "only the separate cleanup cancellation is accepted"
     );
+    assert_eq!(host.presented, displayed);
     assert!(host.refresh_pending);
+    assert!(execution.session().selected_pointer_target().is_none());
 }
 
 #[test]
@@ -629,9 +713,8 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
     let mut execution = scene.into_execution().unwrap();
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
-    let frame = host
-        .capture(execution.session(), execution.session().camera().unwrap())
-        .unwrap();
+    let camera = execution.session().camera().unwrap();
+    let frame = host.capture(&mut execution, camera).unwrap();
     execution.session_mut().take_renderer_publication();
     host.did_present(frame);
     let displayed = execution.session().publication_context();
@@ -662,7 +745,7 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
 }
 
 #[test]
-fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
+fn signal_only_publication_preserves_collected_context_and_ordered_edges() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let source = NativeStateSource::Control {
@@ -674,6 +757,12 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
         source.clone(),
         SemanticSignalValue::Scalar(0.0),
     );
+    let down = event_signal(
+        &mut store,
+        root,
+        NativeEventSource::PointerDown { button: 0 },
+    );
+    let up = event_signal(&mut store, root, NativeEventSource::PointerUp { button: 0 });
     let scene =
         noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
             .unwrap();
@@ -685,9 +774,8 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
     assert!(execution.session().has_native_pointer_subscribers());
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
-    let frame = host
-        .capture(execution.session(), execution.session().camera().unwrap())
-        .unwrap();
+    let camera = execution.session().camera().unwrap();
+    let frame = host.capture(&mut execution, camera).unwrap();
     execution.session_mut().take_renderer_publication();
     host.did_present(frame);
     let displayed = host.presented.clone().unwrap();
@@ -707,24 +795,32 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
         .is_empty());
     assert!(host.needs_refresh(execution.session()));
 
-    // A stale occurrence triggers cancellation and a fresh presentation; it
-    // must never be silently replayed against the newly published receipt.
     let mut binding = None;
     let mut sequence = 0;
-    assert!(!host
-        .submit(
-            &mut execution,
-            &mut binding,
-            &mut sequence,
-            input(BrowserPointerKind::Press),
-        )
-        .unwrap()
-        .is_some());
+    for kind in [BrowserPointerKind::Press, BrowserPointerKind::Release] {
+        let before_input = execution.session().publication_context();
+        let publication = host
+            .submit(&mut execution, &mut binding, &mut sequence, input(kind))
+            .unwrap()
+            .expect("unchanged displayed picking admits the original occurrence");
+        assert_eq!(
+            publication.input().context().publication,
+            displayed.publication()
+        );
+        assert_eq!(publication.previous_publication(), before_input);
+        assert_ne!(publication.previous_publication(), displayed.publication());
+    }
     assert_eq!(
-        sequence, 0,
-        "the stale occurrence is never admitted or replayed"
+        execution.session().effective_signal_value(down),
+        Some(&ReactiveValue::Scalar(1.0))
     );
-    assert!(host.refresh_pending);
+    assert_eq!(
+        execution.session().effective_signal_value(up),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+    assert_eq!(sequence, 2, "each original edge is delivered exactly once");
+    assert_eq!(host.presented, Some(displayed));
+    assert!(!host.refresh_pending);
 }
 
 #[test]

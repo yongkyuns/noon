@@ -9,13 +9,8 @@ fn scroll(f: &mut Fixture, point: Vec2, delta: f64) -> Result<Option<bool>, Stri
         .scroll(&mut f.execution, &mut f.binding, 1, SIZE, point, delta)
 }
 fn present(f: &mut Fixture) {
-    let frame = f
-        .host
-        .capture(
-            f.execution.session(),
-            f.execution.session().inspection_camera().unwrap(),
-        )
-        .unwrap();
+    let camera = f.execution.session().inspection_camera().unwrap();
+    let frame = f.host.capture(&mut f.execution, camera).unwrap();
     f.execution.session_mut().take_renderer_publication();
     f.host.did_present(frame);
 }
@@ -120,13 +115,8 @@ fn direct_inspection_aba_and_old_surface_geometry_do_not_authorize_zoom() {
     assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
     assert_eq!(f.execution.session().inspection_view_revision(), 2);
     f.host.set_view(2, SIZE).unwrap();
-    let frame = f
-        .host
-        .capture(
-            f.execution.session(),
-            f.execution.session().inspection_camera().unwrap(),
-        )
-        .unwrap();
+    let camera = f.execution.session().inspection_camera().unwrap();
+    let frame = f.host.capture(&mut f.execution, camera).unwrap();
     f.host.did_present(frame);
     assert_eq!(scroll(&mut f, CENTER, -100.0).unwrap(), None);
     assert_eq!(f.execution.session().inspection_view_revision(), 2);
@@ -222,12 +212,8 @@ fn direct_inspection_and_real_indicate_restore_independently() {
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
-    let frame = host
-        .capture(
-            execution.session(),
-            execution.session().inspection_camera().unwrap(),
-        )
-        .unwrap();
+    let camera = execution.session().inspection_camera().unwrap();
+    let frame = host.capture(&mut execution, camera).unwrap();
     host.did_present(frame);
     assert_eq!(
         host.scroll(&mut execution, &mut None, 1, SIZE, CENTER, -100.0)

@@ -31,7 +31,7 @@ fn fixture() -> (Scene, crate::Mobject, ExecutionSession) {
     (scene, circle, session)
 }
 
-fn displayed(session: &ExecutionSession) -> PointerFrameSnapshot {
+fn displayed(session: &mut ExecutionSession) -> PointerFrameSnapshot {
     let view = session.inspection_pointer_view(SURFACE, SIZE).unwrap();
     session.capture_pointer_frame(view).unwrap()
 }
@@ -89,11 +89,11 @@ fn click_edge(
 fn shared_view_projects_the_same_anchor_in_both_zoom_directions() {
     for factor in [0.125, 0.73, 1.4, 8.0] {
         let (_, _, mut session) = fixture();
-        let before = displayed(&session);
+        let before = displayed(&mut session);
         let point = Vec2::new(540.0, 120.0);
         let anchor = before.position(point).unwrap().scene();
         assert_eq!(zoom(&mut session, point, factor), Ok(true));
-        let after = displayed(&session);
+        let after = displayed(&mut session);
         let projected = after.position(point).unwrap().scene();
         assert!((projected.x - anchor.x).abs() < 1e-5);
         assert!((projected.y - anchor.y).abs() < 1e-5);
@@ -110,11 +110,11 @@ fn shared_view_projects_the_same_anchor_in_both_zoom_directions() {
 #[test]
 fn zoom_out_and_back_does_not_revive_an_old_displayed_snapshot() {
     let (_, _, mut session) = fixture();
-    let old = displayed(&session);
+    let old = displayed(&mut session);
     let publication = session.publication_context();
     zoom(&mut session, CENTER, 0.5).unwrap();
     zoom(&mut session, CENTER, 2.0).unwrap();
-    let new = displayed(&session);
+    let new = displayed(&mut session);
     assert_eq!(new.view(), old.view());
     assert_eq!(new.publication(), publication);
     assert_eq!(new.inspection_revision(), 2);
@@ -160,8 +160,8 @@ fn invalid_and_foreign_requests_leave_view_frame_and_gesture_unchanged() {
         assert!(zoom(&mut session, CENTER, factor).is_err());
     }
     assert!(zoom(&mut session, Vec2::new(f32::NAN, 0.0), 0.5).is_err());
-    let (_, _, other) = fixture();
-    let foreign = displayed(&other);
+    let (_, _, mut other) = fixture();
+    let foreign = displayed(&mut other);
     assert!(session
         .zoom_inspection_view(&foreign, foreign.view(), CENTER, 0.5)
         .is_err());
@@ -194,7 +194,7 @@ fn revision_exhaustion_is_atomic_but_an_exact_no_op_still_succeeds() {
 #[test]
 fn precise_picking_uses_composed_view_and_rejects_old_uncomposed_view() {
     let (_, circle, mut session) = fixture();
-    let original = displayed(&session);
+    let original = displayed(&mut session);
     zoom(&mut session, CENTER, 0.5).unwrap();
     assert_eq!(
         session.capture_pointer_frame(original.view()),
@@ -203,7 +203,7 @@ fn precise_picking_uses_composed_view_and_rejects_old_uncomposed_view() {
     session
         .configure_native_pointer_input(POINTER, SURFACE)
         .unwrap();
-    let frame = displayed(&session);
+    let frame = displayed(&mut session);
     let token = frame.input_token(&session, frame.view()).unwrap();
     for (surface, expected) in [
         (
@@ -235,7 +235,7 @@ fn zoom_cancels_a_press_and_old_or_fresh_releases_cannot_synthesize_a_click() {
         Vec2::new(500.0, 200.0),
         true,
     );
-    let old_frame = displayed(&session);
+    let old_frame = displayed(&mut session);
     let old_token = session.native_pointer_input_token().unwrap();
     zoom(&mut session, CENTER, 0.5).unwrap();
     let release = input(
@@ -373,7 +373,7 @@ fn zoom_during_click_indicate_restores_and_allows_a_fresh_composed_view_repick()
 #[test]
 fn reset_increments_revision_and_old_identity_view_does_not_revive() {
     let (_, _, mut session) = fixture();
-    let original = displayed(&session);
+    let original = displayed(&mut session);
     assert_eq!(session.reset_inspection_view(), Ok(false));
     zoom(&mut session, Vec2::new(500.0, 100.0), 0.5).unwrap();
     assert_eq!(session.reset_inspection_view(), Ok(true));
@@ -392,7 +392,7 @@ fn reset_increments_revision_and_old_identity_view_does_not_revive() {
 fn seeks_and_clones_preserve_adjustment_but_new_sessions_start_at_identity() {
     let (scene, _, mut session) = fixture();
     zoom(&mut session, CENTER, 0.5).unwrap();
-    let before = displayed(&session);
+    let before = displayed(&mut session);
     session.seek(1.0).unwrap();
     session.seek(0.0).unwrap();
     assert_eq!(session.inspection_camera().unwrap(), before.view().camera());
@@ -403,7 +403,7 @@ fn seeks_and_clones_preserve_adjustment_but_new_sessions_start_at_identity() {
         clone.inspection_camera().unwrap(),
         session.inspection_camera().unwrap()
     );
-    let fresh_frame = displayed(&session);
+    let fresh_frame = displayed(&mut session);
     assert!(fresh_frame
         .validate_current(&clone, fresh_frame.view())
         .is_err());
@@ -415,7 +415,7 @@ fn seeks_and_clones_preserve_adjustment_but_new_sessions_start_at_identity() {
 #[test]
 fn required_callback_barrier_is_not_bypassed_even_by_unit_zoom() {
     let (_, circle, mut session) = fixture();
-    let frame = displayed(&session);
+    let frame = displayed(&mut session);
     let token = session.native_pointer_input_token().unwrap();
     let overlay = session
         .begin_required_callback_phase(0.0, [circle.node_id()])
@@ -512,7 +512,7 @@ fn navigation_composes_with_real_authored_camera_animation_and_completion() {
             .advance_segment_to(segment, time)
             .unwrap();
         let raw = session.camera().unwrap();
-        let view = displayed(&session).view().camera();
+        let view = displayed(&mut session).view().camera();
         assert_eq!(view.center, raw.center);
         assert_eq!(view.height, raw.height * 0.5);
     }
@@ -627,14 +627,17 @@ fn repeated_navigation_has_no_scene_dirtiness_or_resource_and_timeline_growth() 
     session.take_frame_changes();
     let publication = session.publication_context();
     let allocation = session.frame().objects.as_ptr();
-    let spatial = session.last_spatial_update_stats();
     for _ in 0..32 {
-        zoom(&mut session, CENTER, 0.5).unwrap();
-        zoom(&mut session, CENTER, 2.0).unwrap();
+        for factor in [0.5, 2.0] {
+            zoom(&mut session, CENTER, factor).unwrap();
+            assert_eq!(
+                session.last_spatial_update_stats(),
+                noon_runtime::SpatialIndexUpdateStats::default()
+            );
+        }
     }
     assert_eq!(session.publication_context(), publication);
     assert_eq!(session.frame().objects.as_ptr(), allocation);
-    assert_eq!(session.last_spatial_update_stats(), spatial);
     assert!(!session.has_replay_timeline_work());
     assert!(session.take_frame_changes().is_empty());
     assert!(session.wake_state().is_quiescent());

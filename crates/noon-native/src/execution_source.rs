@@ -6,8 +6,8 @@ use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::{
-    ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
-    SceneExecution,
+    ExecutionSession, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
+    RustHostCallbackTable, SceneExecution,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
@@ -88,6 +88,22 @@ pub(crate) trait NativeExecutionSource {
     /// Resume one authoring continuation when its shared program is ready.
     /// Source execution latency does not start a new playback epoch.
     fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, NativeHostError>;
+    fn validate_pointer_frame_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), NativeHostError>;
+    fn pointer_frame_input_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, NativeHostError>;
     fn configure_native_pointer_input(
         &mut self,
         pointer: NativePointerId,
@@ -237,6 +253,38 @@ impl NativeExecutionSource for StaticExecutionSource {
 
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
         Ok(false)
+    }
+
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, NativeHostError> {
+        self.session
+            .session_mut()
+            .capture_pointer_frame(view)
+            .map_err(Into::into)
+    }
+
+    fn validate_pointer_frame_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), NativeHostError> {
+        frame
+            .validate_position(self.session.session_mut(), view, surface)
+            .map_err(Into::into)
+    }
+
+    fn pointer_frame_input_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, NativeHostError> {
+        frame
+            .input_token_at(self.session.session_mut(), view, surface)
+            .map_err(Into::into)
     }
 
     fn configure_native_pointer_input(
@@ -457,6 +505,35 @@ where
         Ok(false)
     }
 
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, NativeHostError> {
+        self.program.capture_pointer_frame(view).map_err(Into::into)
+    }
+
+    fn validate_pointer_frame_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), NativeHostError> {
+        self.program
+            .validate_pointer_frame_position(frame, view, surface)
+            .map_err(pointer_frame_program_error)
+    }
+
+    fn pointer_frame_input_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, NativeHostError> {
+        self.program
+            .pointer_frame_input_token(frame, view, surface)
+            .map_err(pointer_frame_program_error)
+    }
+
     fn configure_native_pointer_input(
         &mut self,
         pointer: NativePointerId,
@@ -532,5 +609,14 @@ where
 
     fn session(&self) -> &ExecutionSession {
         self.program.session()
+    }
+}
+
+fn pointer_frame_program_error<E: std::fmt::Display>(
+    error: LiveProgramError<E>,
+) -> NativeHostError {
+    match error {
+        LiveProgramError::PointerFrame(error) => error.into(),
+        error => NativeHostError::Program(error.to_string()),
     }
 }

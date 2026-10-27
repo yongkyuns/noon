@@ -54,12 +54,12 @@ mod tests {
         }
     }
 
-    fn frame(program: &LiveProgram<Finish>) -> PointerFrameSnapshot {
-        let session = program.session();
-        let view = session
+    fn frame(program: &mut LiveProgram<Finish>) -> PointerFrameSnapshot {
+        let view = program
+            .session()
             .inspection_pointer_view(1, Vec2::new(800.0, 400.0))
             .unwrap();
-        session.capture_pointer_frame(view).unwrap()
+        program.capture_pointer_frame(view).unwrap()
     }
 
     #[test]
@@ -67,7 +67,7 @@ mod tests {
         let mut program = Scene::new().into_live_program(Finish).unwrap();
         program.resume().unwrap();
         program.take_renderer_publication();
-        let before = frame(&program);
+        let before = frame(&mut program);
         let publication = program.session().publication_context();
         assert!(program
             .scroll_inspection_view(&before, before.view(), Vec2::new(400.0, 200.0), -200.0)
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn terminal_owner_rejects_inspection_even_when_the_frame_is_current() {
         let mut program = Scene::new().into_live_program(Finish).unwrap();
-        let before = frame(&program);
+        let before = frame(&mut program);
         program.phase = super::super::LiveProgramPhase::Terminal;
         assert!(matches!(
             program.scroll_inspection_view(&before, before.view(), Vec2::ZERO, 0.0),

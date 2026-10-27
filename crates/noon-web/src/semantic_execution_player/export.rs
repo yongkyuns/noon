@@ -250,6 +250,7 @@ impl SemanticExecutionPlayer {
             "audio_block_frames": MAX_AUDIO_MIX_BLOCK_FRAMES,
             "status": export.status()?,
         }).to_string();
+        self.pending_scene_control = None;
         self.finite_export = Some(export);
         Ok(reply)
     }

@@ -9,6 +9,7 @@ import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { assertGapPixels, gapArgumentSource, gapCheckpoints } from "./gapped-plotting-checks.mjs";
 
 import { assertLiveCoordinatePixels } from "./live-coordinate-checks.mjs";
@@ -66,11 +67,30 @@ async function bounded(promise, label) {
 async function capture(context, language, backend) {
   const page = await context.newPage();
   page.setDefaultTimeout(90_000);
+  const failureTrace = createBrowserFailureTrace({ maxEvents: 128 });
+  const detachFailureTrace = failureTrace.attach(context.browser(), context, page);
   const errors = [];
-  page.on("pageerror", error => errors.push(String(error)));
+  const recordPageError = error => {
+    errors.push(String(error));
+    failureTrace.record("pageerror", { error: String(error.stack ?? error).slice(0, 4000) });
+  };
+  const recordConsole = message => {
+    if (message.type() !== "warning" && message.type() !== "error") return;
+    const location = message.location();
+    failureTrace.record("console", {
+      type: message.type(), text: message.text().slice(0, 2000),
+      url: location.url.slice(0, 500), line: location.lineNumber, column: location.columnNumber,
+    });
+  };
+  page.on("pageerror", recordPageError);
+  page.on("console", recordConsole);
+  let failed = false;
   try {
+    failureTrace.setPhase("navigation");
     await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
+    failureTrace.setPhase("host-readiness");
     await page.waitForFunction(() => window.noonHostRaster);
+    failureTrace.setPhase("attachment");
     await bounded(page.evaluate(async ({ language, source, factoryName, runTime, liveCoordinates, mode }) => {
       const canvas = document.querySelector("#scene");
       window.timeSeriesErrors = [];
@@ -142,6 +162,7 @@ async function capture(context, language, backend) {
     }, { language, source, factoryName, runTime, liveCoordinates, mode }), `${language} attachment`);
     const captures = [];
     for (const time of driveTimes) {
+      failureTrace.setPhase("sample", { time });
       const metrics = await bounded(page.evaluate(time => window.sampleTimeSeries(time), time),
         `${language} sample ${time}`);
       const animatedWait = animated?.waits.find(([start, end]) => time > start && time < end);
@@ -185,8 +206,27 @@ async function capture(context, language, backend) {
     assert.deepEqual(errors, []);
     assert.equal(captures.at(-1).metrics.objectCount, expectedObjectCount);
     return captures;
+  } catch (error) {
+    failed = true;
+    // Save passive host observations before cleanup, even if the page's JS or
+    // worker cannot answer. No extra page evaluation or diagnostic polling.
+    failureTrace.record("capture-failed", { error: String(error?.stack ?? error).slice(0, 8000) });
+    try {
+      await writeFile(path.join(output, `${backend}-${language}-failure.json`),
+        JSON.stringify({ mode, backend, language, ...failureTrace.snapshot() }, null, 2) + "\n");
+    } catch (evidenceError) {
+      console.error("Unable to save plotting failure evidence:", String(evidenceError).slice(0, 2000));
+    }
+    throw error;
   } finally {
-    await page.close();
+    detachFailureTrace();
+    page.off("pageerror", recordPageError);
+    page.off("console", recordConsole);
+    try { await page.close(); }
+    catch (closeError) {
+      if (!failed) throw closeError;
+      console.error("Plotting failure cleanup:", String(closeError).slice(0, 2000));
+    }
   }
 }
 

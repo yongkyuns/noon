@@ -2,6 +2,28 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct PendingSceneControl {
+    pub(super) sequence: u64,
+    pub(super) publication: PublicationContext,
+    pub(super) action: noon::PlaybackControl,
+}
+
+#[cfg(test)]
+mod tests;
+
+impl PendingSceneControl {
+    fn action_name(self) -> &'static str {
+        match self.action {
+            noon::PlaybackControl::TogglePlayback => "toggle_playback",
+            noon::PlaybackControl::Restart => "restart",
+            noon::PlaybackControl::PreviousSection => "previous_section",
+            noon::PlaybackControl::NextSection => "next_section",
+            noon::PlaybackControl::ToggleAudioMuted => "toggle_audio_muted",
+        }
+    }
+}
+
 impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn set_section_navigation(&mut self, navigation: noon::SceneSectionNavigation) {
@@ -16,9 +38,52 @@ impl SemanticExecutionPlayer {
         self.session.has_audio()
     }
 
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finiteAudioDuration))]
-    pub fn finite_audio_duration(&self) -> Option<f64> {
-        self.finite_audio_end
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finitePlaybackDuration))]
+    pub fn finite_playback_duration(&self) -> Option<f64> {
+        self.finite_transport_end
+    }
+
+    /// Platform completion metadata for one successfully committed click.
+    /// The decimal sequence preserves the full Rust input identity across the
+    /// genuine worker boundary. It cannot manufacture a target or action.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pendingSceneControlJson))]
+    pub fn pending_scene_control_json(&self) -> Option<String> {
+        self.pending_scene_control.map(|request| {
+            serde_json::json!({
+                "sequence": request.sequence.to_string(),
+                "action": request.action_name(),
+            })
+            .to_string()
+        })
+    }
+
+    /// Consume the same receipt only after the input transaction has returned.
+    /// A stale device-unlock completion cannot take a newer request, revive a
+    /// changed publication, or extend immutable playback into live execution.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = takeSceneControl))]
+    pub fn take_scene_control(&mut self, sequence: u64) -> Result<Option<String>, String> {
+        let Some(request) = self.pending_scene_control else {
+            return Ok(None);
+        };
+        if request.sequence != sequence {
+            return Ok(None);
+        }
+        self.pending_scene_control = None;
+        if request.publication != self.session.publication_context() {
+            return Ok(None);
+        }
+        if !self.session.supports_immutable_playback() || self.finite_export.is_some() {
+            return Err(
+                "scene playback controls require admitted finite immutable execution (#2263)"
+                    .into(),
+            );
+        }
+        Ok(Some(request.action_name().to_owned()))
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = cancelSceneControl))]
+    pub fn cancel_scene_control(&mut self) {
+        self.pending_scene_control = None;
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

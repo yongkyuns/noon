@@ -856,6 +856,12 @@ impl NativeApp {
             || self.execution.frame_pending()
             || self.selection_overlay_pending()
             || self.pointer.refresh_pending
+            || (self.execution.session().has_native_pointer_subscribers()
+                && self
+                    .pointer
+                    .presented
+                    .as_ref()
+                    .is_some_and(|frame| frame.needs_input_refresh(self.execution.session())))
     }
 
     /// Bind runtime invalidation consumption to a successful surface acquisition.

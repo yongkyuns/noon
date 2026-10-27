@@ -839,6 +839,8 @@ pub struct ExecutionSession {
     replay_pinned_exits: Option<HashSet<ObjectId>>,
     spatial_index: ExecutionSpatialIndex,
     last_spatial_update: SpatialIndexUpdateStats,
+    pointer_frame_damage: input::PointerFrameDamage,
+    pointer_frame_had_family_animation: bool,
     reactive_projection: SemanticReactiveProjection,
     signal_timeline: SignalTimelineSchedule,
     runtime: SceneInstance,
@@ -894,6 +896,11 @@ impl Clone for ExecutionSession {
             replay_pinned_exits: self.replay_pinned_exits.clone(),
             spatial_index: self.spatial_index.clone(),
             last_spatial_update: self.last_spatial_update,
+            pointer_frame_damage: input::PointerFrameDamage::default(),
+            pointer_frame_had_family_animation: !self
+                .runtime
+                .active_family_animation_indices()
+                .is_empty(),
             reactive_projection: self.reactive_projection.clone(),
             signal_timeline: self
                 .signal_timeline
@@ -1071,6 +1078,8 @@ impl ExecutionSession {
         let last_spatial_update =
             spatial_index.rebuild(runtime.frame(), runtime.geometry_resources(), live_slots);
         let _ = runtime.take_spatial_changes();
+        let pointer_frame_had_family_animation =
+            !runtime.active_family_animation_indices().is_empty();
         Self {
             store_identity,
             execution_index,
@@ -1079,6 +1088,8 @@ impl ExecutionSession {
             replay_pinned_exits: None,
             spatial_index,
             last_spatial_update,
+            pointer_frame_damage: input::PointerFrameDamage::default(),
+            pointer_frame_had_family_animation,
             reactive_projection,
             signal_timeline,
             runtime,
@@ -1484,11 +1495,25 @@ impl ExecutionSession {
 
     fn sync_spatial_index(&mut self) {
         let changes = self.runtime.take_spatial_changes();
+        let nonspatial = self.runtime.take_nonspatial_changes();
+        let family_animation = !self.runtime.active_family_animation_indices().is_empty();
+        // Retained glyph/member animation can alter presentation beyond the
+        // ordinary row's indexed envelope. Its activity/retirement requires a
+        // fresh baseline rather than a point-local envelope proof.
+        if family_animation != self.pointer_frame_had_family_animation
+            || (!changes.is_empty()
+                && (family_animation || self.pointer_frame_had_family_animation))
+        {
+            self.pointer_frame_damage.invalidate();
+        }
+        self.pointer_frame_had_family_animation = family_animation;
         if changes.is_empty() {
             self.last_spatial_update = SpatialIndexUpdateStats::default();
+            self.record_nonspatial_pointer_damage(&nonspatial, &changes);
             return;
         }
         if changes.is_all() {
+            self.pointer_frame_damage.invalidate();
             let live_slots = self.runtime.painter_order().iter().filter_map(|&index| {
                 let index = index as usize;
                 let object = self.runtime.frame().objects.get(index)?;
@@ -1506,10 +1531,13 @@ impl ExecutionSession {
         let mut stats = SpatialIndexUpdateStats::default();
         for &index in changes.object_indices() {
             let Some(object) = self.runtime.frame().objects.get(index) else {
+                self.pointer_frame_damage.invalidate();
                 continue;
             };
+            let slot = self.slots.slot_for_object(object.id);
+            let before = slot.and_then(|slot| self.spatial_index.bounds_for_slot(slot));
             if self.runtime.object_slot_is_live(index) {
-                if let Some(slot) = self.slots.slot_for_object(object.id) {
+                if let Some(slot) = slot {
                     let painter_order = self.runtime.painter_rank(index).unwrap_or(index as u32);
                     stats.merge_from(self.spatial_index.upsert_frame_slot(
                         self.runtime.frame(),
@@ -1522,8 +1550,21 @@ impl ExecutionSession {
             } else {
                 stats.merge_from(self.spatial_index.remove_object(object.id));
             }
+            let after = slot.and_then(|slot| self.spatial_index.bounds_for_slot(slot));
+            // Every dirty row matters, including unchanged bounds: fill, reveal,
+            // content and other precise-picking inputs may have changed inside it.
+            // Unknown geometry or membership is a conservative global barrier.
+            if Some(object.id) == self.camera_object {
+                self.pointer_frame_damage.invalidate();
+            } else {
+                match (before, after) {
+                    (Some(before), Some(after)) => self.pointer_frame_damage.record(before, after),
+                    _ => self.pointer_frame_damage.invalidate(),
+                }
+            }
         }
         if let Some(range) = changes.painter_order_range() {
+            self.pointer_frame_damage.invalidate();
             for rank in range {
                 let Some(&index) = self.runtime.painter_order().get(rank) else {
                     continue;
@@ -1544,6 +1585,45 @@ impl ExecutionSession {
             }
         }
         self.last_spatial_update = stats;
+        self.record_nonspatial_pointer_damage(&nonspatial, &changes);
+    }
+
+    fn record_nonspatial_pointer_damage(
+        &mut self,
+        nonspatial: &FrameChanges,
+        spatial: &FrameChanges,
+    ) {
+        if nonspatial.is_all() {
+            self.pointer_frame_damage.invalidate();
+            return;
+        }
+        for &index in nonspatial.object_indices() {
+            // Spatial changes already journaled this row's previous and new
+            // envelope; do not consume another history slot for the same write.
+            if spatial.is_all() || spatial.object_indices().binary_search(&index).is_ok() {
+                continue;
+            }
+            let Some(object) = self.runtime.frame().objects.get(index) else {
+                self.pointer_frame_damage.invalidate();
+                continue;
+            };
+            if Some(object.id) == self.camera_object {
+                self.pointer_frame_damage.invalidate();
+                continue;
+            }
+            // Paint and other appearance writes can change precise picking
+            // inside identical bounds. Reuse the existing indexed envelope
+            // without requiring a redundant spatial update or a scene scan.
+            let bounds = self
+                .slots
+                .slot_for_object(object.id)
+                .and_then(|slot| self.spatial_index.bounds_for_slot(slot));
+            if let Some(bounds) = bounds {
+                self.pointer_frame_damage.record(bounds, bounds);
+            } else {
+                self.pointer_frame_damage.invalidate();
+            }
+        }
     }
 
     /// Read runtime-owned presentation dirtiness and timeline cadence without
@@ -1598,6 +1678,11 @@ impl ExecutionSession {
 
     /// Consume one coherent renderer publication from this typed session.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        // Identity-free presentation rows do not participate in the picking
+        // index. Their appearance or retirement cannot inherit an earlier proof.
+        if self.derived_display_plan.is_some() || !self.derived_display_objects.is_empty() {
+            self.pointer_frame_damage.invalidate();
+        }
         let expiring =
             self.derived_display_plan.is_some() && self.derived_display_expire_after_publication;
         if let Some(plan) = self.derived_display_plan.as_ref() {
@@ -4911,6 +4996,7 @@ impl ExecutionSession {
             }?;
             if requires_seek {
                 self.pointer_selection.reset();
+                self.pointer_frame_damage.invalidate();
             }
             return Ok(self.runtime.frame());
         }
@@ -4930,6 +5016,7 @@ impl ExecutionSession {
         self.signal_timeline.commit(preview);
         if requires_seek {
             self.pointer_selection.reset();
+            self.pointer_frame_damage.invalidate();
         }
         Ok(self.runtime.frame())
     }

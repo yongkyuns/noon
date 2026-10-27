@@ -40,7 +40,9 @@ fn signal(
 
 impl Fixture {
     fn new() -> Self {
-        let fixture = shared_trace::Fixture::new();
+        Self::from_shared(shared_trace::Fixture::new())
+    }
+    fn from_shared(fixture: shared_trace::Fixture) -> Self {
         let mut session = crate::test_scene_from_root(fixture.store, fixture.root)
             .into_execution()
             .unwrap();
@@ -627,7 +629,7 @@ fn idle_callback_only_program_does_not_activate_pointer_ingress() {
 fn native_mapping_uses_the_shared_snapshot_projection_for_outside_coordinates() {
     let scene = noon::Scene::new();
     // Test the shared projection contract, not a second native formula.
-    let session = scene.execution_session().unwrap();
+    let mut session = scene.execution_session().unwrap();
     let view =
         PointerFrameView::new(0, Vec2::new(800.0, 400.0), session.camera().unwrap()).unwrap();
     let frame = session.capture_pointer_frame(view).unwrap();
@@ -712,22 +714,20 @@ fn unpresented_input_cannot_bind_or_claim_a_click_and_requests_only_presentation
 }
 
 #[test]
-fn stale_presented_frame_cancels_press_without_releasing_or_retagging_coordinates() {
+fn seek_retires_presented_frame_without_releasing_or_retagging_coordinates() {
     let mut f = Fixture::new();
     f.move_to(200.0, 100.0);
     f.edge(ElementState::Pressed);
     f.present();
     let displayed = f.app.pointer.presented.clone().unwrap();
-    f.app.static_session_mut().evaluate(0.25).unwrap();
+    f.app.static_session_mut().seek(0.25).unwrap();
     let before = f.app.session().publication_context();
     let seq = f.app.next_input_sequence;
     assert!(matches!(
         f.app
             .dispatch_pointer_position(PhysicalPosition::new(700.0, 300.0), SIZE, 1.0)
             .unwrap(),
-        PointerDispatch::RejectedFrame(PointerFrameError::Input(
-            noon::ExecutionSessionInputError::StalePointerPublication { .. }
-        ))
+        PointerDispatch::RejectedFrame(PointerFrameError::PickingChanged)
     ));
     assert_eq!(
         f.app.next_input_sequence,
@@ -761,10 +761,10 @@ fn stale_presented_frame_cancels_press_without_releasing_or_retagging_coordinate
 }
 
 #[test]
-fn execution_change_without_display_rejects_before_initial_source_configuration() {
+fn seek_without_display_rejects_before_initial_source_configuration() {
     let mut f = Fixture::new();
     f.present();
-    f.app.static_session_mut().evaluate(0.5).unwrap();
+    f.app.static_session_mut().seek(0.5).unwrap();
     let before = f.app.session().publication_context();
     assert!(matches!(
         f.app
@@ -782,7 +782,7 @@ fn capturing_or_consuming_pending_frame_does_not_count_as_a_successful_presentat
     let mut f = Fixture::new();
     f.present();
     let displayed = f.app.pointer.presented.clone();
-    f.app.static_session_mut().evaluate(0.5).unwrap();
+    f.app.static_session_mut().seek(0.5).unwrap();
     let _candidate = f.app.capture_pointer_presentation(SIZE, 1.0).unwrap();
     assert!(NativeApp::take_renderer_publication_after_acquire(
         f.app.execution.as_mut(),
@@ -839,6 +839,63 @@ fn view_rebind_invalidates_receipt_even_when_dimensions_and_image_are_unchanged(
 }
 
 #[test]
+fn pointer_policy_change_wakes_before_input_and_fresh_picture_never_replays_release() {
+    let mut f = Fixture::new();
+    f.move_to(200.0, 100.0);
+    f.edge(ElementState::Pressed);
+    f.present();
+    f.app.static_session_mut().take_renderer_publication();
+    assert!(!f.app.publication_pending());
+    let publication = f.app.session().publication_context();
+    let sequence = f.app.next_input_sequence;
+
+    f.app
+        .static_session_mut()
+        .enable_pointer_fill_selection(6.0)
+        .unwrap();
+    assert_eq!(f.app.session().publication_context(), publication);
+    assert!(!f.app.execution.frame_pending());
+    assert!(!f.app.pointer.refresh_pending);
+    assert!(
+        f.app.publication_pending(),
+        "the policy barrier must request presentation before another input arrives"
+    );
+    assert_eq!(f.app.next_input_sequence, sequence);
+    assert_eq!(f.value(f.down), &ReactiveValue::Scalar(1.0));
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(0.0));
+
+    assert_eq!(
+        f.app
+            .dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0)
+            .unwrap(),
+        PointerDispatch::RejectedFrame(PointerFrameError::PickingChanged)
+    );
+    assert_eq!(
+        f.app.next_input_sequence,
+        sequence + 1,
+        "only cleanup is accepted"
+    );
+    assert!(f.app.pointer.surface.is_none());
+    assert_eq!(f.value(f.button), &ReactiveValue::Bool(false));
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(0.0));
+
+    f.present();
+    assert!(!f.app.publication_pending());
+    assert_eq!(f.app.next_input_sequence, sequence + 1);
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(0.0));
+    assert_eq!(
+        f.app
+            .dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0)
+            .unwrap(),
+        PointerDispatch::Cancelled,
+        "a fresh picture does not restore the rejected contact's cursor sample"
+    );
+    assert_eq!(f.value(f.up), &ReactiveValue::Scalar(0.0));
+    assert!(f.app.session().selected_pointer_target().is_none());
+    assert_eq!(f.app.session().frame().time, 0.0);
+}
+
+#[test]
 fn mismatched_logical_view_rejects_even_before_platform_resize_notification() {
     let mut f = Fixture::new();
     f.present();
@@ -854,13 +911,19 @@ fn mismatched_logical_view_rejects_even_before_platform_resize_notification() {
 }
 
 #[test]
-fn signal_only_epoch_change_gets_a_presentation_wake_without_full_scene_invalidation() {
+fn signal_only_epoch_change_preserves_collected_context_and_delivers_each_edge_once() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let down = signal(
         &mut store,
         root,
         SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button: 0 }),
+        SemanticSignalValue::Scalar(0.0),
+    );
+    let up = signal(
+        &mut store,
+        root,
+        SemanticNativeInputSource::Event(NativeEventSource::PointerUp { button: 0 }),
         SemanticSignalValue::Scalar(0.0),
     );
     let mut app = NativeApp::new(
@@ -871,6 +934,7 @@ fn signal_only_epoch_change_gets_a_presentation_wake_without_full_scene_invalida
     );
     app.static_session_mut().take_renderer_publication();
     model_presentation(&mut app, SIZE, 1.0);
+    let displayed = app.pointer.presented.clone().unwrap();
     app.dispatch_pointer_position(PhysicalPosition::new(400.0, 200.0), SIZE, 1.0)
         .unwrap();
     assert_eq!(
@@ -886,12 +950,35 @@ fn signal_only_epoch_change_gets_a_presentation_wake_without_full_scene_invalida
         !app.execution.frame_pending(),
         "signal-only publications need no scene rows"
     );
-    assert!(matches!(
+    let token = app
+        .execution
+        .pointer_frame_input_token(&displayed, displayed.view(), Vec2::new(400.0, 200.0))
+        .unwrap();
+    assert_eq!(token.context().publication, displayed.publication());
+    assert_ne!(
+        token.context().publication,
+        app.session().publication_context()
+    );
+    assert_eq!(
         app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0)
             .unwrap(),
-        PointerDispatch::RejectedFrame(_)
-    ));
-    assert!(app.publication_pending());
+        PointerDispatch::Admitted
+    );
+    assert_eq!(
+        app.session().effective_signal_value(down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+    assert_eq!(
+        app.session().effective_signal_value(up),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+    assert_eq!(
+        app.next_input_sequence, 3,
+        "one motion, one press and one release"
+    );
+    assert_eq!(app.pointer.presented, Some(displayed));
+    assert!(!app.pointer.refresh_pending);
+    assert!(!app.publication_pending());
     assert!(!app.force_full_redraw);
     assert!(app
         .static_session_mut()
@@ -901,8 +988,17 @@ fn signal_only_epoch_change_gets_a_presentation_wake_without_full_scene_invalida
 }
 
 #[test]
-fn binding_reset_that_changes_publication_cannot_retag_the_first_positional_input() {
-    let mut f = Fixture::new();
+fn binding_reset_that_removes_the_displayed_target_rejects_the_first_positional_input() {
+    let mut fixture = shared_trace::Fixture::new();
+    fixture
+        .store
+        .bind_semantic_signal(
+            fixture.button,
+            fixture.target,
+            noon_core::SemanticObjectProperty::Presence,
+        )
+        .unwrap();
+    let mut f = Fixture::from_shared(fixture);
     f.app
         .dispatch_state(
             NativeStateSource::PointerButton { button: 0 },
@@ -914,7 +1010,7 @@ fn binding_reset_that_changes_publication_cannot_retag_the_first_positional_inpu
     assert!(!f.app.pointer.configured);
     assert!(matches!(
         f.app
-            .dispatch_pointer_position(PhysicalPosition::new(200.0, 100.0), SIZE, 1.0)
+            .dispatch_pointer_position(PhysicalPosition::new(400.0, 200.0), SIZE, 1.0)
             .unwrap(),
         PointerDispatch::RejectedFrame(_)
     ));
