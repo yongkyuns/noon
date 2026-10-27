@@ -1,0 +1,209 @@
+--- a/crates/noon-web/src/browser_pointer_input.rs
++++ b/crates/noon-web/src/browser_pointer_input.rs
+@@ -198,73 +198,79 @@
+     Ok(())
+ }
+ 
+-impl BrowserPointerTarget for ExecutionSession {
+-    fn session(&self) -> &ExecutionSession {
+-        self
+-    }
+-    fn capture_pointer_frame(
+-        &mut self,
+-        view: PointerFrameView,
+-    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+-        self.capture_pointer_frame(view)
+-    }
+-    fn validate_pointer_position(
+-        &mut self,
+-        frame: &PointerFrameSnapshot,
+-        view: PointerFrameView,
+-        surface: Vec2,
+-    ) -> Result<(), BrowserPointerAdmissionError> {
+-        frame
+-            .validate_position(self, view, surface)
+-            .map_err(Into::into)
+-    }
+-    fn pointer_frame_token(
+-        &mut self,
+-        frame: &PointerFrameSnapshot,
+-        view: PointerFrameView,
+-        surface: Vec2,
+-    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+-        frame
+-            .input_token_at(self, view, surface)
+-            .map_err(Into::into)
+-    }
+-    fn observe_pointer_frame(
+-        &mut self,
+-        frame: &PointerFrameSnapshot,
+-    ) -> Result<(), PointerFrameError> {
+-        self.refresh_pointer_hover(frame, frame.view()).map(|_| ())
+-    }
+-    fn configure_pointer(
+-        &mut self,
+-        pointer: NativePointerId,
+-        view: u64,
+-    ) -> Result<NativePointerInputToken, String> {
+-        self.configure_native_pointer_input(pointer, view)
+-            .map_err(|e| e.to_string())
+-    }
+-    fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
+-        self.native_pointer_input_token().map_err(|e| e.to_string())
+-    }
+-    fn scroll_inspection(
+-        &mut self,
+-        frame: &PointerFrameSnapshot,
+-        view: PointerFrameView,
+-        surface: Vec2,
+-        delta_pixels: f64,
+-    ) -> Result<bool, String> {
+-        self.scroll_inspection_view(frame, view, surface, delta_pixels)
+-            .map_err(|error| error.to_string())
+-    }
+-    fn submit_pointer(
+-        &mut self,
+-        token: &NativePointerInputToken,
+-        input: NativePointerInput,
+-    ) -> Result<NativePointerInputPublication, String> {
+-        self.submit_native_pointer_input(token, input)
+-            .map_err(|e| e.to_string())
+-    }
+-}
+-
++impl BrowserPointerTarget for noon::SceneExecution {
++    fn session(&self) -> &ExecutionSession {
++        self.session()
++    }
++    fn capture_pointer_frame(
++        &mut self,
++        view: PointerFrameView,
++    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
++        self.session().capture_pointer_frame(view)
++    }
++    fn validate_pointer_position(
++        &mut self,
++        frame: &PointerFrameSnapshot,
++        view: PointerFrameView,
++        surface: Vec2,
++    ) -> Result<(), BrowserPointerAdmissionError> {
++        frame
++            .validate_position(self.session(), view, surface)
++            .map_err(Into::into)
++    }
++    fn pointer_frame_token(
++        &mut self,
++        frame: &PointerFrameSnapshot,
++        view: PointerFrameView,
++        surface: Vec2,
++    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
++        frame
++            .input_token_at(self.session(), view, surface)
++            .map_err(Into::into)
++    }
++    fn observe_pointer_frame(
++        &mut self,
++        frame: &PointerFrameSnapshot,
++    ) -> Result<(), PointerFrameError> {
++        self.session_mut()
++            .refresh_pointer_hover(frame, frame.view())
++            .map(|_| ())
++    }
++    fn configure_pointer(
++        &mut self,
++        pointer: NativePointerId,
++        view: u64,
++    ) -> Result<NativePointerInputToken, String> {
++        self.session_mut()
++            .configure_native_pointer_input(pointer, view)
++            .map_err(|e| e.to_string())
++    }
++    fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
++        self.session()
++            .native_pointer_input_token()
++            .map_err(|e| e.to_string())
++    }
++    fn scroll_inspection(
++        &mut self,
++        frame: &PointerFrameSnapshot,
++        view: PointerFrameView,
++        surface: Vec2,
++        delta_pixels: f64,
++    ) -> Result<bool, String> {
++        self.session_mut()
++            .scroll_inspection_view(frame, view, surface, delta_pixels)
++            .map_err(|error| error.to_string())
++    }
++    fn submit_pointer(
++        &mut self,
++        token: &NativePointerInputToken,
++        input: NativePointerInput,
++    ) -> Result<NativePointerInputPublication, String> {
++        self.submit_native_pointer_input(token, input)
++            .map_err(|e| e.to_string())
++    }
++}
++
+ impl<C: LiveContinuation> BrowserPointerTarget for LiveProgram<C>
+ where
+     C::Error: std::fmt::Display,
+
+--- a/crates/noon-web/src/semantic_execution_player/pointer_input.rs
++++ b/crates/noon-web/src/semantic_execution_player/pointer_input.rs
+@@ -23,7 +23,7 @@
+ /// ordinary native pointer behavior.
+ pub(super) struct PlayerPointerTarget<'a> {
+     pub(super) session: &'a mut ExecutionSession,
+-    pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
++    pub(super) semantics: &'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
+     /// The same committed input receipt, observed only after the shared
+     /// transaction returns. No target or click is inferred by this adapter.
+@@ -105,20 +105,14 @@
+         token: &NativePointerInputToken,
+         input: NativePointerInput,
+     ) -> Result<NativePointerInputPublication, String> {
+-        let publication = if let Some(semantics) = self.semantics.as_ref() {
+-            let receipt = self
+-                .session
+-                .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
+-                .map_err(|error| error.to_string())?;
+-            if let Some(undo) = receipt.undo {
+-                *self.translation_drag_undo = Some(undo);
+-            }
+-            receipt.input
+-        } else {
+-            self.session
+-                .submit_native_pointer_input(token, input)
+-                .map_err(|error| error.to_string())?
+-        };
++        let receipt = self
++            .session
++            .submit_translation_drag_input(&mut self.semantics.borrow_mut(), token, input)
++            .map_err(|error| error.to_string())?;
++        if let Some(undo) = receipt.undo {
++            *self.translation_drag_undo = Some(undo);
++        }
++        let publication = receipt.input;
+         if publication.playback_control().is_some() {
+             self.control_publication = Some(publication);
+         }
+@@ -169,8 +163,17 @@
+ #[cfg(test)]
+ impl SemanticExecutionPlayer {
+     fn submit_test_frame_input(&mut self, input: BrowserPointerInput) -> Result<(), String> {
++        let mut target = PlayerPointerTarget {
++            session: &mut self.session,
++            semantics: self
++                .semantics
++                .as_ref()
++                .ok_or("execution player lost its semantic store")?,
++            translation_drag_undo: &mut self.translation_drag_undo,
++            control_publication: None,
++        };
+         submit_test_frame(
+-            &mut self.session,
++            &mut target,
+             &mut self.browser_pointer_binding,
+             &mut self.next_native_event_sequence,
+             input,
