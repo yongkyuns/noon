@@ -97,7 +97,7 @@ def resolve(path, ours, theirs):
             return ours.replace("fill_gradient", "fill_paint")
     elif path.endswith("semantic_lowering/compiled_scene.rs"):
         if "InvalidClickIndicate" in ours and "capture_paint_from_arena" in theirs:
-            return ours + theirs
+            return ours + "        }\n" + theirs
         if "click_indicate:" in ours and "effect:" in theirs:
             retained = "".join(line for line in ours.splitlines(keepends=True) if "glow:" not in line)
             return retained + theirs
