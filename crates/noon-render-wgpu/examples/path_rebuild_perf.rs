@@ -54,7 +54,7 @@ fn build_frame(segments: usize) -> FrameState {
         objects: vec![FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),

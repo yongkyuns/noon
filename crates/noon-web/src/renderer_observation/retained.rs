@@ -550,7 +550,7 @@ mod tests {
                 slot,
                 order: 0,
                 object: ObjectId::new(21),
-                effect: None,
+                effects: Vec::new(),
                 z_index: 0.0,
                 content: TransportObjectContent::from(&ObjectContentRef::Geometry(
                     GeometryRef::circle(1.0),

@@ -17,17 +17,20 @@ fn object() -> CompiledObject {
         Transform2D::IDENTITY,
         Style::default(),
     );
-    object.effect = Some(Arc::new(CompiledEffect {
-        attachment: SemanticNodeId::new(3, 7),
-        definition: (Glow::new(
-            EffectUpdate::default()
-                .radius(Pixels(3.25))
-                .intensity(0.35)
-                .color(Color::RED),
-        )
-        .unwrap())
-        .into(),
-    }));
+    object.effects = Some(Arc::new(
+        noon_compile::CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(3, 7),
+            definition: (Glow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(3.25))
+                    .intensity(0.35)
+                    .color(Color::RED),
+            )
+            .unwrap())
+            .into(),
+        }])
+        .unwrap(),
+    ));
     object
 }
 fn tracks(
@@ -37,8 +40,10 @@ fn tracks(
     easing: RateFunction,
 ) -> Vec<TrackDefinition> {
     object
-        .effect
+        .effects
         .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
         .unwrap()
         .parameter_channels(update)
         .unwrap()
@@ -56,8 +61,10 @@ fn tracks(
 }
 fn value(runtime: &SceneInstance) -> Glow {
     (runtime.frame().objects[0]
-        .effect
+        .effects
         .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
         .unwrap()
         .definition)
         .as_glow()
@@ -92,11 +99,27 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
         runtime.evaluate(time).unwrap();
         let alpha = ((time - 0.2) / 1.0).clamp(0.0, 1.0);
         let expected = update
-            .prepare(object.effect.as_ref().unwrap().definition)
+            .prepare(
+                object
+                    .effects
+                    .as_ref()
+                    .unwrap()
+                    .get(SemanticNodeId::new(3, 7))
+                    .unwrap()
+                    .definition,
+            )
             .unwrap()
             .sample(alpha)
             .unwrap()
-            .apply_to(object.effect.as_ref().unwrap().definition)
+            .apply_to(
+                object
+                    .effects
+                    .as_ref()
+                    .unwrap()
+                    .get(SemanticNodeId::new(3, 7))
+                    .unwrap()
+                    .definition,
+            )
             .unwrap();
         assert_eq!(value(&runtime), (expected).as_glow().unwrap());
         let mut direct = SceneInstance::new(compiled.clone());
@@ -104,8 +127,10 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
         assert_eq!(runtime.frame(), direct.frame());
         assert_eq!(
             runtime.frame().objects[0]
-                .effect
+                .effects
                 .as_ref()
+                .unwrap()
+                .get(SemanticNodeId::new(3, 7))
                 .unwrap()
                 .attachment,
             SemanticNodeId::new(3, 7)
@@ -113,8 +138,10 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
     }
     assert_eq!(
         object
-            .effect
+            .effects
             .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(3, 7))
             .unwrap()
             .definition
             .as_glow()
@@ -129,10 +156,17 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
 fn unchanged_frames_are_clean_and_constant_radius_keeps_f64_precision() {
     let mut object = object();
     let radius = EffectRadius::Pixels(12.1234567890123);
-    Arc::make_mut(object.effect.as_mut().unwrap()).definition = EffectUpdate::default()
-        .radius(radius)
-        .apply_to(object.effect.as_ref().unwrap().definition)
+    let mut effect = object
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
         .unwrap();
+    effect.definition = EffectUpdate::default()
+        .radius(radius)
+        .apply_to(effect.definition)
+        .unwrap();
+    Arc::make_mut(object.effects.as_mut().unwrap()).replace(effect);
     let channels = tracks(
         &object,
         EffectUpdate::default().intensity(1.2),
@@ -144,14 +178,14 @@ fn unchanged_frames_are_clean_and_constant_radius_keeps_f64_precision() {
     runtime.advance_to(0.4).unwrap();
     assert_eq!(value(&runtime).radius(), radius);
     runtime.take_frame_changes();
-    let retained = runtime.frame().objects[0].effect.clone().unwrap();
+    let retained = runtime.frame().objects[0].effects.clone().unwrap();
     runtime.advance_to(0.4).unwrap();
     assert!(runtime.frame_changes().is_empty());
     // The existing scheduler samples an active channel again at equal time,
     // but an equal value must not clone/write its retained definition.
     assert!(Arc::ptr_eq(
         &retained,
-        runtime.frame().objects[0].effect.as_ref().unwrap()
+        runtime.frame().objects[0].effects.as_ref().unwrap()
     ));
     runtime.advance_to(2.0).unwrap();
     runtime.take_frame_changes();
@@ -188,8 +222,10 @@ fn prepared_publication_is_atomic_and_matches_direct_evaluation() {
     assert!(!publication.changes().is_empty());
     assert_eq!(
         publication.frame().objects[0]
-            .effect
+            .effects
             .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(3, 7))
             .unwrap()
             .definition,
         (value(&direct)).into()
@@ -262,7 +298,7 @@ fn wrong_generation_or_units_reject_before_transaction_prefix_commits() {
         object: object.id,
         property: Property::EffectRadius,
         values: TrackValues::Effect {
-            attachment: object.effect.as_ref().unwrap().attachment,
+            attachment: SemanticNodeId::new(3, 7),
             from: EffectTrackValue::Radius(EffectRadius::Scene(1.0)),
             to: EffectTrackValue::Radius(EffectRadius::Scene(2.0)),
             end_behavior: EffectTrackEndBehavior::Sample,
@@ -281,7 +317,12 @@ fn wrong_generation_or_units_reject_before_transaction_prefix_commits() {
 #[test]
 fn incompatible_parameter_values_and_discrete_updates_fail_admission() {
     let object = object();
-    let effect = object.effect.as_ref().unwrap();
+    let effect = object
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
+        .unwrap();
     assert!(effect
         .parameter_channels(EffectUpdate::default().radius(1.0))
         .is_err());
@@ -631,7 +672,7 @@ fn source_restoration_requires_a_positive_duration_intensity_channel() {
     track.timing.duration = 1.0;
     track.property = Property::EffectRadius;
     track.values = TrackValues::Effect {
-        attachment: object.effect.as_ref().unwrap().attachment,
+        attachment: SemanticNodeId::new(3, 7),
         from: EffectTrackValue::Radius(EffectRadius::Pixels(3.25)),
         to: EffectTrackValue::Radius(EffectRadius::Pixels(6.5)),
         end_behavior: EffectTrackEndBehavior::RestoreSource,
@@ -809,7 +850,7 @@ fn one_animated_glow_stages_only_its_row_among_4096_unrelated_objects() {
         runtime.frame().objects[4096].transform,
         Transform2D::IDENTITY
     );
-    assert!(runtime.frame().objects[4096].effect.is_none());
+    assert!(runtime.frame().objects[4096].effects.is_none());
 }
 
 #[test]
@@ -826,7 +867,12 @@ fn sequential_channel_capture_uses_current_value_and_replays_historical_gaps() {
         CompiledScene::compile_objects(vec![object.clone()], std::slice::from_ref(&first)).unwrap(),
     );
     runtime.advance_to(1.0).unwrap();
-    let captured = runtime.frame().objects[0].effect.clone().unwrap();
+    let captured = runtime.frame().objects[0]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
+        .unwrap();
     let (property, values) = captured
         .parameter_channels(EffectUpdate::default().intensity(3.0))
         .unwrap()
@@ -858,7 +904,7 @@ fn raw_overlapping_glow_tracks_follow_the_ordinary_channel_order_not_a_new_lease
     // Low-level timeline tracks permit overlap with canonical ordering. Authored
     // animation driver leases are a separate admission layer, not implemented here.
     let object = object();
-    let attachment = object.effect.as_ref().unwrap().attachment;
+    let attachment = SemanticNodeId::new(3, 7);
     let mut channels = Vec::new();
     for (i, start, duration, from, to) in [(1, 0.0, 2.0, 0.2, 0.8), (2, 0.5, 0.75, 0.35, 0.9)] {
         let timing = TrackTiming::new(start, duration, RateFunction::Linear);

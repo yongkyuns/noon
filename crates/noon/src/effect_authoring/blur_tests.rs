@@ -6,10 +6,7 @@ use crate::{
 };
 
 fn radius(session: &crate::ExecutionSession) -> f64 {
-    session.frame().objects[0]
-        .effect
-        .as_ref()
-        .unwrap()
+    only_effect(session.frame().objects[0].effects.as_ref().unwrap())
         .definition
         .as_blur()
         .unwrap()
@@ -52,8 +49,10 @@ fn blur_animation_completion_seek_and_lifetime_use_the_existing_row() {
         assert_eq!(radius(&session), 1.25 + 4.0 * time);
         assert_eq!(
             session.frame().objects[0]
-                .effect
+                .effects
                 .as_ref()
+                .unwrap()
+                .get(original.node_id())
                 .unwrap()
                 .attachment,
             original.node_id()
@@ -84,7 +83,7 @@ fn blur_animation_completion_seek_and_lifetime_use_the_existing_row() {
         .live(&mut session)
         .remove_effect(&source, &original)
         .unwrap();
-    assert!(session.frame().objects[0].effect.is_none());
+    assert!(session.frame().objects[0].effects.is_none());
     assert!(original.authored_definition().is_err());
     scene
         .live(&mut session)

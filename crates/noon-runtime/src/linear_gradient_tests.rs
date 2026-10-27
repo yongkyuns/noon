@@ -346,10 +346,12 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
             .unwrap())
         .into(),
     });
-    let attach = ExecutionPatch::SetEffectAttachment {
+    let attach = ExecutionPatch::SetEffectStack {
         object: ObjectId::new(0),
-        expected: None,
-        effect: Some(glow.clone()),
+        expected: Box::new([]),
+        effects: Some(Arc::new(
+            noon_compile::CompiledEffectStack::new([*glow]).unwrap(),
+        )),
     };
     let style = ExecutionPatch::SetStyle {
         object: ObjectId::new(0),
@@ -381,8 +383,11 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
             );
             runtime.seek(0.5).unwrap();
             assert_eq!(
-                runtime.frame().objects[0].effect.as_deref(),
-                Some(glow.as_ref())
+                runtime.frame().objects[0]
+                    .effects
+                    .as_ref()
+                    .and_then(|stack| stack.get(glow.attachment)),
+                Some(*glow)
             );
             assert!(runtime.frame().objects[0].fill_paint.is_some());
             // Content remains independently checked; supported geometry can be
@@ -396,8 +401,11 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                 .unwrap();
             assert!(runtime.frame().objects[0].fill_paint.is_some());
             assert_eq!(
-                runtime.frame().objects[0].effect.as_deref(),
-                Some(glow.as_ref())
+                runtime.frame().objects[0]
+                    .effects
+                    .as_ref()
+                    .and_then(|stack| stack.get(glow.attachment)),
+                Some(*glow)
             );
             runtime.take_spatial_changes();
             let mut style = runtime.frame().objects[0].style;

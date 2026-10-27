@@ -1,6 +1,7 @@
 //! Semantic attachment + ordinary execution channels -> published GPU pixels.
 //! This does not bypass/qualify the still-guarded public Scene host or worker path.
 use super::analytic_scene::{expected, frame, render_plain, semantic_runtime, target, SIGMA, VIEW};
+use super::only_effect;
 use super::pixels::{device, readback};
 use crate::{Camera2D, FramePreparer, GpuRenderer, PublishedEffectCaptureRequest};
 use noon_compile::{ExecutionMutationTransaction, ExecutionPatch};
@@ -12,7 +13,7 @@ use noon_runtime::SceneInstance;
 
 fn append_channels(runtime: &mut SceneInstance, update: EffectUpdate) {
     let row = &runtime.frame().objects[1];
-    let captured = row.effect.as_ref().unwrap();
+    let captured = only_effect(row.effects.as_ref().unwrap());
     let tracks = captured
         .parameter_channels(update)
         .unwrap()
@@ -101,11 +102,8 @@ fn animated_glow_publication_pixels() {
                 .unwrap();
         }
         append_channels(&mut runtime, update);
-        let attachment = runtime.frame().objects[1]
-            .effect
-            .as_ref()
-            .unwrap()
-            .attachment;
+        let attachment =
+            only_effect(runtime.frame().objects[1].effects.as_ref().unwrap()).attachment;
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
         renderer.set_camera(
@@ -124,7 +122,12 @@ fn animated_glow_publication_pixels() {
             runtime.evaluate(time).unwrap();
             let wanted = expected_parameters(start, end, time);
             let publication = runtime.take_renderer_publication();
-            let actual = publication.frame().objects[1].effect.as_ref().unwrap();
+            let actual = publication.frame().objects[1]
+                .effects
+                .as_ref()
+                .unwrap()
+                .get(attachment)
+                .unwrap();
             assert_eq!(
                 actual.attachment, attachment,
                 "animation cannot replace attachment identity"
@@ -253,11 +256,8 @@ fn live_glow_value_publication_pixels() {
             .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(1)))
             .unwrap();
         let owner = runtime.frame().objects[1].id;
-        let attachment = runtime.frame().objects[1]
-            .effect
-            .as_ref()
-            .unwrap()
-            .attachment;
+        let attachment =
+            only_effect(runtime.frame().objects[1].effects.as_ref().unwrap()).attachment;
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
         renderer.set_camera(
@@ -294,12 +294,15 @@ fn live_glow_value_publication_pixels() {
             let old = runtime.frame().clone();
             let context = runtime.publication_context();
             let transaction =
-                ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffect {
+                ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffects {
                     object: owner,
-                    effect: Arc::new(CompiledEffect {
-                        attachment,
-                        definition: definition.into(),
-                    }),
+                    effects: Arc::new(
+                        noon_compile::CompiledEffectStack::new([CompiledEffect {
+                            attachment,
+                            definition: definition.into(),
+                        }])
+                        .unwrap(),
+                    ),
                 }]);
             let prepare = |runtime: &SceneInstance| {
                 runtime
@@ -319,8 +322,10 @@ fn live_glow_value_publication_pixels() {
             let publication = runtime.take_renderer_publication();
             assert_eq!(
                 publication.frame().objects[1]
-                    .effect
+                    .effects
                     .as_ref()
+                    .unwrap()
+                    .get(attachment)
                     .unwrap()
                     .definition,
                 (definition).into()

@@ -124,8 +124,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .frame()
         .objects
         .iter()
-        .filter_map(|object| object.effect.as_deref())
-        .find(|effect| effect.attachment == path_glow.node_id())
+        .find_map(|object| {
+            object
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(path_glow.node_id()))
+        })
         .expect("effective path glow at the midpoint");
     assert!((midpoint.definition.as_glow().unwrap().intensity() - 1.5).abs() < 1e-9);
     let mut live = scene.live(&mut session);

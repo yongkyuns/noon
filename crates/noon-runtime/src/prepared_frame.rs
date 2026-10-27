@@ -531,10 +531,12 @@ impl SceneInstance {
                 .iter()
                 .copied()
                 .map(|write| {
-                    let glow = self
-                        .effective_object(write.object())
-                        .and_then(|row| row.effect.as_deref())
-                        .copied();
+                    let glow = if let EffectivePropertyWrite::EffectIntensity { .. } = write {
+                        self.effective_object(write.object())
+                            .and_then(|row| row.effects.clone())
+                    } else {
+                        None
+                    };
                     write.as_execution_patch(glow)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -549,7 +551,13 @@ impl SceneInstance {
             // order, coalescing only later writes of the exact same shape.
             // Even superseded writes have already passed validation above.
             let property_tag = std::mem::discriminant(&write);
-            if !seen.insert((write.object(), property_tag)) {
+            let attachment =
+                if let EffectivePropertyWrite::EffectIntensity { attachment, .. } = write {
+                    Some(attachment)
+                } else {
+                    None
+                };
+            if !seen.insert((write.object(), property_tag, attachment)) {
                 continue;
             }
             let object_index = self

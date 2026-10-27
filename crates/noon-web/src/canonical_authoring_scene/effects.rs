@@ -182,10 +182,7 @@ mod playback_tests {
         let initial: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
         assert_eq!(initial.objects.len(), 1);
-        assert_eq!(
-            initial.objects[0].effect.unwrap().attachment,
-            original.node_id()
-        );
+        assert_eq!(initial.objects[0].effects[0].attachment, original.node_id());
         let target = player.live_target_editor(&source).unwrap();
         assert_ne!(
             target.get_effect("glow").unwrap().node_id(),
@@ -226,7 +223,9 @@ mod playback_tests {
         let midpoint: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
         assert_eq!(midpoint.objects.len(), 1);
-        let effect = midpoint.objects[0].effect.unwrap();
+        let [effect] = midpoint.objects[0].effects.as_slice() else {
+            panic!("one effect in the fixture");
+        };
         assert_eq!(effect.attachment, original.node_id());
         let crate::retained_execution_transport::TransportEffectDefinition::Glow {
             intensity,
@@ -249,7 +248,7 @@ mod playback_tests {
         let removed: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
         assert_eq!(removed.objects.len(), 1);
-        assert!(removed.objects[0].effect.is_none());
+        assert!(removed.objects[0].effects.is_empty());
         assert!(
             removed.removed_slots.is_empty(),
             "effect removal is not source retirement"

@@ -1,7 +1,7 @@
-"""Declaration ownership and unsupported-stack contract, paired with the native Rust example of the same name.
+"""Declaration ownership and ordered attachment contract, paired with native Rust.
 
-This checks declaration ownership and unsupported-profile rejection, not glow
-rendering. Cleanup demonstrates ordinary source continuation.
+This checks independent handles, atomic rejection, and retirement. The paired
+ordered-effects scene separately qualifies multi-attachment rendering.
 """
 from noon import Circle, Glow, Pixels, RIGHT, Scene, NoonForeignHandleError, NoonUnsupportedError
 
@@ -42,13 +42,10 @@ class EffectAuthoringContract(Scene):
         assert dot.get_effect("accent").authored_definition.radius == Pixels(12)
         assert movement.target.get_effect("accent").authored_definition.intensity == 0.6
 
-        # Exercise actual Rust admission, not a Python-only skip/fake renderer.
-        try:
-            self.live_execution()
-        except Exception as error:
-            assert "requires one attachment" in str(error), str(error)
-        else:
-            raise AssertionError("unsupported stack was silently accepted")
+        # Multiple named effects are now supported; preserve both handles
+        # through the independent retirement and owner-validation checks.
+        assert dot.get_effect("glow").authored_definition.intensity == 0.25
+        assert dot.get_effect("accent").authored_definition.radius == Pixels(12)
 
         assert dot.remove_effect(original) is dot
         try:

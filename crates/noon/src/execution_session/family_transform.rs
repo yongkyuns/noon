@@ -676,7 +676,7 @@ mod matching_target_tests {
             target_state: SemanticNodeId::new(2, 0),
             effective_source: EffectiveAnimationProperties {
                 fill_paint: None,
-                effect: None,
+                effects: None,
                 z_index: 0.0,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),

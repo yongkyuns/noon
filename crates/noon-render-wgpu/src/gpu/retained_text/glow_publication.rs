@@ -78,7 +78,7 @@ impl RetainedEffectPublication {
             self.sources.clear();
             for (index, row) in frame.objects.iter().enumerate() {
                 self.rows_examined += 1;
-                if row.effect.is_some() && frame.is_drawable(index) {
+                if row.effects.is_some() && frame.is_drawable(index) {
                     self.sources.insert(index, row.id);
                     self.dirty.insert(index);
                 }
@@ -89,7 +89,7 @@ impl RetainedEffectPublication {
                 let next = frame
                     .objects
                     .get(index)
-                    .filter(|row| row.effect.is_some() && frame.is_drawable(index))
+                    .filter(|row| row.effects.is_some() && frame.is_drawable(index))
                     .map(|row| row.id);
                 if let Some(object) = next {
                     self.sources.insert(index, object);
@@ -271,7 +271,7 @@ impl GpuRenderer {
                     return Err(EffectPrepareError::PublicationMismatch);
                 }
                 let effect = row
-                    .effect
+                    .effects
                     .as_ref()
                     .ok_or(EffectPrepareError::PublicationMismatch)?;
                 let analytic = matches!(
@@ -289,7 +289,7 @@ impl GpuRenderer {
                     {
                         return Err(EffectPrepareError::PublicationMismatch);
                     }
-                    sources.push((index, Some((object, index, effect.definition, None))));
+                    sources.push((index, Some((object, index, effect.definitions(), None))));
                     continue;
                 }
                 let scratch = if prepared.geometry_only {
@@ -351,7 +351,7 @@ impl GpuRenderer {
                 // Partial visibility has no O(1) public observation, but the
                 // source index plus existing item/slot mapping above proves it.
                 observation.submission_membership = Some(true);
-                Some((object, scratch, effect.definition, Some(observation)))
+                Some((object, scratch, effect.definitions(), Some(observation)))
             } else {
                 None
             };
@@ -391,13 +391,13 @@ impl GpuRenderer {
             prepared.text.atlas.encode_pending_uploads(encoder);
         }
         for (index, mapped) in sources {
-            if let Some((object, scratch, definition, observation)) = mapped {
+            if let Some((object, scratch, definitions, observation)) = mapped {
                 let packed = observation
                     .as_ref()
                     .map_or(object, |observation| observation.object);
                 let request = EffectCaptureRequest {
                     object_index: scratch,
-                    definition,
+                    definitions,
                     texture_budget_bytes,
                 };
                 let value = if let Some(observation) = observation {

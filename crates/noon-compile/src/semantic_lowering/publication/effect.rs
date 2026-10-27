@@ -9,14 +9,14 @@ use noon_core::{
 use super::{
     SemanticExecutionIndex, SemanticExecutionReachability, SemanticPublicationLoweringError,
 };
-use crate::{CompiledEffect, ExecutionPatch, SemanticLoweringError};
+use crate::{CompiledEffect, CompiledEffectStack, ExecutionPatch, SemanticLoweringError};
 
 /// Read final staged state, including allocator-proven pending attachment IDs.
 /// Detached targets remain inert; callers invoke this only for execution rows.
 pub(super) fn lower_prepared_attachment(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     owner: SemanticTransactionNodeRef,
-) -> Result<Option<Arc<CompiledEffect>>, SemanticPublicationLoweringError> {
+) -> Result<Option<Arc<CompiledEffectStack>>, SemanticPublicationLoweringError> {
     let semantic = prepared
         .planned_node_id(owner)
         .ok_or(SemanticPublicationLoweringError::PlannedObjectIdUnavailable { object: owner })?;
@@ -24,16 +24,14 @@ pub(super) fn lower_prepared_attachment(
     if effects.is_empty() {
         return Ok(None);
     }
-    let [effect] = effects.as_slice() else {
-        return Err(SemanticLoweringError::UnsupportedEffectProfile { owner: semantic }.into());
-    };
     let state = prepared.proposed_object_state(owner)?;
     super::super::projection::validate_effect_source_profile(semantic, &state, prepared.store())?;
-    let definition = effect.definition;
-    Ok(Some(Arc::new(CompiledEffect {
+    let stack = CompiledEffectStack::new(effects.into_iter().map(|effect| CompiledEffect {
         attachment: effect.attachment,
-        definition,
-    })))
+        definition: effect.definition,
+    }))
+    .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner: semantic })?;
+    Ok(Some(Arc::new(stack)))
 }
 
 /// Visit only owners touched by this batch. Never scan the store, root family,
@@ -83,32 +81,35 @@ pub(super) fn lower_changes(
             .store()
             .animation_effect_snapshot(owner)
             .map_err(SemanticLoweringError::from)?;
-        let previous = match original.as_slice() {
-            [] => None,
-            [effect] => {
-                let definition = effect.definition;
-                Some(CompiledEffect {
+        let previous = if original.is_empty() {
+            None
+        } else {
+            Some(
+                CompiledEffectStack::new(original.into_iter().map(|effect| CompiledEffect {
                     attachment: effect.attachment,
-                    definition,
-                })
-            }
-            _ => return Err(SemanticLoweringError::UnsupportedEffectProfile { owner }.into()),
+                    definition: effect.definition,
+                }))
+                .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?,
+            )
         };
         let next = lower_prepared_attachment(prepared, owner.into())?;
         if previous.as_ref() == next.as_deref() {
             continue;
         }
-        let expected = previous.as_ref().map(|effect| effect.attachment);
-        if expected == next.as_ref().map(|effect| effect.attachment) {
-            mutations.push(ExecutionPatch::SetEffect {
+        let expected = previous
+            .as_ref()
+            .map_or(&[][..], CompiledEffectStack::attachments);
+        let next_ids = next.as_ref().map_or(&[][..], |stack| stack.attachments());
+        if expected == next_ids {
+            mutations.push(ExecutionPatch::SetEffects {
                 object,
-                effect: next.expect("a changed same-generation column is present"),
+                effects: next.expect("changed same-topology stack"),
             });
         } else {
-            mutations.push(ExecutionPatch::SetEffectAttachment {
+            mutations.push(ExecutionPatch::SetEffectStack {
                 object,
-                expected,
-                effect: next,
+                expected: expected.into(),
+                effects: next,
             });
         }
     }

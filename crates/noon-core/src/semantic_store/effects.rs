@@ -9,6 +9,10 @@ use crate::{
     Shadow,
 };
 
+/// Maximum attachment count in the qualified finite planar execution profile.
+/// Semantic storage can retain declarations outside that execution profile.
+pub const MAX_EFFECT_STACK_LEN: usize = 8;
+
 /// Finite built-in definitions; custom program/schema resources remain #1897 M4.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EffectDefinition {

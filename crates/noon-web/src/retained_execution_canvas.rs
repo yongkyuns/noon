@@ -513,7 +513,7 @@ mod wasm {
                 .retained
                 .objects
                 .iter()
-                .any(|row| row.effect.is_some());
+                .any(|row| !row.effects.is_empty());
             let pointer_view = delta.pointer_view;
             let mirror = &mut self.mirror;
             let preparer = &mut self.preparer;

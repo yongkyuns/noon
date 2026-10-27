@@ -161,7 +161,9 @@ fn runtime(
         .unwrap())
         .into(),
     };
-    source.effect = Some(Arc::new(effect));
+    source.effects = Some(Arc::new(
+        noon_compile::CompiledEffectStack::new([effect]).unwrap(),
+    ));
     let objects = vec![
         CompiledObject::new(
             ObjectId::new(1),
@@ -258,7 +260,7 @@ fn reference(frame: &FrameState, stage: usize) -> FrameState {
     };
     value.presences[index] = true;
     for row in &mut value.objects {
-        row.effect = None;
+        row.effects = None;
     }
     if index == 1 {
         value.objects[1].style.opacity = 1.0;
@@ -266,8 +268,10 @@ fn reference(frame: &FrameState, stage: usize) -> FrameState {
     if matches!(stage, 2 | 3 | 5) {
         let silhouette = stage == 3
             && frame.objects[1]
-                .effect
+                .effects
                 .as_ref()
+                .unwrap()
+                .get(SemanticNodeId::new(900, u32::MAX))
                 .unwrap()
                 .definition
                 .as_glow()
@@ -396,7 +400,13 @@ fn fixture() -> Fixture {
                     .unwrap()
                     .unwrap()
             };
-            let effect = frame.objects[1].effect.as_ref().unwrap().definition;
+            let effect = frame.objects[1]
+                .effects
+                .as_ref()
+                .unwrap()
+                .get(SemanticNodeId::new(900, u32::MAX))
+                .unwrap()
+                .definition;
             let color = effect.as_glow().unwrap().color();
             let references = (0..6)
                 .map(|stage| {
@@ -432,15 +442,20 @@ fn fixture() -> Fixture {
                 .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(id)))
                 .unwrap();
         }
-        let mut effect = **runtime.frame().objects[1].effect.as_ref().unwrap();
+        let mut effect = runtime.frame().objects[1]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(900, u32::MAX))
+            .unwrap();
         effect.definition = EffectUpdate::default()
             .intensity(0.0)
             .apply_to(effect.definition)
             .unwrap();
         runtime
-            .apply_execution_patch(&ExecutionPatch::SetEffect {
+            .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object: ObjectId::new(2),
-                effect: Arc::new(effect),
+                effects: Arc::new(noon_compile::CompiledEffectStack::new([effect]).unwrap()),
             })
             .unwrap();
         let publication = runtime.take_renderer_publication();
@@ -456,7 +471,7 @@ fn fixture() -> Fixture {
             .unwrap();
         let mut ordinary_frame = publication.frame().clone();
         for row in &mut ordinary_frame.objects {
-            row.effect = None;
+            row.effects = None;
         }
         let ordinary = RetainedExecutionDeltaEncoder::new(900 + i as u32)
             .encode_snapshot_with_context(&ordinary_frame, camera(false), publication.context())
@@ -539,9 +554,10 @@ mod tests {
                     .iter()
                     .find(|row| row.order == 1)
                     .expect("animated source row is transported");
-                assert_eq!(wire_row.effect.unwrap().attachment.generation(), u32::MAX);
+                assert_eq!(wire_row.effects.len(), 1);
+                assert_eq!(wire_row.effects[0].attachment.generation(), u32::MAX);
                 assert_eq!(
-                    match wire_row.effect.unwrap().definition {
+                    match wire_row.effects[0].definition {
                         crate::retained_execution_transport::TransportEffectDefinition::Glow {
                             intensity,
                             ..
@@ -566,7 +582,7 @@ mod tests {
                 if case.name == "cubic-path-reveal" && sample_index == 1 {
                     assert!((row.transform.translation.x - 0.173 - 0.037).abs() < 1e-6);
                     assert!((frame.reveal(1) - (0.15 + 0.85 * 0.37)).abs() < 1e-6);
-                    assert!((match wire_row.effect.unwrap().definition { crate::retained_execution_transport::TransportEffectDefinition::Glow { intensity, .. } => intensity, _ => panic!("expected Glow") } - 1.771).abs() < 1e-6);
+                    assert!((match wire_row.effects[0].definition { crate::retained_execution_transport::TransportEffectDefinition::Glow { intensity, .. } => intensity, _ => panic!("expected Glow") } - 1.771).abs() < 1e-6);
                 }
             }
             if case.name == "outlined-circle-reveal" {
@@ -593,8 +609,10 @@ mod tests {
                 serde_json::from_value(serde_json::to_value(&case.neutral).unwrap()).unwrap();
             installed.apply(neutral).unwrap();
             assert!(installed.frame().unwrap().objects[1]
-                .effect
+                .effects
                 .as_ref()
+                .unwrap()
+                .get(SemanticNodeId::new(900, u32::MAX))
                 .unwrap()
                 .definition
                 .is_neutral());

@@ -22,8 +22,8 @@ enum PreparedAuthoredValueWrite {
     },
     Effect {
         object_index: usize,
-        effect: std::sync::Arc<noon_compile::CompiledEffect>,
-        effective: std::sync::Arc<noon_compile::CompiledEffect>,
+        effects: std::sync::Arc<noon_compile::CompiledEffectStack>,
+        effective: std::sync::Arc<noon_compile::CompiledEffectStack>,
         changes_execution: bool,
     },
     Style {
@@ -103,7 +103,7 @@ impl SceneInstance {
                     | ExecutionPatch::SetSemanticTransform { .. }
                     | ExecutionPatch::SetSpatialState { .. }
                     | ExecutionPatch::SetStyle { .. }
-                    | ExecutionPatch::SetEffect { .. }
+                    | ExecutionPatch::SetEffects { .. }
             )
         }) {
             return Ok(None);
@@ -136,7 +136,7 @@ impl SceneInstance {
                 ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetSpatialState { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
-                ExecutionPatch::SetEffect { object, .. } => (*object, 3_u8),
+                ExecutionPatch::SetEffects { object, .. } => (*object, 3_u8),
                 _ => return Ok(None),
             };
             let object_index = self
@@ -196,11 +196,11 @@ impl SceneInstance {
                     spatial: spatial.clone().map(Box::new),
                     changes_execution,
                 },
-                (3, ExecutionPatch::SetEffect { effect, .. }) => {
+                (3, ExecutionPatch::SetEffects { effects, .. }) => {
                     PreparedAuthoredValueWrite::Effect {
                         object_index,
-                        effect: std::sync::Arc::clone(effect),
-                        effective: self.prepare_effective_attachment_value(object_index, effect),
+                        effects: std::sync::Arc::clone(effects),
+                        effective: self.prepare_effective_effect_values(object_index, effects),
                         changes_execution,
                     }
                 }
@@ -258,15 +258,15 @@ impl SceneInstance {
             // Effect has no geometry/layout dependencies. Its active channel values
             // and any Arc copy-on-write were already prepared before semantic commit.
             if let PreparedAuthoredValueWrite::Effect {
-                effect, effective, ..
+                effects, effective, ..
             } = write
             {
                 self.compiled
-                    .commit_prepared_effect_value(object_index as u32, effect);
-                if self.frame.objects[object_index].effect.as_deref() != Some(effective.as_ref()) {
-                    self.frame.objects[object_index].effect = Some(effective);
+                    .commit_prepared_effect_values(object_index as u32, effects);
+                if self.frame.objects[object_index].effects.as_ref() != Some(&effective) {
                     self.changes.insert(object_index);
                 }
+                self.frame.objects[object_index].effects = Some(effective);
                 continue;
             }
             let before = FrameRowState::from_frame(&self.frame, object_index);
@@ -388,12 +388,51 @@ impl SceneInstance {
 }
 
 impl SceneInstance {
+    pub(crate) fn prepare_effective_effect_values(
+        &self,
+        object_index: usize,
+        base: &std::sync::Arc<noon_compile::CompiledEffectStack>,
+    ) -> std::sync::Arc<noon_compile::CompiledEffectStack> {
+        let mut effective = std::sync::Arc::clone(base);
+        for binding in base.iter() {
+            let value = self.prepare_effective_attachment_value(object_index, binding);
+            if value != binding {
+                std::sync::Arc::make_mut(&mut effective).replace(value);
+            }
+        }
+        effective
+    }
+
     fn prepare_effective_attachment_value(
         &self,
         object_index: usize,
-        base: &std::sync::Arc<noon_compile::CompiledEffect>,
-    ) -> std::sync::Arc<noon_compile::CompiledEffect> {
-        let mut effective = Some(std::sync::Arc::clone(base));
+        base: noon_compile::CompiledEffect,
+    ) -> noon_compile::CompiledEffect {
+        let previous = self.compiled.objects()[object_index]
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(base.attachment));
+        let mut effective = self.frame.objects[object_index]
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(base.attachment))
+            .unwrap_or(base);
+        // Persistent edits own only the authored parameters they change. Preserve
+        // another parameter's effective driver, including an input-owned pulse.
+        for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
+            let next = noon_core::EffectTrackValue::from_definition(property, base.definition);
+            let old = previous.and_then(|value| {
+                noon_core::EffectTrackValue::from_definition(property, value.definition)
+            });
+            if next != old {
+                if let Some(next) = next {
+                    effective.definition = next
+                        .update()
+                        .apply_to(effective.definition)
+                        .expect("validated surviving schema");
+                }
+            }
+        }
         for property in [
             Property::EffectColor,
             Property::EffectRadius,
@@ -411,13 +450,13 @@ impl SceneInstance {
             let tracks = self.compiled.channel_tracks(channel);
             group.cursor = crate::upper_bound_start(tracks, self.frame.time, &mut 0);
             crate::apply_effect_channel(
-                Some(base.as_ref()),
+                Some(&base),
                 &mut effective,
                 tracks,
                 &group,
                 self.frame.time,
             );
         }
-        effective.expect("existing generation validated before preparation")
+        effective
     }
 }

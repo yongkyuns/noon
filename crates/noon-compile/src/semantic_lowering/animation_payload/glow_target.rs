@@ -1,7 +1,9 @@
 //! Existing-attachment target edits use ordinary parameter channels and driver
 //! ownership. This finite slice does not enroll/remove attachments or create a
 //! separate effect scheduler, runtime state, or completion policy.
-use super::affine::{driver_key, transform_driver_conflict, SemanticAnimationCompletion};
+use super::affine::{
+    channel_driver_key, transform_driver_conflict, DriverMap, SemanticAnimationCompletion,
+};
 #[cfg(test)]
 use noon_core::EffectDefinition;
 use noon_core::{
@@ -9,7 +11,7 @@ use noon_core::{
     SemanticNodeId, SemanticStore, SemanticTransactionReadError, SemanticTransformEffectSnapshot,
     TimelineError, TrackTiming, TrackValues,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EffectTargetLoweringError {
@@ -40,46 +42,79 @@ pub(super) fn channels(
     snapshot: Option<&SemanticTransformEffectSnapshot>,
     source: &[SemanticAnimationEffectSnapshot],
     target: &[SemanticAnimationEffectSnapshot],
-    effective: Option<crate::CompiledEffect>,
+    effective: Option<&crate::CompiledEffectStack>,
     method_target: bool,
     temporary_attachments: &HashSet<SemanticNodeId>,
 ) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
-    // A motion/style target captured before an absent pulse has no authored
-    // effect destination. Only the activation owner's exact candidate-created
-    // or input-owned temporary generation can account for that source attachment.
-    if let [temporary] = source {
-        let definition = temporary.definition;
-        if target.is_empty()
-            && definition
-                .as_glow()
-                .is_some_and(|effect| effect.intensity() == 0.0)
-            && temporary_attachments.contains(&temporary.attachment)
-            && effective.is_some_and(|value| value.attachment == temporary.attachment)
-            && snapshot.is_none_or(|snapshot| {
-                snapshot.target.is_empty()
-                    && (snapshot.source.is_empty() || same_identity(&snapshot.source, source))
-            })
-        {
-            return Ok(Vec::new());
-        }
-    }
+    // A captured target can omit an exact temporary neutral glow, while still
+    // describing independent persistent attachments on the same owner.
+    let omitted: HashSet<_> = source
+        .iter()
+        .filter(|effect| {
+            temporary_attachments.contains(&effect.attachment)
+                && effect
+                    .definition
+                    .as_glow()
+                    .is_some_and(|glow| glow.intensity() == 0.0)
+                && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
+                && !target
+                    .iter()
+                    .any(|destination| destination.name == effect.name)
+        })
+        .map(|effect| effect.attachment)
+        .collect();
+    let source: Vec<_> = source
+        .iter()
+        .filter(|effect| !omitted.contains(&effect.attachment))
+        .cloned()
+        .collect();
     let Some(snapshot) = snapshot else {
-        return if source.is_empty() && target.is_empty() && effective.is_none() {
+        return if source.is_empty()
+            && target.is_empty()
+            && effective
+                .is_none_or(|stack| stack.attachments().iter().all(|id| omitted.contains(id)))
+        {
             Ok(Vec::new())
         } else {
             Err(EffectTargetLoweringError::StaleAttachment)
         };
     };
-    if !same_identity(&snapshot.source, source) || !same_identity(&snapshot.target, target) {
+    let expected: Vec<_> = snapshot
+        .source
+        .iter()
+        .copied()
+        .filter(|id| !omitted.contains(id))
+        .collect();
+    if !same_identity(&expected, &source) || !same_identity(&snapshot.target, target) {
         return Err(EffectTargetLoweringError::StaleAttachment);
     }
-    let ([initial], [destination]) = (source, target) else {
+    if source.len() != target.len() {
         return Err(EffectTargetLoweringError::UnsupportedTopology);
-    };
+    }
+    let mut channels = Vec::new();
+    for (initial, destination) in source.iter().zip(target) {
+        let effect = effective
+            .and_then(|stack| stack.get(initial.attachment))
+            .ok_or(EffectTargetLoweringError::MissingEffectiveValue)?;
+        channels.extend(attachment_channels(
+            initial,
+            destination,
+            effect,
+            method_target,
+        )?);
+    }
+    Ok(channels)
+}
+
+fn attachment_channels(
+    initial: &SemanticAnimationEffectSnapshot,
+    destination: &SemanticAnimationEffectSnapshot,
+    effective: crate::CompiledEffect,
+    method_target: bool,
+) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
     if initial.name != destination.name {
         return Err(EffectTargetLoweringError::UnsupportedTopology);
     }
-    let effective = effective.ok_or(EffectTargetLoweringError::MissingEffectiveValue)?;
     if effective.attachment != initial.attachment {
         return Err(EffectTargetLoweringError::StaleAttachment);
     }
@@ -148,6 +183,58 @@ fn same_identity(a: &[SemanticNodeId], b: &[SemanticAnimationEffectSnapshot]) ->
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| *a == b.attachment)
 }
 
+/// Fill only allocator-proven newly staged neutral glows (or a newly admitted
+/// owner's authored values). Existing generations always use runtime captures.
+pub(super) fn prepared_effective(
+    current: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    source: &[SemanticAnimationEffectSnapshot],
+    newly_admitted: bool,
+    unpublished: impl Fn(SemanticNodeId) -> bool,
+) -> Result<Option<std::sync::Arc<crate::CompiledEffectStack>>, EffectTargetLoweringError> {
+    if current
+        .as_ref()
+        .is_some_and(|stack| same_identity(stack.attachments(), source))
+    {
+        return Ok(current);
+    }
+    if current.as_ref().is_some_and(|stack| {
+        stack
+            .attachments()
+            .iter()
+            .any(|id| !source.iter().any(|effect| effect.attachment == *id))
+    }) {
+        return Err(EffectTargetLoweringError::StaleAttachment);
+    }
+    if source.is_empty() {
+        return Ok(None);
+    }
+    let mut values = Vec::with_capacity(source.len().min(noon_core::MAX_EFFECT_STACK_LEN));
+    for effect in source {
+        let value = current
+            .as_ref()
+            .and_then(|stack| stack.get(effect.attachment));
+        if let Some(value) = value {
+            values.push(value);
+        } else if newly_admitted
+            || (unpublished(effect.attachment)
+                && effect
+                    .definition
+                    .as_glow()
+                    .is_some_and(|glow| glow.intensity() == 0.0))
+        {
+            values.push(crate::CompiledEffect {
+                attachment: effect.attachment,
+                definition: effect.definition,
+            });
+        } else {
+            return Err(EffectTargetLoweringError::MissingEffectiveValue);
+        }
+    }
+    let stack = crate::CompiledEffectStack::new(values)
+        .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
+    Ok(Some(std::sync::Arc::new(stack)))
+}
+
 pub(super) fn validate_sources(
     store: &SemanticStore,
     source_id: SemanticNodeId,
@@ -165,20 +252,22 @@ pub(super) fn validate_sources(
     Ok(())
 }
 
-/// Same bounded ownership table as ordinary object channels; the supported
-/// single attachment is generation-checked before any key is reserved.
+/// Reserve one generation-checked attachment parameter in the ordinary
+/// object-local ownership table.
 pub(super) fn reserve<T: Copy + PartialEq>(
-    driven: &mut HashMap<(u64, u8), T>,
+    driven: &mut DriverMap<T>,
     object: ObjectId,
     property: Property,
+    values: &TrackValues,
     animation: T,
 ) -> Result<(), T> {
+    let key = channel_driver_key(object, property, values);
     if let Some(owner) = transform_driver_conflict(driven, object, property, animation)
-        .or_else(|| driven.get(&driver_key(object, property)).copied())
+        .or_else(|| driven.get(&key).copied())
     {
         return Err(owner);
     }
-    driven.insert(driver_key(object, property), animation);
+    driven.insert(key, animation);
     Ok(())
 }
 
@@ -206,7 +295,23 @@ pub(super) fn completion(
 
 #[cfg(test)]
 mod tests {
+    use super::super::affine::driver_key;
     use super::*;
+
+    fn parameter(attachment: SemanticNodeId, property: Property) -> TrackValues {
+        let definition = if property == Property::EffectOffset {
+            EffectDefinition::Shadow(noon_core::Shadow::default())
+        } else {
+            EffectDefinition::Glow(noon_core::Glow::default())
+        };
+        let value = noon_core::EffectTrackValue::from_definition(property, definition).unwrap();
+        TrackValues::Effect {
+            attachment,
+            from: value,
+            to: value,
+            end_behavior: noon_core::EffectTrackEndBehavior::Sample,
+        }
+    }
 
     #[test]
     fn empty_target_requires_the_exact_candidate_temporary_generation() {
@@ -218,10 +323,12 @@ mod tests {
             definition: EffectDefinition::Glow(definition),
             copy_provenance: None,
         }];
-        let effective = Some(crate::CompiledEffect {
+        let stack = crate::CompiledEffectStack::new([crate::CompiledEffect {
             attachment,
             definition: definition.into(),
-        });
+        }])
+        .unwrap();
+        let effective = Some(&stack);
         let proof = HashSet::from([attachment]);
         let current = SemanticTransformEffectSnapshot {
             source: vec![attachment].into_boxed_slice(),
@@ -245,10 +352,13 @@ mod tests {
             None,
             &source,
             &[],
-            Some(crate::CompiledEffect {
-                attachment: SemanticNodeId::new(3, 6),
-                definition: definition.into(),
-            }),
+            Some(
+                &crate::CompiledEffectStack::new([crate::CompiledEffect {
+                    attachment: SemanticNodeId::new(3, 6),
+                    definition: definition.into(),
+                }])
+                .unwrap()
+            ),
             false,
             &proof,
         )
@@ -263,6 +373,7 @@ mod tests {
     #[test]
     fn glow_driver_ownership_is_parameter_local_and_symmetric_with_umbrella_tracks() {
         let object = ObjectId::new(17);
+        let attachment = SemanticNodeId::new(3, 7);
         for effect in [
             Property::EffectColor,
             Property::EffectRadius,
@@ -275,42 +386,100 @@ mod tests {
                 Property::WorldTransform,
                 Property::CameraProfile,
             ] {
-                let mut driven = HashMap::new();
-                reserve(&mut driven, object, effect, 1_u32).unwrap();
+                let mut driven = DriverMap::new();
+                let values = parameter(attachment, effect);
+                reserve(&mut driven, object, effect, &values, 1_u32).unwrap();
                 assert_eq!(
                     transform_driver_conflict(&driven, object, umbrella, 2),
                     Some(1)
                 );
                 driven.clear();
                 driven.insert(driver_key(object, umbrella), 1);
-                assert_eq!(reserve(&mut driven, object, effect, 2), Err(1));
-                assert!(!driven.contains_key(&driver_key(object, effect)));
+                assert_eq!(reserve(&mut driven, object, effect, &values, 2), Err(1));
+                assert!(!driven.contains_key(&channel_driver_key(object, effect, &values)));
             }
         }
-        let mut driven = HashMap::new();
+        let mut driven = DriverMap::new();
         driven.insert(driver_key(object, Property::Position), 1_u32);
         for (owner, effect) in [
             (2, Property::EffectIntensity),
             (3, Property::EffectColor),
             (4, Property::EffectRadius),
         ] {
-            reserve(&mut driven, object, effect, owner).unwrap();
+            reserve(
+                &mut driven,
+                object,
+                effect,
+                &parameter(attachment, effect),
+                owner,
+            )
+            .unwrap();
         }
         assert_eq!(driven.len(), 4);
         assert_eq!(
-            reserve(&mut driven, object, Property::EffectIntensity, 5),
+            reserve(
+                &mut driven,
+                object,
+                Property::EffectIntensity,
+                &parameter(attachment, Property::EffectIntensity),
+                5
+            ),
             Err(2)
         );
         assert_eq!(
-            reserve(&mut driven, ObjectId::new(18), Property::EffectIntensity, 5),
+            reserve(
+                &mut driven,
+                ObjectId::new(18),
+                Property::EffectIntensity,
+                &parameter(attachment, Property::EffectIntensity),
+                5
+            ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn same_parameter_on_distinct_attachments_reserves_independent_drivers() {
+        let object = ObjectId::new(17);
+        let first = SemanticNodeId::new(3, 7);
+        let second = SemanticNodeId::new(4, 2);
+        let radius = Property::EffectRadius;
+        let mut driven = DriverMap::new();
+        let a = parameter(first, radius);
+        let b = parameter(second, radius);
+        reserve(&mut driven, object, radius, &a, 1_u32).unwrap();
+        reserve(&mut driven, object, radius, &b, 2_u32).unwrap();
+        assert_eq!(reserve(&mut driven, object, radius, &a, 3), Err(1));
+        assert_eq!(reserve(&mut driven, object, radius, &b, 3), Err(2));
+        assert_eq!(
+            transform_driver_conflict(&driven, object, Property::WorldTransform, 1),
+            Some(2)
+        );
+        assert_eq!(
+            transform_driver_conflict(&driven, object, Property::Reveal, 3),
+            None
+        );
+        // Object prefixes and full generations both participate in ownership.
+        let reused = parameter(
+            SemanticNodeId::new(first.slot(), first.generation() + 1),
+            radius,
+        );
+        reserve(&mut driven, object, radius, &reused, 3).unwrap();
+        reserve(&mut driven, ObjectId::new(18), radius, &a, 4).unwrap();
+        assert_eq!(
+            super::super::affine::object_drivers(&driven, object).count(),
+            3
+        );
+        assert_eq!(
+            super::super::affine::object_drivers(&driven, ObjectId::new(18)).count(),
+            1
         );
     }
 
     #[test]
     fn same_declaration_umbrella_cannot_hide_another_declarations_conflict() {
         let object = ObjectId::new(17);
-        let driven = HashMap::from([
+        let driven = DriverMap::from([
             (driver_key(object, Property::Morph), 1_u32),
             (driver_key(object, Property::WorldTransform), 2_u32),
         ]);
@@ -318,9 +487,16 @@ mod tests {
             transform_driver_conflict(&driven, object, Property::EffectIntensity, 1),
             Some(2)
         );
-        let driven = HashMap::from([
+        let driven = DriverMap::from([
             (driver_key(object, Property::Position), 1_u32),
-            (driver_key(object, Property::EffectIntensity), 2_u32),
+            (
+                channel_driver_key(
+                    object,
+                    Property::EffectIntensity,
+                    &parameter(SemanticNodeId::new(3, 7), Property::EffectIntensity),
+                ),
+                2_u32,
+            ),
         ]);
         assert_eq!(
             transform_driver_conflict(&driven, object, Property::WorldTransform, 1),

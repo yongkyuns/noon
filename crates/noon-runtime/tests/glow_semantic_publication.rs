@@ -124,17 +124,18 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
     let prepared = tx.prepare(&mut f.store).unwrap();
     let id = prepared.planned_node_id(pending).unwrap();
     let publication = prepare_semantic_publication(&prepared, &f.index, &f.reachability).unwrap();
-    let [ExecutionPatch::SetEffectAttachment {
+    let [ExecutionPatch::SetEffectStack {
         object,
-        expected: None,
-        effect: Some(value),
+        expected,
+        effects: Some(value),
     }] = publication.value_transaction().mutations()
     else {
         panic!("one enrollment patch")
     };
+    assert!(expected.is_empty());
     assert_eq!(*object, f.index.execution_object_id(f.source).unwrap());
-    assert_eq!(value.attachment, id);
-    assert_eq!(value.definition, (effect(0.4)).into());
+    assert_eq!(value.attachments(), &[id]);
+    assert_eq!(value.definitions(), &[effect(0.4).into()]);
     assert_eq!(publication.stats().object_states_lowered, 0);
     assert_eq!(prepared.store().scene_revision(), revision);
     assert_eq!(f.runtime.frame(), &frame);
@@ -148,11 +149,11 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
     );
     assert_eq!(
         f.runtime.frame().objects[0]
-            .effect
+            .effects
             .as_ref()
             .unwrap()
-            .attachment,
-        id
+            .attachments(),
+        &[id]
     );
 }
 
@@ -172,7 +173,7 @@ fn removal_and_replacement_are_single_owner_patches_not_object_recreation() {
     assert!(publication.possible_exits().is_empty());
     assert_eq!(publication.possible_entry_count(), 0);
     assert!(
-        matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetEffectAttachment { expected: Some(id), effect: Some(value), .. }] if *id == old && value.attachment == replacement)
+        matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetEffectStack { expected, effects: Some(value), .. }] if expected.as_ref() == [old] && value.attachments() == [replacement])
     );
     let tx = prepared.into_transaction();
     f.runtime.take_frame_changes();
@@ -189,7 +190,7 @@ fn removal_and_replacement_are_single_owner_patches_not_object_recreation() {
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(replacement);
     f.publish(remove);
-    assert!(f.runtime.frame().objects[0].effect.is_none());
+    assert!(f.runtime.frame().objects[0].effects.is_none());
     assert!(f.store.effect_by_name(f.source, "glow").unwrap().is_none());
 }
 
@@ -206,7 +207,7 @@ fn pending_owner_and_attachment_enter_together_without_dropping_the_glow_column(
     assert!(publication.value_transaction().is_empty());
     assert_eq!(publication.possible_entry_count(), 1);
     assert!(
-        matches!(publication.conservative_entry_patches(&prepared).as_slice(), [ExecutionPatch::CreateObject(object)] if object.effect.as_ref().unwrap().attachment == id)
+        matches!(publication.conservative_entry_patches(&prepared).as_slice(), [ExecutionPatch::CreateObject(object)] if object.effects.as_ref().unwrap().attachments() == [id])
     );
     let tx = prepared.into_transaction();
     let result = f.publish(tx);
@@ -218,11 +219,11 @@ fn pending_owner_and_attachment_enter_together_without_dropping_the_glow_column(
         f.runtime
             .effective_object(object)
             .unwrap()
-            .effect
+            .effects
             .as_ref()
             .unwrap()
-            .attachment,
-        result.resolve(attachment).unwrap()
+            .attachments(),
+        &[result.resolve(attachment).unwrap()]
     );
 }
 
@@ -257,11 +258,11 @@ fn detached_edits_remain_inert_then_reentry_uses_final_attachment_generation() {
         f.runtime
             .effective_object(f.object())
             .unwrap()
-            .effect
+            .effects
             .as_ref()
             .unwrap()
-            .attachment,
-        new
+            .attachments(),
+        &[new]
     );
 }
 
@@ -350,12 +351,12 @@ fn removing_glow_can_legally_leave_the_source_outside_the_glow_profile() {
     );
     tx.remove_node(old);
     f.publish(tx);
-    assert!(f.runtime.frame().objects[0].effect.is_none());
+    assert!(f.runtime.frame().objects[0].effects.is_none());
     assert_eq!(f.runtime.frame().objects[0].transform.scale.x, 0.0);
 }
 
 #[test]
-fn unsupported_stack_rejects_even_with_an_otherwise_valid_motion_prefix() {
+fn stack_profile_overflow_rejects_even_with_an_otherwise_valid_motion_prefix() {
     let mut f = Fixture::new(0);
     f.attach(0.4);
     let before = f.runtime.frame().clone();
@@ -366,7 +367,9 @@ fn unsupported_stack_rejects_even_with_an_otherwise_valid_motion_prefix() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(1.0, 0.0, 0.0),
     );
-    tx.create_effect(f.source, "second", effect(1.4));
+    for i in 1..=noon_core::MAX_EFFECT_STACK_LEN {
+        tx.create_effect(f.source, format!("extra{i}"), effect(1.4));
+    }
     let prepared = tx.prepare(&mut f.store).unwrap();
     assert!(prepare_semantic_publication(&prepared, &f.index, &f.reachability).is_err());
     drop(prepared);
@@ -388,7 +391,7 @@ fn parameter_only_change_stays_on_the_existing_value_lane_and_noop_is_empty() {
             assert!(publication.value_transaction().is_empty());
         } else {
             assert!(
-                matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetEffect { effect, .. }] if effect.attachment == old && effect.definition.as_glow().unwrap().intensity() == intensity)
+                matches!(publication.value_transaction().mutations(), [ExecutionPatch::SetEffects { effects, .. }] if effects.attachments() == [old] && effects.get(old).unwrap().definition.as_glow().unwrap().intensity() == intensity)
             );
         }
     }
@@ -437,7 +440,12 @@ fn semantic_removal_retires_only_glow_drivers_and_replay_restores_their_identity
     let mut f = Fixture::new(0);
     let old = f.attach(0.4);
     let object = f.object();
-    let declaration = f.runtime.frame().objects[0].effect.clone().unwrap();
+    let declaration = f.runtime.frame().objects[0]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(old)
+        .unwrap();
     let (property, values) = declaration
         .parameter_channels(EffectUpdate::default().intensity(2.0))
         .unwrap()
@@ -479,7 +487,7 @@ fn semantic_removal_retires_only_glow_drivers_and_replay_restores_their_identity
     f.publish(remove);
     f.runtime.advance_to(0.75).unwrap();
     let after = f.runtime.frame().clone();
-    assert!(after.objects[0].effect.is_none());
+    assert!(after.objects[0].effects.is_none());
     assert_eq!(after.objects[0].transform.translation.x, 0.75);
     f.runtime.seal_replay().unwrap();
     for _ in 0..3 {
@@ -551,11 +559,11 @@ fn shared_family_alias_retains_the_one_source_attachment_when_one_path_is_remove
         f.runtime
             .effective_object(f.object())
             .unwrap()
-            .effect
+            .effects
             .as_ref()
             .unwrap()
-            .attachment,
-        old
+            .attachments(),
+        &[old]
     );
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_node(old);
@@ -564,7 +572,7 @@ fn shared_family_alias_retains_the_one_source_attachment_when_one_path_is_remove
         .runtime
         .effective_object(f.object())
         .unwrap()
-        .effect
+        .effects
         .is_none());
 }
 
@@ -576,10 +584,10 @@ fn runtime_generation_mismatch_is_rejected_before_the_semantic_commit() {
     // A desynchronized runtime must be detected; the semantic store is not used
     // as an excuse to overwrite whichever runtime attachment happens to exist.
     f.runtime
-        .apply_execution_patch(&ExecutionPatch::SetEffectAttachment {
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
             object,
-            expected: Some(old),
-            effect: None,
+            expected: Box::new([old]),
+            effects: None,
         })
         .unwrap();
     let frame = f.runtime.frame().clone();

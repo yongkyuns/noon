@@ -52,7 +52,7 @@ fn effective(runtime: &SceneInstance, object: ObjectId) -> EffectiveAnimationPro
     let row = &frame.objects[index];
     EffectiveAnimationProperties {
         fill_paint: row.fill_paint.clone(),
-        effect: row.effect.as_deref().copied(),
+        effects: row.effects.clone(),
         z_index: row.z_index,
         transform: row.transform,
         style: row.style,
@@ -83,7 +83,7 @@ fn lower(
     lower_semantic_affine_animation_tracks(&store, &schedule, |id| Some(effective(runtime, id)))
 }
 fn effective_glow(runtime: &SceneInstance, object: ObjectId) -> Glow {
-    (effective(runtime, object).effect.unwrap().definition)
+    (only_effect(&effective(runtime, object).effects.unwrap()).definition)
         .as_glow()
         .unwrap()
 }
@@ -96,7 +96,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
         .unwrap();
     let (mut runtime, index) = runtime(&scene);
     let object = index.execution_object_id(source.node_id()).unwrap();
-    let base = effective(&runtime, object).effect.unwrap();
+    let base = only_effect(&effective(&runtime, object).effects.unwrap());
     let [(property, values)] = base
         .parameter_channels(EffectUpdate::default().intensity(1.2))
         .unwrap()
@@ -519,7 +519,7 @@ fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
         panic!("one inert prepared entry with its reserved attachment")
     };
     assert_eq!(
-        Some(object.effect.as_ref().unwrap().attachment),
+        Some(only_effect(object.effects.as_ref().unwrap()).attachment),
         prepared.planned_node_id(attachment)
     );
     drop(prepared);
@@ -527,17 +527,19 @@ fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
 }
 
 #[test]
-fn initial_execution_rejects_unsupported_stacks_without_index_pollution() {
+fn initial_execution_rejects_stack_profile_overflow_without_index_pollution() {
     let (mut scene, source) = fixture();
-    scene
-        .add_effect(&source, Glow::default(), "second")
-        .unwrap();
+    for i in 1..=noon_core::MAX_EFFECT_STACK_LEN {
+        scene
+            .add_effect(&source, Glow::default(), &format!("extra{i}"))
+            .unwrap();
+    }
     let mut index = SemanticExecutionIndex::new();
     let store = scene.integration_store().borrow();
     let error =
         noon_compile::lower_semantic_execution_root(&store, scene.root(), &mut index).unwrap_err();
     assert!(
-        error.to_string().contains("requires one attachment"),
+        error.to_string().contains("finite effect stack profile"),
         "{error}"
     );
     assert!(index.is_empty());
@@ -545,6 +547,6 @@ fn initial_execution_rejects_unsupported_stacks_without_index_pollution() {
         .lower_root(&store, scene.root())
         .unwrap_err()
         .to_string()
-        .contains("requires one attachment"));
+        .contains("finite effect stack profile"));
     assert!(index.is_empty());
 }

@@ -179,7 +179,7 @@ mod tests {
         let text = crate::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
@@ -192,7 +192,7 @@ mod tests {
         let circle = crate::FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -217,7 +217,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Text(text_handle),
@@ -230,7 +230,7 @@ mod tests {
                 FrameObjectState {
                     fill_paint: None,
                     draw_enabled: true,
-                    effect: None,
+                    effects: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -274,7 +274,7 @@ mod tests {
         frame.objects.push(FrameObjectState {
             fill_paint: None,
             draw_enabled: true,
-            effect: None,
+            effects: None,
             z_index: 0.0,
             id: ObjectId::new(99),
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),

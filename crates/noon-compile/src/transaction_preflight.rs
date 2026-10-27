@@ -91,7 +91,7 @@ fn effective_track_interval(
 
 enum ObjectOverlay {
     Present {
-        effect: Option<std::sync::Arc<crate::CompiledEffect>>,
+        effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
         index: u32,
         is_text: bool,
         continuous_fill: bool,
@@ -144,33 +144,45 @@ impl PreflightOverlay {
         }
     }
 
-    fn effect(
+    fn effects(
         &mut self,
         scene: &CompiledScene,
         id: ObjectId,
-    ) -> Option<std::sync::Arc<crate::CompiledEffect>> {
+    ) -> Option<std::sync::Arc<crate::CompiledEffectStack>> {
         match self.objects.get(&id) {
-            Some(ObjectOverlay::Present { effect, .. }) => effect.clone(),
+            Some(ObjectOverlay::Present { effects, .. }) => effects.clone(),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
                 self.seen_objects.insert(id);
-                scene.objects[index as usize].effect.clone()
+                scene.objects[index as usize].effects.clone()
             }
         }
     }
 
-    fn set_effect(
+    fn track_effect(
+        &mut self,
+        scene: &CompiledScene,
+        track: &TrackDefinition,
+    ) -> Option<crate::CompiledEffect> {
+        let TrackValues::Effect { attachment, .. } = track.values else {
+            return None;
+        };
+        self.effects(scene, track.object)
+            .and_then(|stack| stack.get(attachment))
+    }
+
+    fn set_effects(
         &mut self,
         scene: &CompiledScene,
         id: ObjectId,
-        effect: Option<std::sync::Arc<crate::CompiledEffect>>,
+        effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     ) {
         if let Some(ObjectOverlay::Present {
-            effect: current, ..
+            effects: current, ..
         }) = self.objects.get_mut(&id)
         {
-            *current = effect;
+            *current = effects;
             return;
         }
         if let Some(index) = scene.object_indices.get(&id).copied() {
@@ -178,7 +190,7 @@ impl PreflightOverlay {
             self.objects.insert(
                 id,
                 ObjectOverlay::Present {
-                    effect,
+                    effects,
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     continuous_fill: crate::continuous_fill_content_supported(
@@ -224,7 +236,7 @@ impl PreflightOverlay {
             self.objects.insert(
                 id,
                 ObjectOverlay::Present {
-                    effect: scene.objects[index as usize].effect.clone(),
+                    effects: scene.objects[index as usize].effects.clone(),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     continuous_fill: crate::continuous_fill_content_supported(
@@ -430,7 +442,7 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
-                        effect: object.effect.clone(),
+                        effects: object.effects.clone(),
                         index,
                         is_text: object.text().is_some(),
                         continuous_fill: crate::continuous_fill_content_supported(&object.content),
@@ -488,7 +500,7 @@ pub(super) fn preflight_transaction_with_resources(
                     }
                 }
                 let spatial = overlay.spatial(scene, *object);
-                let effect = overlay.effect(scene, *object);
+                let effects = overlay.effects(scene, *object);
                 overlay.require_paint_source(
                     scene,
                     index,
@@ -497,7 +509,7 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay.objects.insert(
                     *object,
                     ObjectOverlay::Present {
-                        effect,
+                        effects,
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
                         continuous_fill: crate::continuous_fill_content_supported(content),
@@ -609,36 +621,42 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 super::validate_z_index(*object, *value)?;
             }
-            ExecutionPatch::SetEffect { object, effect } => {
+            ExecutionPatch::SetEffects { object, effects } => {
                 overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                let previous = overlay.effect(scene, *object);
-                crate::execution_patch::validate_effect_replacement(
+                let previous = overlay.effects(scene, *object);
+                crate::execution_patch::validate_effect_values(
                     *object,
                     previous.as_deref(),
-                    effect,
+                    effects,
                 )?;
-                overlay.set_effect(scene, *object, Some(std::sync::Arc::clone(effect)));
+                overlay.set_effects(scene, *object, Some(std::sync::Arc::clone(effects)));
             }
-            ExecutionPatch::SetEffectAttachment {
+            ExecutionPatch::SetEffectStack {
                 object,
                 expected,
-                effect,
+                effects,
             } => {
                 let index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                let previous = overlay.effect(scene, *object);
+                let previous = overlay.effects(scene, *object);
                 crate::effect_attachment::validate_change(
                     *object,
                     previous.as_deref(),
-                    *expected,
-                    effect.as_deref(),
+                    expected,
+                    effects.as_deref(),
                 )?;
                 // Respect staged adds/replacements as well as base tracks. A
                 // retired generation cannot retain drivers or block its successor.
-                if let Some(attachment) = expected {
+                for attachment in expected {
+                    if effects
+                        .as_ref()
+                        .is_some_and(|stack| stack.get(*attachment).is_some())
+                    {
+                        continue;
+                    }
                     for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
                         for track in overlay.channel(
                             scene,
@@ -648,7 +666,7 @@ pub(super) fn preflight_transaction_with_resources(
                         }
                     }
                 }
-                overlay.set_effect(scene, *object, effect.clone());
+                overlay.set_effects(scene, *object, effects.clone());
             }
             ExecutionPatch::SetStyle {
                 object,
@@ -747,7 +765,7 @@ pub(super) fn preflight_transaction_with_resources(
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
-                        overlay.effect(scene, track.object).as_deref(),
+                        overlay.track_effect(scene, track),
                     )
                     .map_err(CompilePatchError::InvalidTrack)?;
                 }
@@ -797,7 +815,7 @@ pub(super) fn preflight_transaction_with_resources(
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
-                        overlay.effect(scene, track.object).as_deref(),
+                        overlay.track_effect(scene, track),
                     )
                     .map_err(CompilePatchError::InvalidTrack)?;
                 }

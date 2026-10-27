@@ -139,7 +139,7 @@ impl EffectivePropertyWrite {
     /// to the execution plan or used to assign a whole effective row.
     pub(crate) fn as_execution_patch(
         self,
-        glow: Option<noon_compile::CompiledEffect>,
+        effects: Option<std::sync::Arc<noon_compile::CompiledEffectStack>>,
     ) -> Result<ExecutionPatch, noon_compile::CompilePatchError> {
         Ok(match self {
             Self::EffectIntensity {
@@ -147,17 +147,17 @@ impl EffectivePropertyWrite {
                 attachment,
                 intensity,
             } => {
-                let mut glow = glow
-                    .filter(|glow| glow.attachment == attachment)
+                let mut effects = effects
+                    .ok_or(noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
+                let mut glow = effects
+                    .get(attachment)
                     .ok_or(noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
                 glow.definition = noon_core::EffectUpdate::default()
                     .intensity(intensity)
                     .apply_to(glow.definition)
                     .map_err(|_| noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
-                ExecutionPatch::SetEffect {
-                    object,
-                    effect: std::sync::Arc::new(glow),
-                }
+                std::sync::Arc::make_mut(&mut effects).replace(glow);
+                ExecutionPatch::SetEffects { object, effects }
             }
             Self::Presence { object, .. } => ExecutionPatch::SetStyle {
                 fill_paint: None,
@@ -253,11 +253,10 @@ pub(crate) fn apply_effective_property_to_row(
             intensity,
             ..
         } => {
-            let Some(glow) = row
-                .effect
-                .as_mut()
-                .filter(|glow| glow.attachment == attachment)
-            else {
+            let Some(stack) = row.effects.as_mut() else {
+                return;
+            };
+            let Some(mut glow) = stack.get(attachment) else {
                 // A concurrently prepared structural retirement wins; never
                 // recreate an attachment or transfer a write to its replacement.
                 return;
@@ -267,7 +266,8 @@ pub(crate) fn apply_effective_property_to_row(
                 .apply_to(glow.definition)
                 .expect("preflighted glow intensity");
             if next != glow.definition {
-                std::sync::Arc::make_mut(glow).definition = next;
+                glow.definition = next;
+                std::sync::Arc::make_mut(stack).replace(glow);
             }
             return;
         }

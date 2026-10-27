@@ -109,8 +109,8 @@ impl ExecutionSession {
             let Some(glow) = self
                 .runtime
                 .effective_object(object)
-                .and_then(|row| row.effect.as_deref())
-                .filter(|glow| glow.attachment == attachment)
+                .and_then(|row| row.effects.as_ref())
+                .and_then(|stack| stack.get(attachment))
             else {
                 continue;
             };
