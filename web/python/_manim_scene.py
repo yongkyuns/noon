@@ -2771,10 +2771,9 @@ def _build_canonical_composition_candidate(
             )
             if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
-            if child.rate_func not in ("linear", "smooth"):
-                raise NotImplementedError(
-                    "canonical family Transform requires linear or smooth easing"
-                )
+            # The shared Rust Transform policy resolves supported rate IDs and
+            # validates their trajectories; forward that result without a second
+            # Python easing profile.
             destination = builder
             if matching:
                 if any(child_kwargs.get(name) not in (None, 0.0)
