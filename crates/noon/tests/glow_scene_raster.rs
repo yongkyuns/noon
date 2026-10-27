@@ -2860,6 +2860,16 @@ fn independent_image_sample(
 #[test]
 #[ignore = "requires a real native raster adapter; absence is a failure"]
 fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
+    continuous_fill_filter_capture(false);
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_noise_fill_reuses_source_capture_for_blur_shadow_and_glow() {
+    continuous_fill_filter_capture(true);
+}
+
+fn continuous_fill_filter_capture(noise: bool) {
     use noon::effects::{Blur, EffectOffset, Glow, GlowSource, Shadow};
     use noon::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintOptions, ImageUvTransform};
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -2871,6 +2881,22 @@ fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
         source.disable_stroke().unwrap();
         if silhouette {
             source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        } else if noise {
+            source
+                .set_fill_noise(
+                    noon::NoisePaint::new(
+                        7,
+                        [16.0, 12.0],
+                        [-0.173, 0.231],
+                        [
+                            Color::rgba(1.0, 0.0, 0.0, 0.2),
+                            Color::rgba(0.0, 0.0, 1.0, 0.9),
+                        ],
+                    )
+                    .unwrap(),
+                    Some(0.73),
+                )
+                .unwrap();
         } else {
             source
                 .set_fill_image(
@@ -2928,7 +2954,26 @@ fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
         let mut session = scene.execution_session().unwrap();
         let mut surface = Surface::new(&device, &queue);
         for stage in 0..2 {
-            if stage == 1 {
+            if stage == 1 && noise {
+                let paint = noon::NoisePaint::new(
+                    7,
+                    [64.0, 64.0],
+                    [0.531, -0.719],
+                    [
+                        Color::rgba(1.0, 0.0, 0.0, 0.2),
+                        Color::rgba(0.0, 0.0, 1.0, 0.9),
+                    ],
+                )
+                .unwrap();
+                scene
+                    .live(&mut session)
+                    .set_fill_noise(&source, paint.clone(), None)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .set_fill_noise(&plain_source, paint, None)
+                    .unwrap();
+            } else if stage == 1 {
                 let mapping = ImageMapping::new(
                     ImageFit::Cover,
                     [0.5; 2],
@@ -2961,7 +3006,7 @@ fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
             };
             assert!(
                 error(&actual, &expected) <= 1,
-                "image fill filter={kind} stage={stage}, max byte error {}",
+                "noise={noise} fill filter={kind} stage={stage}, max byte error {}",
                 error(&actual, &expected)
             );
             // Silhouette Glow retains the painted source and a separate geometry mask.
@@ -2989,12 +3034,22 @@ fn public_image_fill_reuses_source_capture_for_blur_shadow_and_glow() {
         surface.render(&device, &queue, &mut session);
         assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
     }
-    eprintln!("image fill source/filter qualification: {samples} whole-image comparisons, max allowed byte error 1");
+    eprintln!("noise={noise} fill source/filter qualification: {samples} whole-image comparisons, max allowed byte error 1");
 }
 
 #[test]
 #[ignore = "requires a real native raster adapter; absence is a failure"]
 fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
+    continuous_fill_coverage_and_strokes(false);
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; absence is a failure"]
+fn public_noise_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
+    continuous_fill_coverage_and_strokes(true);
+}
+
+fn continuous_fill_coverage_and_strokes(noise: bool) {
     use noon::ImagePaintOptions;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
@@ -3022,9 +3077,27 @@ fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
                 };
                 if image {
                     let rgba = if opaque { [255; 4] } else { [255, 0, 255, 0] };
-                    source
-                        .set_fill_image(ImagePaintOptions::rgba8(1, 1, rgba).unwrap(), Some(0.73))
-                        .unwrap();
+                    if noise {
+                        let color = if opaque {
+                            Color::WHITE
+                        } else {
+                            Color::rgba(1.0, 0.0, 1.0, 0.0)
+                        };
+                        source
+                            .set_fill_noise(
+                                noon::NoisePaint::new(7, [8.0; 2], [-0.173, 0.231], [color; 2])
+                                    .unwrap(),
+                                Some(0.73),
+                            )
+                            .unwrap();
+                    } else {
+                        source
+                            .set_fill_image(
+                                ImagePaintOptions::rgba8(1, 1, rgba).unwrap(),
+                                Some(0.73),
+                            )
+                            .unwrap();
+                    }
                 } else if opaque {
                     source.set_fill(1.0, 1.0, 1.0, 0.73).unwrap();
                 } else {
@@ -3055,7 +3128,7 @@ fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
             );
             assert_eq!(
                 image, ordinary,
-                "image paint changed geometry/stroke kind={kind} opaque={opaque}"
+                "noise={noise} paint changed geometry/stroke kind={kind} opaque={opaque}"
             );
             assert!(
                 image
@@ -3068,5 +3141,5 @@ fn public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes() {
             images += 1;
         }
     }
-    eprintln!("image paint coverage/strokes: {images} byte-identical whole images");
+    eprintln!("noise={noise} paint coverage/strokes: {images} byte-identical whole images");
 }

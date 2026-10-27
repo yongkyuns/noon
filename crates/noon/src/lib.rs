@@ -319,11 +319,14 @@ pub use noon_core::{
     GradientError, GradientStop, LinearGradient, PaintTransitionError, RadialGradient,
 };
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
+pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
 #[cfg(test)]
 mod gradient_authoring_tests;
 #[cfg(test)]
 mod image_paint_authoring_tests;
+#[cfg(test)]
+mod noise_authoring_tests;
 #[cfg(test)]
 mod radial_authoring_tests;
 pub use noon_geometry::manim_default_vector_field_ranges_2d;

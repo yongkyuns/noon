@@ -86,6 +86,26 @@ impl PaintUniform {
                 result.metadata[1] = 2;
                 result.set_stops(definition.stops());
             }
+            noon_core::SemanticPaint::Noise(noise) => {
+                let (cell, fraction) = noise.phase_parts();
+                let frequency = noise.frequency();
+                result.metadata = [2, 3, noise.seed(), cell[0] | (cell[1] << 16)];
+                result.image_u = [
+                    frequency[0] as f32,
+                    frequency[1] as f32,
+                    fraction[0] as f32,
+                    fraction[1] as f32,
+                ];
+                for (index, color) in noise.colors().into_iter().enumerate() {
+                    result.stops[index].color = [
+                        color.red * color.alpha,
+                        color.green * color.alpha,
+                        color.blue * color.alpha,
+                        color.alpha,
+                    ];
+                    result.stops[index].position[0] = index as f32;
+                }
+            }
             noon_core::SemanticPaint::Image(image) => {
                 let dimensions = images
                     .and_then(|images| images.texture_dimensions(image.resource()))

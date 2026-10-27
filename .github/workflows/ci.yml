@@ -82,6 +82,9 @@ on:
       - "scripts/glow-worker-*.mjs"
       - "scripts/linear-gradient-qualification.mjs"
       - "scripts/radial-gradient-qualification.mjs"
+      - "scripts/noise-paint-qualification.mjs"
+      - "scripts/noise-paint-reference.mjs"
+      - "scripts/noise-paint-reference.test.mjs"
       - "scripts/image-fill-qualification.mjs"
       - "crates/noon-web/src/glow_worker_smoke.rs"
       - "crates/noon-web/src/retained_execution_canvas.rs"
@@ -90,6 +93,8 @@ on:
       - "crates/noon/tests/glow_scene_raster.rs"
       - "crates/noon/tests/linear_gradient_raster.rs"
       - "crates/noon/tests/radial_gradient_raster.rs"
+      - "crates/noon/tests/noise_paint_raster.rs"
+      - "crates/noon/tests/noise_reference/**"
       - "crates/noon/examples/glow_scene_playback.rs"
       - "crates/noon/src/effect_authoring*"
       - "crates/noon/src/effect_authoring/**"
@@ -253,6 +258,10 @@ jobs:
         run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture
       - name: Qualify public Rust radial paint on native GPU
         run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture
+      - name: Qualify public Rust procedural noise paint on native GPU
+        run: |
+          cargo test -p noon --test noise_paint_raster -- --ignored --nocapture
+          cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -506,6 +515,8 @@ jobs:
         run: node scripts/linear-gradient-qualification.mjs
       - name: Qualify paired radial paint authoring
         run: node scripts/radial-gradient-qualification.mjs
+      - name: Qualify paired procedural noise paint authoring
+        run: node scripts/noise-paint-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage

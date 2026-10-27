@@ -241,6 +241,7 @@ fn apply_effective_track_endpoint(
                 Some(
                     paint @ (noon_core::SemanticPaint::LinearGradient(_)
                     | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
                     | noon_core::SemanticPaint::Image(_)),
                 ) => {
                     value.fill_paint = Some(std::sync::Arc::new(paint));
