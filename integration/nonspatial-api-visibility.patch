@@ -1,0 +1,13 @@
+diff --git a/crates/noon/src/execution_session.rs b/crates/noon/src/execution_session.rs
+index 6030a46..a19d4ca 100644
+--- a/crates/noon/src/execution_session.rs
++++ b/crates/noon/src/execution_session.rs
+@@ -1600,7 +1600,7 @@ impl ExecutionSession {
+         for &index in nonspatial.object_indices() {
+             // Spatial changes already journaled this row's previous and new
+             // envelope; do not consume another history slot for the same write.
+-            if spatial.contains_object(index) {
++            if spatial.is_all() || spatial.object_indices().binary_search(&index).is_ok() {
+                 continue;
+             }
+             let Some(object) = self.runtime.frame().objects.get(index) else {

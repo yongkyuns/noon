@@ -66,9 +66,12 @@ jobs:
           PY
           git apply --check ../evidence/nonspatial-correction.patch
           git apply ../evidence/nonspatial-correction.patch
+          test "$(git hash-object ../workbench/integration/nonspatial-api-visibility.patch)" = 377c3926ce1c4e820c93cbb549343423ecfb2419
+          git apply --check ../workbench/integration/nonspatial-api-visibility.patch
+          git apply ../workbench/integration/nonspatial-api-visibility.patch
           git diff --check
           git add -u
-          test "$(git write-tree)" = 1f0fe72ad502ea19eb62da92382c854f9695d731
+          test "$(git write-tree)" = ee172be89722581c1331645423fc7f510da48e9e
           test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = 5
           test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341
       - name: Use repository-pinned Rust and WASM target
