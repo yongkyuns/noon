@@ -88,15 +88,16 @@ pub(super) fn channels(
     let omitted: HashSet<_> = source
         .iter()
         .filter(|effect| {
-            temporary_attachments.contains(&effect.attachment)
-                && effect
-                    .definition
-                    .as_glow()
-                    .is_some_and(|glow| glow.intensity() == 0.0)
-                && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
-                && !target
-                    .iter()
-                    .any(|destination| destination.name == effect.name)
+            effect.name.is_visibility()
+                || (temporary_attachments.contains(&effect.attachment)
+                    && effect
+                        .definition
+                        .as_glow()
+                        .is_some_and(|glow| glow.intensity() == 0.0)
+                    && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
+                    && !target
+                        .iter()
+                        .any(|destination| destination.name == effect.name))
         })
         .map(|effect| effect.attachment)
         .collect();
@@ -105,6 +106,12 @@ pub(super) fn channels(
         .filter(|effect| !omitted.contains(&effect.attachment))
         .cloned()
         .collect();
+    let target: Vec<_> = target
+        .iter()
+        .filter(|effect| !effect.name.is_visibility())
+        .cloned()
+        .collect();
+    let target = target.as_slice();
     let Some(snapshot) = snapshot else {
         return if source.is_empty()
             && target.is_empty()
@@ -271,10 +278,11 @@ pub(super) fn prepared_effective(
             values.push(value);
         } else if newly_admitted
             || (unpublished(effect.attachment)
-                && effect
-                    .definition
-                    .as_glow()
-                    .is_some_and(|glow| glow.intensity() == 0.0))
+                && (effect.name.is_visibility()
+                    || effect
+                        .definition
+                        .as_glow()
+                        .is_some_and(|glow| glow.intensity() == 0.0)))
         {
             values.push(crate::CompiledEffect {
                 attachment: effect.attachment,

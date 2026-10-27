@@ -318,7 +318,10 @@ where
                     error: super::glow_target::EffectTargetLoweringError::Read(error),
                 },
             )?;
-        if let [attachment] = attachments.as_slice() {
+        if let Some(attachment) = attachments
+            .iter()
+            .find(|attachment| attachment.name.authored() == Some("glow"))
+        {
             let definition = attachment.definition;
             if attachment.name.authored() == Some("glow")
                 && definition
@@ -400,6 +403,7 @@ where
                     | PreparedSemanticScheduledAnimationPayload::WorldTransformTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::CameraProfileTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::GlowPulse { .. }
+                    | PreparedSemanticScheduledAnimationPayload::Dissolve { .. }
             );
         captures.begin_leaf(
             leaf,
@@ -421,6 +425,53 @@ where
             // Capturing the exact effective bounds-center offset requires the runtime's
             // current retained bounds. The activation coordinator appends this channel
             // through lower_prepared_path_motion_tracks after ordinary lowering.
+            continue;
+        }
+        if let PreparedSemanticScheduledAnimationPayload::Dissolve { direction, style } =
+            leaf.payload
+        {
+            let error = |error| PreparedSemanticAnimationLoweringError::EffectTarget {
+                animation: leaf.animation,
+                error,
+            };
+            if leaf.options.path_arc != 0.0 || leaf.options.lag_ratio != 0.0 {
+                return Err(error(
+                    super::glow_target::EffectTargetLoweringError::UnsupportedTargetOptions,
+                ));
+            }
+            let attachments = prepared
+                .animation_effect_snapshot(leaf.target)
+                .map_err(super::glow_target::EffectTargetLoweringError::Read)
+                .map_err(error)?;
+            let from = captures.effects(leaf.execution_object_id).or_else(|| {
+                effective_properties(leaf.execution_object_id).and_then(|value| value.effects)
+            });
+            let from = super::glow_target::prepared_effective(
+                from,
+                &attachments,
+                admitted.contains(&leaf.target),
+                |attachment| prepared.store().node(attachment).is_none(),
+            )
+            .map_err(error)?;
+            if let Some(value) = &from {
+                captures.insert_effects(leaf.execution_object_id, value.clone());
+            }
+            let mut timing = leaf.timing;
+            timing.reverse_rate_function = leaf.options.reverse_rate_function;
+            let (channels, completion) = super::dissolve::channels(
+                &attachments,
+                from.as_deref(),
+                direction,
+                style,
+                timing,
+                leaf.options.remover,
+            )
+            .map_err(error)?;
+            let start = tracks.len();
+            push_effect_channels(leaf, channels, &mut driven, &mut tracks)?;
+            for track in &mut tracks[start..] {
+                track.completion = completion.clone();
+            }
             continue;
         }
         if let PreparedSemanticScheduledAnimationPayload::EffectTargetTo {
@@ -1231,6 +1282,9 @@ where
                         to: true,
                     },
                 }
+            }
+            PreparedSemanticScheduledAnimationPayload::Dissolve { .. } => {
+                unreachable!("dissolve was lowered above")
             }
             PreparedSemanticScheduledAnimationPayload::EffectTargetTo { .. } => {
                 unreachable!("effect-only targets were lowered without object geometry above")

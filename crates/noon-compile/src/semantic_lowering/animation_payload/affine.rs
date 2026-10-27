@@ -49,6 +49,11 @@ pub struct PathMotionActivationProperties {
 /// Exact authored reconciliation performed when one execution channel is released.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
+    Visibility {
+        attachment: SemanticNodeId,
+        endpoint: noon_core::NoiseDissolve,
+        remover: bool,
+    },
     /// Persist only the driven parameter at the actual terminal sample.
     Effect {
         attachment: SemanticNodeId,
@@ -593,6 +598,58 @@ where
         ) {
             continue;
         }
+        if let SemanticScheduledAnimationPayload::Dissolve { direction, style } = leaf.payload {
+            let error = |error| SemanticAffineAnimationTrackError::EffectTarget {
+                animation: leaf.animation,
+                error,
+            };
+            let attachments = store
+                .animation_effect_snapshot(leaf.target)
+                .map_err(super::glow_target::EffectTargetLoweringError::Store)
+                .map_err(error)?;
+            let from = captures
+                .get(&leaf.execution_object_id)
+                .cloned()
+                .or_else(|| effective_properties(leaf.execution_object_id));
+            let mut timing = leaf.timing;
+            timing.reverse_rate_function = leaf.options.reverse_rate_function;
+            let (channels, completion) = super::dissolve::channels(
+                &attachments,
+                from.as_ref().and_then(|value| value.effects.as_deref()),
+                direction,
+                style,
+                timing,
+                leaf.options.remover,
+            )
+            .map_err(error)?;
+            for (property, values) in channels {
+                super::glow_target::reserve(
+                    &mut driven,
+                    leaf.execution_object_id,
+                    property,
+                    &values,
+                    leaf.animation,
+                )
+                .map_err(|first_animation| {
+                    SemanticAffineAnimationTrackError::GlowDriverConflict {
+                        first_animation,
+                        next_animation: leaf.animation,
+                        property,
+                    }
+                })?;
+                tracks.push(SemanticAffineAnimationTrack {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                    property,
+                    values,
+                    completion: completion.clone(),
+                    timing,
+                    time_map: leaf.time_map.clone(),
+                });
+            }
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::EffectTargetTo {
             target_state,
             method_target,
@@ -970,6 +1027,9 @@ where
 
                 complete_priority,
             } => (target_state, interpolation, complete_priority),
+            SemanticScheduledAnimationPayload::Dissolve { .. } => {
+                unreachable!("dissolve was lowered above")
+            }
             SemanticScheduledAnimationPayload::EffectTargetTo { .. } => {
                 unreachable!("effect-only target was lowered above")
             }
@@ -1340,6 +1400,19 @@ fn validate_leaf_matches_declaration(
                 == SemanticScheduledAnimationPayload::Rotate {
                     angle: *angle,
                     hold_origin: *hold_origin,
+                } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::Dissolve {
+            target,
+            direction,
+            style,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::Dissolve {
+                    direction: *direction,
+                    style: *style,
                 } =>
         {
             Ok(())
@@ -3172,6 +3245,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
         Property::EffectOffset => 18,
         Property::EffectProgress => 19,
         Property::EffectSoftness => 20,
+        Property::EffectSeed => 21,
     };
     (object.get(), slot, None)
 }

@@ -897,6 +897,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
+                            | Property::EffectSeed
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

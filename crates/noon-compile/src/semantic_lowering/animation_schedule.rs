@@ -79,6 +79,10 @@ impl SemanticAnimationScheduleProjection {
 /// Payload kind retained by one scheduled published animation leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticScheduledAnimationPayload {
+    Dissolve {
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+    },
     EffectTargetTo {
         target_state: SemanticNodeId,
         method_target: bool,
@@ -254,6 +258,10 @@ impl PreparedSemanticAnimationScheduleProjection {
 /// Payload kind retained by one scheduled transaction-local animation leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PreparedSemanticScheduledAnimationPayload {
+    Dissolve {
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+    },
     EffectTargetTo {
         target_state: SemanticTransactionNodeRef,
         method_target: bool,
@@ -886,6 +894,9 @@ fn published_payload(
         ScheduledAnimationPayload::Rotate { angle, hold_origin } => {
             SemanticScheduledAnimationPayload::Rotate { angle, hold_origin }
         }
+        ScheduledAnimationPayload::Dissolve { direction, style } => {
+            SemanticScheduledAnimationPayload::Dissolve { direction, style }
+        }
         ScheduledAnimationPayload::GlowPulse { intensity } => {
             SemanticScheduledAnimationPayload::GlowPulse { intensity }
         }
@@ -979,6 +990,9 @@ fn prepared_payload(
         ScheduledAnimationPayload::Rotate { angle, hold_origin } => {
             PreparedSemanticScheduledAnimationPayload::Rotate { angle, hold_origin }
         }
+        ScheduledAnimationPayload::Dissolve { direction, style } => {
+            PreparedSemanticScheduledAnimationPayload::Dissolve { direction, style }
+        }
         ScheduledAnimationPayload::GlowPulse { intensity } => {
             PreparedSemanticScheduledAnimationPayload::GlowPulse { intensity }
         }
@@ -1039,6 +1053,11 @@ struct AnimationDeclaration<R> {
 
 #[derive(Clone, Debug)]
 enum AnimationDeclarationIntent<R> {
+    Dissolve {
+        target: R,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+    },
     EffectTargetTo {
         target: R,
         target_state: R,
@@ -1288,6 +1307,26 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::CameraProfileTo {
                     target: *target,
                     profile: *profile,
+                }
+            }
+            SemanticAnimationIntent::Dissolve {
+                target,
+                direction,
+                style,
+            } => {
+                if !self
+                    .store
+                    .node(*target)
+                    .is_some_and(|node| node.can_own_members())
+                {
+                    return Err(SemanticAnimationError::Target(
+                        noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(*target),
+                    ));
+                }
+                AnimationDeclarationIntent::Dissolve {
+                    target: *target,
+                    direction: *direction,
+                    style: *style,
                 }
             }
             SemanticAnimationIntent::GlowPulse { target, intensity } => {
@@ -1573,6 +1612,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             profile: *profile,
                         }
                     }
+                    SemanticAnimationIntent::Dissolve {
+                        target,
+                        direction,
+                        style,
+                    } => AnimationDeclarationIntent::Dissolve {
+                        target: (*target).into(),
+                        direction: *direction,
+                        style: *style,
+                    },
                     SemanticAnimationIntent::GlowPulse { target, intensity } => {
                         AnimationDeclarationIntent::GlowPulse {
                             target: (*target).into(),
@@ -1740,6 +1788,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             profile: *profile,
                         }
                     }
+                    SemanticTransactionAnimationIntent::Dissolve {
+                        target,
+                        direction,
+                        style,
+                    } => AnimationDeclarationIntent::Dissolve {
+                        target: *target,
+                        direction: *direction,
+                        style: *style,
+                    },
                     SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
                         AnimationDeclarationIntent::GlowPulse {
                             target: *target,
@@ -1848,6 +1905,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
         };
         match &intent {
             AnimationDeclarationIntent::FamilyTransformTo { .. } => {}
+            AnimationDeclarationIntent::Dissolve { target, .. } => {
+                self.prepared
+                    .animation_effect_snapshot(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
             AnimationDeclarationIntent::EffectTargetTo {
                 target,
                 target_state,
@@ -2007,6 +2069,10 @@ enum ScheduledAnimationLeaf<R> {
 
 #[derive(Clone, Copy, Debug)]
 enum ScheduledAnimationPayload<R> {
+    Dissolve {
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+    },
     EffectTargetTo {
         target_state: R,
         method_target: bool,
@@ -2373,6 +2439,39 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::CameraProfileTo { profile },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::Dissolve {
+            target,
+            direction,
+            style,
+        } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let mut authored = state.options;
+            authored
+                .introducer
+                .get_or_insert(direction == noon_core::DissolveDirection::In);
+            authored
+                .remover
+                .get_or_insert(direction == noon_core::DissolveDirection::Out);
+            let options = resolve_transform_animation_options(
+                AnimationDefaults::MANIM,
+                authored,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::Dissolve { direction, style },
                     options,
                 },
             })

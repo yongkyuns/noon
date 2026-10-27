@@ -21,7 +21,7 @@ pub use effect_parameters::{
 pub use glow::{Glow, GlowSource};
 pub use gradient::{GradientError, GradientStop};
 pub use linear_gradient::LinearGradient;
-pub use noise_dissolve::{NoiseDissolve, NoiseDissolveError};
+pub use noise_dissolve::{DissolveDirection, DissolveStyle, NoiseDissolve, NoiseDissolveError};
 pub use noise_paint::{NoisePaint, NoisePaintError};
 
 /// Checked paint callers supply unit progress and unit colors. Keep stop and

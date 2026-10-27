@@ -224,6 +224,34 @@ class NoiseDissolve:
         return int(self._definition.seed)
 
 
+class Dissolve:
+    """Animate an object or composed family's seeded visibility mask in Rust.
+
+    Construction is inert. Direction is ``"in"`` or ``"out"``; omitted style
+    fields preserve an existing visibility mask. Rust owns the clock, enrollment
+    and completion. ``remover=False`` keeps an out endpoint for a later reveal.
+    """
+    __slots__ = ("mobject", "direction", "seed", "softness", "introducer", "remover", "anim_args")
+
+    def __init__(self, mobject, *, direction="out", seed=None, softness=None,
+                 introducer=None, remover=None, **kwargs):
+        from _manim_semantic_handles import _is_shared_family
+        if not isinstance(mobject, _base.Mobject) and not _is_shared_family(mobject):
+            raise TypeError("Dissolve target must be a Mobject or Group")
+        if direction not in ("in", "out"):
+            raise ValueError('Dissolve direction must be "in" or "out"')
+        for name, value in (("introducer", introducer), ("remover", remover)):
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"Dissolve {name} must be a boolean")
+        self.mobject = mobject
+        self.direction = direction
+        self.seed = None if seed is None else _number(seed, "seed")
+        self.softness = None if softness is None else _number(softness, "softness")
+        self.introducer = introducer
+        self.remover = remover
+        self.anim_args = dict(kwargs)
+
+
 class GlowPulse:
     """Temporarily animate one leaf's canonical glow intensity in shared Rust.
 

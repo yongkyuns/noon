@@ -373,6 +373,11 @@ pub enum SemanticAnimationIntent {
     },
     /// Temporarily drive only glow intensity from its activation-effective value.
     /// Attachment enrollment and restoration belong to shared activation/completion.
+    Dissolve {
+        target: SemanticNodeId,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+    },
     GlowPulse {
         target: SemanticNodeId,
         intensity: f64,
@@ -457,6 +462,7 @@ impl SemanticAnimationIntent {
             | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::GlowPulse { target, .. }
+            | Self::Dissolve { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -482,6 +488,7 @@ impl SemanticAnimationIntent {
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -527,6 +534,7 @@ impl SemanticAnimationIntent {
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -553,6 +561,7 @@ impl SemanticAnimationIntent {
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -1026,6 +1035,30 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::GlowPulse { target, intensity },
+                options,
+            )),
+        )
+    }
+
+    pub fn insert_semantic_dissolve_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        if !self.node(target).is_some_and(|node| node.can_own_members()) {
+            return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(target).into());
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Dissolve {
+                    target,
+                    direction,
+                    style,
+                },
                 options,
             )),
         )

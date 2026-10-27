@@ -458,6 +458,7 @@ pub enum Property {
     EffectOffset,
     EffectProgress,
     EffectSoftness,
+    EffectSeed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,7 +486,8 @@ impl Property {
             | Self::EffectIntensity
             | Self::EffectOffset
             | Self::EffectProgress
-            | Self::EffectSoftness => ValueKind::Effect,
+            | Self::EffectSoftness
+            | Self::EffectSeed => ValueKind::Effect,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -520,6 +522,9 @@ pub enum EffectTrackValue {
     Offset(crate::EffectOffset),
     Progress(f64),
     Softness(f64),
+    /// A constant discrete value for one scheduled interval. Different endpoint
+    /// seeds cannot interpolate; successive intervals may choose another seed.
+    Seed(u32),
 }
 
 impl EffectTrackValue {
@@ -538,6 +543,7 @@ impl EffectTrackValue {
             Property::EffectSoftness => definition
                 .as_noise_dissolve()
                 .map(|v| Self::Softness(v.softness())),
+            Property::EffectSeed => definition.as_noise_dissolve().map(|v| Self::Seed(v.seed())),
             Property::EffectIntensity => definition
                 .as_glow()
                 .map(|effect| Self::Intensity(effect.intensity())),
@@ -553,6 +559,7 @@ impl EffectTrackValue {
             Self::Offset(_) => Property::EffectOffset,
             Self::Progress(_) => Property::EffectProgress,
             Self::Softness(_) => Property::EffectSoftness,
+            Self::Seed(_) => Property::EffectSeed,
         }
     }
 
@@ -564,6 +571,7 @@ impl EffectTrackValue {
             Self::Offset(value) => crate::EffectUpdate::default().offset(value),
             Self::Progress(value) => crate::EffectUpdate::default().progress(value),
             Self::Softness(value) => crate::EffectUpdate::default().softness(value),
+            Self::Seed(value) => crate::EffectUpdate::default().seed(value),
         }
     }
 
@@ -593,6 +601,7 @@ impl EffectTrackValue {
             (Self::Intensity(a), Self::Intensity(b)) => Self::Intensity(mix(a, b, alpha)),
             (Self::Progress(a), Self::Progress(b)) => Self::Progress(mix(a, b, alpha)),
             (Self::Softness(a), Self::Softness(b)) => Self::Softness(mix(a, b, alpha)),
+            (Self::Seed(a), Self::Seed(b)) if a == b => Self::Seed(a),
             (Self::Offset(a), Self::Offset(b)) if a.same_unit(b) => {
                 Self::Offset(a.interpolate(b, alpha))
             }

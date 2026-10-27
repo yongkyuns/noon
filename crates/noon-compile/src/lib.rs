@@ -91,7 +91,8 @@ impl DynamicProperties {
             | Property::EffectIntensity
             | Property::EffectOffset
             | Property::EffectProgress
-            | Property::EffectSoftness => self.effect = true,
+            | Property::EffectSoftness
+            | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
@@ -164,13 +165,14 @@ pub struct CompiledEffect {
 
 impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 6] = [
+    pub const PARAMETER_PROPERTIES: [Property; 7] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
         Property::EffectOffset,
         Property::EffectProgress,
         Property::EffectSoftness,
+        Property::EffectSeed,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -1464,17 +1466,17 @@ impl CompiledScene {
         &self,
         tracks: &[TrackDefinition],
     ) -> Result<(), CompilePatchError> {
-        self.preflight_reconcilable_track_additions_with_staged_glow(tracks, &BTreeMap::new())
+        self.preflight_reconcilable_track_additions_with_staged_effects(tracks, &BTreeMap::new())
     }
 
     /// Validate completion/overlap admission when the *same prepared semantic
     /// transaction* installs a fresh attachment immediately before its tracks.
     /// This is not an alternate publication path: the complete patch sequence
     /// still requires strict compiler/runtime preflight before semantic commit.
-    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+    pub fn preflight_reconcilable_track_additions_with_staged_effects(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &BTreeMap<ObjectId, CompiledEffect>,
+        staged_effects: &BTreeMap<ObjectId, CompiledEffectStack>,
     ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
@@ -1501,6 +1503,7 @@ impl CompiledScene {
                         | Property::EffectOffset
                         | Property::EffectProgress
                         | Property::EffectSoftness
+                        | Property::EffectSeed
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1508,10 +1511,15 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
-            let resident_glow = self.objects[object_index as usize].effects.as_deref();
-            let staged = staged_glow.get(&track.object);
+            let resident_effects = self.objects[object_index as usize].effects.as_deref();
+            let staged = staged_effects.get(&track.object);
             if staged.is_some_and(|staged| {
-                resident_glow.is_some_and(|stack| stack.get(staged.attachment).is_some())
+                resident_effects.is_some_and(|stack| {
+                    staged
+                        .attachments()
+                        .iter()
+                        .any(|id| stack.get(*id).is_some())
+                })
             }) {
                 return Err(CompilePatchError::InvalidEffectAttachmentChange {
                     object: track.object,
@@ -1519,9 +1527,8 @@ impl CompiledScene {
             }
             let effect = if let TrackValues::Effect { attachment, .. } = track.values {
                 staged
-                    .copied()
-                    .filter(|effect| effect.attachment == attachment)
-                    .or_else(|| resident_glow.and_then(|stack| stack.get(attachment)))
+                    .and_then(|stack| stack.get(attachment))
+                    .or_else(|| resident_effects.and_then(|stack| stack.get(attachment)))
             } else {
                 None
             };
@@ -2770,6 +2777,7 @@ impl CompiledScene {
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
+                            | Property::EffectSeed
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -3006,6 +3014,17 @@ pub(crate) fn validate_effect_track_attachment(
                 attachment,
             });
         };
+        if let (noon_core::EffectTrackValue::Seed(a), noon_core::EffectTrackValue::Seed(b)) =
+            (from, to)
+        {
+            return if a == b && effect.definition.as_noise_dissolve().is_some() {
+                Ok(())
+            } else {
+                Err(noon_core::TimelineError::InvalidEffectValues(
+                    track.property,
+                ))
+            };
+        }
         if from.update().prepare(effect.definition).is_err()
             || to.update().prepare(effect.definition).is_err()
         {
@@ -3554,6 +3573,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectOffset => 18,
         Property::EffectProgress => 19,
         Property::EffectSoftness => 20,
+        Property::EffectSeed => 21,
     }
 }
 

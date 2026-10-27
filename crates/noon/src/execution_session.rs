@@ -1,5 +1,6 @@
 mod callback;
 mod completion;
+mod dissolve;
 mod effective_content;
 mod family_effect_target;
 mod family_transform;
@@ -253,6 +254,12 @@ pub(crate) enum SemanticCompositionRequest {
         intensity: f64,
         options: AnimationOptions,
     },
+    Dissolve {
+        target: SemanticNodeId,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: AnimationOptions,
+    },
     FamilyIndicate {
         target: SemanticNodeId,
         indication: IndicateOptions,
@@ -372,6 +379,7 @@ impl SemanticCompositionRequest {
             Self::MoveAlongPath { target, .. } => Some(*target),
             Self::Indicate { target, .. }
             | Self::GlowPulse { target, .. }
+            | Self::Dissolve { target, .. }
             | Self::FamilyIndicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::FamilyDrawBorderThenFill { target, .. }
@@ -2148,6 +2156,8 @@ impl ExecutionSession {
         };
         let specialized = self.specialize_layout_replace(store, request, play_options);
         let request = specialized.as_ref().unwrap_or(request);
+        let dissolve_overrides = dissolve::lifecycle_overrides(request, play_options);
+        let request = dissolve_overrides.as_ref().unwrap_or(request);
         let animation = self.stage_composition_request(
             store,
             root,
@@ -2689,6 +2699,17 @@ impl ExecutionSession {
                 intensity,
                 options,
             } => self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration),
+            SemanticCompositionRequest::Dissolve {
+                target,
+                direction,
+                style,
+                options,
+            } => {
+                self.stage_dissolve_membership(
+                    store, root, *target, *direction, *options, admitted,
+                )?;
+                Ok(declaration.create_dissolve_animation(*target, *direction, *style, *options))
+            }
             SemanticCompositionRequest::FamilyIndicate {
                 target,
                 indication,
@@ -3317,6 +3338,12 @@ impl ExecutionSession {
             }
             SemanticCompositionRequest::GlowPulse { target, intensity, options } => {
                 self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration)
+            }
+            SemanticCompositionRequest::Dissolve { target, direction, style, options } => {
+                if !self.reachability.is_reachable(*target) || options.remover.unwrap_or(*direction == noon_core::DissolveDirection::Out) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition("Dissolve lifecycle requires a scene root".into()));
+                }
+                Ok(declaration.create_dissolve_animation(*target, *direction, *style, *options))
             }
             SemanticCompositionRequest::WorldTransform { target, transform, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -4244,6 +4271,20 @@ impl ExecutionSession {
             play_options,
         )?;
         if lifecycle.is_none() {
+            if schedule.leaves().iter().any(|leaf| {
+                matches!(
+                    leaf.payload,
+                    PreparedSemanticScheduledAnimationPayload::Dissolve { .. }
+                ) && (leaf.options.remover
+                    || !leaf
+                        .target
+                        .existing()
+                        .is_some_and(|owner| self.reachability.is_reachable(owner)))
+            }) {
+                return Err(ExecutionSessionAnimationError::InvalidComposition(
+                    "Dissolve lifecycle requires a scene root".into(),
+                ));
+            }
             // The prepared payload lowerer also serves root-aware introducing
             // and removing activations. A generic existing declaration still
             // needs that lifecycle proof before it may change membership.
@@ -4299,6 +4340,25 @@ impl ExecutionSession {
                 &self.execution_index,
                 root,
                 self.runtime.frame().time,
+                play_options,
+            )?;
+        }
+        let missing_visibility = self.missing_dissolve_attachments(&prepared, &schedule)?;
+        if !missing_visibility.is_empty() {
+            let mut declaration = prepared.into_transaction();
+            for (owner, mask) in missing_visibility {
+                declaration.create_visibility_effect(owner, mask);
+            }
+            prepared = declaration.prepare(store).map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(error),
+                )
+            })?;
+            schedule = lower_prepared_semantic_animation_schedule(
+                &prepared,
+                &self.execution_index,
+                root,
+                self.frame().time,
                 play_options,
             )?;
         }
@@ -4658,14 +4718,18 @@ impl ExecutionSession {
         // Staged effect enrollment is not yet resident while this preflight
         // runs. Pass only the exact allocator-proven new attachment generations
         // of this prepared transaction; the combined publication still
-        // validates SetGlowAttachment before AddTrack and commits atomically.
-        let mut staged_glow = BTreeMap::new();
+        // validates the ordered attachments before AddTrack and commits atomically.
+        let mut staged_effects = BTreeMap::new();
+        let mut entering_scope_owners = std::collections::BTreeSet::new();
         for mutation in prepared.candidate_mutations() {
             let noon_core::SemanticMutation::AddNode {
                 token,
                 creation:
                     SemanticNodeCreation::Effect {
-                        owner, definition, ..
+                        owner,
+                        definition,
+                        name,
+                        ..
                     },
             } = mutation
             else {
@@ -4674,33 +4738,72 @@ impl ExecutionSession {
             if let (Some(owner), Some(attachment)) =
                 (owner.existing(), prepared.planned_node_id(*token))
             {
-                if let Some(object) = self.execution_index.execution_object_id(owner) {
-                    staged_glow.insert(
-                        object,
+                if let Some(object) = self
+                    .execution_index
+                    .execution_object_id(owner)
+                    .filter(|object| self.runtime.contains_object(*object))
+                {
+                    staged_effects.entry(object).or_insert_with(Vec::new).push(
                         noon_compile::CompiledEffect {
                             attachment,
                             definition: *definition,
                         },
                     );
+                } else if name.is_visibility()
+                    && prepared.store().node(owner).is_some_and(|node| {
+                        matches!(node.kind(), noon_core::SemanticNodeKind::Family(_))
+                    })
+                {
+                    // The first family effect introduces its composed row in
+                    // this same publication. Its tracks are checked against the
+                    // prepared row by the final combined runtime transaction.
+                    entering_scope_owners.insert(owner);
                 }
             }
         }
-        let candidate_tracks = if lifecycle
-            .as_ref()
-            .is_some_and(PreparedAnimationLifecycle::admits)
+        let staged_effects = staged_effects
+            .into_iter()
+            .map(|(object, effects)| {
+                noon_compile::CompiledEffectStack::new(effects)
+                    .map(|effects| (object, effects))
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let entering_effect_scopes = activation_tracks
+            .iter()
+            .filter(|track| {
+                track
+                    .target
+                    .existing()
+                    .is_some_and(|owner| entering_scope_owners.contains(&owner))
+            })
+            .map(|track| track.execution_object_id)
+            .collect::<HashSet<_>>();
+        let candidate_tracks = if !entering_effect_scopes.is_empty()
+            || lifecycle
+                .as_ref()
+                .is_some_and(PreparedAnimationLifecycle::admits)
         {
             definitions
                 .iter()
-                .filter(|definition| self.runtime.contains_object(definition.object))
+                .filter(|definition| {
+                    self.runtime.contains_object(definition.object)
+                        || (!entering_effect_scopes.contains(&definition.object)
+                            && !lifecycle
+                                .as_ref()
+                                .is_some_and(PreparedAnimationLifecycle::admits))
+                })
                 .cloned()
                 .collect::<Vec<_>>()
         } else {
             definitions.clone()
         };
         self.runtime
-            .preflight_reconcilable_track_additions_with_staged_glow(
+            .preflight_reconcilable_track_additions_with_staged_effects(
                 &candidate_tracks,
-                &staged_glow,
+                &staged_effects,
             )
             .map_err(ExecutionSessionAnimationError::Publication)?;
 

@@ -1633,6 +1633,28 @@ impl SemanticMutationTransaction {
         token
     }
 
+    pub fn create_dissolve_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Dissolve {
+                    target: target.into(),
+                    direction,
+                    style,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     pub fn create_move_along_path_animation(
         &mut self,
         target: impl Into<SemanticTransactionNodeRef>,

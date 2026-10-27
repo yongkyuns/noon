@@ -604,6 +604,7 @@ const fn property_slot(property: Property) -> u8 {
         Property::EffectOffset => 18,
         Property::EffectProgress => 19,
         Property::EffectSoftness => 20,
+        Property::EffectSeed => 21,
     }
 }
 

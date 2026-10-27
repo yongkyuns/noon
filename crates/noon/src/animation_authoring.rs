@@ -146,6 +146,28 @@ impl crate::Scene {
         )
     }
 
+    /// Declare a replayable visibility gesture without enrolling a mask yet.
+    pub fn declare_dissolve<'a>(
+        &self,
+        target: impl Into<crate::MobjectTarget<'a>>,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        let target = target.into();
+        target
+            .require_store(self.integration_store())
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::Dissolve {
+                target: target.node_id(),
+                direction,
+                style,
+            },
+            options,
+        )
+    }
+
     /// Declare one transient flash over an exact analytic Line.
     pub fn declare_passing_flash(
         &self,

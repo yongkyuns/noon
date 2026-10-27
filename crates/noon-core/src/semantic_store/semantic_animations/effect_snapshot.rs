@@ -26,6 +26,17 @@ impl SemanticTransformEffectSnapshot {
         source: Vec<SemanticAnimationEffectSnapshot>,
         target: Vec<SemanticAnimationEffectSnapshot>,
     ) -> Option<Box<Self>> {
+        // Visibility is a lifecycle role owned by Dissolve, rather than an
+        // authored appearance target. Ordinary motion/Transform must neither
+        // capture its temporary generation nor copy its progress back later.
+        let source: Vec<_> = source
+            .into_iter()
+            .filter(|effect| !effect.name.is_visibility())
+            .collect();
+        let target: Vec<_> = target
+            .into_iter()
+            .filter(|effect| !effect.name.is_visibility())
+            .collect();
         if source.is_empty() && target.is_empty() {
             return None;
         }

@@ -797,7 +797,8 @@ impl SceneInstance {
                     | Property::EffectIntensity
                     | Property::EffectOffset
                     | Property::EffectProgress
-                    | Property::EffectSoftness => {
+                    | Property::EffectSoftness
+                    | Property::EffectSeed => {
                         let Some(attachment) = attachment else {
                             return false;
                         };

@@ -266,6 +266,60 @@ impl ExecutionSession {
         for &(root, target) in lifecycle_removals {
             membership_removals.entry(root).or_default().insert(target);
         }
+        let visibility_endpoints = entries
+            .iter()
+            .filter_map(|entry| match entry.completion {
+                SemanticAnimationCompletion::Visibility {
+                    attachment,
+                    remover,
+                    ..
+                } => Some((
+                    attachment,
+                    (entry.semantic_object, entry.execution_object, remover),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut removed_visibility = BTreeSet::new();
+        for (&attachment, &(owner, object, remover)) in &visibility_endpoints {
+            // The enclosing composition can reverse or return through a child.
+            // Release the value evaluated by the common runtime at this barrier,
+            // rather than assuming the child's forward authored endpoint.
+            let index = self
+                .runtime
+                .frame_index_for_object(object)
+                .expect("pending visibility source has a resident row");
+            let endpoint = self.frame().objects[index]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(attachment))
+                .and_then(|effect| effect.definition.as_noise_dissolve())
+                .expect("pending visibility keeps its exact mask generation");
+            if remover {
+                let parents = store
+                    .node(owner)
+                    .expect("pending visibility owner remains live")
+                    .parents();
+                let [parent] = parents else {
+                    return Err(ExecutionSegmentCompletionError::MissingLifecycleRoot(owner));
+                };
+                membership_removals
+                    .entry(*parent)
+                    .or_default()
+                    .insert(owner);
+            }
+            if remover || endpoint.is_neutral() {
+                removed_visibility.insert(attachment);
+            } else {
+                semantic.update_effect(
+                    attachment,
+                    noon_core::EffectUpdate::default()
+                        .progress(endpoint.progress())
+                        .softness(endpoint.softness())
+                        .seed(endpoint.seed()),
+                );
+            }
+        }
         if let Some(replacement) = segment.family_replacement() {
             super::family_transform::validate_matching_family_completion_swap(
                 store,
@@ -502,6 +556,7 @@ impl ExecutionSession {
                     }
                 }
                 SemanticAnimationCompletion::Effect { .. }
+                | SemanticAnimationCompletion::Visibility { .. }
                 | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
@@ -624,6 +679,9 @@ impl ExecutionSession {
         // Node removals form the transaction's suffix. Property completion for
         // this or another source must be staged before retiring temporary IDs.
         for attachment in removed_glow {
+            semantic.remove_node(attachment);
+        }
+        for attachment in removed_visibility {
             semantic.remove_node(attachment);
         }
         let prepared = semantic.prepare(store).map_err(|error| {

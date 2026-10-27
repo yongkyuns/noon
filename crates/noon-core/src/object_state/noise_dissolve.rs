@@ -115,9 +115,73 @@ impl EffectValue for NoiseDissolve {
     }
 }
 
+/// Direction of a high-level visibility transition, independent of rate reversal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DissolveDirection {
+    In,
+    Out,
+}
+
+/// Checked partial style captured by an inert dissolve declaration. Progress is
+/// owned by the animation, while omitted style fields preserve an existing mask.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DissolveStyle {
+    seed: Option<u32>,
+    softness: Option<f64>,
+}
+impl DissolveStyle {
+    pub fn new(update: EffectUpdate) -> Result<Self, EffectParameterError> {
+        update.require_parameters(&[EffectParameter::Seed, EffectParameter::Softness])?;
+        update.validate()?;
+        Ok(Self {
+            seed: update.seed,
+            softness: update.softness,
+        })
+    }
+    pub fn parameters(self) -> EffectUpdate {
+        EffectUpdate {
+            seed: self.seed,
+            softness: self.softness,
+            ..EffectUpdate::default()
+        }
+    }
+    pub fn resolve(self, previous: NoiseDissolve) -> NoiseDissolve {
+        self.parameters()
+            .apply_to(previous)
+            .expect("checked dissolve style")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dissolve_style_keeps_omitted_parameters_and_cannot_own_progress() {
+        let previous = NoiseDissolve::new(7, 0.2)
+            .unwrap()
+            .with_progress(0.5)
+            .unwrap();
+        assert_eq!(DissolveStyle::default().resolve(previous), previous);
+        assert_eq!(
+            DissolveStyle::new(EffectUpdate::default().seed(0))
+                .unwrap()
+                .resolve(previous),
+            NoiseDissolve::new(0, 0.2)
+                .unwrap()
+                .with_progress(0.5)
+                .unwrap()
+        );
+        for update in [
+            EffectUpdate::default().progress(0.0),
+            EffectUpdate::default().intensity(1.0),
+            EffectUpdate::default().softness(f64::NAN),
+            EffectUpdate::default().softness(-0.1),
+            EffectUpdate::default().softness(1.1),
+        ] {
+            assert!(DissolveStyle::new(update).is_err());
+        }
+    }
+
     #[test]
     fn mask_updates_are_partial_typed_and_seed_transitions_are_discrete() {
         let value = NoiseDissolve::new(7, 0.08)
