@@ -3,6 +3,8 @@
 use super::*;
 use noon::{effects::Blur, MobjectFamily};
 
+mod animation;
+
 fn soften(scene: &mut Scene, session: &mut ExecutionSession, family: &MobjectFamily) {
     scene
         .live(session)

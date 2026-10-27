@@ -1130,6 +1130,8 @@ The composed renderer profile captures contiguous, fully present source interval
 
 Raster-image capture borrows the existing image texture and sampling pipeline with a disposable normalized instance binding. Intrinsic sampled texel alpha is image coverage in both modes; painted coverage also includes fill modulation, while silhouette coverage ignores that modulation. Final object opacity and appearance apply once after filtering. Immutable pixel resources, source painter anchors and ordinary no-effect instances remain shared and unchanged. Image source preparation remains separate from glow parameters and does not introduce image fills inside vector geometry or a general custom-shader API.
 
+Filtered child captures expose their finite contribution bounds separately from rounded, retained texture capacity. Ancestor capture bounds consume only the contribution, so repeated nested parameter animation cannot feed transparent high-water padding back into source extents. Native animated mixed-source checks use literal premultiplied source fields and independent two-dimensional convolutions, require pixel-exact same-time seek, and check local forward invalidation and bounded warmed texture reuse. Absolute seek currently restores the runtime base frame and marks the restored frame dirty; its pixel determinism is qualified separately from forward-playback locality.
+
 Continuous local gradient fills use that same isolated vector draw path for glow.
 Capture borrows the ordinary gradient program and retained paint binding, with
 only final scope opacity removed from its instance. Painted coverage includes

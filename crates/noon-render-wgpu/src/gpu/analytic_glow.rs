@@ -164,6 +164,9 @@ impl CaptureImage {
 struct ResidentEffect {
     object: ObjectId,
     tile: EffectCaptureTile,
+    // Finite contribution before capacity rounding/high-water reuse. Ancestor
+    // bounds must never feed retained transparent storage back into capture size.
+    contribution_bounds: EffectPixelBounds,
     camera: Camera2D,
     viewport: [u32; 2],
     effective: SourceInstance,
@@ -630,6 +633,12 @@ impl GpuRenderer {
                 ..Default::default()
             });
         };
+        let contribution_bounds = EffectPixelBounds {
+            min: tile.origin.map(f64::from),
+            max: std::array::from_fn(|axis| {
+                f64::from(tile.origin[axis]) + f64::from(tile.size[axis])
+            }),
+        };
         let cost_per_pixel =
             tile.capture_and_scratch_bytes / (u64::from(tile.size[0]) * u64::from(tile.size[1]));
         let old = self
@@ -746,6 +755,7 @@ impl GpuRenderer {
                     ResidentEffect {
                         object,
                         tile,
+                        contribution_bounds,
                         camera: self.camera,
                         viewport: self.viewport_size,
                         effective: effective.clone(),
@@ -988,6 +998,7 @@ impl GpuRenderer {
             scope.effective = effective;
             scope.source_instance = source_instance;
             scope.tile = tile;
+            scope.contribution_bounds = contribution_bounds;
             scope.camera = self.camera;
             scope.viewport = self.viewport_size;
             scope.placement = placement;

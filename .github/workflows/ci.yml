@@ -237,7 +237,7 @@ jobs:
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify public composed group pixels and lifecycle
-        run: cargo test -p noon --test glow_scene_raster composed::public_composed_group_pixels_cover_live_attachment_membership_and_retirement -- --ignored --nocapture
+        run: cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle

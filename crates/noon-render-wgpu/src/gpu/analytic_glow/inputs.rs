@@ -52,12 +52,12 @@ impl GpuRenderer {
         };
         let bounds = noon_core::Rect::new(
             Vec2::new(
-                x(f64::from(origin[0])),
-                y(f64::from(origin[1]) + f64::from(size[1])),
+                x(scope.contribution_bounds.min[0]),
+                y(scope.contribution_bounds.max[1]),
             ),
             Vec2::new(
-                x(f64::from(origin[0]) + f64::from(size[0])),
-                y(f64::from(origin[1])),
+                x(scope.contribution_bounds.max[0]),
+                y(scope.contribution_bounds.min[1]),
             ),
         );
         Ok(Some(FilteredCapture {
