@@ -1531,7 +1531,7 @@ impl RetainedFramePreparer {
         visible_object_indices: Option<&[usize]>,
         images: Option<&dyn RasterImageResourceLookup>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        let staged = self.stage_image_publication(device, frame, changes, images)?;
+        let staged = self.stage_image_publication(device, frame, changes, images, geometries)?;
         let mut prepared = self.prepare_geometry_text_inner(
             device,
             frame,
@@ -1680,6 +1680,7 @@ impl RetainedFramePreparer {
         frame: &FrameState,
         changes: &FrameChanges,
         images: Option<&dyn RasterImageResourceLookup>,
+        geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<PreparedImagePublication, RetainedPrepareError> {
         let rows = self
             .images
@@ -1687,6 +1688,7 @@ impl RetainedFramePreparer {
                 frame,
                 changes,
                 images,
+                geometries,
                 device.limits().max_texture_dimension_2d,
             )
             .map_err(RetainedPrepareError::Image)?;
@@ -2350,7 +2352,7 @@ impl RetainedFramePreparer {
             scratch.text_bounds = None;
             scratch.transform = frame.render_transform(index);
             scratch.style = object.style;
-            scratch.fill_gradient = object.fill_gradient.clone();
+            scratch.fill_paint = object.fill_paint.clone();
             scratch.appearance = object.appearance;
             self.scratch.reveals[scratch_slot] = frame.reveal(index);
             self.scratch.morphs[scratch_slot] = frame.morph(index);
@@ -2653,7 +2655,7 @@ fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
             object.geometry(),
             Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
         ) && object.style.fill.is_some()
-            && object.fill_gradient.is_none()
+            && object.fill_paint.is_none()
             && object.style.stroke.is_none()
             && reveal == 1.0)
 }
@@ -2734,7 +2736,7 @@ impl RetainedFramePreparer {
                         frame.reveal(object_index),
                         frame.morph(object_index),
                     );
-                    self.scratch.objects[scratch_slot].fill_gradient = object.fill_gradient.clone();
+                    self.scratch.objects[scratch_slot].fill_paint = object.fill_paint.clone();
                     self.scratch_slots[object_index] = Some(scratch_slot);
                 }
                 ObjectContentRef::Text(handle) => {
@@ -2818,7 +2820,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -3115,6 +3117,22 @@ fn same_analytic_geometry_kind(left: Option<&GeometryRef>, right: Option<&Geomet
             Some(GeometryRef::Line { .. })
         )
     )
+}
+
+/// Borrow immutable content for bounds admission; UV-only checks must not clone
+/// a resource-backed path's command buffer just to read its coordinate box.
+pub(super) fn resolve_geometry_bounds(
+    geometry: &GeometryRef,
+    geometries: &(impl GeometryResourceLookup + ?Sized),
+) -> Option<noon_core::Rect> {
+    let GeometryRef::External(id) = geometry else {
+        return geometry.local_bounds();
+    };
+    let handle = geometries.current_handle(*id)?;
+    let GeometryResource::VectorPath(path) = geometries.get(handle)? else {
+        return None;
+    };
+    path.conservative_bounds()
 }
 
 fn resolve_geometry_ref(
@@ -3552,9 +3570,9 @@ impl GpuRenderer {
         if !views.is_empty() {
             let limit = device.limits().max_texture_dimension_2d;
             let limits = self.viewport_size.map(|size| size.min(limit));
-            let images = self
-                .images
-                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format));
+            let images = self.images.get_or_insert_with(|| {
+                RasterImageGpuRenderer::new(device, self.target_format, &self.image_texture_layout)
+            });
             for (index, view) in views.iter().enumerate() {
                 let size = view.capture_size;
                 let uniform =
@@ -3667,6 +3685,22 @@ impl GpuRenderer {
             &mut Vec<crate::UploadWrite>,
         )>,
     ) -> RetainedUploadStats {
+        let images = if prepared.images.objects.is_empty()
+            && prepared.images.paints.is_empty()
+            && self.images.is_none()
+        {
+            RasterImageUploadStats::default()
+        } else {
+            self.images
+                .get_or_insert_with(|| {
+                    RasterImageGpuRenderer::new(
+                        device,
+                        self.target_format,
+                        &self.image_texture_layout,
+                    )
+                })
+                .upload(device, queue, prepared.images)
+        };
         let geometry = if let Some((observed, writes)) = observed_uploads.as_mut() {
             let mut trace = |buffer, range, offset, bytes: &[u8]| {
                 if observed_geometry_write_matches(observed, buffer, &range) {
@@ -3735,13 +3769,6 @@ impl GpuRenderer {
             uploaded
         } else {
             TextGpuUploadStats::default()
-        };
-        let images = if prepared.images.objects.is_empty() && self.images.is_none() {
-            RasterImageUploadStats::default()
-        } else {
-            self.images
-                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format))
-                .upload(device, queue, prepared.images)
         };
         RetainedUploadStats {
             images,
@@ -4598,7 +4625,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         effect: None,
                         spatial: None,
@@ -4611,7 +4638,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         effect: None,
                         spatial: None,
@@ -4654,7 +4681,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         effect: None,
                         spatial: None,
@@ -4667,7 +4694,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         effect: None,
                         spatial: None,
@@ -4981,7 +5008,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 effect: None,
                 spatial: None,
@@ -5645,6 +5672,99 @@ mod tests {
     }
 
     #[test]
+    fn image_paint_resolves_shared_path_bounds_before_atomic_renderer_publication() {
+        let (mut frame, texts, fonts, mut geometries) = mixed_text_frame();
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-2.0, -1.0))
+            .line_to(Vec2::new(2.0, -1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-2.0, 1.0))
+            .close();
+        let bounds = path.conservative_bounds().unwrap();
+        let geometry = geometries.insert_path(path.clone());
+        let mut images = noon_core::RasterImageResourceArena::new();
+        let handle = images.intern_rgba8(1, 1, [17, 73, 191, 128]).unwrap();
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::External(geometry.id));
+        frame.objects[0].fill_paint = Some(Arc::new(noon_core::SemanticPaint::Image(Arc::new(
+            noon_core::ImagePaint::new(
+                handle,
+                noon_core::ImageMapping::default(),
+                noon_core::RasterImageSampling::Linear,
+            ),
+        ))));
+        frame.objects[0].style.fill = Some(Color::WHITE);
+        frame.objects[0].style.stroke = None;
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut gpu_text = renderer.create_retained_text_state(&device, &queue);
+        {
+            let prepared = preparer
+                .prepare_with_image_resources(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &images,
+                    TextDeviceMetrics::uniform(10.0).unwrap(),
+                )
+                .expect("accepted resource-backed vector paint must resolve its local bounds");
+            assert_eq!(prepared.images.paints.len(), 1);
+            assert_eq!(prepared.images.paints[&0].handle, handle);
+            let paint = prepared
+                .geometry
+                .fill_paints
+                .values()
+                .find(|paint| paint.definition.as_image().is_some())
+                .unwrap();
+            assert_eq!(paint.bounds, bounds);
+            let upload = renderer.upload_retained(&device, &queue, &prepared, &mut gpu_text);
+            assert_eq!(upload.images.textures_uploaded, 1);
+            assert_eq!(upload.images.pixel_bytes_uploaded, 4);
+        }
+        let generation = preparer.images.generation;
+        geometries.remove(geometry.id).unwrap();
+        assert!(preparer
+            .prepare_with_image_resources(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                &images,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .is_err());
+        assert_eq!(preparer.images.generation, generation);
+        assert_eq!(preparer.images.paints[&0].handle, handle);
+        let replacement = geometries.insert_path(path);
+        assert_ne!(replacement.id, geometry.id);
+        frame.objects[0].content =
+            ObjectContentRef::Geometry(GeometryRef::External(replacement.id));
+        let prepared = preparer
+            .prepare_with_image_resources(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                &images,
+                TextDeviceMetrics::uniform(10.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.images.paints[&0].handle, handle);
+        assert_eq!(
+            renderer
+                .upload_retained(&device, &queue, &prepared, &mut gpu_text)
+                .images,
+            RasterImageUploadStats::default()
+        );
+    }
+    #[test]
     fn encoded_frame_keeps_retired_image_and_compacted_paths_alive_until_submit() {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let path = GeometryRef::path(
@@ -5661,7 +5781,7 @@ mod tests {
             image_resource,
         );
         frame.objects.push(FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

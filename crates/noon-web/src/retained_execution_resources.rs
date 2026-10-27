@@ -549,6 +549,22 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let Some(image) = object
+                .fill_paint
+                .as_deref()
+                .and_then(noon_core::SemanticPaint::as_image)
+            {
+                let handle = image.resource().into();
+                if self
+                    .resources
+                    .resolve_image_handle(handle, image.sampling().into())
+                    .is_none()
+                {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownImageResource(handle).into(),
+                    );
+                }
+            }
             if let TransportObjectContent::Image { image, sampling } = object.content {
                 if self
                     .resources
@@ -745,7 +761,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![crate::RetainedTransportObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 slot: crate::TransportSlotId {
                     slot: 0,
@@ -960,7 +976,7 @@ mod tests {
                 camera: Camera2DState::default(),
                 inset_2d_views: Vec::new(),
                 objects: vec![crate::RetainedTransportObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot: 0,
@@ -1007,7 +1023,7 @@ mod tests {
                                      camera_projection: Option<crate::TransportProjection3D>,
                                      point_light: bool| {
                 crate::RetainedTransportObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot,
@@ -1144,7 +1160,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,
@@ -1228,7 +1244,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
-                        fill_gradient: None,
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,

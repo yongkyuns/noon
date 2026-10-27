@@ -18,7 +18,7 @@ fn retained_geometry_frame(
         family_animation_plan_indices: Vec::new(),
         time: 0.5,
         objects: vec![FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

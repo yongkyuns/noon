@@ -242,7 +242,7 @@ mod tests {
     fn fill_color(object: &Mobject) -> Color {
         match object.state().unwrap().style.fill.unwrap() {
             SemanticPaint::Solid(color) => color,
-            SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_) => {
+            SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) => {
                 panic!("radial family paint must stay solid")
             }
         }

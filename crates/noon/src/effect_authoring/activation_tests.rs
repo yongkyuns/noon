@@ -51,7 +51,7 @@ fn effective(runtime: &SceneInstance, object: ObjectId) -> EffectiveAnimationPro
     let index = runtime.frame_index_for_object(object).unwrap();
     let row = &frame.objects[index];
     EffectiveAnimationProperties {
-        fill_gradient: row.fill_gradient.clone(),
+        fill_paint: row.fill_paint.clone(),
         effect: row.effect.as_deref().copied(),
         z_index: row.z_index,
         transform: row.transform,

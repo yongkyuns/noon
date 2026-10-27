@@ -1856,8 +1856,8 @@ def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobje
 def _canonical_set_fill(
     self: _base.Mobject, color: _base.Color | None = None, opacity: float | None = None
 ) -> _base.Mobject:
-    from _noon_paints import LinearGradient, set_fill
-    if isinstance(color, LinearGradient):
+    from _noon_paints import LinearGradient, ImagePaint, set_fill
+    if isinstance(color, (LinearGradient, ImagePaint)):
         return set_fill(self, color, opacity)
     provisional = _canonical_provisional_context(self)
     if provisional is not None:
@@ -1938,8 +1938,8 @@ def _canonical_vmobject_set_fill(
     opacity: float | None = None,
     family: bool = True,
 ) -> _base.Mobject:
-    from _noon_paints import LinearGradient, set_fill
-    if isinstance(color, LinearGradient):
+    from _noon_paints import LinearGradient, ImagePaint, set_fill
+    if isinstance(color, (LinearGradient, ImagePaint)):
         return set_fill(self, color, opacity)
     if (_canonical_phase_context(self) is not None
             or _canonical_provisional_context(self) is not None):

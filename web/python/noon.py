@@ -1196,6 +1196,11 @@ class Mobject:
         from _noon_effects import remove_glow
         return remove_glow(self)
 
+    def set_fill_image_mapping(self, mapping, opacity=None):
+        """Edit local image UVs through shared Rust publication without reading pixels."""
+        from _noon_paints import set_image_mapping
+        return set_image_mapping(self, mapping, opacity)
+
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
         return _callback_operations()._canonical_set_fill(self, color, opacity)
 
@@ -1942,6 +1947,8 @@ _PUBLIC_EXPORTS = {
     "Blur": "_noon_effects",
     "Shadow": "_noon_effects",
     "LinearGradient": "_noon_paints",
+    "ImagePaint": "_noon_paints",
+    "ImageMapping": "_noon_paints",
     "GlowPulse": "_noon_effects",
     "Pixels": "_noon_effects",
     "EffectHandle": "_noon_effects",

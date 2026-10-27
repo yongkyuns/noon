@@ -127,6 +127,7 @@ impl RetainedFramePreparer {
             publication.frame(),
             publication.changes(),
             Some(publication.raster_image_resources()),
+            publication.geometry_resources(),
         )?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
@@ -176,7 +177,8 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
-        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
+        let images =
+            self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device, frame, plans, changes, texts, fonts, geometries, metrics, None, None,
         )?;
@@ -201,7 +203,13 @@ impl RetainedFramePreparer {
         images: &dyn RasterImageResourceLookup,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
-        let images = self.stage_image_publication(device, frame.retained, changes, Some(images))?;
+        let images = self.stage_image_publication(
+            device,
+            frame.retained,
+            changes,
+            Some(images),
+            geometries,
+        )?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
             frame,
@@ -1052,7 +1060,7 @@ mod tests {
 
     fn semantic_object(id: u64, content: ObjectContentRef) -> FrameObjectState {
         FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

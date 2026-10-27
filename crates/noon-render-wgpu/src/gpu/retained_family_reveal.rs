@@ -251,7 +251,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -264,7 +264,7 @@ mod tests {
             text_bounds: None,
         };
         let circle = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -299,7 +299,7 @@ mod tests {
         store.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -312,7 +312,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -340,7 +340,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -353,7 +353,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -446,7 +446,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(resource).unwrap();
         let object = FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

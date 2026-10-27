@@ -16,6 +16,127 @@ use crate::{semantic_mobject::authoring_render_f64, AuthoringError, Mobject};
 /// ManimCE's resolution-independent image sizing default (high-quality height).
 pub const DEFAULT_IMAGE_SCALE_TO_RESOLUTION: f64 = 1080.0;
 
+/// Inert normalized pixels and local image-fill values. Admission happens only
+/// while publishing the owning shape's ordinary style transaction.
+#[derive(Clone, Debug)]
+pub struct ImagePaintOptions {
+    pixels: RasterImageResource,
+    mapping: noon_core::ImageMapping,
+    sampling: RasterImageSampling,
+}
+
+impl ImagePaintOptions {
+    pub fn rgba8(
+        width: u32,
+        height: u32,
+        pixels: impl Into<Arc<[u8]>>,
+    ) -> Result<Self, AuthoringError> {
+        Ok(Self::from_resource(RasterImageResource::from_rgba8(
+            width, height, pixels,
+        )?))
+    }
+    pub fn from_resource(pixels: RasterImageResource) -> Self {
+        Self {
+            pixels,
+            mapping: noon_core::ImageMapping::default(),
+            sampling: RasterImageSampling::Linear,
+        }
+    }
+    pub fn from_image(image: &Mobject) -> Result<Self, AuthoringError> {
+        let content = image
+            .state()?
+            .content
+            .image()
+            .ok_or(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ImageContent,
+            ))?;
+        let store = image.integration_store().borrow();
+        let resource = store
+            .raster_image_resources()
+            .get(content.resource())
+            .ok_or(AuthoringError::MissingImageResource(content.resource()))?;
+        let mut options = Self::from_resource(resource.clone());
+        options.sampling = content.sampling();
+        Ok(options)
+    }
+    pub const fn pixel_width(&self) -> u32 {
+        self.pixels.width()
+    }
+    pub const fn pixel_height(&self) -> u32 {
+        self.pixels.height()
+    }
+    pub const fn mapping(&self) -> noon_core::ImageMapping {
+        self.mapping
+    }
+    pub const fn sampling(&self) -> RasterImageSampling {
+        self.sampling
+    }
+    pub fn set_mapping(&mut self, mapping: noon_core::ImageMapping) {
+        self.mapping = mapping;
+    }
+    pub fn set_sampling(&mut self, sampling: RasterImageSampling) {
+        self.sampling = sampling;
+    }
+}
+
+pub(crate) fn publish_image_fill(
+    store: &mut SemanticStore,
+    object: SemanticNodeId,
+    state: SemanticObjectState,
+    options: ImagePaintOptions,
+    opacity: Option<f64>,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    store.with_raster_image_rgba8(
+        options.pixels.width(),
+        options.pixels.height(),
+        options.pixels.into_rgba8(),
+        |store, handle| {
+            let paint = noon_core::SemanticPaint::Image(std::sync::Arc::new(
+                noon_core::ImagePaint::new(handle, options.mapping, options.sampling),
+            ));
+            let state = crate::semantic_mobject::prepare_fill_paint_value(
+                store, object, state, paint, opacity,
+            )?;
+            let mut transaction = SemanticMutationTransaction::new();
+            transaction.replace_style(object, state.style);
+            publish(store, transaction)
+        },
+    )
+}
+
+pub(crate) fn prepare_image_fill_mapping(
+    object: &Mobject,
+    mapping: noon_core::ImageMapping,
+    opacity: Option<f64>,
+) -> Result<SemanticObjectState, AuthoringError> {
+    object.validate()?;
+    let state = object.state()?;
+    let image = *state
+        .style
+        .fill
+        .as_ref()
+        .and_then(noon_core::SemanticPaint::as_image)
+        .ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ContinuousPaintProfile,
+        ))?;
+    let paint = noon_core::SemanticPaint::Image(std::sync::Arc::new(noon_core::ImagePaint::new(
+        image.resource(),
+        mapping,
+        image.sampling(),
+    )));
+    crate::semantic_mobject::prepare_fill_paint_value(
+        &object.integration_store().borrow(),
+        object.node_id(),
+        state,
+        paint,
+        opacity,
+    )
+}
+
 /// Inert image constructor. It owns prepared pixels, but no semantic identity or
 /// retained-resource admission until a Scene/Mobject/live construction succeeds.
 #[derive(Clone, Debug)]
@@ -36,15 +157,21 @@ impl ImageMobjectOptions {
         height: u32,
         pixels: impl Into<Arc<[u8]>>,
     ) -> Result<Self, AuthoringError> {
-        Ok(Self {
-            pixels: RasterImageResource::from_rgba8(width, height, pixels)?,
+        Ok(Self::from_resource(RasterImageResource::from_rgba8(
+            width, height, pixels,
+        )?))
+    }
+
+    pub(crate) fn from_resource(pixels: RasterImageResource) -> Self {
+        Self {
+            pixels,
             scale_to_resolution: DEFAULT_IMAGE_SCALE_TO_RESOLUTION,
             frame_height: f64::from(noon_core::DEFAULT_FRAME_HEIGHT),
             display_height: None,
             sampling: RasterImageSampling::Bicubic,
             opacity: 1.0,
             z_index: 0.0,
-        })
+        }
     }
 
     pub const fn pixel_width(&self) -> u32 {
@@ -174,6 +301,33 @@ pub(crate) fn publish_image_creation(
 }
 
 impl Mobject {
+    pub fn set_fill_image(
+        &mut self,
+        options: ImagePaintOptions,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let state = self.state()?;
+        publish_image_fill(
+            &mut self.integration_store().borrow_mut(),
+            self.node_id(),
+            state,
+            options,
+            opacity,
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )
+        .map(|_| ())
+    }
+
+    /// Edit only checked UV values, reusing the existing immutable pixel resource.
+    pub fn set_fill_image_mapping(
+        &mut self,
+        mapping: noon_core::ImageMapping,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        let state = prepare_image_fill_mapping(self, mapping, opacity)?;
+        self.commit_state(state)
+    }
     /// Cold-authoring image constructor. For an already-running Scene use
     /// `Scene::image` or `LiveSession::create_image`, which preserve revision coherence.
     pub fn from_image(

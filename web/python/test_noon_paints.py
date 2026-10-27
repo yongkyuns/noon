@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 import noon
+# Keep type identities stable when patch.dict restores each fake JS host.
+import _noon_paints
 import _manim_semantic_handles as handles
 import _manim_updaters as updaters
 
@@ -46,3 +48,65 @@ class PaintFacadeTests(unittest.TestCase):
                 value.set_fill(paint, opacity=True)
             with self.assertRaises(TypeError):
                 noon.LinearGradient([(True, noon.Color(1, 0, 0)), (1, noon.Color(0, 0, 1))])
+
+    def test_image_values_share_pixels_and_route_cold_live_and_uv_only_edits(self):
+        candidate = Mock()
+        candidate.copy.return_value = cloned = Mock()
+        factory = Mock()
+        factory.rgba8.return_value = candidate
+        mapping_definition = object()
+        js = types.ModuleType("js")
+        js.noonImageMapping = Mock(return_value=mapping_definition)
+        js.noonImagePaintOptions = factory
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = tuple
+        handle, context = Mock(), Mock()
+        value = object.__new__(noon.Mobject)
+        with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
+             patch.object(handles, "_handle_for", return_value=handle), \
+             patch.object(handles, "_is_shared_family", return_value=False), \
+             patch.object(handles, "_live_mutation_context", return_value=None):
+            mapping = noon.ImageMapping(translation=(0.173, -0.231), scale=(-0.7, 1.2))
+            paint = noon.ImagePaint([[[17, 73, 191, 128]]], mapping=mapping, sampling="linear")
+            factory.rgba8.assert_called_once_with(1, 1, (17, 73, 191, 128))
+            candidate.setSampling.assert_called_once_with("bilinear")
+            candidate.setMapping.assert_called_once_with(mapping_definition)
+            self.assertIs(copy.deepcopy(paint), paint)
+            self.assertIs(copy.copy(mapping), mapping)
+            changed = paint.with_mapping(mapping)
+            self.assertIs(changed._definition, cloned)
+            cloned.setMapping.assert_called_once_with(mapping_definition)
+            value.set_fill(paint, opacity=0.25)
+            handle.setFillImage.assert_called_once_with(candidate, 0.25)
+            value.set_fill_image_mapping(mapping, opacity=0.75)
+            handle.setFillImageMapping.assert_called_once_with(mapping_definition, 0.75)
+            with patch.object(handles, "_live_mutation_context", return_value=context):
+                value.set_fill(paint)
+                context.liveSetFillImage.assert_called_once_with(handle, candidate, None)
+                value.set_fill_image_mapping(mapping)
+                context.liveSetFillImageMapping.assert_called_once_with(handle, mapping_definition, None)
+            updaters._canonical_vmobject_set_fill(value, paint, 0.5)
+            self.assertEqual(handle.setFillImage.call_args.args, (candidate, 0.5))
+            self.assertEqual(factory.rgba8.call_count, 1, "mapping edits must not transfer pixel bytes")
+            with self.assertRaises(TypeError):
+                value.set_fill_image_mapping(object())
+            with self.assertRaises(TypeError):
+                value.set_fill_image_mapping(mapping, opacity=True)
+
+
+    def test_image_bitmap_sampling_default_stays_with_the_shared_rust_value(self):
+        candidate, handle = Mock(), Mock()
+        factory = Mock()
+        factory.fromImage.return_value = candidate
+        js = types.ModuleType("js")
+        js.noonImagePaintOptions = factory
+        bitmap = object.__new__(noon.ImageMobject)
+        with patch.dict(sys.modules, {"js": js}), \
+             patch.object(handles, "_handle_for", return_value=handle):
+            paint = noon.ImagePaint(bitmap)
+            self.assertIs(paint._definition, candidate)
+            factory.fromImage.assert_called_once_with(handle)
+            candidate.setSampling.assert_not_called()
+            noon.ImagePaint(bitmap, sampling="nearest")
+            candidate.setSampling.assert_called_once_with("nearest")
+            factory.rgba8.assert_not_called()

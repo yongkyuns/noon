@@ -14,6 +14,8 @@ mod effects;
 mod export;
 #[cfg(any(target_arch = "wasm32", test))]
 mod graph;
+#[cfg(test)]
+mod image_paint_tests;
 #[cfg(target_arch = "wasm32")]
 mod matrix;
 #[cfg(target_arch = "wasm32")]
@@ -1995,6 +1997,27 @@ impl SemanticExecutionPlayer {
         amount: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.fade_to_family(family, color, amount))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_fill_image(
+        &mut self,
+        mobject: &noon::Mobject,
+        paint: noon::ImagePaintOptions,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_fill_image(mobject, paint, opacity))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_fill_image_mapping(
+        &mut self,
+        mobject: &noon::Mobject,
+        mapping: noon::ImageMapping,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_fill_image_mapping(mobject, mapping, opacity))
             .map(|_| ())
     }
 
@@ -4196,11 +4219,18 @@ impl SemanticExecutionPlayer {
         )
         .and_then(|bundle| {
             bundle.with_images(
-                session
-                    .frame()
-                    .objects
-                    .iter()
-                    .filter_map(|object| object.content.image().map(|image| image.resource())),
+                session.frame().objects.iter().flat_map(|object| {
+                    [
+                        object.content.image().map(|image| image.resource()),
+                        object
+                            .fill_paint
+                            .as_deref()
+                            .and_then(noon_core::SemanticPaint::as_image)
+                            .map(|image| image.resource()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                }),
                 session.raster_image_resources(),
             )
         })

@@ -126,7 +126,8 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
-        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
+        let images =
+            self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         self.prepare_canonical_mixed_baseline(
             device,
             frame.retained,
@@ -731,7 +732,7 @@ mod draw_border_tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -753,7 +754,7 @@ mod draw_border_tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 effect: None,
                 spatial: None,

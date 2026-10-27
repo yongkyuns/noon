@@ -232,26 +232,28 @@ fn apply_effective_track_endpoint(
             value.transform.rotation = if at_end { *to } else { *from };
         }
         (Property::Fill, TrackValues::Color { from, to }) => {
-            value.fill_gradient = None;
+            value.fill_paint = None;
             value.style.fill = if at_end { *to } else { *from };
         }
         (Property::Fill, TrackValues::Paint { transition }) => {
             let (paint, opacity) = transition.sample(if at_end { 1.0 } else { 0.0 }).ok()?;
             match paint {
-                Some(noon_core::SemanticPaint::LinearGradient(gradient)) => {
-                    value.fill_gradient = Some(gradient);
+                Some(
+                    paint @ (noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::Image(_)),
+                ) => {
+                    value.fill_paint = Some(std::sync::Arc::new(paint));
                     value.style.fill = Some(noon_core::Color::rgba(1.0, 1.0, 1.0, opacity as f32));
                 }
                 Some(noon_core::SemanticPaint::Solid(mut color)) => {
-                    value.fill_gradient = None;
+                    value.fill_paint = None;
                     color.alpha = (f64::from(color.alpha) * opacity) as f32;
                     value.style.fill = Some(color);
                 }
                 None => {
-                    value.fill_gradient = None;
+                    value.fill_paint = None;
                     value.style.fill = None;
                 }
-                _ => return None,
             }
         }
         (Property::Stroke, TrackValues::Color { from, to }) => {
@@ -353,7 +355,7 @@ mod tests {
         let captured_intensity = 0.613456789012345;
         let peak = 2.0;
         let source = EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: Some(CompiledEffect {
                 attachment,
                 definition: (Glow::new(

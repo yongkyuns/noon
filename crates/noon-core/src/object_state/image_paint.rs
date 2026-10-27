@@ -230,34 +230,8 @@ impl ImageMapping {
         if !point.into_iter().all(f64::is_finite) {
             return Err(ImagePaintError::InvalidSamplePoint);
         }
-        if !local_size.into_iter().all(|v| v.is_finite() && v > 0.0) || image_size.contains(&0) {
-            return Err(ImagePaintError::InvalidBounds);
-        }
+        let size = self.fitted_size(local_size, image_size)?;
         let point = self.transform.inverse(point)?;
-        if self.fit == ImageFit::Stretch {
-            return Ok(Some([point[0], 1.0 - point[1]]));
-        }
-        // The ratio compares image and local-box aspect ratios. Check it before
-        // reciprocal use; extreme but finite authored bounds may be unrenderable.
-        let image_aspect = f64::from(image_size[0]) / f64::from(image_size[1]);
-        let inverse_local_aspect = local_size[1] / local_size[0];
-        let ratio = if inverse_local_aspect.is_infinite() {
-            // A small image aspect can bring an overflowing local ratio back
-            // into range. Multiply before dividing only in that case.
-            (image_aspect * local_size[1]) / local_size[0]
-        } else {
-            image_aspect * inverse_local_aspect
-        };
-        if !ratio.is_finite() || ratio <= 0.0 || !ratio.recip().is_finite() {
-            return Err(ImagePaintError::InvalidBounds);
-        }
-        let size = match self.fit {
-            ImageFit::Stretch => [1.0; 2],
-            ImageFit::Cover if ratio >= 1.0 => [ratio, 1.0],
-            ImageFit::Cover => [1.0, ratio.recip()],
-            ImageFit::Contain if ratio >= 1.0 => [1.0, ratio.recip()],
-            ImageFit::Contain => [ratio, 1.0],
-        };
         let uv: [f64; 2] = std::array::from_fn(|axis| {
             if size[axis] >= 1.0 {
                 // Cover may have a huge extent. Avoid overflowing the offset
@@ -274,6 +248,80 @@ impl ImageMapping {
             return Ok(None);
         }
         Ok(Some([uv[0], 1.0 - uv[1]]))
+    }
+
+    fn fitted_size(
+        self,
+        local_size: [f64; 2],
+        image_size: [u32; 2],
+    ) -> Result<[f64; 2], ImagePaintError> {
+        if !local_size.into_iter().all(|v| v.is_finite() && v > 0.0) || image_size.contains(&0) {
+            return Err(ImagePaintError::InvalidBounds);
+        }
+        if self.fit == ImageFit::Stretch {
+            return Ok([1.0; 2]);
+        }
+        // The ratio compares image and local-box aspect ratios. Check it before
+        // reciprocal use; extreme but finite authored bounds may be unrenderable.
+        let image_aspect = f64::from(image_size[0]) / f64::from(image_size[1]);
+        let inverse_local_aspect = local_size[1] / local_size[0];
+        let ratio = if inverse_local_aspect.is_infinite() {
+            // A small image aspect can bring an overflowing local ratio back
+            // into range. Multiply before dividing only in that case.
+            (image_aspect * local_size[1]) / local_size[0]
+        } else {
+            image_aspect * inverse_local_aspect
+        };
+        if !ratio.is_finite() || ratio <= 0.0 || !ratio.recip().is_finite() {
+            return Err(ImagePaintError::InvalidBounds);
+        }
+        Ok(match self.fit {
+            ImageFit::Stretch => [1.0; 2],
+            ImageFit::Cover if ratio >= 1.0 => [ratio, 1.0],
+            ImageFit::Cover => [1.0, ratio.recip()],
+            ImageFit::Contain if ratio >= 1.0 => [1.0, ratio.recip()],
+            ImageFit::Contain => [ratio, 1.0],
+        })
+    }
+
+    /// Affine projection from normalized lower-left geometry coordinates to
+    /// top-first image UVs. Renderers derive their finite precision uniforms from
+    /// these checked coefficients; contain clipping is applied to the result.
+    pub fn image_uv_affine(
+        self,
+        local_size: [f64; 2],
+        image_size: [u32; 2],
+    ) -> Result<[[f64; 3]; 2], ImagePaintError> {
+        let size = self.fitted_size(local_size, image_size)?;
+        let (s, c) = self.transform.rotation.sin_cos();
+        let scale = self.transform.scale;
+        let origin = self.transform.inverse([0.0; 2])?;
+        let mut rows = [
+            [
+                c / scale[0] / size[0],
+                s / scale[0] / size[0],
+                origin[0] / size[0] + (1.0 - size[0].recip()) * self.alignment[0],
+            ],
+            [
+                s / scale[1] / size[1],
+                -c / scale[1] / size[1],
+                1.0 - (origin[1] / size[1] + (1.0 - size[1].recip()) * self.alignment[1]),
+            ],
+        ];
+        // The form above avoids overflowing huge cover extents; for contain use
+        // subtraction before division, matching the point sampler.
+        for axis in 0..2 {
+            if size[axis] < 1.0 {
+                let offset =
+                    (origin[axis] - (1.0 - size[axis]) * self.alignment[axis]) / size[axis];
+                rows[axis][2] = if axis == 0 { offset } else { 1.0 - offset };
+            }
+        }
+        if rows.iter().flatten().copied().all(f64::is_finite) {
+            Ok(rows)
+        } else {
+            Err(ImagePaintError::InvalidBounds)
+        }
     }
 
     /// Checked complete-interval admission. Fit/address/resource changes are
@@ -339,7 +387,8 @@ impl ImageMapping {
 
 /// Immutable paint parameters over one versioned resource capability. Resource
 /// admission, retention, clone remapping and publication belong to the store.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImagePaint {
     resource: RasterImageResourceHandle,
     mapping: ImageMapping,
@@ -366,6 +415,9 @@ impl ImagePaint {
     }
     pub const fn sampling(self) -> RasterImageSampling {
         self.sampling
+    }
+    pub(crate) fn remap_resource(&mut self, resource: RasterImageResourceHandle) {
+        self.resource = resource;
     }
     pub fn interpolate(self, to: Self, alpha: f64) -> Result<Self, ImagePaintError> {
         if self.resource != to.resource || self.sampling != to.sampling {

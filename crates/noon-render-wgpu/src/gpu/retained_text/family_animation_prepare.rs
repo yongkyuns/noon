@@ -235,7 +235,7 @@ mod operation_selection_tests {
         semantics.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -248,7 +248,7 @@ mod operation_selection_tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -276,7 +276,7 @@ mod operation_selection_tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -289,7 +289,7 @@ mod operation_selection_tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -302,7 +302,7 @@ mod operation_selection_tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,

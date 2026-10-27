@@ -11,7 +11,7 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
         ..Style::default()
     };
     FrameObjectState {
-        fill_gradient: None,
+        fill_paint: None,
         draw_enabled: true,
         effect: None,
         spatial: None,

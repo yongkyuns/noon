@@ -55,6 +55,7 @@ fn publish(runtime: &mut SceneInstance, transaction: &ExecutionMutationTransacti
     let prepared = runtime
         .prepare_authored_value_publication(
             transaction,
+            Default::default(),
             context,
             context.scene_revision().checked_next().unwrap(),
         )
@@ -107,6 +108,7 @@ fn prepared_glow_is_atomic_sparse_and_does_not_dirty_geometry() {
     let prepared = runtime
         .prepare_authored_value_publication(
             &transaction,
+            Default::default(),
             context,
             context.scene_revision().checked_next().unwrap(),
         )
@@ -165,7 +167,7 @@ fn final_glow_base_coalesces_independently_of_style_and_transform() {
                 effect: first,
             },
             ExecutionPatch::SetStyle {
-                fill_gradient: None,
+                fill_paint: None,
                 object: ObjectId::new(1),
                 style,
             },
@@ -222,6 +224,7 @@ fn rejected_rebinding_and_discrete_changes_cannot_commit_a_prefix_or_hide_as_sup
         assert!(runtime
             .prepare_authored_value_publication(
                 &transaction,
+                Default::default(),
                 context,
                 context.scene_revision().checked_next().unwrap()
             )
@@ -296,7 +299,12 @@ fn exact_noop_and_stale_context_preserve_shared_values_and_versions() {
         effect: object.effect.clone().unwrap(),
     }]);
     let prepared = runtime
-        .prepare_authored_value_publication(&transaction, context, context.scene_revision())
+        .prepare_authored_value_publication(
+            &transaction,
+            Default::default(),
+            context,
+            context.scene_revision(),
+        )
         .unwrap()
         .unwrap();
     runtime.commit_prepared_authored_value_publication(prepared);
@@ -309,7 +317,12 @@ fn exact_noop_and_stale_context_preserve_shared_values_and_versions() {
     ));
     runtime.advance_to(0.1).unwrap();
     assert!(runtime
-        .prepare_authored_value_publication(&transaction, context, context.scene_revision())
+        .prepare_authored_value_publication(
+            &transaction,
+            Default::default(),
+            context,
+            context.scene_revision()
+        )
         .is_err());
 }
 

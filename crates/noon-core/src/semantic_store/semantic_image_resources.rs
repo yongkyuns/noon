@@ -4,6 +4,9 @@ use std::sync::Arc;
 use super::SemanticStore;
 use crate::{RasterImageResourceArena, RasterImageResourceError, RasterImageResourceHandle};
 
+#[cfg(test)]
+mod paint_tests;
+
 impl SemanticStore {
     pub fn raster_image_resources(&self) -> &RasterImageResourceArena {
         &self.raster_image_resources
@@ -47,7 +50,10 @@ struct ImageAdmission<'a> {
 
 impl Drop for ImageAdmission<'_> {
     fn drop(&mut self) {
-        if self.fresh && !self.committed {
+        if self.fresh
+            && (!self.committed || !self.store.has_semantic_image_owner(self.handle))
+            && self.store.raster_image_resources.get(self.handle).is_some()
+        {
             self.store
                 .raster_image_resources
                 .discard_unpublished(self.handle);

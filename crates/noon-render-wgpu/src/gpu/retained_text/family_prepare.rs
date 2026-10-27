@@ -132,7 +132,8 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
-        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
+        let images =
+            self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         self.prepare_canonical_mixed_baseline(
             device,
             frame.retained,
@@ -568,7 +569,7 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
         let first_object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -581,7 +582,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -608,7 +609,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -621,7 +622,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -699,7 +700,7 @@ mod tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -721,7 +722,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 effect: None,
                 spatial: None,

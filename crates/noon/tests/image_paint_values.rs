@@ -41,3 +41,34 @@ fn checked_mapping_round_trip_preserves_f64_and_rejects_unknown_or_invalid_field
         assert!(serde_json::from_value::<ImageMapping>(invalid).is_err());
     }
 }
+
+#[test]
+fn explicit_shared_image_paint_codec_is_strict_and_has_no_pixel_payload() {
+    use noon_core::{ImagePaint, RasterImageResourceArena, RasterImageSampling, SemanticPaint};
+    let mut arena = RasterImageResourceArena::new();
+    let handle = arena.intern_rgba8(1, 1, [17, 73, 191, 128]).unwrap();
+    let paint = SemanticPaint::Image(std::sync::Arc::new(ImagePaint::new(
+        handle,
+        ImageMapping::default(),
+        RasterImageSampling::Bicubic,
+    )));
+    let encoded = serde_json::to_value(&paint).unwrap();
+    assert_eq!(
+        serde_json::from_value::<SemanticPaint>(encoded.clone()).unwrap(),
+        paint
+    );
+    assert!(!encoded.to_string().contains("rgba8"));
+    for path in ["image", "resource", "mapping"] {
+        let mut invalid = encoded.clone();
+        let field = match path {
+            "image" => &mut invalid["image"],
+            "resource" => &mut invalid["image"]["resource"],
+            _ => &mut invalid["image"]["mapping"],
+        };
+        field["extra"] = serde_json::json!(true);
+        assert!(
+            serde_json::from_value::<SemanticPaint>(invalid).is_err(),
+            "unknown field in {path}"
+        );
+    }
+}

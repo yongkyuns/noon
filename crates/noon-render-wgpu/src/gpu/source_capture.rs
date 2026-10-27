@@ -26,10 +26,7 @@ enum SourceDraw {
         mesh: Option<usize>,
         // The value participates in capture invalidation even when the packed
         // carrier row is unchanged. GPU bindings remain renderer-owned.
-        gradient: Option<(
-            noon_core::ObjectId,
-            crate::linear_gradient::PreparedGradient,
-        )>,
+        paint: Option<(noon_core::ObjectId, crate::paint::PreparedPaint)>,
     },
     Glyph {
         item: PreparedTextItem,
@@ -75,10 +72,10 @@ impl PreparedSource {
                     };
                     // Retained mixed frames use private scratch identities. The
                     // canonical source draw range proves their packed mapping.
-                    let gradient = packed.filter(|_| !silhouette).and_then(|id| {
+                    let paint = packed.filter(|_| !silhouette).and_then(|id| {
                         frame
                             .geometry
-                            .fill_gradients
+                            .fill_paints
                             .get(id)
                             .map(|value| (*id, value.clone()))
                     });
@@ -159,7 +156,7 @@ impl PreparedSource {
                             batch: local,
                             bytes: start..source.bytes.len() as u64,
                             mesh,
-                            gradient,
+                            paint,
                         });
                     }
                 }
@@ -322,13 +319,13 @@ impl PreparedSource {
                 SourceDraw::Geometry {
                     batch,
                     bytes,
-                    gradient,
+                    paint,
                     ..
                 } => {
                     pass.set_bind_group(0, camera, &[]);
-                    if let Some((object, _)) = gradient {
+                    if let Some((object, _)) = paint {
                         renderer
-                            .draw_gradient_batch(
+                            .draw_paint_batch(
                                 &mut pass,
                                 prepared,
                                 batch.primitive,

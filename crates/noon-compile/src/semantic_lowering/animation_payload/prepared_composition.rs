@@ -1406,7 +1406,7 @@ where
         captured
     } else if admitted {
         EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
@@ -1644,7 +1644,7 @@ mod tests {
 
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: 0.0,
             transform: Transform2D {
@@ -2197,7 +2197,7 @@ mod tests {
         );
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
-            fill_gradient: None,
+            fill_paint: None,
             effect: None,
             z_index: 0.0,
             transform: Transform2D {

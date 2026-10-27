@@ -47,14 +47,6 @@ struct VertexOutput {
     output.camera_scale = vec4(camera.viewport_size,camera.clip_scale);
     return output;
 }
-fn pixel(point: vec2<i32>) -> vec4<f32> {
-    // Captured insets retain spare texture capacity. Clamp to the active raster
-    // rather than sampling its cleared padding at a filtered image boundary.
-    let limits = vec2<i32>(object.dimensions)-vec2<i32>(1);
-    let rgba = textureLoad(image, clamp(point, vec2<i32>(0), limits), 0);
-    let alpha = rgba.a*object.opacity; return vec4(rgba.rgb*alpha, alpha);
-}
-fn cubic(value: f32) -> f32 { let x = abs(value); if x <= 1.0 { return (x-2.0)*x*x+1.0; } if x < 2.0 { return ((-x+5.0)*x-8.0)*x+4.0; } return 0.0; }
 @fragment fn fs_image(input: VertexOutput) -> @location(0) vec4<f32> {
     let viewport_position = input.position.xy-input.camera_pose.zw;
     let world = (viewport_position/input.camera_scale.xy-vec2(0.5))
@@ -69,9 +61,5 @@ fn cubic(value: f32) -> f32 { let x = abs(value); if x <= 1.0 { return (x-2.0)*x
         || any(input.position.xy >= input.clip_bounds.zw) {
         discard;
     }
-    let position = uv*object.dimensions-vec2(0.5); let base = vec2<i32>(floor(position)); let fraction = fract(position); var color: vec4<f32>;
-    if object.sampling == 0u { color = pixel(vec2<i32>(floor(uv*object.dimensions))); }
-    else if object.sampling == 1u { let top = mix(pixel(base), pixel(base+vec2(1,0)), fraction.x); let bottom = mix(pixel(base+vec2(0,1)), pixel(base+vec2(1,1)), fraction.x); color = mix(top, bottom, fraction.y); }
-    else { color = vec4(0.0); for (var y = -1; y <= 2; y = y+1) { for (var x = -1; x <= 2; x = x+1) { color += pixel(base+vec2(x,y))*cubic(f32(x)-fraction.x)*cubic(f32(y)-fraction.y); } } color.a = clamp(color.a, 0.0, 1.0); color = vec4(clamp(color.rgb, vec3(0.0), vec3(color.a)), color.a); }
-    return color;
+    return raster_sample(image, uv, vec2<u32>(object.dimensions), object.sampling, 1u, object.opacity);
 }

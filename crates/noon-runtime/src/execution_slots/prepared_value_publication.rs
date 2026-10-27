@@ -1,4 +1,4 @@
-use noon_compile::{ExecutionMutationTransaction, ExecutionPatch};
+use noon_compile::{CompiledResources, ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{
     ExecutionRevision, FrameEpoch, Property, PublicationContext, SceneRevision, Style, Transform2D,
 };
@@ -29,7 +29,7 @@ enum PreparedAuthoredValueWrite {
     Style {
         object_index: usize,
         style: Style,
-        fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+        fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
         changes_execution: bool,
     },
 }
@@ -76,6 +76,7 @@ pub struct PreparedAuthoredValuePublication {
     scene_revision: SceneRevision,
     execution_revision: ExecutionRevision,
     frame_epoch: FrameEpoch,
+    resource_additions: CompiledResources,
     writes: Vec<PreparedAuthoredValueWrite>,
 }
 
@@ -87,6 +88,7 @@ impl SceneInstance {
     pub fn prepare_authored_value_publication(
         &self,
         transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
@@ -124,9 +126,10 @@ impl SceneInstance {
 
         // Validate every submitted write, including one superseded by a later value,
         // before retaining only the final value in each object/property lane.
-        self.compiled.preflight_execution_transaction(transaction)?;
+        self.compiled
+            .preflight_execution_transaction_with_resources(transaction, &resource_additions)?;
         let mut writes = Vec::new();
-        let mut execution_changed = false;
+        let mut execution_changed = !self.compiled.resources().contains_all(&resource_additions);
         for patch in final_value_writes(transaction) {
             let (object, prepared) = match patch {
                 ExecutionPatch::SetTransform { object, .. } => (*object, 0_u8),
@@ -154,14 +157,12 @@ impl SceneInstance {
                 (
                     1,
                     ExecutionPatch::SetStyle {
-                        style,
-                        fill_gradient,
-                        ..
+                        style, fill_paint, ..
                     },
                 ) => PreparedAuthoredValueWrite::Style {
                     object_index,
                     style: *style,
-                    fill_gradient: fill_gradient.clone(),
+                    fill_paint: fill_paint.clone(),
                     changes_execution,
                 },
                 (2, ExecutionPatch::SetSemanticTransform { transform, .. }) => {
@@ -228,6 +229,7 @@ impl SceneInstance {
             scene_revision,
             execution_revision,
             frame_epoch,
+            resource_additions,
             writes,
         }))
     }
@@ -236,8 +238,8 @@ impl SceneInstance {
     /// transaction has crossed the point of no return.
     ///
     /// The execution-session `PreparedPublication` owns exclusive access between
-    /// preparation and this call. No check, lookup, allocation, or fallible compile
-    /// operation remains here.
+    /// preparation and this call. The complete immutable resource set is already
+    /// owned and validated; no fallible compilation or preparation remains here.
     pub fn commit_prepared_authored_value_publication(
         &mut self,
         prepared: PreparedAuthoredValuePublication,
@@ -245,6 +247,8 @@ impl SceneInstance {
         debug_assert_eq!(prepared.runtime, self.runtime_identity());
         debug_assert_eq!(prepared.expected, self.publication_context());
         self.last_patch_stats = crate::RuntimePatchStats::default();
+        self.compiled
+            .merge_prepared_resources(prepared.resource_additions);
 
         for write in prepared.writes {
             if !write.changes_execution() {
@@ -338,17 +342,17 @@ impl SceneInstance {
                 }
                 PreparedAuthoredValueWrite::Style {
                     style,
-                    fill_gradient,
+                    fill_paint,
                     object_index,
                     ..
                 } => {
                     self.compiled.commit_prepared_style_value(
                         object_index as u32,
                         style,
-                        fill_gradient.clone(),
+                        fill_paint.clone(),
                     );
                     self.frame.objects[object_index].style = style;
-                    self.frame.objects[object_index].fill_gradient = fill_gradient;
+                    self.frame.objects[object_index].fill_paint = fill_paint;
                     self.reapply_properties(
                         object_index,
                         &[

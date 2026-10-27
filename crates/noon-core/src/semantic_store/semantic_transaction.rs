@@ -3790,6 +3790,7 @@ impl SemanticMutationTransaction {
         // Only affected/provisional objects are staged; this remains local to
         // the transaction and runs before any semantic resource publication.
         for (object, state) in &staged_objects {
+            validate_style_image_resources(store, &state.style, *object)?;
             if !state.world_path_style_is_supported(store.geometry_resources()) {
                 return Err(
                     SemanticMutationTransactionError::UnsupportedWorldPathStyle { object: *object },
@@ -3828,6 +3829,41 @@ impl SemanticMutationTransaction {
         }
         staged_family_colors.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_styles.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
+        for (object, style) in &staged_family_styles {
+            validate_style_image_resources(store, style, *object)?;
+        }
+        for (token, path) in &staged_pending_paths {
+            if !removed_pending.contains(token) {
+                validate_style_image_resources(
+                    store,
+                    &path.style,
+                    SemanticTransactionNodeRef::Pending(*token),
+                )?;
+            }
+        }
+        for mutation in &self.mutations {
+            if let SemanticMutation::AddAnimation { token, animation } = mutation {
+                if removed_pending.contains(token) {
+                    continue;
+                }
+                if let crate::SemanticTransactionAnimationIntent::ObjectPropertyTrack {
+                    values,
+                    ..
+                } = animation.intent()
+                {
+                    for resource in values.image_resources() {
+                        if store.raster_image_resources().get(resource).is_none() {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidPaintImageResource {
+                                    object: SemanticTransactionNodeRef::Pending(*token),
+                                    resource,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
         staged_drawing.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
@@ -4343,12 +4379,29 @@ pub(super) fn validate_object_content_resource(
     Ok(())
 }
 
+fn validate_style_image_resources(
+    store: &SemanticStore,
+    style: &SemanticStyle,
+    object: SemanticTransactionNodeRef,
+) -> Result<(), SemanticMutationTransactionError> {
+    for resource in style.image_resources() {
+        if store.raster_image_resources().get(resource).is_none() {
+            return Err(
+                SemanticMutationTransactionError::InvalidPaintImageResource { object, resource },
+            );
+        }
+    }
+    Ok(())
+}
+
 fn set_object_style(store: &mut SemanticStore, object: SemanticNodeId, style: SemanticStyle) {
-    store
-        .node_mut(object)
-        .and_then(|node| node.semantic_object_state_mut())
-        .expect("preflighted semantic object must remain valid while transaction owns the store")
-        .style = style;
+    store.mutate_semantic_style(object, |node| {
+        node.semantic_object_state_mut()
+            .expect(
+                "preflighted semantic object must remain valid while transaction owns the store",
+            )
+            .style = style;
+    });
 }
 
 const fn is_transform_property(property: SemanticObjectProperty) -> bool {
@@ -4838,6 +4891,10 @@ pub enum SemanticMutationTransactionError {
     },
     InvalidImageResource {
         index: usize,
+        resource: crate::RasterImageResourceHandle,
+    },
+    InvalidPaintImageResource {
+        object: SemanticTransactionNodeRef,
         resource: crate::RasterImageResourceHandle,
     },
     InvalidTextResource {
@@ -5431,6 +5488,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} references unavailable raster image resource {:?}",
                 resource
+            ),
+            Self::InvalidPaintImageResource { object, resource } => write!(
+                formatter,
+                "semantic style on {object:?} references unavailable raster image resource {resource:?}"
             ),
             Self::InvalidTextResource { index, resource } => write!(
                 formatter,

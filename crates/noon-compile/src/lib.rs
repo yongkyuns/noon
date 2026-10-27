@@ -50,7 +50,7 @@ use noon_core::{
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
 pub use execution_patch::{
-    validate_fill_gradient, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
+    validate_fill_paint, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
     CompiledInset2DView, ExecutionMutationTransaction, ExecutionPatch,
 };
 pub use semantic_lowering::*;
@@ -124,7 +124,7 @@ impl DynamicProperties {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
     /// Derived continuous fill definition; solid fills retain the compact style.
-    pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     /// Whether this object can draw; its query geometry remains available.
     pub draw_enabled: bool,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
@@ -253,7 +253,7 @@ impl CompiledObject {
         base_style: Style,
     ) -> Self {
         Self {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             id,
             content: content.into(),
@@ -448,16 +448,49 @@ impl CompiledResources {
         source: &RasterImageResourceArena,
         content: SemanticImageContent,
     ) -> Result<RasterImageContentRef, CompiledResourceError> {
-        let handle = content.resource();
-        let resource = match self.images.entry(handle) {
+        let resource = self.capture_image_resource(source, content.resource())?;
+        Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
+    pub fn capture_paint_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        paint: &noon_core::SemanticPaint,
+    ) -> Result<(), CompiledResourceError> {
+        if let Some(image) = paint.as_image() {
+            self.capture_image_resource(source, image.resource())?;
+        }
+        Ok(())
+    }
+
+    pub fn capture_paint_track_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        values: &TrackValues,
+    ) -> Result<(), CompiledResourceError> {
+        if let TrackValues::Paint { transition } = values {
+            for (paint, _) in transition.endpoints() {
+                if let Some(paint) = paint {
+                    self.capture_paint_from_arena(source, paint)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn capture_image_resource(
+        &mut self,
+        source: &RasterImageResourceArena,
+        handle: RasterImageResourceHandle,
+    ) -> Result<&Arc<RasterImageResource>, CompiledResourceError> {
+        Ok(match self.images.entry(handle) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
                 source
                     .get_shared(handle)
                     .ok_or(CompiledResourceError::MissingImage(handle))?,
             ),
-        };
-        Ok(RasterImageContentRef::from_resource(content, resource))
+        })
     }
 
     /// Capture one producer-owned immutable text resource and its font/path
@@ -1466,7 +1499,7 @@ impl CompiledScene {
         let mut objects = Vec::with_capacity(object_count);
 
         for (index, mut object) in source_objects.into_iter().enumerate() {
-            if let Some(gradient) = &object.fill_gradient {
+            if let Some(gradient) = &object.fill_paint {
                 if !continuous_fill_content_supported(&object.content)
                     || object.spatial.is_some()
                     || semantic_lowering::paint::validate_definition(gradient).is_err()
@@ -1906,7 +1939,7 @@ impl CompiledScene {
         supported: bool,
     ) -> Result<(), CompilePatchError> {
         if !supported
-            && (self.objects[index as usize].fill_gradient.is_some()
+            && (self.objects[index as usize].fill_paint.is_some()
                 || self
                     .channel_tracks(CompiledChannelKey::new(index, Property::Fill))
                     .iter()
@@ -1980,10 +2013,10 @@ impl CompiledScene {
             ExecutionPatch::SetStyle {
                 object,
                 style,
-                fill_gradient,
+                fill_paint,
             } => self.object_index(*object).is_none_or(|index| {
                 self.objects[index as usize].base_style != *style
-                    || self.objects[index as usize].fill_gradient != *fill_gradient
+                    || self.objects[index as usize].fill_paint != *fill_paint
             }),
             ExecutionPatch::SetEffect { object, effect } => {
                 self.object_index(*object).is_none_or(|index| {
@@ -2062,6 +2095,11 @@ impl CompiledScene {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
                 validate_compiled_object(object)?;
+                validate_execution_paint_resources(
+                    &self.resources,
+                    None,
+                    object.fill_paint.as_deref(),
+                )?;
                 validate_execution_content_resource(
                     &self.resources,
                     None,
@@ -2359,15 +2397,16 @@ impl CompiledScene {
             ExecutionPatch::SetStyle {
                 object,
                 style,
-                fill_gradient,
+                fill_paint,
             } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
-                execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
+                execution_patch::validate_fill_paint(*object, fill_paint.as_deref())?;
+                validate_execution_paint_resources(&self.resources, None, fill_paint.as_deref())?;
                 let source = &self.objects[index as usize];
-                if fill_gradient.is_some()
+                if fill_paint.is_some()
                     && (!continuous_fill_content_supported(&source.content)
                         || source.spatial.is_some())
                 {
@@ -2376,7 +2415,7 @@ impl CompiledScene {
                     ));
                 }
                 self.objects[index as usize].base_style = *style;
-                self.objects[index as usize].fill_gradient = fill_gradient.clone();
+                self.objects[index as usize].fill_paint = fill_paint.clone();
             }
             ExecutionPatch::SetEffect { object, effect } => {
                 let index = self
@@ -2622,6 +2661,7 @@ impl CompiledScene {
         &self,
         track: &TrackDefinition,
     ) -> Result<CompiledTrack, CompilePatchError> {
+        validate_execution_paint_track_resources(&self.resources, None, &track.values)?;
         let object_index = self
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
@@ -2912,6 +2952,40 @@ fn validate_execution_content(
     }
 }
 
+fn validate_execution_paint_resources(
+    resources: &CompiledResources,
+    additions: Option<&CompiledResources>,
+    paint: Option<&noon_core::SemanticPaint>,
+) -> Result<(), CompilePatchError> {
+    if let Some(image) = paint.and_then(noon_core::SemanticPaint::as_image) {
+        let handle = image.resource();
+        if RasterImageResourceLookup::get(resources, handle)
+            .or_else(|| {
+                additions.and_then(|resources| RasterImageResourceLookup::get(resources, handle))
+            })
+            .is_none()
+        {
+            return Err(CompilePatchError::Resource(
+                CompiledResourceError::MissingImage(handle),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_execution_paint_track_resources(
+    resources: &CompiledResources,
+    additions: Option<&CompiledResources>,
+    values: &TrackValues,
+) -> Result<(), CompilePatchError> {
+    if let TrackValues::Paint { transition } = values {
+        for (paint, _) in transition.endpoints() {
+            validate_execution_paint_resources(resources, additions, paint)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_execution_content_resource(
     resources: &CompiledResources,
     additions: Option<&CompiledResources>,
@@ -2963,7 +3037,7 @@ fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchErro
 }
 
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
-    if object.fill_gradient.is_some()
+    if object.fill_paint.is_some()
         && (!continuous_fill_content_supported(&object.content) || object.spatial.is_some())
     {
         return Err(CompilePatchError::InvalidTrack(
@@ -2979,7 +3053,7 @@ fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchE
     }
     validate_execution_content(object.id, &object.content, object.text_bounds)?;
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
-    execution_patch::validate_fill_gradient(object.id, object.fill_gradient.as_deref())?;
+    execution_patch::validate_fill_paint(object.id, object.fill_paint.as_deref())?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
 }
 
@@ -4599,7 +4673,7 @@ mod tests {
         assert_eq!(compiled.objects()[0].base_transform, Transform2D::IDENTITY);
 
         let valid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
-            fill_gradient: None,
+            fill_paint: None,
             object,
             style: Style::default(),
         }]);

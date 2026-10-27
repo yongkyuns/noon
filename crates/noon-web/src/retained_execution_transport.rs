@@ -21,9 +21,9 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V19 carries a finite tagged effect definition in the genuine execution/render
-// worker envelope. Older readers reject instead of discarding a filter kind.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 20;
+// V21 carries the shared tagged fill paint in the genuine execution/render
+// worker envelope. Older readers reject instead of discarding a paint kind.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 21;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -401,7 +401,7 @@ impl From<&ObjectContentRef> for TransportObjectContent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTransportObjectState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fill_gradient: Option<Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     pub draw_enabled: bool,
     pub slot: TransportSlotId,
     pub order: u32,
@@ -1156,6 +1156,29 @@ impl RetainedExecutionFrameMirror {
         }
     }
 
+    pub(crate) fn resolve_fill_paint(
+        &self,
+        paint: Option<&Arc<noon_core::SemanticPaint>>,
+    ) -> Result<Option<Arc<noon_core::SemanticPaint>>, RetainedExecutionTransportError> {
+        let Some(paint) = paint else {
+            return Ok(None);
+        };
+        let Some(image) = paint.as_image() else {
+            return Ok(Some(paint.clone()));
+        };
+        let transport = image.resource().into();
+        let local = self.image_handles.get(&transport).ok_or(
+            RetainedExecutionTransportError::UnknownImageResource(transport),
+        )?;
+        Ok(Some(Arc::new(noon_core::SemanticPaint::Image(
+            std::sync::Arc::new(noon_core::ImagePaint::new(
+                local.resource(),
+                image.mapping(),
+                image.sampling(),
+            )),
+        ))))
+    }
+
     fn resolve_content(
         &self,
         content: &TransportObjectContent,
@@ -1235,7 +1258,11 @@ impl RetainedExecutionFrameMirror {
     ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
         validate_object_state(object)?;
         let content = self.resolve_content(&object.content)?;
-        frame_object(object, content)
+        frame_object(
+            object,
+            content,
+            self.resolve_fill_paint(object.fill_paint.as_ref())?,
+        )
     }
 
     pub const fn camera(&self) -> Camera2DState {
@@ -1445,8 +1472,13 @@ impl RetainedExecutionFrameMirror {
         let frame_objects = objects
             .iter()
             .map(|object| {
-                self.resolve_content(&object.content)
-                    .and_then(|content| frame_object(object, content))
+                self.resolve_content(&object.content).and_then(|content| {
+                    frame_object(
+                        object,
+                        content,
+                        self.resolve_fill_paint(object.fill_paint.as_ref())?,
+                    )
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
@@ -1547,7 +1579,8 @@ impl RetainedExecutionFrameMirror {
             } else {
                 self.resolve_render_geometry(object, delta.session)?
             };
-            updates.push((index, added, object, geometry, content));
+            let fill_paint = self.resolve_fill_paint(object.fill_paint.as_ref())?;
+            updates.push((index, added, object, geometry, content, fill_paint));
         }
         let mut seen_removed = HashSet::with_capacity(delta.removed_slots.len());
         let _validated_removed_indices = delta
@@ -1642,7 +1675,7 @@ impl RetainedExecutionFrameMirror {
         validate_single_camera(camera_rows)?;
         let added_indices = updates
             .iter()
-            .filter_map(|(index, added, _, _, _)| {
+            .filter_map(|(index, added, _, _, _, _)| {
                 (*added || self.painter_ranks.get(*index).copied().flatten().is_none())
                     .then_some(*index)
             })
@@ -1650,20 +1683,22 @@ impl RetainedExecutionFrameMirror {
         let removed_indices = _validated_removed_indices;
         let frame = self.frame.as_mut().expect("validated retained frame");
         let mut changed = Vec::with_capacity(updates.len() + patch_updates.len());
-        for (index, is_added, object, geometry, content) in updates {
+        for (index, is_added, object, geometry, content, fill_paint) in updates {
             if is_added {
                 debug_assert_eq!(index, frame.objects.len());
                 self.slots.push(object.slot);
                 self.slot_indices.insert(object.slot, index);
                 self.object_indices.insert(object.object, index);
-                frame.objects.push(frame_object(object, content)?);
+                frame
+                    .objects
+                    .push(frame_object(object, content, fill_paint)?);
                 frame.presences.push(object.presence);
                 frame.reveals.push(object.reveal);
                 frame.morphs.push(object.morph);
                 frame.render_geometries.push(geometry);
                 frame.render_transforms.push(object.render_transform);
             } else {
-                frame.objects[index] = frame_object(object, content)?;
+                frame.objects[index] = frame_object(object, content, fill_paint)?;
                 frame.presences[index] = object.presence;
                 frame.reveals[index] = object.reveal;
                 frame.morphs[index] = object.morph;
@@ -1857,7 +1892,7 @@ fn transport_object(
     let slot_index = u32::try_from(index)
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
-        fill_gradient: object.fill_gradient.clone(),
+        fill_paint: object.fill_paint.clone(),
         draw_enabled: object.draw_enabled,
         slot: TransportSlotId {
             slot: slot_index,
@@ -1913,7 +1948,7 @@ fn validate_object_state(
 fn validate_object_fields(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
-    noon_compile::validate_fill_gradient(object.object, object.fill_gradient.as_deref())
+    noon_compile::validate_fill_paint(object.object, object.fill_paint.as_deref())
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
     if object
         .effect
@@ -2071,6 +2106,7 @@ fn removed_indices_contains_slot(
 fn frame_object(
     object: &RetainedTransportObjectState,
     content: ObjectContentRef,
+    fill_paint: Option<Arc<noon_core::SemanticPaint>>,
 ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
     let spatial = match object.spatial.as_ref() {
         Some(spatial) => Some(spatial.to_compiled().ok_or(
@@ -2079,7 +2115,7 @@ fn frame_object(
         None => None,
     };
     Ok(FrameObjectState {
-        fill_gradient: object.fill_gradient.clone(),
+        fill_paint,
         draw_enabled: object.draw_enabled,
         effect: object
             .effect
@@ -2160,7 +2196,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -2173,7 +2209,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     spatial: None,
@@ -2211,7 +2247,9 @@ mod tests {
             .unwrap(),
         );
         let mut frame = mixed_frame();
-        frame.objects[0].fill_gradient = Some(gradient.clone());
+        frame.objects[0].fill_paint = Some(Arc::new(noon_core::SemanticPaint::LinearGradient(
+            gradient.clone(),
+        )));
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let snapshot = encoder
             .encode_snapshot_with_context(
@@ -2222,17 +2260,21 @@ mod tests {
             .unwrap();
         let json = serde_json::to_string(&snapshot).unwrap();
         assert_eq!(
-            json.matches("\"fill_gradient\"").count(),
+            json.matches("\"fill_paint\"").count(),
             1,
             "ordinary rows omit paint payload"
         );
         let mut mirror = test_mirror();
         mirror.apply(serde_json::from_str(&json).unwrap()).unwrap();
         assert_eq!(
-            mirror.frame().unwrap().objects[0].fill_gradient.as_deref(),
+            mirror.frame().unwrap().objects[0]
+                .fill_paint
+                .as_deref()
+                .and_then(noon_core::SemanticPaint::as_linear_gradient)
+                .map(Arc::as_ref),
             Some(gradient.as_ref())
         );
-        frame.objects[0].fill_gradient = None;
+        frame.objects[0].fill_paint = None;
         let delta = encoder
             .encode_incremental_with_context(
                 &frame,
@@ -2243,7 +2285,7 @@ mod tests {
             .unwrap()
             .unwrap();
         mirror.apply(delta).unwrap();
-        assert!(mirror.frame().unwrap().objects[0].fill_gradient.is_none());
+        assert!(mirror.frame().unwrap().objects[0].fill_paint.is_none());
         let mut value = serde_json::to_value(gradient.as_ref()).unwrap();
         value["stops"][0]["position"] = serde_json::json!(-0.1);
         assert!(serde_json::from_value::<noon_core::LinearGradient>(value).is_err());
@@ -2345,7 +2387,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 20);
+        assert_eq!(snapshot.protocol_version, 21);
         assert_eq!(
             snapshot.objects[0].effect.unwrap().attachment,
             effect.attachment
@@ -3525,7 +3567,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -3647,7 +3689,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,

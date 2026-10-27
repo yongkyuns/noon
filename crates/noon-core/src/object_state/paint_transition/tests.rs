@@ -254,8 +254,23 @@ fn invalid_progress_opacity_resource_and_stop_topology_fail_closed() {
         PaintTransitionError::DifferentStopCounts
     );
     assert_eq!(
-        PaintTransition::new(paint.clone(), 1.0, Some(SemanticPaint::Resource(7)), 1.0)
-            .unwrap_err(),
+        PaintTransition::new(
+            paint.clone(),
+            1.0,
+            Some(SemanticPaint::Image(std::sync::Arc::new(
+                crate::ImagePaint::new(
+                    crate::RasterImageResourceHandle {
+                        arena: 1,
+                        id: crate::RasterImageResourceId::new(7),
+                        version: 0
+                    },
+                    crate::ImageMapping::default(),
+                    crate::RasterImageSampling::Linear
+                )
+            ))),
+            1.0
+        )
+        .unwrap_err(),
         PaintTransitionError::UnsupportedPaint
     );
     for opacity in [-1.0, 2.0, f64::NAN, f64::INFINITY] {

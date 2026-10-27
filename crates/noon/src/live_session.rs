@@ -52,7 +52,7 @@ use std::{cell::RefCell, rc::Rc};
 pub struct EffectiveMobjectState {
     /// Continuous fill definition, when present. `style.fill` then carries only
     /// the independent fill-opacity multiplier in its alpha component.
-    pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -1481,7 +1481,7 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         Ok(EffectiveMobjectState {
-            fill_gradient: object.fill_gradient.clone(),
+            fill_paint: object.fill_paint.clone(),
             z_index: object.z_index,
             transform: object.transform,
             style: object.style,
@@ -1629,10 +1629,10 @@ impl<'a> LiveSession<'a> {
         mobject: &Mobject,
     ) -> Result<Option<Color>, LiveSessionError> {
         let effective = self.effective(mobject)?;
-        if effective.fill_gradient.is_some()
+        if effective.fill_paint.is_some()
             || matches!(
                 mobject.state()?.style.fill,
-                Some(noon_core::SemanticPaint::Resource(_))
+                Some(noon_core::SemanticPaint::Image(_))
             )
         {
             return Err(crate::AuthoringError::Unsupported(
@@ -1674,7 +1674,7 @@ impl<'a> LiveSession<'a> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
         let effective = self.effective(mobject)?;
-        if effective.fill_gradient.is_some()
+        if effective.fill_paint.is_some()
             && effective.style.fill.is_some_and(|color| color.alpha > 0.0)
         {
             return Err(crate::AuthoringError::Unsupported(
@@ -3861,12 +3861,26 @@ mod tests {
     }
 
     #[test]
-    fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
-        let authored = SemanticStyle {
-            fill: Some(SemanticPaint::Resource(7)),
-            ..SemanticStyle::default()
-        };
-        assert!(target_style_from_effective(&authored, Style::default(), None).is_err());
+    fn target_style_capture_preserves_image_mapping_and_authored_opacity_precision() {
+        let mut scene = Scene::new();
+        let mut object = scene.circle(1.0).unwrap();
+        object
+            .set_fill_image(
+                crate::ImagePaintOptions::rgba8(1, 1, vec![255, 0, 0, 255]).unwrap(),
+                Some(0.12345678912345678),
+            )
+            .unwrap();
+        object.set_object_opacity(0.8765432123456789).unwrap();
+        scene.add(&object).unwrap();
+        let authored = object.state().unwrap().style;
+        let mut session = scene.execution_session().unwrap();
+        let live = scene.live(&mut session);
+        let observed = live.effective(&object).unwrap();
+        assert_eq!(
+            target_style_from_effective(&authored, observed.style, observed.fill_paint.as_ref())
+                .unwrap(),
+            authored
+        );
     }
 
     #[test]

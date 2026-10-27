@@ -7,7 +7,7 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
         Some(SemanticPaint::Solid(color)) => {
             Ok(Some(Color::rgb(color.red, color.green, color.blue)))
         }
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_)) => {
             Err(AuthoringError::Unsupported(
                 crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
             ))
@@ -19,7 +19,7 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
 pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, AuthoringError> {
     let fill_visible = match style.fill.as_ref() {
         Some(SemanticPaint::Solid(color)) => f64::from(color.alpha) * style.fill_opacity > 0.0,
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => {
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_)) => {
             style.fill_opacity > 0.0
         }
         None => false,
@@ -34,14 +34,11 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
 
 /// Observable paint alpha is the solid color alpha times its authored multiplier.
 /// A continuous paint reports its independent multiplier; intrinsic stop alpha
-/// varies spatially. Unresolved resource paint has no supported scalar query.
+/// varies spatially. Image paints likewise report their independent multiplier.
 fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, AuthoringError> {
     match paint {
         Some(SemanticPaint::Solid(color)) => Ok(f64::from(color.alpha) * opacity),
-        Some(SemanticPaint::LinearGradient(_)) => Ok(opacity),
-        Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
-        )),
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_)) => Ok(opacity),
         None => Ok(0.0),
     }
 }
@@ -91,7 +88,7 @@ fn replace_paint_color(
     *opacity = match paint {
         None => opacity_when_enabled,
         Some(SemanticPaint::Solid(previous)) => f64::from(previous.alpha) * *opacity,
-        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Resource(_)) => *opacity,
+        Some(SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_)) => *opacity,
     };
     *paint = Some(SemanticPaint::Solid(color));
 }
@@ -610,20 +607,34 @@ pub(crate) fn prepare_fill_gradient(
     opacity: Option<f64>,
 ) -> Result<SemanticObjectState, AuthoringError> {
     object.validate()?;
-    let mut state = object.state()?;
+    let state = object.state()?;
+    prepare_fill_paint_value(
+        &object.integration_store().borrow(),
+        object.node_id(),
+        state,
+        SemanticPaint::LinearGradient(gradient),
+        opacity,
+    )
+}
+
+pub(crate) fn prepare_fill_paint_value(
+    store: &SemanticStore,
+    node: SemanticNodeId,
+    mut state: SemanticObjectState,
+    paint: SemanticPaint,
+    opacity: Option<f64>,
+) -> Result<SemanticObjectState, AuthoringError> {
     if state.style.fill.is_none() {
         state.style.fill_opacity = 1.0;
     }
-    state.style.fill = Some(SemanticPaint::LinearGradient(gradient));
+    state.style.fill = Some(paint);
     if let Some(opacity) = opacity {
         edit_fill_opacity(&mut state.style, opacity)?;
     }
-    let store = object.integration_store().borrow();
     let unsupported = || {
         AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::ContinuousPaintProfile)
     };
-    noon_compile::lower_semantic_fill(object.node_id(), &state, &store)
-        .map_err(|_| unsupported())?;
+    noon_compile::lower_semantic_fill(node, &state, store).map_err(|_| unsupported())?;
     Ok(state)
 }
 
@@ -840,6 +851,20 @@ impl Mobject {
 mod opacity_tests {
     use super::*;
 
+    fn image_style() -> (crate::Scene, SemanticStyle) {
+        let mut scene = crate::Scene::new();
+        let mut object = scene.circle(1.0).unwrap();
+        object
+            .set_fill_image(
+                crate::ImagePaintOptions::rgba8(1, 1, vec![128, 64, 0, 64]).unwrap(),
+                Some(1.0),
+            )
+            .unwrap();
+        object.disable_stroke().unwrap();
+        let style = object.state().unwrap().style;
+        (scene, style)
+    }
+
     #[test]
     fn stroke_cap_parser_accepts_manim_auto_and_explicit_caps() {
         assert_eq!(parse_stroke_cap("auto").unwrap(), StrokeCap::Auto);
@@ -962,13 +987,10 @@ mod opacity_tests {
         );
         assert_eq!(authored.object_opacity, 0.3);
 
-        let mut resource = SemanticStyle {
-            fill: Some(SemanticPaint::Resource(7)),
-            stroke: None,
-            ..SemanticStyle::default()
-        };
+        let (_scene, mut resource) = image_style();
+        let original = resource.fill.clone();
         edit_manim_opacity(&mut resource, 0.4).unwrap();
-        assert_eq!(resource.fill, Some(SemanticPaint::Resource(7)));
+        assert_eq!(resource.fill, original);
         assert_eq!(resource.fill_opacity, 0.4);
         assert_eq!(resource.stroke, None);
     }
@@ -979,11 +1001,7 @@ mod opacity_tests {
         assert_eq!(manim_paint_opacity(Some(&solid), 0.25).unwrap(), 0.125);
         assert_eq!(manim_paint_opacity(Some(&solid), 1.0).unwrap(), 0.5);
         assert_eq!(manim_paint_opacity(None, 1.0).unwrap(), 0.0);
-        assert_eq!(
-            manim_paint_opacity(Some(&SemanticPaint::Resource(7)), 0.5).unwrap_err(),
-            AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery
-            )
-        );
+        let (_scene, image) = image_style();
+        assert_eq!(manim_paint_opacity(image.fill.as_ref(), 0.5).unwrap(), 0.5);
     }
 }

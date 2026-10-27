@@ -85,7 +85,7 @@ mod replacement_tests {
             .into_iter()
             .enumerate()
             .map(|(index, geometry)| FrameObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 effect: None,
                 spatial: None,

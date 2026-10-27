@@ -177,7 +177,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = crate::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             z_index: 0.0,
@@ -190,7 +190,7 @@ mod tests {
             text_bounds: None,
         };
         let circle = crate::FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             z_index: 0.0,
@@ -215,7 +215,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     z_index: 0.0,
@@ -228,7 +228,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
-                    fill_gradient: None,
+                    fill_paint: None,
                     draw_enabled: true,
                     effect: None,
                     z_index: 0.0,
@@ -272,7 +272,7 @@ mod tests {
         let (plan, mut frame, mut states) = mixed_fixture();
         states[0] = None;
         frame.objects.push(FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             z_index: 0.0,

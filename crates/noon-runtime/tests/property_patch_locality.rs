@@ -55,7 +55,7 @@ fn property_patches_touch_only_one_object_in_a_100k_scene() {
     let mut style = live.frame().objects[TARGET_INDEX].style;
     style.opacity = 0.25;
     live.apply_execution_patch(&ExecutionPatch::SetStyle {
-        fill_gradient: None,
+        fill_paint: None,
         object: target,
         style,
     })

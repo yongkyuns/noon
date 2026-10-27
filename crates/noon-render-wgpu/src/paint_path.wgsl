@@ -1,4 +1,4 @@
-struct GradientPathOutput {
+struct PaintPathOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) path_progress: f32,
@@ -13,9 +13,9 @@ struct GradientPathOutput {
 };
 
 @vertex
-fn vs_gradient_path(input: PathVertexInput) -> GradientPathOutput {
+fn vs_paint_path(input: PathVertexInput) -> PaintPathOutput {
     let base = path_vertex(input);
-    var output: GradientPathOutput;
+    var output: PaintPathOutput;
     output.position = base.position;
     output.color = base.color;
     output.path_progress = base.path_progress;
@@ -36,10 +36,10 @@ fn vs_gradient_path(input: PathVertexInput) -> GradientPathOutput {
     return output;
 }
 
-fn gradient_path_input(input: GradientPathOutput) -> PathVertexOutput {
+fn paint_path_input(input: PaintPathOutput) -> PathVertexOutput {
     var base: PathVertexOutput;
     base.position = input.position;
-    let color = gradient_fill(gradient_local_from_pixel(input.position.xy), vec4<f32>(1.0, 1.0, 1.0, input.paint.x));
+    let color = paint_fill(paint_local_from_pixel(input.position.xy), vec4<f32>(1.0, 1.0, 1.0, input.paint.x));
     base.color = select(input.color, cairo_source_color(color, 1.0), input.paint.y > 0.5);
     base.path_progress = input.path_progress;
     base.reveal = input.reveal;
@@ -53,10 +53,10 @@ fn gradient_path_input(input: GradientPathOutput) -> PathVertexOutput {
 }
 
 @fragment
-fn fs_gradient_path(input: GradientPathOutput) -> @location(0) vec4<f32> {
-    return path_color(gradient_path_input(input));
+fn fs_paint_path(input: PaintPathOutput) -> @location(0) vec4<f32> {
+    return path_color(paint_path_input(input));
 }
 @fragment
-fn fs_gradient_path_stroke(input: GradientPathOutput) -> @location(0) vec4<f32> {
-    return path_stroke_color(gradient_path_input(input));
+fn fs_paint_path_stroke(input: PaintPathOutput) -> @location(0) vec4<f32> {
+    return path_stroke_color(paint_path_input(input));
 }

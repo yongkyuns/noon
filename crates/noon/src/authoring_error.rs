@@ -49,8 +49,6 @@ pub enum UnsupportedAuthoringOperation {
     CaptureResourcePaint,
     /// Manim color queries do not support resource paints.
     ResourcePaintColorQuery,
-    /// Manim opacity queries do not support resource paints.
-    ResourcePaintOpacityQuery,
     /// Manim style interpolation requires matching solid-paint channels and
     /// compatible sheen-direction dimensions.
     ManimStyleInterpolation,
@@ -96,7 +94,6 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::SpatialPathOpacity => "spatial path caps require opaque or fully transparent paint",
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
-            Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
             Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",

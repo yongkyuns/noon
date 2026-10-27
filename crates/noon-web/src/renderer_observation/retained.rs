@@ -545,7 +545,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
-                fill_gradient: None,
+                fill_paint: None,
                 draw_enabled: true,
                 slot,
                 order: 0,

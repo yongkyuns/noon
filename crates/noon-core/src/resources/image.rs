@@ -16,7 +16,9 @@ fn next_raster_image_resource_arena() -> u64 {
 }
 
 /// Stable identity for one immutable canonical raster-image payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct RasterImageResourceId(u64);
 
 impl RasterImageResourceId {
@@ -34,7 +36,10 @@ impl RasterImageResourceId {
 /// This first B2 resource slice is append-only inside one arena, so live handles
 /// remain at version zero. Arena provenance prevents equal slot values from a
 /// cloned or unrelated scene store from aliasing one another.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(deny_unknown_fields)]
 pub struct RasterImageResourceHandle {
     pub arena: u64,
     pub id: RasterImageResourceId,

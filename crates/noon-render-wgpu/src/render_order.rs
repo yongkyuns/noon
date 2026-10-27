@@ -471,7 +471,7 @@ fn project_mega_render_batches(
             .mega_path_segments
             .get(path_batch_index)
             .and_then(|segment| segment.as_ref())
-            .filter(|_| !preparer.path_range_has_gradient(&ordered_batch.instance_range))
+            .filter(|_| !preparer.path_range_has_paint(&ordered_batch.instance_range))
             .filter(|_| {
                 !preparer
                     .mega_path_detached
@@ -523,9 +523,9 @@ fn projected_frame<'a>(
     stats: RenderStats,
 ) -> PreparedFrame<'a> {
     PreparedFrame {
-        fill_gradients: &preparer.fill_gradients,
-        gradient_changes: &preparer.gradient_changes,
-        gradient_indices: &preparer.gradient_indices,
+        fill_paints: &preparer.fill_paints,
+        paint_changes: &preparer.paint_changes,
+        paint_indices: &preparer.paint_indices,
         time,
         circle_ids: &preparer.circle_ids,
         circles: &preparer.circles,
@@ -1125,7 +1125,7 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             draw_enabled: true,
             effect: None,
             spatial: None,
@@ -1624,7 +1624,7 @@ fn pack_derived_display_object(
 ) -> Result<(), DerivedDisplayRenderError> {
     let state = object.state();
     let occurrence = object.occurrence_index();
-    if state.fill_gradient.is_some() {
+    if state.fill_paint.is_some() {
         return Err(DerivedDisplayRenderError::UnsupportedPaint(occurrence));
     }
     if !state.presence {
@@ -1841,7 +1841,7 @@ mod derived_display_tests {
 
     fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
-            fill_gradient: None,
+            fill_paint: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,

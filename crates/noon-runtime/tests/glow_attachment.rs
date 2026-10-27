@@ -101,6 +101,7 @@ fn attach_remove_and_new_generation_preserve_the_object_and_only_dirty_rendering
         assert!(
             rt.prepare_authored_value_publication(
                 &tx([patch.clone()]),
+                Default::default(),
                 before,
                 before.scene_revision().checked_next().unwrap()
             )
@@ -206,7 +207,7 @@ fn stale_attachment_changes_and_same_identity_schema_edits_fail_without_a_prefix
         );
         let edits = tx([
             ExecutionPatch::SetStyle {
-                fill_gradient: None,
+                fill_paint: None,
                 object: ObjectId::new(1),
                 style: Style {
                     fill: Some(Color::BLUE),

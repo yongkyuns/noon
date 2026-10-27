@@ -10,8 +10,8 @@ use noon_runtime::{FrameChanges, SceneInstance};
 use super::*;
 use crate::{Camera2D, FramePreparer};
 
-fn gradient(first: Color) -> Arc<LinearGradient> {
-    Arc::new(
+fn gradient(first: Color) -> Arc<noon_core::SemanticPaint> {
+    Arc::new(noon_core::SemanticPaint::LinearGradient(Arc::new(
         LinearGradient::new(
             [0.0, 0.5],
             [1.0, 0.5],
@@ -21,7 +21,7 @@ fn gradient(first: Color) -> Arc<LinearGradient> {
             ],
         )
         .unwrap(),
-    )
+    )))
 }
 
 fn runtime(geometry: GeometryRef) -> SceneInstance {
@@ -43,13 +43,13 @@ fn runtime(geometry: GeometryRef) -> SceneInstance {
     )
 }
 
-fn set_gradient(runtime: &mut SceneInstance, paint: Option<Arc<LinearGradient>>) {
+fn set_gradient(runtime: &mut SceneInstance, paint: Option<Arc<noon_core::SemanticPaint>>) {
     let style = runtime.frame().objects[0].style;
     runtime
         .apply_execution_patch(&ExecutionPatch::SetStyle {
             object: ObjectId::new(7),
             style,
-            fill_gradient: paint,
+            fill_paint: paint,
         })
         .unwrap();
 }
@@ -74,13 +74,13 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
         .apply_execution_patch(&ExecutionPatch::SetStyle {
             object: ObjectId::new(50_000),
             style: Style::default(),
-            fill_gradient: Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
+            fill_paint: Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
         })
         .unwrap();
     let changes = runtime.take_frame_changes();
     let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
     let routes = prepared
-        .gradient_indices(RenderPrimitive::Circle, 0..100_000)
+        .paint_indices(RenderPrimitive::Circle, 0..100_000)
         .unwrap()
         .copied()
         .collect::<Vec<_>>();
@@ -88,7 +88,7 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
     assert_eq!(prepared.stats.instances_repacked, 1);
     assert_eq!(prepared.stats.dirty_instance_count, 0);
     assert_eq!(prepared.stats.render_order_positions_visited, 0);
-    assert_eq!(prepared.gradient_changes, &[ObjectId::new(50_000)]);
+    assert_eq!(prepared.paint_changes, &[ObjectId::new(50_000)]);
 }
 
 #[test]
@@ -127,12 +127,12 @@ fn path_gradient_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
             .apply_execution_patch(&ExecutionPatch::SetStyle {
                 object: ObjectId::new(500),
                 style: runtime.frame().objects[500].style,
-                fill_gradient: paint,
+                fill_paint: paint,
             })
             .unwrap();
         let changes = runtime.take_frame_changes();
         let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
-        assert_eq!(prepared.gradient_changes, &[ObjectId::new(500)]);
+        assert_eq!(prepared.paint_changes, &[ObjectId::new(500)]);
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.path_vertices_repacked, 0);
@@ -148,7 +148,7 @@ fn gradient_only_edits_reuse_uniforms_and_clean_frames_upload_nothing() {
     let mut preparer = FramePreparer::new();
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()));
-    assert!(renderer.fill_gradients.is_none());
+    assert!(renderer.fill_paints.is_none());
     runtime.take_frame_changes();
     let original_style = runtime.frame().objects[0].style;
     for (color, allocations) in [
@@ -160,13 +160,13 @@ fn gradient_only_edits_reuse_uniforms_and_clean_frames_upload_nothing() {
         let changes = runtime.take_frame_changes();
         assert_eq!(changes.object_indices(), &[0]);
         let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
-        assert_eq!(prepared.gradient_changes, &[ObjectId::new(7)]);
+        assert_eq!(prepared.paint_changes, &[ObjectId::new(7)]);
         assert_eq!(prepared.stats.dirty_instance_count, 0);
         let stats = renderer.upload(&device, &queue, &prepared);
         assert_eq!(stats.buffer_reallocations, allocations);
-        assert_eq!(stats.bytes_uploaded, size_of::<GradientUniform>());
+        assert_eq!(stats.bytes_uploaded, size_of::<PaintUniform>());
         let prepared = preparer.prepare_incremental(runtime.frame(), &FrameChanges::default());
-        assert!(prepared.gradient_changes.is_empty());
+        assert!(prepared.paint_changes.is_empty());
         assert_eq!(
             renderer.upload(&device, &queue, &prepared),
             UploadStats::default()
@@ -179,12 +179,7 @@ fn gradient_only_edits_reuse_uniforms_and_clean_frames_upload_nothing() {
         &queue,
         &preparer.prepare_incremental(runtime.frame(), &changes),
     );
-    assert!(renderer
-        .fill_gradients
-        .as_ref()
-        .unwrap()
-        .residents
-        .is_empty());
+    assert!(renderer.fill_paints.as_ref().unwrap().residents.is_empty());
 }
 
 #[test]
@@ -247,16 +242,18 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
             let red = Color::rgb(1.0, 0.0, 0.0);
             let blue = Color::rgb(0.0, 0.0, 1.0);
             let make = |start, end, stops: Vec<(f64, Color)>| {
-                Some(Arc::new(
-                    LinearGradient::new(
-                        start,
-                        end,
-                        stops
-                            .into_iter()
-                            .map(|(p, c)| GradientStop::new(p, c).unwrap()),
-                    )
-                    .unwrap(),
-                ))
+                Some(Arc::new(noon_core::SemanticPaint::LinearGradient(
+                    Arc::new(
+                        LinearGradient::new(
+                            start,
+                            end,
+                            stops
+                                .into_iter()
+                                .map(|(p, c)| GradientStop::new(p, c).unwrap()),
+                        )
+                        .unwrap(),
+                    ),
+                )))
             };
             let paint = match profile {
                 0 => None,
@@ -278,7 +275,7 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
             runtime
                 .apply_execution_patch(&ExecutionPatch::SetStyle {
                     object: ObjectId::new(7),
-                    fill_gradient: paint,
+                    fill_paint: paint,
                     style: Style {
                         fill: Some(Color::rgba(
                             1.0,

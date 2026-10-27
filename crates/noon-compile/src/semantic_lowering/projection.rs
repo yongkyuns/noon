@@ -355,7 +355,7 @@ impl SemanticExecutionIndex {
         let objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
-                fill_gradient: state.fill_gradient,
+                fill_paint: state.fill_paint,
                 semantic_id,
                 effect: state.effect,
                 execution_id: self.ensure_object(semantic_id),
@@ -455,7 +455,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
-    pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub effect: Option<std::sync::Arc<crate::CompiledEffect>>,
     /// Authoritative scene-global semantic identity.
@@ -550,11 +550,6 @@ pub enum SemanticLoweringError {
         node: SemanticNodeId,
         field: SemanticExecutionField,
     },
-    UnsupportedPaintResource {
-        node: SemanticNodeId,
-        field: SemanticExecutionField,
-        resource: u64,
-    },
     UnsupportedSpatialOrientation {
         node: SemanticNodeId,
     },
@@ -632,16 +627,6 @@ impl std::fmt::Display for SemanticLoweringError {
             Self::ValueOutOfRange { node, field } => write!(
                 formatter,
                 "semantic object {}:{} {field} cannot lower to the current f32 execution domain",
-                node.slot(),
-                node.generation()
-            ),
-            Self::UnsupportedPaintResource {
-                node,
-                field,
-                resource,
-            } => write!(
-                formatter,
-                "semantic object {}:{} {field} resource {resource} is not supported by the current solid-paint execution backend",
                 node.slot(),
                 node.generation()
             ),
@@ -888,7 +873,7 @@ fn lower_graph_dependencies(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
-    pub(super) fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+    pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub(super) effect: Option<std::sync::Arc<crate::CompiledEffect>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
@@ -1103,7 +1088,7 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     };
     Ok(LoweredObjectState {
-        fill_gradient: super::paint::lower_fill(semantic_id, state, store)?,
+        fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
         effect: None,
         content: state.content,
         base_transform,
@@ -1125,19 +1110,9 @@ pub(super) fn lower_semantic_transform(
 /// Value-lowering failure before a transaction-local node has a permanent semantic ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticExecutionValueError {
-    UnsupportedPaintProfile {
-        field: SemanticExecutionField,
-    },
-    NonFiniteValue {
-        field: SemanticExecutionField,
-    },
-    ValueOutOfRange {
-        field: SemanticExecutionField,
-    },
-    UnsupportedPaintResource {
-        field: SemanticExecutionField,
-        resource: u64,
-    },
+    UnsupportedPaintProfile { field: SemanticExecutionField },
+    NonFiniteValue { field: SemanticExecutionField },
+    ValueOutOfRange { field: SemanticExecutionField },
     SpatialOrientationUnsupported,
 }
 
@@ -1153,9 +1128,6 @@ impl std::fmt::Display for SemanticExecutionValueError {
                     formatter,
                     "{field} state is outside the f32 execution domain"
                 )
-            }
-            Self::UnsupportedPaintResource { field, resource } => {
-                write!(formatter, "unsupported {field} paint resource {resource}")
             }
             Self::SpatialOrientationUnsupported => {
                 formatter.write_str("spatial orientation cannot be lowered to a 2D transform")
@@ -1175,13 +1147,6 @@ impl SemanticExecutionValueError {
             Self::NonFiniteValue { field } => SemanticLoweringError::NonFiniteValue { node, field },
             Self::ValueOutOfRange { field } => {
                 SemanticLoweringError::ValueOutOfRange { node, field }
-            }
-            Self::UnsupportedPaintResource { field, resource } => {
-                SemanticLoweringError::UnsupportedPaintResource {
-                    node,
-                    field,
-                    resource,
-                }
             }
             Self::SpatialOrientationUnsupported => {
                 SemanticLoweringError::UnsupportedSpatialOrientation { node }
@@ -1313,13 +1278,13 @@ fn lower_paint(
     };
 
     match paint {
-        SemanticPaint::LinearGradient(gradient) => {
+        SemanticPaint::LinearGradient(_) | SemanticPaint::Image(_) => {
             if paint_field != SemanticExecutionField::FillPaint {
                 return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
                     field: paint_field,
                 });
             }
-            super::paint::validate_definition(gradient)?;
+            super::paint::validate_definition(paint)?;
             Ok(Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)))
         }
         SemanticPaint::Solid(color) => {
@@ -1333,12 +1298,6 @@ fn lower_paint(
             let mut color = *color;
             color.alpha = lower_scalar_f32(opacity_field, f64::from(color.alpha) * opacity)?;
             Ok(Some(color))
-        }
-        SemanticPaint::Resource(resource) => {
-            Err(SemanticExecutionValueError::UnsupportedPaintResource {
-                field: paint_field,
-                resource: *resource,
-            })
         }
     }
 }
@@ -1932,20 +1891,29 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_paint_fails_without_partial_identity_update() {
+    fn missing_image_paint_fails_without_partial_identity_update() {
         let mut store = SemanticStore::new();
         attach(&mut store, circle(1.0));
         let mut invalid = circle(2.0);
-        invalid.style.fill = Some(SemanticPaint::Resource(42));
+        invalid.style.fill = Some(SemanticPaint::Image(std::sync::Arc::new(
+            noon_core::ImagePaint::new(
+                noon_core::RasterImageResourceHandle {
+                    arena: u64::MAX,
+                    id: noon_core::RasterImageResourceId::new(42),
+                    version: 0,
+                },
+                noon_core::ImageMapping::default(),
+                noon_core::RasterImageSampling::Linear,
+            ),
+        )));
         let invalid = attach(&mut store, invalid);
 
         let mut index = SemanticExecutionIndex::new();
         assert_eq!(
             index.lower_scene(&store).unwrap_err(),
-            SemanticLoweringError::UnsupportedPaintResource {
+            SemanticLoweringError::UnsupportedPaintProfile {
                 node: invalid,
                 field: SemanticExecutionField::FillPaint,
-                resource: 42,
             }
         );
         assert!(index.is_empty());

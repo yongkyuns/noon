@@ -499,6 +499,11 @@ fn all_fits_match_independent_physical_rectangle_placement() {
                         } else {
                             Some([uv[0], 1.0 - uv[1]])
                         };
+                        let affine = paint.image_uv_affine(local, image).unwrap();
+                        near(
+                            affine.map(|row| row[0] * point[0] + row[1] * point[1] + row[2]),
+                            [uv[0], 1.0 - uv[1]],
+                        );
                         match (paint.image_uv(point, local, image).unwrap(), expected) {
                             (Some(actual), Some(expected)) => near(actual, expected),
                             (None, None) => {}

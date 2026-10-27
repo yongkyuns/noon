@@ -10,9 +10,9 @@ use crate::{
 
 /// Validate the finite continuous-paint execution profile at a genuine external
 /// boundary as well as typed execution-plan publication.
-pub fn validate_fill_gradient(
+pub fn validate_fill_paint(
     object: ObjectId,
-    gradient: Option<&noon_core::LinearGradient>,
+    gradient: Option<&noon_core::SemanticPaint>,
 ) -> Result<(), crate::CompilePatchError> {
     if let Some(gradient) = gradient {
         crate::semantic_lowering::paint::validate_definition(gradient).map_err(|_| {
@@ -100,7 +100,7 @@ pub enum ExecutionPatch {
     SetStyle {
         object: ObjectId,
         style: Style,
-        fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+        fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     },
     /// Replace one display's relation. The camera may be detached; the relation
     /// becomes visible only while both execution rows are live.
@@ -237,11 +237,11 @@ impl CompiledScene {
         &mut self,
         object_index: u32,
         style: Style,
-        fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
+        fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     ) {
         let object = &mut self.objects[object_index as usize];
         object.base_style = style;
-        object.fill_gradient = fill_gradient;
+        object.fill_paint = fill_paint;
     }
 }
 

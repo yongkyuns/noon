@@ -357,7 +357,7 @@ impl PreflightOverlay {
                 scene
                     .objects
                     .get(index as usize)
-                    .is_some_and(|object| object.fill_gradient.is_some())
+                    .is_some_and(|object| object.fill_paint.is_some())
             });
         if !supported
             && (painted
@@ -386,6 +386,10 @@ pub(super) fn preflight_transaction_with_resources(
     transaction: &ExecutionMutationTransaction,
     additions: &crate::CompiledResources,
 ) -> Result<CompiledTransactionPreflightStats, CompilePatchError> {
+    scene
+        .resources
+        .preflight_merge(additions)
+        .map_err(CompilePatchError::Resource)?;
     let mut overlay = PreflightOverlay::new(scene);
 
     for patch in transaction.mutations() {
@@ -395,6 +399,11 @@ pub(super) fn preflight_transaction_with_resources(
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
                 validate_compiled_object(object)?;
+                crate::validate_execution_paint_resources(
+                    &scene.resources,
+                    Some(additions),
+                    object.fill_paint.as_deref(),
+                )?;
                 validate_execution_content_resource(
                     &scene.resources,
                     Some(additions),
@@ -417,7 +426,7 @@ pub(super) fn preflight_transaction_with_resources(
                 };
                 overlay
                     .paint_definitions
-                    .insert(index, object.fill_gradient.is_some());
+                    .insert(index, object.fill_paint.is_some());
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
@@ -639,16 +648,21 @@ pub(super) fn preflight_transaction_with_resources(
             ExecutionPatch::SetStyle {
                 object,
                 style,
-                fill_gradient,
+                fill_paint,
             } => {
                 let index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
-                crate::execution_patch::validate_fill_gradient(*object, fill_gradient.as_deref())?;
+                crate::execution_patch::validate_fill_paint(*object, fill_paint.as_deref())?;
+                crate::validate_execution_paint_resources(
+                    &scene.resources,
+                    Some(additions),
+                    fill_paint.as_deref(),
+                )?;
                 let supported = overlay.supports_continuous_fill(scene, *object)
                     && overlay.spatial(scene, *object).is_none();
-                if fill_gradient.is_some() && !supported {
+                if fill_paint.is_some() && !supported {
                     return Err(CompilePatchError::InvalidObjectState {
                         object: *object,
                         field: noon_core::ObjectStateField::Style,
@@ -656,7 +670,7 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 overlay
                     .paint_definitions
-                    .insert(index, fill_gradient.is_some());
+                    .insert(index, fill_paint.is_some());
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -720,6 +734,11 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                crate::validate_execution_paint_track_resources(
+                    &scene.resources,
+                    Some(additions),
+                    &track.values,
+                )?;
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
