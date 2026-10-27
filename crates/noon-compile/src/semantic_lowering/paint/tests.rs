@@ -3,6 +3,60 @@ use crate::{lower_semantic_execution_root, SemanticExecutionIndex};
 use noon_core::{Color, GradientStop};
 
 #[test]
+fn hatch_projection_is_periodic_bounded_and_rotation_independent() {
+    use noon_core::{HatchPaint, HatchPaintOptions, Rect, Vec2};
+    let make = |spacing, angle, phase| {
+        HatchPaint::new(
+            Color::WHITE,
+            Color::TRANSPARENT,
+            HatchPaintOptions {
+                spacing,
+                width: spacing * 0.25,
+                angle,
+                phase,
+                cross: true,
+            },
+        )
+        .unwrap()
+    };
+    let bounds = Rect::new(Vec2::new(-2.0, -1.0), Vec2::new(2.0, 1.0));
+    for angle in [0.0, 0.3, std::f64::consts::FRAC_PI_2, 7.0] {
+        let hatch = make(0.5, angle, [-0.25, 4_294_967_296.125]);
+        let rows = project_hatch_mapping(&hatch).unwrap();
+        assert_eq!(rows[0][2..], [0.75, 0.25]);
+        assert_eq!(rows[1][2..], [0.125, 0.0]);
+        validate_hatch_bounds(&hatch, bounds).unwrap();
+        assert!(validate_hatch_bounds(&make(1e-8, angle, [0.0; 2]), bounds).is_err());
+    }
+    for spacing in [1e-60, 1e60] {
+        assert!(project_hatch_mapping(&make(spacing, 0.7, [0.0; 2])).is_err());
+    }
+    let rounded_seam = project_hatch_mapping(&make(0.5, 0.0, [-1e-100, 0.0])).unwrap();
+    assert_eq!(rounded_seam[0][2], 0.0);
+
+    // A valid zero-width endpoint can pass through arbitrarily small positive
+    // widths. The finite GPU duty may round to zero, never fail after admission.
+    let absent = HatchPaint::new(
+        Color::WHITE,
+        Color::TRANSPARENT,
+        HatchPaintOptions {
+            width: 0.0,
+            ..HatchPaintOptions::default()
+        },
+    )
+    .unwrap();
+    let present = HatchPaint::new(
+        Color::WHITE,
+        Color::TRANSPARENT,
+        HatchPaintOptions::default(),
+    )
+    .unwrap();
+    for progress in [f64::from_bits(1), 1e-100, 1e-38, 0.5, 1.0] {
+        project_hatch_mapping(&absent.interpolate(&present, progress).unwrap()).unwrap();
+    }
+}
+
+#[test]
 fn radial_profile_rejects_unrepresentable_radii_and_moving_stop_gaps() {
     let make = |radii, position| {
         Arc::new(

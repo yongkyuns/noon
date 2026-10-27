@@ -221,6 +221,92 @@ reference, full u32 seed, phase-wrap and minification profiles on WebGPU/WebGL2.
 Executed source/build evidence and unfinished promotion gates belong to the
 owning PR/#1897; these are correctness/resource checks, not frame-pacing claims.
 
+## Scene-unit stripes and crosshatching
+
+`HatchPaint` fills an ordinary planar circle, rectangle or vector path with
+parallel lines. `cross=True` unions a perpendicular family with those lines.
+It uses the existing fill value, target animation and retained paint program.
+The static pattern has no clock, generated image, offscreen pass or per-frame
+callback. It is useful for uncertainty regions, material differentiation and
+print-style diagrams whose meaning should remain visible without color alone.
+
+```python
+from math import pi
+from noon import HatchPaint, Rectangle, Scene, linear
+
+class UncertaintyRegion(Scene):
+    def construct(self):
+        region = Rectangle(width=4, height=2, stroke=None)
+        region.set_fill(HatchPaint("#F4D35E", background="#132A3A",
+                                  spacing=0.4, width=0.06, angle=pi / 4), opacity=1)
+        self.add(region)
+        self.play(region.animate.set_fill(
+            HatchPaint("#F4D35E", background="#132A3A", spacing=0.4,
+                       width=0.06, angle=pi / 4, phase=(1, 0))),
+            run_time=2, rate_func=linear)
+        self.wait(0.5)
+```
+
+The default background is transparent. Defaults are `spacing=0.25`,
+`width=0.04`, `angle=pi/4`, `phase=(0,0)`, and `cross=False`. Rust uses
+`HatchPaint::new(foreground, background, HatchPaintOptions { ... })`, followed by
+`Mobject::set_fill_hatch` or `LiveSession::set_fill_hatch`. The full paired
+playback scripts are `noon::example_scenes::hatch_paint` and
+`web/python/examples/hatch_paint.py`; the native executable is `hatch_paint`.
+
+Spacing is the perpendicular distance between line centers and width is the
+line width, both in object-local scene units. The local origin anchors the
+pattern. Angle is the line direction in counterclockwise radians from local
+positive X. Resizing geometry adds more lines at the same spacing; scaling
+the object scales the lines along with it. Phase advances each family in
+periods; integral phase repeats the appearance. The second phase affects
+crosshatching only. Phase and angle remain unwrapped authored f64 values, so
+an animation can intentionally travel through multiple periods or turns.
+
+For local point `(x,y)`, line coordinates are
+`u=(-sin(angle)*x+cos(angle)*y)/spacing+phase.x` and
+`v=(cos(angle)*x+sin(angle)*y)/spacing+phase.y`. Each family covers a band of
+width `width/spacing` centered at every integer. The point rule is half-open;
+zero width yields only the background and width equal to spacing yields only
+the foreground. Spacing must be finite and positive, width must be finite in
+`[0,spacing]`, angle and phase finite, and RGBA components in `[0,1]`.
+
+The physical pixel is mapped through camera and inverse object pose, then
+through the two line coordinates. Its axis-aligned bounding box in line
+coordinates is the declared reconstruction domain. Each axis analytically
+averages periodic band coverage; below 256 cells the calculation uses complete
+periods plus bounded interval overlaps, and at 256 cells or more it uses the
+exact period mean. A zero footprint uses the point rule. There is no small
+pixel threshold that silently disables filtering. Crosshatch coverage is
+`a+b-a*b` for the two axis averages, so crossing lines do not double opacity.
+This finite box profile is distinct from integrating the exact rotated pixel
+parallelogram. GPU admission checks finite projected coefficients and limits
+the all-angle local coordinate extent to 65,536 cells. Unsupported values
+reject before publication.
+
+Foreground/background mix in premultiplied encoded sRGB, including their
+intrinsic alpha. Fill and final object opacity remain independent. Matching
+`cross` targets interpolate spacing, width, angle, phase, colors and opacity
+through the existing Fill channel. Solid/absent endpoints lift onto the
+pattern only for interior samples, and exact endpoints preserve their paint
+kind and authored values. Changing `cross` is an immediate edit; animating
+between one and two families rejects atomically. Existing text/stroke,
+callback paint, spatial and transient-family restrictions remain explicit.
+
+The native `hatch_paint_raster` and browser
+`scripts/hatch-paint-qualification.mjs` use independent interval enumeration
+and clipping, rather than production period decomposition, sampling functions
+or uniforms. Coverage includes actual paths, primitive coverage, reflections,
+nonuniform scale, rotation, physical pixel density, detail/coarse profiles,
+transparent colors, duty endpoints, wrapped phase, ordinary animation and
+backward seek. Existing retained counters check one local uniform update,
+clean zero uploads and no additional texture allocation. Browser comparisons
+exercise direct Rust/WASM and Python on WebGPU and WebGL2. Actual production
+shader negative controls must fail the original numerical tolerance before
+restored source passes. Executed results and exact source/build identities
+belong in the owning PR/#1897; these checks do not establish physical-device
+frame pacing.
+
 ## Radial paint authoring and qualification
 
 `RadialGradient(stops, center=(0.5, 0.5), radii=(0.5, 0.5))` uses the same

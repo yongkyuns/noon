@@ -1699,6 +1699,7 @@ fn interpolate_manim_paint(
             SemanticPaint::LinearGradient(_)
                 | SemanticPaint::RadialGradient(_)
                 | SemanticPaint::Noise(_)
+                | SemanticPaint::Hatch(_)
                 | SemanticPaint::Image(_)
         )
     ) || matches!(
@@ -1707,6 +1708,7 @@ fn interpolate_manim_paint(
             SemanticPaint::LinearGradient(_)
                 | SemanticPaint::RadialGradient(_)
                 | SemanticPaint::Noise(_)
+                | SemanticPaint::Hatch(_)
                 | SemanticPaint::Image(_)
         )
     ) {

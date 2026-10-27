@@ -11,6 +11,7 @@ pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
             | SemanticPaint::Noise(_)
+            | SemanticPaint::Hatch(_)
             | SemanticPaint::Image(_),
         ) => Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
@@ -26,6 +27,7 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
             | SemanticPaint::Noise(_)
+            | SemanticPaint::Hatch(_)
             | SemanticPaint::Image(_),
         ) => style.fill_opacity > 0.0,
         None => false,
@@ -48,6 +50,7 @@ fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f6
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
             | SemanticPaint::Noise(_)
+            | SemanticPaint::Hatch(_)
             | SemanticPaint::Image(_),
         ) => Ok(opacity),
         None => Ok(0.0),
@@ -103,6 +106,7 @@ fn replace_paint_color(
             SemanticPaint::LinearGradient(_)
             | SemanticPaint::RadialGradient(_)
             | SemanticPaint::Noise(_)
+            | SemanticPaint::Hatch(_)
             | SemanticPaint::Image(_),
         ) => *opacity,
     };
@@ -655,6 +659,23 @@ pub(crate) fn prepare_fill_paint_value(
 }
 
 impl Mobject {
+    /// Set immutable stripes or crosshatching in object-local scene units.
+    pub fn set_fill_hatch(
+        &mut self,
+        paint: impl Into<std::sync::Arc<noon_core::HatchPaint>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let state = prepare_fill_paint_value(
+            &self.integration_store().borrow(),
+            self.node_id(),
+            self.state()?,
+            SemanticPaint::Hatch(paint.into()),
+            opacity,
+        )?;
+        self.commit_state(state)
+    }
+
     /// Set a seeded local noise fill through the shared style publication.
     pub fn set_fill_noise(
         &mut self,

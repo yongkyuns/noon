@@ -85,6 +85,10 @@ on:
       - "scripts/noise-paint-qualification.mjs"
       - "scripts/noise-paint-reference.mjs"
       - "scripts/noise-paint-reference.test.mjs"
+      - "scripts/hatch-paint-*.mjs"
+      - "crates/noon-core/src/object_state/hatch_paint*"
+      - "crates/noon-core/src/object_state/hatch_paint/**"
+      - "crates/noon-render-wgpu/src/paint*.wgsl"
       - "scripts/image-fill-qualification.mjs"
       - "crates/noon-web/src/glow_worker_smoke.rs"
       - "crates/noon-web/src/retained_execution_canvas.rs"
@@ -95,6 +99,8 @@ on:
       - "crates/noon/tests/radial_gradient_raster.rs"
       - "crates/noon/tests/noise_paint_raster.rs"
       - "crates/noon/tests/noise_reference/**"
+      - "crates/noon/tests/hatch_paint_raster.rs"
+      - "crates/noon/tests/hatch_reference/**"
       - "crates/noon/examples/glow_scene_playback.rs"
       - "crates/noon/src/effect_authoring*"
       - "crates/noon/src/effect_authoring/**"
@@ -264,6 +270,11 @@ jobs:
         run: |
           cargo test -p noon --test noise_paint_raster -- --ignored --nocapture
           cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture
+      - name: Qualify public Rust hatch paint on native GPU
+        # A missing GPU fails the required raster test, rather than skipping it.
+        run: |
+          cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture
+          cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -519,6 +530,8 @@ jobs:
         run: node scripts/radial-gradient-qualification.mjs
       - name: Qualify paired procedural noise paint authoring
         run: node scripts/noise-paint-qualification.mjs
+      - name: Qualify paired hatch paint authoring
+        run: node scripts/hatch-paint-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage

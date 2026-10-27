@@ -77,6 +77,7 @@ pub enum RasterImagePrepareError {
     TextureLimit { width: u32, height: u32, limit: u32 },
     UnsupportedReveal(ObjectId),
     InvalidPresentation(ObjectId),
+    InvalidPaint(ObjectId),
 }
 
 impl std::fmt::Display for RasterImagePrepareError {
@@ -107,6 +108,9 @@ impl std::fmt::Display for RasterImagePrepareError {
                 "image {id:?} cannot use vector/glyph reveal or pixel morphing"
             ),
             Self::InvalidPresentation(id) => write!(f, "image {id:?} has an invalid presentation"),
+            Self::InvalidPaint(id) => {
+                write!(f, "object {id:?} has an invalid fill paint presentation")
+            }
         }
     }
 }
@@ -174,6 +178,20 @@ impl RasterImageFramePreparer {
         let mut updates = Vec::new();
         let mut paint_updates = Vec::new();
         let mut stage_slot = |index: usize| -> Result<(), RasterImagePrepareError> {
+            // Value-backed paints need the same atomic, resource-resolved
+            // publication check as image fills, even though they own no pixels.
+            if let Some(object) = frame.objects.get(index).filter(|_| frame.is_present(index)) {
+                if let Some(noon_core::SemanticPaint::Hatch(hatch)) = object.fill_paint.as_deref() {
+                    let geometry = object
+                        .geometry()
+                        .ok_or(RasterImagePrepareError::InvalidPaint(object.id))?;
+                    let bounds =
+                        super::retained_text::resolve_geometry_bounds(geometry, geometries)
+                            .ok_or(RasterImagePrepareError::InvalidPaint(object.id))?;
+                    noon_compile::validate_hatch_bounds(hatch, bounds)
+                        .map_err(|_| RasterImagePrepareError::InvalidPaint(object.id))?;
+                }
+            }
             let paint = frame
                 .objects
                 .get(index)

@@ -160,6 +160,13 @@ impl InstalledRetainedResources {
 }
 
 impl PreparedRetainedResourceAdditionsWithRender {
+    pub(crate) fn geometry_for_transport(
+        &self,
+        handle: super::TransportGeometryResourceHandle,
+    ) -> Option<&noon_core::GeometryResource> {
+        self.ordinary.geometry_for_transport(handle)
+    }
+
     pub(crate) fn image_handle_remap(&self) -> super::images::ImageHandles {
         self.ordinary.image_handle_remap()
     }
