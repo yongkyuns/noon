@@ -66,6 +66,10 @@ on:
       - "scripts/ordered-effects-qualification.mjs"
       - "scripts/composed-effects-qualification.mjs"
       - "scripts/noise-dissolve-qualification.mjs"
+      - "scripts/dissolve-qualification.mjs"
+      - "scripts/dissolve-mask-*.mjs"
+      - "scripts/scope-opacity-qualification.mjs"
+      - "crates/noon-export/tests/scope_opacity.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -245,6 +249,8 @@ jobs:
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify public composed group pixels and lifecycle
         run: cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture
+      - name: Qualify native composed opacity and ancestor Visibility lifecycle
+        run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
       - name: Qualify dissolve mask field and premultiplied alpha operator
         run: cargo test -p noon-render-wgpu --lib dissolve_filter -- --ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
@@ -529,6 +535,10 @@ jobs:
         run: node scripts/ordered-effects-qualification.mjs
       - name: Qualify paired composed family controls on WebGPU and WebGL2
         run: node scripts/composed-effects-qualification.mjs
+      - name: Qualify animated nested opacity and ancestor Visibility
+        run: node scripts/scope-opacity-qualification.mjs
+      - name: Qualify private visibility lifecycle through Rust and Python
+        run: node scripts/dissolve-qualification.mjs
       - name: Qualify composed seeded masks through Rust and Python
         run: node scripts/noise-dissolve-qualification.mjs
       - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2

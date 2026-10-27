@@ -284,3 +284,89 @@ fn dissolve_of_nested_family_removes_its_ancestor_silhouette_contribution() {
         assert_eq!(capture.capture(&mut session).unwrap().rgba, empty);
     }
 }
+
+#[test]
+#[ignore = "requires native GPU; paired creator programme and shared export clock"]
+fn paired_scope_opacity_programme_animates_and_restores_through_native_export() {
+    use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
+    use noon::RustHostCallbackTable;
+    use noon_export::capture_frames;
+    let mut program = noon::example_scenes::scope_opacity::program().unwrap();
+    let mut options = CaptureOptions::new(640, 360);
+    options.backends = if cfg!(target_os = "macos") {
+        Backends::METAL
+    } else {
+        Backends::VULKAN
+    };
+    let times = [
+        4.75, 5.5, 7.0, 8.25, 8.5, 8.75, 9.25, 9.75, 10.25, 11.5, 12.0, 13.25, 13.75,
+    ];
+    let mut samples = std::collections::BTreeMap::new();
+    let summary = capture_frames(
+        &mut program,
+        &mut RustHostCallbackTable::new(),
+        ExportFrameOptions {
+            frame_rate: FrameRate::new(8, 1).unwrap(),
+            start_frame: 0,
+            stop: ExportStop::SourceEnd,
+            max_frames: 113,
+            max_transitions_per_sample: 64,
+            final_hold_seconds: 0.0,
+        },
+        options,
+        |frame| {
+            let time = frame.observation.requested_time;
+            if times.contains(&time) {
+                samples.insert((time * 8.0) as u32, frame.rgba.to_vec());
+            }
+            Ok::<_, std::convert::Infallible>(())
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.sampling.frames, 112);
+    assert_eq!(samples.len(), times.len());
+    for (time, red, overlap) in [
+        (5.5, 159, 80),
+        (7.0, 96, 48),
+        (8.25, 48, 24),
+        (9.25, 96, 48),
+    ] {
+        let frame = &samples[&((time * 8.0) as u32)];
+        for (x, expected) in [(260, [red, 0, 0, 255]), (320, [overlap, 0, overlap, 255])] {
+            let actual = &frame[(180 * 640 + x) * 4..][..4];
+            assert!(
+                actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
+                "time={time} x={x}: {actual:?} vs {expected:?}"
+            );
+        }
+    }
+    assert_eq!(
+        samples[&66], samples[&70],
+        "there-and-back samples agree exactly"
+    );
+    assert_eq!(
+        samples[&38], samples[&78],
+        "returning completion restores ordinary output"
+    );
+    assert_eq!(
+        samples[&38], samples[&110],
+        "mask and halo removal restore ordinary output"
+    );
+    assert_eq!(
+        samples[&82], samples[&106],
+        "Visibility in restores the entire parent halo"
+    );
+    let mut empty = [0_u8, 0, 0, 255].repeat(640 * 360);
+    for y in 282..318 {
+        for x in 62..98 {
+            empty[(y * 640 + x) * 4..][..4].fill(255);
+        }
+    }
+    for index in [68, 92, 96] {
+        assert_eq!(
+            samples[&index], empty,
+            "empty child cannot leave ancestor coverage at frame {index}"
+        );
+    }
+    eprintln!("ANIMATED_SCOPE_EXPORT_PASS frames=112 samples=13 literal_primary_overlap=true empty_exact=true returning_exact=true ancestor_visibility_exact=true final_restoration_exact=true");
+}

@@ -2,27 +2,10 @@
 // The independent field and source AABB below come from the authored fixture;
 // no engine uniforms or mask output are used to construct expected coverage.
 import assert from "node:assert/strict";
+import { dissolveCoverage } from "./dissolve-mask-reference.mjs";
 import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
-function lattice(x, y, seed) {
-  let h = Math.imul(x, 0x9e3779b9) ^ Math.imul(y, 0x85ebca6b) ^ seed;
-  h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
-  h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
-  return ((h ^ (h >>> 16)) >>> 8) / 16777216;
-}
-const mix = (a, b, t) => a * (1 - t) + b * t;
-function coverage(x, y, progress) {
-  if (progress <= 0) return 1;
-  if (progress >= 1) return 0;
-  const px = x * 16, py = y * 16, bx = Math.floor(px), by = Math.floor(py);
-  const fx = px - bx, fy = py - by;
-  const wx = fx * fx * (3 - 2 * fx), wy = fy * fy * (3 - 2 * fy);
-  const noise = mix(mix(lattice(bx, by, 7), lattice(bx + 1, by, 7), wx),
-    mix(lattice(bx, by + 1, 7), lattice(bx + 1, by + 1, 7), wx), wy);
-  const t = Math.max(0, Math.min(1, (progress - noise) / 0.2 + 0.5));
-  return 1 - t * t * (3 - 2 * t);
-}
 function progress(time) {
   if (time < 0.5 || (time >= 3 && time < 3.5) || time >= 6) return 0;
   if (time <= 1.5) return time - 0.5;
@@ -44,8 +27,8 @@ function reference(image, time) {
     if (x < min[0] || x >= min[0] + 1.6 * scale || y < min[1] || y >= min[1] + 0.8 * scale) {
       haloWitness = Math.max(haloWitness, source);
     }
-    const expected = Math.round(source * coverage((x + 0.5 - min[0]) / (1.6 * scale),
-      (y + 0.5 - min[1]) / (0.8 * scale), p));
+    const expected = Math.round(source * dissolveCoverage((x + 0.5 - min[0]) / (1.6 * scale),
+      (y + 0.5 - min[1]) / (0.8 * scale), {seed:7, softness:0.2, progress:p}));
     for (let c = 0; c < 3; c++) {
       maximumError = Math.max(maximumError, Math.abs(expected - image.data[(y * 640 + x) * 4 + c]));
       channels++;

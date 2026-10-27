@@ -1,5 +1,5 @@
 """Final composed opacity paired with noon::example_scenes::scope_opacity."""
-from noon import Blur, MovingCameraScene, Pixels, Rectangle, VGroup
+from noon import Blur, Dissolve, Glow, MovingCameraScene, Pixels, Rectangle, VGroup, linear, there_and_back
 
 
 class FamilyOpacity(MovingCameraScene):
@@ -29,4 +29,25 @@ class FamilyOpacity(MovingCameraScene):
         parent.set_object_opacity(1)
         self.wait(0.5)
         group.set_object_opacity(1)
+        self.wait(0.5)
+        self.play(group.animate.set_object_opacity(0.25), run_time=1, rate_func=linear)
+        self.wait(0.5)
+        self.play(group.animate.set_object_opacity(0.75), parent.animate.set_object_opacity(0.5), run_time=1, rate_func=linear)
+        self.wait(0.5)
+        self.play(group.animate.set_object_opacity(0), run_time=1, rate_func=there_and_back)
+        self.wait(0.5)
+        group.set_object_opacity(1)
+        parent.set_object_opacity(1)
+        self.wait(0.5)
+        group.set_object_opacity(0.5)
+        parent.set_object_opacity(0.6)
+        parent.add_effect(Glow(radius=Pixels(2), source="silhouette", color="#ff0000"), name="halo", scope="composed")
+        self.wait(0.5)
+        self.play(Dissolve(group, seed=7, softness=0.2, remover=False), run_time=1, rate_func=linear)
+        self.wait(0.5)
+        self.play(Dissolve(group, direction="in", seed=7, softness=0.2), run_time=1, rate_func=linear)
+        self.wait(0.5)
+        parent.remove_effect("halo")
+        group.set_object_opacity(1)
+        parent.set_object_opacity(1)
         self.wait(0.5)

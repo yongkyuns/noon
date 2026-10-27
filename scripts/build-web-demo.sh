@@ -43,6 +43,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/glow-worker-qualification.mjs
   node --check scripts/gaussian-blur-qualification.mjs
   node --test scripts/gaussian-blur-reference.test.mjs
+  node --test scripts/dissolve-mask-reference.test.mjs
+  node --check scripts/scope-opacity-qualification.mjs
   node --check scripts/linear-gradient-qualification.mjs
   node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/noise-paint-qualification.mjs
