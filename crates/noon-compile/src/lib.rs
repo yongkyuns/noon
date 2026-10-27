@@ -8,8 +8,8 @@ use order_index::{move_order_row, reposition_order_row};
 mod audio;
 pub use audio::CompiledAudioClip;
 mod compaction;
+mod effect_attachment;
 mod execution_patch;
-mod glow_attachment;
 mod graph_dependencies;
 pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
 mod replay_revision;
@@ -58,7 +58,7 @@ pub use transform::TransformGeometryPlan;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
-    pub glow: bool,
+    pub effect: bool,
     pub presence: bool,
     pub z_index: bool,
     pub transform: bool,
@@ -79,8 +79,8 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
-            Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
-                self.glow = true
+            Property::EffectColor | Property::EffectRadius | Property::EffectIntensity => {
+                self.effect = true
             }
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
@@ -101,7 +101,7 @@ impl DynamicProperties {
     }
 
     pub const fn any(self) -> bool {
-        self.glow
+        self.effect
             || self.presence
             || self.z_index
             || self.transform
@@ -127,7 +127,7 @@ pub struct CompiledObject {
     /// Whether this object can draw; its query geometry remains available.
     pub draw_enabled: bool,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
-    pub glow: Option<Arc<CompiledGlow>>,
+    pub effect: Option<Arc<CompiledEffect>>,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
@@ -147,17 +147,17 @@ pub struct CompiledObject {
 /// One static attachment lowered from the existing generational semantic node.
 /// This is execution data, not a second attachment allocator or mutable scene.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CompiledGlow {
+pub struct CompiledEffect {
     pub attachment: noon_core::SemanticNodeId,
-    pub definition: noon_core::Glow,
+    pub definition: noon_core::EffectDefinition,
 }
 
-impl CompiledGlow {
+impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
     pub const PARAMETER_PROPERTIES: [Property; 3] = [
-        Property::GlowColor,
-        Property::GlowRadius,
-        Property::GlowIntensity,
+        Property::EffectColor,
+        Property::EffectRadius,
+        Property::EffectIntensity,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -165,8 +165,8 @@ impl CompiledGlow {
     /// this value from the runtime row at activation, not an earlier authored copy.
     pub fn parameter_channels(
         &self,
-        update: noon_core::GlowUpdate,
-    ) -> Result<Vec<(Property, TrackValues)>, noon_core::GlowParameterError> {
+        update: noon_core::EffectUpdate,
+    ) -> Result<Vec<(Property, TrackValues)>, noon_core::EffectParameterError> {
         update.prepare(self.definition)?;
         let target = update.apply_to(self.definition)?;
         let count = usize::from(update.color.is_some())
@@ -174,20 +174,23 @@ impl CompiledGlow {
             + usize::from(update.intensity.is_some());
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
-            (update.color.is_some(), Property::GlowColor),
-            (update.radius.is_some(), Property::GlowRadius),
-            (update.intensity.is_some(), Property::GlowIntensity),
+            (update.color.is_some(), Property::EffectColor),
+            (update.radius.is_some(), Property::EffectRadius),
+            (update.intensity.is_some(), Property::EffectIntensity),
         ] {
             if requested {
                 channels.push((
                     property,
-                    TrackValues::Glow {
+                    TrackValues::Effect {
                         attachment: self.attachment,
-                        from: noon_core::GlowTrackValue::from_definition(property, self.definition)
+                        from: noon_core::EffectTrackValue::from_definition(
+                            property,
+                            self.definition,
+                        )
+                        .expect("glow property"),
+                        to: noon_core::EffectTrackValue::from_definition(property, target)
                             .expect("glow property"),
-                        to: noon_core::GlowTrackValue::from_definition(property, target)
-                            .expect("glow property"),
-                        end_behavior: noon_core::GlowTrackEndBehavior::Sample,
+                        end_behavior: noon_core::EffectTrackEndBehavior::Sample,
                     },
                 ));
             }
@@ -252,7 +255,7 @@ impl CompiledObject {
             content: content.into(),
             text_bounds: None,
             base_transform,
-            glow: None,
+            effect: None,
             spatial: None,
             base_style,
             base_z_index: 0.0,
@@ -1137,10 +1140,10 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
-    InvalidGlowAttachmentChange {
+    InvalidEffectAttachmentChange {
         object: ObjectId,
     },
-    InvalidGlowUpdate {
+    InvalidEffectUpdate {
         object: ObjectId,
     },
     InvalidInset2DView(ObjectId),
@@ -1245,13 +1248,13 @@ impl std::fmt::Display for CompilePatchError {
                 track.get(),
                 other.get()
             ),
-            Self::InvalidGlowAttachmentChange { object } => write!(
+            Self::InvalidEffectAttachmentChange { object } => write!(
                 formatter,
-                "glow attachment change must match the installed generation and replace or remove it for object {}",
+                "effect attachment change must match the installed generation and replace or remove it for object {}",
                 object.get()
             ),
-            Self::InvalidGlowUpdate { object } => write!(
-                formatter, "glow value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
+            Self::InvalidEffectUpdate { object } => write!(
+                formatter, "effect value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
             ),
             Self::InvalidObjectState { object, field } => write!(
                 formatter,
@@ -1365,7 +1368,7 @@ impl CompiledScene {
     pub fn preflight_reconcilable_track_additions_with_staged_glow(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &BTreeMap<ObjectId, CompiledGlow>,
+        staged_glow: &BTreeMap<ObjectId, CompiledEffect>,
     ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
@@ -1386,9 +1389,9 @@ impl CompiledScene {
                         | Property::WorldTransform
                         | Property::CameraProfile
                         | Property::ZIndex
-                        | Property::GlowColor
-                        | Property::GlowRadius
-                        | Property::GlowIntensity
+                        | Property::EffectColor
+                        | Property::EffectRadius
+                        | Property::EffectIntensity
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1396,14 +1399,14 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
-            let resident_glow = self.objects[object_index as usize].glow.as_deref();
+            let resident_glow = self.objects[object_index as usize].effect.as_deref();
             let staged = staged_glow.get(&track.object);
             if staged.is_some() && resident_glow.is_some() {
-                return Err(CompilePatchError::InvalidGlowAttachmentChange {
+                return Err(CompilePatchError::InvalidEffectAttachmentChange {
                     object: track.object,
                 });
             }
-            validate_glow_track_attachment(track, staged.or(resident_glow))
+            validate_effect_track_attachment(track, staged.or(resident_glow))
                 .map_err(CompilePatchError::InvalidTrack)?;
             validate_paint_track_profile(
                 track,
@@ -1492,7 +1495,7 @@ impl CompiledScene {
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
             validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
-            validate_glow_track(track, &objects[object_index as usize])
+            validate_effect_track(track, &objects[object_index as usize])
                 .map_err(CompileError::InvalidTrack)?;
             validate_paint_track(track, &objects[object_index as usize])
                 .map_err(CompileError::InvalidTrack)?;
@@ -1977,24 +1980,29 @@ impl CompiledScene {
                 self.objects[index as usize].base_style != *style
                     || self.objects[index as usize].fill_gradient != *fill_gradient
             }),
-            ExecutionPatch::SetGlow { object, glow } => {
+            ExecutionPatch::SetEffect { object, effect } => {
                 self.object_index(*object).is_none_or(|index| {
-                    self.objects[index as usize].glow.as_deref() != Some(glow.as_ref())
+                    self.objects[index as usize].effect.as_deref() != Some(effect.as_ref())
                 })
             }
-            ExecutionPatch::SetGlowAttachment {
+            ExecutionPatch::SetEffectAttachment {
                 object,
                 expected,
-                glow,
+                effect,
             } => {
                 self.object_index(*object).is_none_or(|index| {
                     // Invalid redundant changes must still reach validation. Only
                     // the exact absent -> absent case is an idempotent no-op.
-                    let previous = self.objects[index as usize].glow.as_deref();
-                    glow_attachment::validate_change(*object, previous, *expected, glow.as_deref())
-                        .is_err()
+                    let previous = self.objects[index as usize].effect.as_deref();
+                    effect_attachment::validate_change(
+                        *object,
+                        previous,
+                        *expected,
+                        effect.as_deref(),
+                    )
+                    .is_err()
                         || previous.is_some()
-                        || glow.is_some()
+                        || effect.is_some()
                 })
             }
             ExecutionPatch::SetInset2DView { object, view } => {
@@ -2365,23 +2373,23 @@ impl CompiledScene {
                 self.objects[index as usize].base_style = *style;
                 self.objects[index as usize].fill_gradient = fill_gradient.clone();
             }
-            ExecutionPatch::SetGlow { object, glow } => {
+            ExecutionPatch::SetEffect { object, effect } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                execution_patch::validate_glow_replacement(
+                execution_patch::validate_effect_replacement(
                     *object,
-                    self.objects[index as usize].glow.as_deref(),
-                    glow,
+                    self.objects[index as usize].effect.as_deref(),
+                    effect,
                 )?;
-                self.objects[index as usize].glow = Some(Arc::clone(glow));
+                self.objects[index as usize].effect = Some(Arc::clone(effect));
             }
-            ExecutionPatch::SetGlowAttachment {
+            ExecutionPatch::SetEffectAttachment {
                 object,
                 expected,
-                glow,
+                effect,
             } => {
-                self.apply_glow_attachment(*object, *expected, glow.clone(), &mut stats)?;
+                self.apply_effect_attachment(*object, *expected, effect.clone(), &mut stats)?;
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if self.object_index(*object).is_none() {
@@ -2569,9 +2577,9 @@ impl CompiledScene {
                             | Property::WorldTransform
                             | Property::CameraProfile
                             | Property::ZIndex
-                            | Property::GlowColor
-                            | Property::GlowRadius
-                            | Property::GlowIntensity
+                            | Property::EffectColor
+                            | Property::EffectRadius
+                            | Property::EffectIntensity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -2612,7 +2620,7 @@ impl CompiledScene {
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
-        validate_glow_track(track, &self.objects[object_index as usize])
+        validate_effect_track(track, &self.objects[object_index as usize])
             .map_err(CompilePatchError::InvalidTrack)?;
         validate_paint_track(track, &self.objects[object_index as usize])
             .map_err(CompilePatchError::InvalidTrack)?;
@@ -2775,34 +2783,36 @@ pub(crate) fn validate_paint_track_profile(
     Ok(())
 }
 
-pub(crate) fn validate_glow_track(
+pub(crate) fn validate_effect_track(
     track: &TrackDefinition,
     object: &CompiledObject,
 ) -> Result<(), noon_core::TimelineError> {
-    validate_glow_track_attachment(track, object.glow.as_deref())
+    validate_effect_track_attachment(track, object.effect.as_deref())
 }
 
-pub(crate) fn validate_glow_track_attachment(
+pub(crate) fn validate_effect_track_attachment(
     track: &TrackDefinition,
-    glow: Option<&CompiledGlow>,
+    effect: Option<&CompiledEffect>,
 ) -> Result<(), noon_core::TimelineError> {
-    if let TrackValues::Glow {
+    if let TrackValues::Effect {
         attachment,
         from,
         to,
         ..
     } = track.values
     {
-        let Some(glow) = glow.filter(|glow| glow.attachment == attachment) else {
-            return Err(noon_core::TimelineError::InvalidGlowAttachment {
+        let Some(effect) = effect.filter(|effect| effect.attachment == attachment) else {
+            return Err(noon_core::TimelineError::InvalidEffectAttachment {
                 object: track.object,
                 attachment,
             });
         };
-        if from.update().prepare(glow.definition).is_err()
-            || to.update().prepare(glow.definition).is_err()
+        if from.update().prepare(effect.definition).is_err()
+            || to.update().prepare(effect.definition).is_err()
         {
-            return Err(noon_core::TimelineError::InvalidGlowValues(track.property));
+            return Err(noon_core::TimelineError::InvalidEffectValues(
+                track.property,
+            ));
         }
     }
     Ok(())
@@ -3302,9 +3312,9 @@ const fn property_rank(property: Property) -> u8 {
         Property::Reveal => 12,
         Property::Morph => 13,
         Property::ZIndex => 14,
-        Property::GlowColor => 15,
-        Property::GlowRadius => 16,
-        Property::GlowIntensity => 17,
+        Property::EffectColor => 15,
+        Property::EffectRadius => 16,
+        Property::EffectIntensity => 17,
     }
 }
 
@@ -3630,7 +3640,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -3678,7 +3688,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 scale: true,
                 ..DynamicProperties::default()
@@ -3709,7 +3719,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 stroke_width: true,
                 ..DynamicProperties::default()
@@ -3741,7 +3751,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 appearance: true,
                 ..DynamicProperties::default()
@@ -3776,7 +3786,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 presence: true,
                 ..DynamicProperties::default()
@@ -3996,7 +4006,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -4223,9 +4233,9 @@ mod tests {
 
     fn object_with_late_channels(id: u64) -> (CompiledObject, Vec<TrackDefinition>) {
         let object = ObjectId::new(id);
-        let glow = CompiledGlow {
+        let effect = CompiledEffect {
             attachment: noon_core::SemanticNodeId::new(id as u32, 1),
-            definition: noon_core::Glow::default(),
+            definition: noon_core::Glow::default().into(),
         };
         let mut compiled = CompiledObject::new(
             object,
@@ -4233,7 +4243,7 @@ mod tests {
             Transform2D::IDENTITY,
             Style::default(),
         );
-        compiled.glow = Some(Arc::new(glow));
+        compiled.effect = Some(Arc::new(effect));
         let mut channels = vec![
             (
                 Property::Position,
@@ -4245,13 +4255,14 @@ mod tests {
             (Property::ZIndex, TrackValues::ZIndex { from: 0.0, to: 2.0 }),
         ];
         channels.extend(
-            glow.parameter_channels(
-                noon_core::GlowUpdate::default()
-                    .color(noon_core::Color::BLUE)
-                    .radius(0.3)
-                    .intensity(0.8),
-            )
-            .unwrap(),
+            effect
+                .parameter_channels(
+                    noon_core::EffectUpdate::default()
+                        .color(noon_core::Color::BLUE)
+                        .radius(0.3)
+                        .intensity(0.8),
+                )
+                .unwrap(),
         );
         let tracks = channels
             .into_iter()
@@ -4316,7 +4327,7 @@ mod tests {
             tracks.len()
         );
         assert!(compiled.objects()[0].dynamic.z_index);
-        assert!(compiled.objects()[0].dynamic.glow);
+        assert!(compiled.objects()[0].dynamic.effect);
         assert!(compiled.objects()[0].dynamic.position);
         assert_eq!(compiled.objects()[1].dynamic, DynamicProperties::default());
 
@@ -4325,11 +4336,11 @@ mod tests {
             .unwrap();
         assert!(!compiled.objects()[0].dynamic.z_index);
         for (index, track) in tracks[2..].iter().enumerate() {
-            assert!(compiled.objects()[0].dynamic.glow);
+            assert!(compiled.objects()[0].dynamic.effect);
             compiled
                 .apply_execution_patch(&ExecutionPatch::RemoveTrack(track.id))
                 .unwrap();
-            assert_eq!(compiled.objects()[0].dynamic.glow, index < 2);
+            assert_eq!(compiled.objects()[0].dynamic.effect, index < 2);
         }
         assert!(compiled.objects()[0].dynamic.position);
         assert_eq!(compiled.objects()[1].dynamic, DynamicProperties::default());

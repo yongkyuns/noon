@@ -219,7 +219,7 @@ fn bounded_returning_and_reversed_paint_tracks_restore_exact_source() {
 
 #[test]
 fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels() {
-    use crate::effects::GlowUpdate;
+    use crate::effects::EffectUpdate;
     for paint_first in [false, true] {
         let mut scene = Scene::new();
         let mut source = scene.circle(0.5).unwrap();
@@ -230,7 +230,7 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
                 .unwrap();
         }
         source
-            .set_glow(GlowUpdate::default().intensity(0.4))
+            .set_glow(EffectUpdate::default().intensity(0.4))
             .unwrap();
         if !paint_first {
             source
@@ -243,7 +243,7 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
             .set_fill_gradient(gradient(true), Some(0.75))
             .unwrap();
         target
-            .set_glow(GlowUpdate::default().intensity(1.4))
+            .set_glow(EffectUpdate::default().intensity(1.4))
             .unwrap();
         let animation = scene
             .declare_transform_to(&source, &target, options())
@@ -255,7 +255,19 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
             .advance_segment_to(segment, 0.5)
             .unwrap();
         let state = row(&session, &source);
-        assert!((state.glow.as_ref().unwrap().definition.intensity() - 0.9).abs() < 1e-12);
+        assert!(
+            (state
+                .effect
+                .as_ref()
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .intensity()
+                - 0.9)
+                .abs()
+                < 1e-12
+        );
         assert_eq!(state.style.fill.unwrap().alpha, 0.5);
         assert_eq!(state.fill_gradient.as_ref().unwrap().start(), [0.25, 0.25]);
         scene
@@ -270,10 +282,12 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
         assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.75);
         assert_eq!(
             row(&session, &source)
-                .glow
+                .effect
                 .as_ref()
                 .unwrap()
                 .definition
+                .as_glow()
+                .unwrap()
                 .intensity(),
             1.4
         );
@@ -300,10 +314,12 @@ fn gradient_temporary_pulse_restores_exact_paint_and_retires_only_glow() {
         .unwrap();
     assert_eq!(
         row(&session, &source)
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .definition
+            .as_glow()
+            .unwrap()
             .intensity(),
         2.0
     );
@@ -316,7 +332,7 @@ fn gradient_temporary_pulse_restores_exact_paint_and_retires_only_glow() {
         .advance_segment_to(segment, 1.0)
         .unwrap();
     scene.live(&mut session).complete_segment(segment).unwrap();
-    assert!(row(&session, &source).glow.is_none());
+    assert!(row(&session, &source).effect.is_none());
     assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.375);
     assert!(Arc::ptr_eq(
         row(&session, &source).fill_gradient.as_ref().unwrap(),

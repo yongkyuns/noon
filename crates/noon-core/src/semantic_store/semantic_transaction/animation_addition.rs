@@ -837,9 +837,9 @@ pub(super) fn preflight_transaction_animation(
         SemanticTransactionAnimationIntent::GlowPulse { target, intensity } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
-            crate::Glow::new(crate::GlowUpdate::default().intensity(*intensity)).map_err(|_| {
-                SemanticMutationTransactionError::InvalidGlowPulseIntensity { index }
-            })?;
+            crate::Glow::new(crate::EffectUpdate::default().intensity(*intensity)).map_err(
+                |_| SemanticMutationTransactionError::InvalidGlowPulseIntensity { index },
+            )?;
         }
         SemanticTransactionAnimationIntent::Indicate {
             target,

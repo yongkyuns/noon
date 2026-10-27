@@ -2,63 +2,65 @@
 use std::sync::Arc;
 
 use noon_compile::{
-    CompilePatchError, CompiledChannelKey, CompiledGlow, CompiledObject, CompiledResources,
+    CompilePatchError, CompiledChannelKey, CompiledEffect, CompiledObject, CompiledResources,
     CompiledScene, ExecutionMutationTransaction, ExecutionPatch,
 };
 use noon_core::{
-    Color, GeometryRef, Glow, GlowSource, GlowUpdate, ObjectId, Pixels, Property, RateFunction,
+    Color, EffectUpdate, GeometryRef, Glow, GlowSource, ObjectId, Pixels, Property, RateFunction,
     SemanticNodeId, Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, ReplayLimits, SceneInstance};
 
-fn attachment(generation: u32) -> Arc<CompiledGlow> {
-    Arc::new(CompiledGlow {
+fn attachment(generation: u32) -> Arc<CompiledEffect> {
+    Arc::new(CompiledEffect {
         attachment: SemanticNodeId::new(7, generation),
-        definition: Glow::new(
-            GlowUpdate::default()
+        definition: (Glow::new(
+            EffectUpdate::default()
                 .radius(Pixels(3.25))
                 .color(Color::RED)
                 .intensity(0.4),
         )
-        .unwrap(),
+        .unwrap())
+        .into(),
     })
 }
-fn source(glow: Option<Arc<CompiledGlow>>) -> CompiledObject {
+fn source(effect: Option<Arc<CompiledEffect>>) -> CompiledObject {
     let mut row = CompiledObject::new(
         ObjectId::new(1),
         GeometryRef::circle(0.4),
         Transform2D::IDENTITY,
         Style::default(),
     );
-    row.glow = glow;
+    row.effect = effect;
     row
 }
-fn change(expected: Option<SemanticNodeId>, glow: Option<Arc<CompiledGlow>>) -> ExecutionPatch {
-    ExecutionPatch::SetGlowAttachment {
+fn change(expected: Option<SemanticNodeId>, effect: Option<Arc<CompiledEffect>>) -> ExecutionPatch {
+    ExecutionPatch::SetEffectAttachment {
         object: ObjectId::new(1),
         expected,
-        glow,
+        effect,
     }
 }
-fn channels(glow: &CompiledGlow, start: f64, offset: u64) -> Vec<TrackDefinition> {
-    glow.parameter_channels(
-        GlowUpdate::default()
-            .radius(Pixels(6.5))
-            .color(Color::BLUE)
-            .intensity(2.0),
-    )
-    .unwrap()
-    .into_iter()
-    .enumerate()
-    .map(|(i, (property, values))| TrackDefinition {
-        id: TrackId::new(offset + i as u64),
-        object: ObjectId::new(1),
-        property,
-        values,
-        timing: TrackTiming::new(start, 1.0, RateFunction::Linear),
-        time_map: Default::default(),
-    })
-    .collect()
+fn channels(effect: &CompiledEffect, start: f64, offset: u64) -> Vec<TrackDefinition> {
+    effect
+        .parameter_channels(
+            EffectUpdate::default()
+                .radius(Pixels(6.5))
+                .color(Color::BLUE)
+                .intensity(2.0),
+        )
+        .unwrap()
+        .into_iter()
+        .enumerate()
+        .map(|(i, (property, values))| TrackDefinition {
+            id: TrackId::new(offset + i as u64),
+            object: ObjectId::new(1),
+            property,
+            values,
+            timing: TrackTiming::new(start, 1.0, RateFunction::Linear),
+            time_map: Default::default(),
+        })
+        .collect()
 }
 fn motion() -> TrackDefinition {
     TrackDefinition {
@@ -73,8 +75,8 @@ fn motion() -> TrackDefinition {
         time_map: Default::default(),
     }
 }
-fn scene(glow: Option<Arc<CompiledGlow>>, tracks: &[TrackDefinition]) -> CompiledScene {
-    CompiledScene::compile_objects(vec![source(glow)], tracks).unwrap()
+fn scene(effect: Option<Arc<CompiledEffect>>, tracks: &[TrackDefinition]) -> CompiledScene {
+    CompiledScene::compile_objects(vec![source(effect)], tracks).unwrap()
 }
 fn tx(patches: impl IntoIterator<Item = ExecutionPatch>) -> ExecutionMutationTransaction {
     ExecutionMutationTransaction::from_mutations(patches)
@@ -113,9 +115,9 @@ fn attach_remove_and_new_generation_preserve_the_object_and_only_dirty_rendering
             before.scene_revision().checked_next().unwrap(),
         )
         .unwrap();
-        assert_eq!(rt.frame().objects[0].glow, next);
+        assert_eq!(rt.frame().objects[0].effect, next);
         let mut row = rt.frame().objects[0].clone();
-        row.glow = None;
+        row.effect = None;
         assert_eq!(row, original);
         assert_eq!(rt.frame().objects.len(), 1);
         assert_eq!(rt.painter_order(), &[0]);
@@ -150,7 +152,7 @@ fn removal_retires_only_glow_tracks_and_keeps_motion_and_other_attachments() {
         stats.dynamic_tracks_inspected, 0,
         "do not scan motion when retiring glow"
     );
-    assert!(!compiled.objects()[0].dynamic.glow);
+    assert!(!compiled.objects()[0].dynamic.effect);
     assert!(compiled.objects()[0].dynamic.position);
     let mut rt = SceneInstance::new(scene(Some(a.clone()), &tracks));
     rt.advance_to(0.25).unwrap();
@@ -167,7 +169,7 @@ fn removal_retires_only_glow_tracks_and_keeps_motion_and_other_attachments() {
     for time in [0.5, 1.0, 1.5, 2.0, 0.25] {
         rt.evaluate(time).unwrap();
         assert!(
-            rt.frame().objects[0].glow.is_none(),
+            rt.frame().objects[0].effect.is_none(),
             "retired drivers cannot recreate a halo"
         );
         assert!((rt.frame().objects[0].transform.translation.x as f64 - time).abs() < 1e-6);
@@ -186,7 +188,7 @@ fn stale_attachment_changes_and_same_identity_schema_edits_fail_without_a_prefix
     let frame = rt.frame().clone();
     let context = rt.publication_context();
     let mut schema = *a;
-    schema.definition = GlowUpdate::default()
+    schema.definition = EffectUpdate::default()
         .source(GlowSource::Silhouette)
         .apply_to(a.definition)
         .unwrap();
@@ -198,7 +200,7 @@ fn stale_attachment_changes_and_same_identity_schema_edits_fail_without_a_prefix
     ] {
         assert_eq!(
             rt.apply_execution_patch(&patch).unwrap_err(),
-            CompilePatchError::InvalidGlowAttachmentChange {
+            CompilePatchError::InvalidEffectAttachmentChange {
                 object: ObjectId::new(1)
             }
         );
@@ -227,37 +229,37 @@ fn topology_barrier_keeps_value_writes_bound_to_their_own_generation() {
     let a = attachment(3);
     let b = attachment(4);
     let mut old_value = *a;
-    old_value.definition = GlowUpdate::default()
+    old_value.definition = EffectUpdate::default()
         .intensity(1.0)
         .apply_to(a.definition)
         .unwrap();
     let mut new_value = *b;
-    new_value.definition = GlowUpdate::default()
+    new_value.definition = EffectUpdate::default()
         .intensity(1.7)
         .apply_to(b.definition)
         .unwrap();
     let mut rt = SceneInstance::new(scene(Some(a.clone()), &[]));
     rt.apply_execution_transaction(&tx([
-        ExecutionPatch::SetGlow {
+        ExecutionPatch::SetEffect {
             object: ObjectId::new(1),
-            glow: Arc::new(old_value),
+            effect: Arc::new(old_value),
         },
         change(Some(a.attachment), Some(b.clone())),
-        ExecutionPatch::SetGlow {
+        ExecutionPatch::SetEffect {
             object: ObjectId::new(1),
-            glow: Arc::new(new_value),
+            effect: Arc::new(new_value),
         },
     ]))
     .unwrap();
-    assert_eq!(rt.frame().objects[0].glow.as_deref(), Some(&new_value));
+    assert_eq!(rt.frame().objects[0].effect.as_deref(), Some(&new_value));
     let before = rt.frame().clone();
     assert!(rt
         .apply_execution_transaction(&tx([
             change(Some(b.attachment), None),
             change(None, Some(attachment(5))),
-            ExecutionPatch::SetGlow {
+            ExecutionPatch::SetEffect {
                 object: ObjectId::new(1),
-                glow: a
+                effect: a
             },
         ]))
         .is_err());
@@ -280,15 +282,17 @@ fn preflight_accounts_for_staged_drivers_and_rejects_old_generation_tracks() {
     rt.apply_execution_transaction(&tx(edits)).unwrap();
     rt.advance_to(0.5).unwrap();
     assert_eq!(
-        rt.frame().objects[0].glow.as_ref().unwrap().attachment,
+        rt.frame().objects[0].effect.as_ref().unwrap().attachment,
         b.attachment
     );
     assert!(
         (rt.frame().objects[0]
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .definition
+            .as_glow()
+            .unwrap()
             .intensity()
             - 1.2)
             .abs()
@@ -321,13 +325,15 @@ fn replacing_one_attachment_does_not_retire_another_objects_moved_track() {
     ]))
     .unwrap();
     rt.advance_to(0.5).unwrap();
-    assert!(rt.frame().objects[0].glow.is_none());
+    assert!(rt.frame().objects[0].effect.is_none());
     assert!(
         (rt.frame().objects[1]
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .definition
+            .as_glow()
+            .unwrap()
             .intensity()
             - 1.2)
             .abs()

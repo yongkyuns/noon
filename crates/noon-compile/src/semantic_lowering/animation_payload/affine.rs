@@ -27,7 +27,7 @@ use super::transform_payload::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
     pub fill_gradient: Option<std::sync::Arc<noon_core::LinearGradient>>,
-    pub glow: Option<crate::CompiledGlow>,
+    pub effect: Option<crate::CompiledEffect>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -50,9 +50,9 @@ pub struct PathMotionActivationProperties {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
     /// Persist only the driven parameter at the actual terminal sample.
-    Glow {
+    Effect {
         attachment: SemanticNodeId,
-        value: noon_core::GlowTrackValue,
+        value: noon_core::EffectTrackValue,
     },
     /// Method completion copies exact priority even for returning interpolation.
     Priority { value: f64 },
@@ -175,9 +175,9 @@ impl SemanticAffineAnimationTrackProjection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAffineAnimationTrackError {
-    GlowTarget {
+    EffectTarget {
         animation: SemanticNodeId,
-        error: super::glow_target::GlowTargetLoweringError,
+        error: super::glow_target::EffectTargetLoweringError,
     },
     GlowDriverConflict {
         first_animation: SemanticNodeId,
@@ -297,7 +297,7 @@ pub enum SemanticAffineAnimationTrackError {
 impl std::fmt::Display for SemanticAffineAnimationTrackError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GlowTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
+            Self::EffectTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
             Self::GlowDriverConflict { first_animation, next_animation, property } => write!(formatter,
                 "glow channel {property:?} has conflicting drivers {first_animation:?} and {next_animation:?}"),
             Self::Animation(error) => error.fmt(formatter),
@@ -662,7 +662,7 @@ where
         }
         if let SemanticScheduledAnimationPayload::GlowPulse { intensity } = leaf.payload {
             super::glow_pulse::validate_options(leaf.options).map_err(|error| {
-                SemanticAffineAnimationTrackError::GlowTarget {
+                SemanticAffineAnimationTrackError::EffectTarget {
                     animation: leaf.animation,
                     error,
                 }
@@ -681,34 +681,34 @@ where
                 captures.insert(leaf.execution_object_id, captured.clone());
                 captured
             };
-            let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+            let glow_error = |error| SemanticAffineAnimationTrackError::EffectTarget {
                 animation: leaf.animation,
                 error,
             };
             let attachments = store
                 .animation_effect_snapshot(leaf.target)
-                .map_err(super::glow_target::GlowTargetLoweringError::Store)
+                .map_err(super::glow_target::EffectTargetLoweringError::Store)
                 .map_err(glow_error)?;
             let values = super::glow_pulse::values(
                 store,
                 leaf.target,
                 source,
                 &attachments,
-                from.glow,
+                from.effect,
                 intensity,
             )
             .map_err(glow_error)?;
             super::glow_target::reserve(
                 &mut driven,
                 leaf.execution_object_id,
-                Property::GlowIntensity,
+                Property::EffectIntensity,
                 leaf.animation,
             )
             .map_err(|first_animation| {
                 SemanticAffineAnimationTrackError::GlowDriverConflict {
                     first_animation,
                     next_animation: leaf.animation,
-                    property: Property::GlowIntensity,
+                    property: Property::EffectIntensity,
                 }
             })?;
             let mut timing = leaf.timing;
@@ -717,7 +717,7 @@ where
                 animation: leaf.animation,
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
-                property: Property::GlowIntensity,
+                property: Property::EffectIntensity,
                 completion: super::glow_target::completion(&values, timing).map_err(glow_error)?,
                 values,
                 timing,
@@ -965,24 +965,24 @@ where
             start,
         )
         .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
-        let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+        let glow_error = |error| SemanticAffineAnimationTrackError::EffectTarget {
             animation: leaf.animation,
             error,
         };
         let source_effects = store
             .animation_effect_snapshot(leaf.target)
-            .map_err(super::glow_target::GlowTargetLoweringError::Store)
+            .map_err(super::glow_target::EffectTargetLoweringError::Store)
             .map_err(glow_error)?;
         let target_effects = store
             .animation_effect_snapshot(target_state)
-            .map_err(super::glow_target::GlowTargetLoweringError::Store)
+            .map_err(super::glow_target::EffectTargetLoweringError::Store)
             .map_err(glow_error)?;
         let snapshot = store
             .semantic_animation_state(leaf.animation)
             .map_err(SemanticAffineAnimationTrackError::Animation)?
             .transform_effect_snapshot();
         if snapshot.is_some()
-            || from.glow.is_some()
+            || from.effect.is_some()
             || !source_effects.is_empty()
             || !target_effects.is_empty()
         {
@@ -993,7 +993,7 @@ where
             snapshot,
             &source_effects,
             &target_effects,
-            from.glow,
+            from.effect,
             complete_priority,
             &Default::default(),
         )
@@ -2942,9 +2942,9 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     let (_, morph_slot) = driver_key(object, Property::Morph);
     let (object, transform_slot) = driver_key(object, Property::Transform);
     let glow_slots = [
-        Property::GlowColor,
-        Property::GlowRadius,
-        Property::GlowIntensity,
+        Property::EffectColor,
+        Property::EffectRadius,
+        Property::EffectIntensity,
     ]
     .map(|property| driver_key(ObjectId::new(object), property).1);
     if property == Property::Morph {
@@ -2966,7 +2966,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             }
         })
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
-        (0..=driver_key(ObjectId::new(object), Property::GlowIntensity).1)
+        (0..=driver_key(ObjectId::new(object), Property::EffectIntensity).1)
             .filter(|slot| *slot != reveal_slot)
             .find_map(|slot| {
                 driven
@@ -2976,7 +2976,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             })
     } else if matches!(
         property,
-        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+        Property::EffectColor | Property::EffectRadius | Property::EffectIntensity
     ) {
         [
             Property::Transform,
@@ -3054,9 +3054,9 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::ZIndex => 12,
         Property::Presence => 13,
         Property::CameraProfile => 14,
-        Property::GlowColor => 15,
-        Property::GlowRadius => 16,
-        Property::GlowIntensity => 17,
+        Property::EffectColor => 15,
+        Property::EffectRadius => 16,
+        Property::EffectIntensity => 17,
     };
     (object.get(), slot)
 }
@@ -3097,7 +3097,7 @@ mod tests {
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: 0.0,
             transform,
             style: Style {
@@ -3381,7 +3381,7 @@ mod tests {
         });
         let from = EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(10.0, -20.0),
@@ -3515,7 +3515,7 @@ mod tests {
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(-2.0, 1.0),
@@ -3717,7 +3717,7 @@ mod tests {
             |_| {
                 Some(EffectiveAnimationProperties {
                     fill_gradient: None,
-                    glow: None,
+                    effect: None,
                     z_index: 0.0,
                     transform: Transform2D::default(),
                     style: current,
@@ -3958,7 +3958,7 @@ mod tests {
         let index = index(&store);
         let current = EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D::default(),
             style: Style {

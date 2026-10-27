@@ -9,14 +9,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
-use crate::{AnalyticGlowRequest, AnalyticGlowStats, GlowPrepareError};
+use crate::{EffectCaptureRequest, EffectCaptureStats, EffectPrepareError};
 
 /// Current renderer-owned capture/filter texture budget. In-flight resources and
 /// driver bookkeeping are not included; hosts retain their own submission fences.
-pub const DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_EFFECT_TEXTURE_BUDGET: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RetainedGlowStats {
+pub struct RetainedEffectStats {
     /// Runtime rows examined while updating the sparse source index.
     pub rows_examined: usize,
     /// Source-to-packed mappings checked during this preparation.
@@ -28,8 +28,8 @@ pub struct RetainedGlowStats {
     pub texture_allocations: usize,
     pub retained_texture_bytes: u64,
 }
-impl RetainedGlowStats {
-    fn accumulate(&mut self, value: AnalyticGlowStats) {
+impl RetainedEffectStats {
+    fn accumulate(&mut self, value: EffectCaptureStats) {
         self.sources_prepared += 1;
         self.source_passes += value.source_passes;
         self.blur_passes += value.filter.blur_passes;
@@ -43,7 +43,7 @@ impl RetainedGlowStats {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct RetainedGlowPublication {
+pub(crate) struct RetainedEffectPublication {
     context: Option<PublicationContext>,
     sources: BTreeMap<usize, ObjectId>,
     // Existing source indices -> current private geometry scratch identities.
@@ -55,18 +55,18 @@ pub(crate) struct RetainedGlowPublication {
     rows_examined: usize,
     invalidated: bool,
 }
-impl RetainedGlowPublication {
+impl RetainedEffectPublication {
     pub(crate) fn invalidate(&mut self) {
         self.invalidated = true;
     }
 
-    fn sync(&mut self, publication: &RendererPublication<'_>) -> Result<(), GlowPrepareError> {
+    fn sync(&mut self, publication: &RendererPublication<'_>) -> Result<(), EffectPrepareError> {
         let context = publication.context();
         if self
             .context
             .is_some_and(|old| publication_is_stale(context, old))
         {
-            return Err(GlowPrepareError::PublicationMismatch);
+            return Err(EffectPrepareError::PublicationMismatch);
         }
         if self.context == Some(context) && !publication.changes().is_all() {
             return Ok(());
@@ -78,7 +78,7 @@ impl RetainedGlowPublication {
             self.sources.clear();
             for (index, row) in frame.objects.iter().enumerate() {
                 self.rows_examined += 1;
-                if row.glow.is_some() && frame.is_drawable(index) {
+                if row.effect.is_some() && frame.is_drawable(index) {
                     self.sources.insert(index, row.id);
                     self.dirty.insert(index);
                 }
@@ -89,7 +89,7 @@ impl RetainedGlowPublication {
                 let next = frame
                     .objects
                     .get(index)
-                    .filter(|row| row.glow.is_some() && frame.is_drawable(index))
+                    .filter(|row| row.effect.is_some() && frame.is_drawable(index))
                     .map(|row| row.id);
                 if let Some(object) = next {
                     self.sources.insert(index, object);
@@ -124,17 +124,17 @@ impl RetainedGlowPublication {
 impl GpuRenderer {
     /// A transport renderer can return to its ordinary zero-effect fast path
     /// after the last published source and its scope resources are retired.
-    pub fn has_retained_analytic_glow_sources(&self) -> bool {
-        !self.retained_glow.sources.is_empty()
+    pub fn has_retained_effect_sources(&self) -> bool {
+        !self.retained_effects.sources.is_empty()
     }
 
     /// Drop publication-scoped glow bindings when a new validated worker
     /// session replaces the previous one. Frame epochs order a single session;
     /// they cannot establish authority across unrelated sessions. All GPU
     /// textures remain safely retained by any already-submitted wgpu work.
-    pub fn reset_retained_analytic_glow_publication(&mut self) {
-        self.retained_glow = RetainedGlowPublication::default();
-        self.analytic_glows = None;
+    pub fn reset_retained_effect_publication(&mut self) {
+        self.retained_effects = RetainedEffectPublication::default();
+        self.effect_captures = None;
     }
 
     /// Add only effect-source indices to the execution-owned, painter-ordered
@@ -145,27 +145,27 @@ impl GpuRenderer {
     ///
     /// Call before the normal retained geometry/text preparation, then call
     /// `prepare_retained_analytic_glows` with the same publication and encoder.
-    pub fn glow_source_visibility<'a>(
+    pub fn effect_source_visibility<'a>(
         &'a mut self,
         publication: &RendererPublication<'_>,
         visible: &'a [usize],
-    ) -> Result<&'a [usize], GlowPrepareError> {
-        self.retained_glow.sync(publication)?;
-        if self.retained_glow.sources.is_empty() {
+    ) -> Result<&'a [usize], EffectPrepareError> {
+        self.retained_effects.sync(publication)?;
+        if self.retained_effects.sources.is_empty() {
             return Ok(visible);
         }
         if !self.inset_views.is_empty() {
-            return Err(GlowPrepareError::UnsupportedCapture);
+            return Err(EffectPrepareError::UnsupportedCapture);
         }
         // The execution-owned candidate slice is already in painter order.
         // Typical on-screen glow needs no visibility copy, allocation or full
         // candidate scan: prove each source by its existing inverse rank.
         // The ordinary retained preparer still validates the input index set.
-        if self.retained_glow.sources.keys().all(|index| {
-            let rank = self.retained_glow.painter_ranks[*index];
+        if self.retained_effects.sources.keys().all(|index| {
+            let rank = self.retained_effects.painter_ranks[*index];
             visible
                 .binary_search_by_key(&rank, |candidate| {
-                    self.retained_glow
+                    self.retained_effects
                         .painter_ranks
                         .get(*candidate)
                         .copied()
@@ -176,8 +176,8 @@ impl GpuRenderer {
             return Ok(visible);
         }
         validate_visible_object_indices(publication.frame(), visible)
-            .map_err(|_| GlowPrepareError::PublicationMismatch)?;
-        let state = &mut self.retained_glow;
+            .map_err(|_| EffectPrepareError::PublicationMismatch)?;
+        let state = &mut self.retained_effects;
         // Visibility is in painter order, NOT source-index order. Merge the
         // extra source candidates with the existing runtime-derived ranks.
         state.visible.clear();
@@ -202,7 +202,7 @@ impl GpuRenderer {
     /// On any failure the host must abandon this encoder. All affected cache
     /// commands are invalidated for retry; no partial frame may be submitted.
     #[allow(clippy::too_many_arguments)]
-    pub fn prepare_retained_analytic_glows(
+    pub fn prepare_retained_effects(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -211,8 +211,8 @@ impl GpuRenderer {
         text_state: &RetainedTextGpuState,
         publication: &RendererPublication<'_>,
         texture_budget_bytes: u64,
-    ) -> Result<RetainedGlowStats, GlowPrepareError> {
-        let result = self.prepare_retained_glows_inner(
+    ) -> Result<RetainedEffectStats, EffectPrepareError> {
+        let result = self.prepare_retained_effects_inner(
             device,
             queue,
             encoder,
@@ -222,13 +222,13 @@ impl GpuRenderer {
             texture_budget_bytes,
         );
         if result.is_err() {
-            self.invalidate_analytic_glows();
+            self.invalidate_effect_captures();
         }
         result
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn prepare_retained_glows_inner(
+    fn prepare_retained_effects_inner(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -237,43 +237,43 @@ impl GpuRenderer {
         text_state: &RetainedTextGpuState,
         publication: &RendererPublication<'_>,
         texture_budget_bytes: u64,
-    ) -> Result<RetainedGlowStats, GlowPrepareError> {
+    ) -> Result<RetainedEffectStats, EffectPrepareError> {
         let context = publication.context();
-        if self.retained_glow.context != Some(context)
+        if self.retained_effects.context != Some(context)
             || *prepared.applied_publication != Some(context)
             || prepared.time() != publication.frame().time
         {
-            return Err(GlowPrepareError::PublicationMismatch);
+            return Err(EffectPrepareError::PublicationMismatch);
         }
         let view = (self.camera, self.viewport_size);
-        if self.retained_glow.view != Some(view)
-            || self.retained_glow.invalidated
+        if self.retained_effects.view != Some(view)
+            || self.retained_effects.invalidated
             || prepared.geometry.stats.full_rebuilds > 0
         {
-            self.retained_glow
+            self.retained_effects
                 .dirty
-                .extend(self.retained_glow.sources.keys().copied());
+                .extend(self.retained_effects.sources.keys().copied());
         }
-        if !self.retained_glow.sources.is_empty() && !self.inset_views.is_empty() {
-            return Err(GlowPrepareError::UnsupportedCapture);
+        if !self.retained_effects.sources.is_empty() && !self.inset_views.is_empty() {
+            return Err(EffectPrepareError::UnsupportedCapture);
         }
         let frame = publication.frame();
         // Prove all source mappings before recording GPU work. Scratch identities
         // stay private; no assumption that frame index equals packed index.
-        let mut sources = Vec::with_capacity(self.retained_glow.dirty.len());
-        for &index in &self.retained_glow.dirty {
-            let mapped = if let Some(&object) = self.retained_glow.sources.get(&index) {
+        let mut sources = Vec::with_capacity(self.retained_effects.dirty.len());
+        for &index in &self.retained_effects.dirty {
+            let mapped = if let Some(&object) = self.retained_effects.sources.get(&index) {
                 let row = frame
                     .objects
                     .get(index)
-                    .ok_or(GlowPrepareError::PublicationMismatch)?;
+                    .ok_or(EffectPrepareError::PublicationMismatch)?;
                 if row.id != object || !frame.is_drawable(index) || row.spatial.is_some() {
-                    return Err(GlowPrepareError::PublicationMismatch);
+                    return Err(EffectPrepareError::PublicationMismatch);
                 }
-                let glow = row
-                    .glow
+                let effect = row
+                    .effect
                     .as_ref()
-                    .ok_or(GlowPrepareError::PublicationMismatch)?;
+                    .ok_or(EffectPrepareError::PublicationMismatch)?;
                 let analytic = matches!(
                     row.geometry(),
                     Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
@@ -287,9 +287,9 @@ impl GpuRenderer {
                         || prepared.capture_items(object).is_none()
                         || !prepared.source_is_visible(object)
                     {
-                        return Err(GlowPrepareError::PublicationMismatch);
+                        return Err(EffectPrepareError::PublicationMismatch);
                     }
-                    sources.push((index, Some((object, index, glow.definition, None))));
+                    sources.push((index, Some((object, index, effect.definition, None))));
                     continue;
                 }
                 let scratch = if prepared.geometry_only {
@@ -300,12 +300,12 @@ impl GpuRenderer {
                         .and_then(|slots| slots.get(index))
                         .copied()
                         .flatten()
-                        .ok_or(GlowPrepareError::UnsupportedCapture)?
+                        .ok_or(EffectPrepareError::UnsupportedCapture)?
                 };
                 let mut observation = prepared
                     .geometry
                     .observe_object(scratch)
-                    .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                    .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                 let geometry = match observation.primitive {
                     RenderPrimitive::Circle => GeometryRef::circle(
                         prepared.geometry.circles[observation.instance_index].radius,
@@ -314,7 +314,7 @@ impl GpuRenderer {
                         let size = prepared.geometry.rectangles[observation.instance_index].size;
                         GeometryRef::rectangle(size[0], size[1])
                     }
-                    _ => return Err(GlowPrepareError::UnsupportedCapture),
+                    _ => return Err(EffectPrepareError::UnsupportedCapture),
                 };
                 // This retained frame uses the visibility union admitted above.
                 // A transparent source's anchor must survive paint suppression.
@@ -327,7 +327,7 @@ impl GpuRenderer {
                         .painter_ranks
                         .get(index)
                         .copied()
-                        .ok_or(GlowPrepareError::PublicationMismatch)?;
+                        .ok_or(EffectPrepareError::PublicationMismatch)?;
                     prepared.object_indices.get(&object) == Some(&index)
                         && prepared.render_items.binary_search_by_key(&rank, |item| {
                             prepared.object_indices.get(&item.object_id())
@@ -346,12 +346,12 @@ impl GpuRenderer {
                     || frame.reveal(index) != 1.0
                     || (prepared.geometry_only && observation.object != object)
                 {
-                    return Err(GlowPrepareError::PublicationMismatch);
+                    return Err(EffectPrepareError::PublicationMismatch);
                 }
                 // Partial visibility has no O(1) public observation, but the
                 // source index plus existing item/slot mapping above proves it.
                 observation.submission_membership = Some(true);
-                Some((object, scratch, glow.definition, Some(observation)))
+                Some((object, scratch, effect.definition, Some(observation)))
             } else {
                 None
             };
@@ -369,17 +369,17 @@ impl GpuRenderer {
                 )
             });
             if let Some(old) = self
-                .retained_glow
+                .retained_effects
                 .packed
                 .get(index)
                 .copied()
                 .filter(|old| Some(*old) != next)
             {
-                self.remove_analytic_glow(old.1);
-                self.retained_glow.packed.remove(index);
+                self.remove_effect_capture(old.1);
+                self.retained_effects.packed.remove(index);
             }
         }
-        let mut stats = RetainedGlowStats::default();
+        let mut stats = RetainedEffectStats::default();
         if sources.iter().any(|(_, mapped)| {
             mapped
                 .as_ref()
@@ -395,13 +395,13 @@ impl GpuRenderer {
                 let packed = observation
                     .as_ref()
                     .map_or(object, |observation| observation.object);
-                let request = AnalyticGlowRequest {
+                let request = EffectCaptureRequest {
                     object_index: scratch,
                     definition,
                     texture_budget_bytes,
                 };
                 let value = if let Some(observation) = observation {
-                    self.prepare_observed_analytic_glow(
+                    self.prepare_observed_effect_capture(
                         device,
                         queue,
                         encoder,
@@ -410,7 +410,7 @@ impl GpuRenderer {
                         observation,
                     )?
                 } else {
-                    self.prepare_draw_source_glow(
+                    self.prepare_draw_source_effect(
                         device,
                         queue,
                         encoder,
@@ -422,19 +422,19 @@ impl GpuRenderer {
                     )?
                 };
                 stats.accumulate(value);
-                self.retained_glow.packed.insert(index, (object, packed));
+                self.retained_effects.packed.insert(index, (object, packed));
             }
         }
         // Even a clean publication must admit a newly reduced host budget.
         // Removal is processed first so retiring a scope can satisfy that budget.
-        if self.analytic_glow_texture_bytes() > texture_budget_bytes {
-            return Err(GlowPrepareError::ScratchBudgetExceeded);
+        if self.effect_capture_texture_bytes() > texture_budget_bytes {
+            return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        stats.rows_examined = std::mem::take(&mut self.retained_glow.rows_examined);
-        stats.retained_texture_bytes = self.analytic_glow_texture_bytes();
-        self.retained_glow.dirty.clear();
-        self.retained_glow.view = Some(view);
-        self.retained_glow.invalidated = false;
+        stats.rows_examined = std::mem::take(&mut self.retained_effects.rows_examined);
+        stats.retained_texture_bytes = self.effect_capture_texture_bytes();
+        self.retained_effects.dirty.clear();
+        self.retained_effects.view = Some(view);
+        self.retained_effects.invalidated = false;
         Ok(stats)
     }
 }

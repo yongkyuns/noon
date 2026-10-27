@@ -491,7 +491,7 @@ impl SemanticClickGlowPulse {
     }
 
     pub fn is_valid(self) -> bool {
-        crate::GlowUpdate::default()
+        crate::EffectUpdate::default()
             .intensity(self.intensity)
             .prepare(crate::Glow::default())
             .is_ok()

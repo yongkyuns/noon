@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/click_glow_pulse.py`.
 
 use crate::{
-    effects::{GlowUpdate, Pixels},
+    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, Scene, SceneExecution,
 };
 
@@ -14,7 +14,7 @@ pub fn execution() -> Result<SceneExecution, String> {
     persistent.set_translation(-2.0, 0.0).map_err(message)?;
     persistent
         .set_glow(
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .color(Color::BLUE)
                 .radius(Pixels(12.0))
                 .intensity(0.35),

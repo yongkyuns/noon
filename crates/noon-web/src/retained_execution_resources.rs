@@ -722,15 +722,16 @@ mod tests {
             InstalledRetainedExecutionMirror::from_bundle_bytes(&bundle.encode_binary().unwrap())
                 .unwrap();
         let local_handle = mirror.resources().geometry_handle_remap()[&source_handle];
-        let compiled_glow = noon_compile::CompiledGlow {
+        let compiled_glow = noon_compile::CompiledEffect {
             attachment: noon_core::SemanticNodeId::new(90, 1),
-            definition: noon_core::Glow::new(
-                noon::effects::GlowUpdate::default()
+            definition: (noon_core::Glow::new(
+                noon::effects::EffectUpdate::default()
                     .color(noon::Color::BLUE)
                     .radius(noon::effects::Pixels(8.0))
                     .intensity(1.25),
             )
-            .unwrap(),
+            .unwrap())
+            .into(),
         };
         let context = noon_core::PublicationContext::default();
         let retained = RetainedExecutionDeltaEnvelope {
@@ -752,7 +753,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(90),
-                glow: Some(crate::TransportGlowState::from(&compiled_glow)),
+                effect: Some(crate::TransportEffectState::from(&compiled_glow)),
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -804,7 +805,14 @@ mod tests {
         );
         assert_eq!(resolved_frame.reveals[0], 0.35);
         assert_eq!(
-            resolved.glow.as_deref().unwrap().definition.intensity(),
+            resolved
+                .effect
+                .as_deref()
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .intensity(),
             1.25
         );
     }
@@ -960,7 +968,7 @@ mod tests {
                     },
                     order: 0,
                     object: ObjectId::new(90),
-                    glow: None,
+                    effect: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -1007,7 +1015,7 @@ mod tests {
                     },
                     order: slot,
                     object: ObjectId::new(object),
-                    glow: None,
+                    effect: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1144,7 +1152,7 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        glow: None,
+                        effect: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1228,7 +1236,7 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        glow: None,
+                        effect: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),

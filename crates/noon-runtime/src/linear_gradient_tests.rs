@@ -338,14 +338,16 @@ fn unsupported_source_changes_reject_in_both_transaction_orders_and_direct_edits
 
 #[test]
 fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
-    let glow = Arc::new(noon_compile::CompiledGlow {
+    let glow = Arc::new(noon_compile::CompiledEffect {
         attachment: noon_core::SemanticNodeId::new(7, 0),
-        definition: noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.4)).unwrap(),
+        definition: (noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.4))
+            .unwrap())
+        .into(),
     });
-    let attach = ExecutionPatch::SetGlowAttachment {
+    let attach = ExecutionPatch::SetEffectAttachment {
         object: ObjectId::new(0),
         expected: None,
-        glow: Some(glow.clone()),
+        effect: Some(glow.clone()),
     };
     let style = ExecutionPatch::SetStyle {
         object: ObjectId::new(0),
@@ -377,7 +379,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
             );
             runtime.seek(0.5).unwrap();
             assert_eq!(
-                runtime.frame().objects[0].glow.as_deref(),
+                runtime.frame().objects[0].effect.as_deref(),
                 Some(glow.as_ref())
             );
             assert!(runtime.frame().objects[0].fill_gradient.is_some());
@@ -392,7 +394,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                 .unwrap();
             assert!(runtime.frame().objects[0].fill_gradient.is_some());
             assert_eq!(
-                runtime.frame().objects[0].glow.as_deref(),
+                runtime.frame().objects[0].effect.as_deref(),
                 Some(glow.as_ref())
             );
             runtime.take_spatial_changes();

@@ -837,8 +837,8 @@ async function clickGlowPulseParity(backend) {
       assert.equal(initial[host].time, 0);
       assert.equal(initial[host].interactions_active, false);
       assert.equal(initial[host].present_object_count, 2);
-      assert.equal(initial[host].objects[0].glow.definition.intensity, 0.35);
-      assert.equal(initial[host].objects[1].glow, null, `${host}: binding must not preinstall a neutral glow`);
+      assert.equal(initial[host].objects[0].effect.definition.intensity, 0.35);
+      assert.equal(initial[host].objects[1].effect, null, `${host}: binding must not preinstall a neutral glow`);
     }
 
     const restored = {};
@@ -849,19 +849,19 @@ async function clickGlowPulseParity(backend) {
         assert.ok(bounds);
         const click = () => pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
         await click();
-        const baselineIntensity = initial[host].objects[target.index].glow?.definition.intensity ?? 0;
+        const baselineIntensity = initial[host].objects[target.index].effect?.definition.intensity ?? 0;
         const active = await waitUntil(`${host} ${target.label} active glow`, async () => {
           const frame = await frameFor(host);
           return frame.interactions_active &&
-            frame.objects[target.index].glow?.definition.intensity > baselineIntensity + 0.15 && frame;
+            frame.objects[target.index].effect?.definition.intensity > baselineIntensity + 0.15 && frame;
         }, 5000);
         // A second genuine DOM click reaches the same active attachment. Exact
         // original-deadline suppression is checked with native deterministic ticks.
         await click();
         const repeated = await frameFor(host);
         assert.equal(repeated.interactions_active, true);
-        assert.deepEqual(repeated.objects[target.index].glow.attachment,
-          active.objects[target.index].glow.attachment, `${host}: retrigger changed attachment identity`);
+        assert.deepEqual(repeated.objects[target.index].effect.attachment,
+          active.objects[target.index].effect.attachment, `${host}: retrigger changed attachment identity`);
         assert.equal(repeated.time, 0, `${host}: input advanced authored time`);
         assert.deepEqual(matchedVisibleObjectState(repeated.objects), matchedVisibleObjectState(initial[host].objects),
           `${host}: glow pulse changed ordinary source geometry or style`);
@@ -873,14 +873,14 @@ async function clickGlowPulseParity(backend) {
         }, 5000);
         checkpoints.push({ id: `${host}-${target.label}-active`, backend: expectedBackend,
           transport: host === "worker" ? "transferable" : "direct",
-          attachment: active.objects[target.index].glow.attachment,
-          observedIntensity: active.objects[target.index].glow.definition.intensity,
+          attachment: active.objects[target.index].effect.attachment,
+          observedIntensity: active.objects[target.index].effect.definition.intensity,
           ...coverage, sha256: hash(pixels.data) });
 
         await waitUntil(`${host} ${target.label} exact restoration`, async () => {
           const frame = await frameFor(host);
           if (frame.interactions_active) return false;
-          assert.deepEqual(frame.objects[target.index].glow, initial[host].objects[target.index].glow,
+          assert.deepEqual(frame.objects[target.index].effect, initial[host].objects[target.index].effect,
             `${host}: completion did not restore or retire the exact attachment`);
           if (host === "direct") return pages.direct.evaluate(() => clickGlowPulseParity.driver.stats().idle);
           return pages.worker.evaluate(async () => {
@@ -893,7 +893,7 @@ async function clickGlowPulseParity(backend) {
         assertExactPixels(restored[host], baseline[host], `${backend} ${host} ${target.label} restoration`, VIEW);
         const finalFrame = await frameFor(host);
         assert.equal(finalFrame.time, 0);
-        assert.deepEqual(finalFrame.objects.map(object => object.glow), initial[host].objects.map(object => object.glow));
+        assert.deepEqual(finalFrame.objects.map(object => object.effect), initial[host].objects.map(object => object.effect));
         if (host === "direct") {
           const idle = await pages.direct.evaluate(() => ({
             idle: clickGlowPulseParity.driver.stats().idle,
@@ -924,7 +924,7 @@ async function clickGlowPulseParity(backend) {
       await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
       const active = await waitUntil(`${host} temporary glow before seek`, async () => {
         const frame = await frameFor(host);
-        return frame.interactions_active && frame.objects[1].glow?.definition.intensity > 0.15 && frame;
+        return frame.interactions_active && frame.objects[1].effect?.definition.intensity > 0.15 && frame;
       }, 5000);
       const visible = await waitUntil(`${host} presented halo before seek`, async () => {
         if (host === "direct") await pages.direct.evaluate(() => clickGlowPulseParity.renderer.render());
@@ -938,7 +938,7 @@ async function clickGlowPulseParity(backend) {
           ? JSON.parse(clickGlowPulseParity.renderer.debugSelectionFrameJson())
           : await clickGlowPulseParity.execution.debugFrame();
         if (!current.interactions_active ||
-            JSON.stringify(current.objects[1].glow?.attachment) !== JSON.stringify(attachment)) {
+            JSON.stringify(current.objects[1].effect?.attachment) !== JSON.stringify(attachment)) {
           throw new Error("seek must cancel the exact active attachment whose halo was observed");
         }
         if (host === "direct") {
@@ -947,11 +947,11 @@ async function clickGlowPulseParity(backend) {
         } else {
           await clickGlowPulseParity.execution.seek(0);
         }
-      }, { host, attachment: active.objects[1].glow.attachment });
+      }, { host, attachment: active.objects[1].effect.attachment });
       await waitUntil(`${host} seek retirement`, async () => {
         const frame = await frameFor(host);
-        if (frame.interactions_active || frame.objects[1].glow !== null || frame.time !== 0) return false;
-        assert.deepEqual(frame.objects[0].glow, initial[host].objects[0].glow,
+        if (frame.interactions_active || frame.objects[1].effect !== null || frame.time !== 0) return false;
+        assert.deepEqual(frame.objects[0].effect, initial[host].objects[0].effect,
           `${host}: seeking temporary pulse changed the persistent attachment`);
         if (host === "direct") return pages.direct.evaluate(() => clickGlowPulseParity.driver.stats().idle);
         return pages.worker.evaluate(async () => {
@@ -962,7 +962,7 @@ async function clickGlowPulseParity(backend) {
       await pages[host].evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       sought[host] = await capture(host, "active-pulse-seek");
       assertExactPixels(sought[host], baseline[host], `${backend} ${host} active-pulse seek`, VIEW);
-      checkpoints.push({ id: `${host}-active-pulse-seek`, attachment: active.objects[1].glow.attachment,
+      checkpoints.push({ id: `${host}-active-pulse-seek`, attachment: active.objects[1].effect.attachment,
         ...visible, sha256: hash(sought[host].data) });
     }
     equalPixels(sought.direct, sought.worker, `${backend} click-GlowPulse seek parity`);
@@ -980,7 +980,7 @@ async function clickGlowPulseParity(backend) {
       await pages[host].mouse.click(bounds.x + point.x, bounds.y + point.y);
       const active = await waitUntil(`${host} temporary glow before reload`, async () => {
         const frame = await frameFor(host);
-        return frame.interactions_active && frame.objects[1].glow?.definition.intensity > 0.15 && frame;
+        return frame.interactions_active && frame.objects[1].effect?.definition.intensity > 0.15 && frame;
       }, 5000);
       assert.equal(active.time, 0, `${host}: reload click advanced authored time`);
       assert.deepEqual(active.objects.map(object => object.id), initial[host].objects.map(object => object.id),
@@ -995,27 +995,27 @@ async function clickGlowPulseParity(backend) {
         return coverage.haloPixels > 40 && { pixels, coverage };
       }, 5000);
       checkpoints.push({ id: `${host}-active-pulse-before-reload`,
-        attachment: active.objects[1].glow.attachment, previousSession,
+        attachment: active.objects[1].effect.attachment, previousSession,
         ...coverage, sha256: hash(pixels.data) });
       let replacement;
       if (host === "direct") {
         replacement = await pages.direct.evaluate(async attachment => {
           const previous = clickGlowPulseParity;
           const active = JSON.parse(previous.renderer.debugSelectionFrameJson());
-          if (!active.interactions_active || active.objects[1].glow === null) {
+          if (!active.interactions_active || active.objects[1].effect === null) {
             throw new Error("direct source replacement must begin with an active temporary attachment");
           }
-          if (JSON.stringify(active.objects[1].glow.attachment) !== JSON.stringify(attachment)) {
+          if (JSON.stringify(active.objects[1].effect.attachment) !== JSON.stringify(attachment)) {
             throw new Error("direct source replacement must retire the attachment whose halo was observed");
           }
           previous.detach(); previous.driver.stop();
           previous.renderer.retireExecutionSource();
           const retired = JSON.parse(previous.renderer.debugSelectionFrameJson());
-          if (retired.interactions_active || retired.objects[1].glow !== null) {
+          if (retired.interactions_active || retired.objects[1].effect !== null) {
             throw new Error("direct source retirement must clear the old invocation and temporary attachment before free");
           }
           if (retired.time !== active.time ||
-              JSON.stringify(retired.objects[0].glow) !== JSON.stringify(active.objects[0].glow)) {
+              JSON.stringify(retired.objects[0].effect) !== JSON.stringify(active.objects[0].effect)) {
             throw new Error("direct source retirement changed authored time or the persistent attachment");
           }
           previous.renderer.free();
@@ -1032,10 +1032,10 @@ async function clickGlowPulseParity(backend) {
             onInput: () => driver.wake(), onError: error => errors.push(String(error)),
           });
           globalThis.clickGlowPulseParity = { renderer, driver, detach, errors };
-          return { retiredAttachment: active.objects[1].glow.attachment,
+          return { retiredAttachment: active.objects[1].effect.attachment,
             retiredPublication: active.publication, retirementPublication: retired.publication,
             retiredBeforeFree: true, recreated: true };
-        }, active.objects[1].glow.attachment);
+        }, active.objects[1].effect.attachment);
         await pages.direct.waitForFunction(() => clickGlowPulseParity.driver.stats().idle);
       } else {
         assert.ok(previousSession != null, "worker reload click requires a presented source session");
@@ -1045,10 +1045,10 @@ async function clickGlowPulseParity(backend) {
             throw new Error("worker source changed between the reload click and retirement");
           }
           const active = await execution.debugFrame();
-          if (!active.interactions_active || active.objects[1].glow === null) {
+          if (!active.interactions_active || active.objects[1].effect === null) {
             throw new Error("worker source replacement must begin with an active temporary attachment");
           }
-          if (JSON.stringify(active.objects[1].glow.attachment) !== JSON.stringify(attachment)) {
+          if (JSON.stringify(active.objects[1].effect.attachment) !== JSON.stringify(attachment)) {
             throw new Error("worker source replacement must retire the attachment whose halo was observed");
           }
           // Authoring also writes this worker's canonical store. Await the old
@@ -1059,14 +1059,14 @@ async function clickGlowPulseParity(backend) {
             authoringClient: authoring,
           });
           const fresh = await execution.debugFrame();
-          if (fresh.interactions_active || fresh.objects[1].glow !== null) {
+          if (fresh.interactions_active || fresh.objects[1].effect !== null) {
             throw new Error("fresh Run retained an old input-owned attachment or invocation");
           }
           await execution.pause();
-          return { retiredAttachment: active.objects[1].glow.attachment,
+          return { retiredAttachment: active.objects[1].effect.attachment,
             retiredPublication: active.publication, previousSession, session: result.ready.session,
             releasedBeforeAuthoring: true };
-        }, { source: clickGlowPulseSource, previousSession, attachment: active.objects[1].glow.attachment });
+        }, { source: clickGlowPulseSource, previousSession, attachment: active.objects[1].effect.attachment });
         assert.notEqual(replacement.session, replacement.previousSession, "fresh Run must replace the execution session");
         await waitUntil("worker fresh Run presentation", () => pages.worker.evaluate(async session => {
           const { metrics } = await clickGlowPulseParity.execution.metrics();
@@ -1077,8 +1077,8 @@ async function clickGlowPulseParity(backend) {
       const fresh = await frameFor(host);
       assert.equal(fresh.time, 0);
       assert.equal(fresh.interactions_active, false);
-      assert.equal(fresh.objects[1].glow, null, `${host}: retired temporary generation survived source replacement`);
-      assert.deepEqual(fresh.objects[0].glow.definition, initial[host].objects[0].glow.definition);
+      assert.equal(fresh.objects[1].effect, null, `${host}: retired temporary generation survived source replacement`);
+      assert.deepEqual(fresh.objects[0].effect.definition, initial[host].objects[0].effect.definition);
       assert.deepEqual(matchedVisibleObjectState(fresh.objects), matchedVisibleObjectState(initial[host].objects));
       await pages[host].evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       reloaded[host] = await capture(host, "active-pulse-reload");

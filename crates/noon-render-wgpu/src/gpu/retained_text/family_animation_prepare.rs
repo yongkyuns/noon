@@ -237,7 +237,7 @@ mod operation_selection_tests {
         let first_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -250,7 +250,7 @@ mod operation_selection_tests {
         let second_object = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -278,7 +278,7 @@ mod operation_selection_tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
@@ -291,7 +291,7 @@ mod operation_selection_tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
@@ -304,7 +304,7 @@ mod operation_selection_tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(99),

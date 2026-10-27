@@ -473,7 +473,7 @@ impl ExecutionSession {
                 let glow = self
                     .runtime
                     .effective_object(object)
-                    .and_then(|row| row.glow.as_deref().copied());
+                    .and_then(|row| row.effect.as_deref().copied());
                 if let Some(glow) = glow {
                     if store.effect_by_name(target, "glow").ok().flatten() != Some(glow.attachment)
                     {
@@ -500,7 +500,7 @@ impl ExecutionSession {
                         SemanticPublicationPurpose::TransientGlowLifecycle,
                     )?;
                     let neutral =
-                        noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+                        noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
                             .expect("neutral glow is valid");
                     let mut transaction = noon_core::SemanticMutationTransaction::new();
                     let token = transaction.create_effect(target, "glow", neutral);
@@ -527,9 +527,9 @@ impl ExecutionSession {
                         .prepare_click_glow_pulse(
                             object,
                             binding,
-                            noon_compile::CompiledGlow {
+                            noon_compile::CompiledEffect {
                                 attachment,
-                                definition: neutral,
+                                definition: neutral.into(),
                             },
                             true,
                             proposed,

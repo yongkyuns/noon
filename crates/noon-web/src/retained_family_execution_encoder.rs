@@ -932,7 +932,7 @@ mod tests {
         let first = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -945,7 +945,7 @@ mod tests {
         let second = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -979,7 +979,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: first.id,
@@ -992,7 +992,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: second.id,

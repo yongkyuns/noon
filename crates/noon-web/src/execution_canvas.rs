@@ -2260,7 +2260,7 @@ mod wasm {
             // the final presented frame, after all endpoint drains have settled.
             let glow_visible = self
                 .renderer
-                .glow_source_visibility(&publication, visibility.object_indices())
+                .effect_source_visibility(&publication, visibility.object_indices())
                 .map_err(js_error)?;
             let prepared = self
                 .direct_preparer
@@ -2405,7 +2405,7 @@ mod wasm {
                     .map_err(js_error)?;
                 let glow_visible = self
                     .renderer
-                    .glow_source_visibility(&publication, visibility.object_indices())
+                    .effect_source_visibility(&publication, visibility.object_indices())
                     .map_err(js_error)?;
                 let prepared = self
                     .direct_preparer
@@ -2444,14 +2444,14 @@ mod wasm {
                         });
                 let glow_work = self
                     .renderer
-                    .prepare_retained_analytic_glows(
+                    .prepare_retained_effects(
                         &self.device,
                         &self.queue,
                         &mut encoder,
                         &prepared,
                         &self.direct_text_gpu,
                         &publication,
-                        noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                        noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;
                 self.last_bytes_uploaded = self
@@ -2482,7 +2482,7 @@ mod wasm {
                 let draw = match draw {
                     Ok(draw) => draw,
                     Err(error) => {
-                        self.renderer.invalidate_analytic_glows();
+                        self.renderer.invalidate_effect_captures();
                         if let Some(slot) = timestamp_slot {
                             profiler.expect("reserved profiler").cancel_slot(slot);
                         }

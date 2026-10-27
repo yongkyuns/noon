@@ -189,13 +189,13 @@ pub(crate) fn stage_effect_copy(
     let node = store
         .node(source)
         .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.glow.as_deref()) {
+    match (node.effect_ids(), observed.object.effect.as_deref()) {
         ([], None) => Ok(()),
-        ([attachment], Some(glow)) if *attachment == glow.attachment => {
+        ([attachment], Some(effect)) if *attachment == effect.attachment => {
             store.copy_effect_into_with_definition(
                 *attachment,
                 target,
-                glow.definition,
+                effect.definition,
                 transaction,
             )?;
             Ok(())

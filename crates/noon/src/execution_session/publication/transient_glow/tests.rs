@@ -3,8 +3,8 @@ use crate::{
     TransformToRequest,
 };
 use noon_core::{
-    Color, Glow, GlowSource, GlowUpdate, NativeInputModifiers, NativePointerId, NativePointerInput,
-    NativePointerInputKind, NativePointerPosition, Vec2,
+    Color, EffectUpdate, Glow, GlowSource, NativeInputModifiers, NativePointerId,
+    NativePointerInput, NativePointerInputKind, NativePointerPosition, Vec2,
 };
 
 fn clicked() -> (SceneExecution, Mobject) {
@@ -77,10 +77,12 @@ fn glow(execution: &SceneExecution, object: &Mobject) -> Glow {
         .runtime
         .effective_object(id)
         .unwrap()
-        .glow
+        .effect
         .as_ref()
         .unwrap()
         .definition
+        .as_glow()
+        .unwrap()
 }
 
 fn assert_no_carry_owner(execution: &SceneExecution, object: &Mobject) {
@@ -99,7 +101,7 @@ fn transient_glow_disjoint_and_same_value_edits_adopt_without_restarting_intensi
     // produces no semantic parameter impact.
     execution
         .live()
-        .set_glow(&object, GlowUpdate::default().color(Color::WHITE))
+        .set_glow(&object, EffectUpdate::default().color(Color::WHITE))
         .unwrap();
     assert_eq!(glow(&execution, &object).intensity(), 2.0);
     assert!(execution.session().interactions_active());
@@ -107,7 +109,7 @@ fn transient_glow_disjoint_and_same_value_edits_adopt_without_restarting_intensi
         .live()
         .set_glow(
             &object,
-            GlowUpdate::default().color(Color::BLUE).radius(0.3),
+            EffectUpdate::default().color(Color::BLUE).radius(0.3),
         )
         .unwrap();
     assert_eq!(glow(&execution, &object).intensity(), 2.0);
@@ -128,7 +130,7 @@ fn transient_glow_same_value_intensity_write_supersedes_the_effective_peak() {
     let attachment = object.get_effect("glow").unwrap().node_id();
     execution
         .live()
-        .set_glow(&object, GlowUpdate::default().intensity(0.0))
+        .set_glow(&object, EffectUpdate::default().intensity(0.0))
         .unwrap();
     assert!(!execution.session().interactions_active());
     assert_eq!(glow(&execution, &object).intensity(), 0.0);
@@ -146,7 +148,7 @@ fn transient_glow_empty_or_rejected_edit_keeps_temporary_retirement_owned() {
     let frame = execution.session().frame().clone();
     execution
         .live()
-        .set_glow(&object, GlowUpdate::default())
+        .set_glow(&object, EffectUpdate::default())
         .unwrap();
     assert_eq!(execution.session().publication_context(), publication);
     // A live source-mode schema change is rejected by compiler preparation;
@@ -155,7 +157,7 @@ fn transient_glow_empty_or_rejected_edit_keeps_temporary_retirement_owned() {
         .live()
         .set_glow(
             &object,
-            GlowUpdate::default().source(GlowSource::Silhouette),
+            EffectUpdate::default().source(GlowSource::Silhouette),
         )
         .is_err());
     assert_eq!(execution.session().publication_context(), publication);
@@ -174,7 +176,7 @@ fn transient_glow_authored_radius_track_adopts_and_keeps_input_intensity_indepen
     let target = execution.live().target_editor(&object).unwrap();
     execution
         .live()
-        .set_glow(&target, GlowUpdate::default().radius(0.4))
+        .set_glow(&target, EffectUpdate::default().radius(0.4))
         .unwrap();
     let request = AnimationCompositionRequest::TransformTo(
         TransformToRequest::new(
@@ -212,7 +214,7 @@ fn transient_glow_authored_intensity_track_keeps_its_reversed_initial_sample() {
     let target = execution.live().target_editor(&object).unwrap();
     execution
         .live()
-        .set_glow(&target, GlowUpdate::default().intensity(0.8))
+        .set_glow(&target, EffectUpdate::default().intensity(0.8))
         .unwrap();
     let request = AnimationCompositionRequest::TransformTo(
         TransformToRequest::new(
@@ -310,7 +312,7 @@ fn transient_glow_admits_preclick_motion_target_without_adopting_temporary_attac
         .runtime
         .effective_object(object_id)
         .unwrap()
-        .glow
+        .effect
         .is_none());
     execution
         .live()

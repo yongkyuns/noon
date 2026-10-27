@@ -1,5 +1,5 @@
 use crate::{
-    effects::{Glow, GlowRadius, GlowUpdate, Pixels},
+    effects::{EffectRadius, EffectUpdate, Glow, Pixels},
     integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition},
     AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, Mobject, Scene,
 };
@@ -12,7 +12,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(persistent: Option<GlowUpdate>) -> Self {
+    fn new(persistent: Option<EffectUpdate>) -> Self {
         let mut scene = Scene::new();
         let mut first = scene.circle(0.75).unwrap();
         first.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
@@ -120,12 +120,12 @@ impl Fixture {
             .iter()
             .find(|row| row.id == object)
             .unwrap()
-            .glow
+            .effect
             .as_ref()
-            .map(|binding| binding.definition)
+            .map(|binding| binding.definition.as_glow().unwrap())
     }
 
-    fn update(&mut self, target: usize, update: GlowUpdate) {
+    fn update(&mut self, target: usize, update: EffectUpdate) {
         self.scene
             .live(&mut self.session)
             .set_glow(&self.targets[target], update)
@@ -138,12 +138,49 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
+fn click_pulse_rejects_blur_without_publishing_or_acknowledging_the_release() {
+    let mut f = Fixture::new(None);
+    f.scene
+        .live(&mut f.session)
+        .add_effect(&f.targets[0], crate::effects::Blur::default(), "glow")
+        .unwrap();
+    let attachment = f.effect(0).unwrap();
+    f.send(1, 0, true).unwrap();
+    let context = f.session.publication_context();
+    let frame = f.session.frame().clone();
+    let revision = f.scene.revision();
+    assert!(matches!(
+        f.send(2, 0, false),
+        Err(ExecutionSessionInputError::Interaction(_))
+    ));
+    assert_eq!(f.session.publication_context(), context);
+    assert_eq!(f.session.frame(), &frame);
+    assert_eq!(f.scene.revision(), revision);
+    assert_eq!(f.effect(0), Some(attachment));
+    assert!(f
+        .scene
+        .get_effect(&f.targets[0], "glow")
+        .unwrap()
+        .authored_definition()
+        .unwrap()
+        .as_blur()
+        .is_some());
+    assert!(!f.session.interactions_active());
+    f.scene
+        .live(&mut f.session)
+        .on_click(&f.targets[0], None)
+        .unwrap();
+    // The rejected release is still the next admitted input occurrence.
+    f.send(2, 0, false).unwrap();
+}
+
+#[test]
 fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
     use crate::{GradientStop, LinearGradient};
     use std::sync::Arc;
 
     for persistent in [false, true] {
-        let mut f = Fixture::new(persistent.then(|| GlowUpdate::default().intensity(0.35)));
+        let mut f = Fixture::new(persistent.then(|| EffectUpdate::default().intensity(0.35)));
         let gradient = LinearGradient::new(
             [0.0, 0.5],
             [1.0, 0.5],
@@ -213,14 +250,14 @@ fn click_glow_pulse_absent_attachment_enrolls_neutrally_and_retires_exactly() {
 #[test]
 fn click_glow_pulse_captures_the_persistent_value_at_activation() {
     let mut f = Fixture::new(Some(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::RED)
             .radius(Pixels(3.0))
             .intensity(0.35),
     ));
     let original = f.effect(0).unwrap();
     // This edit follows registration and must become the captured baseline.
-    f.update(0, GlowUpdate::default().intensity(1.2));
+    f.update(0, EffectUpdate::default().intensity(1.2));
     let baseline = f.glow(0).unwrap();
     f.click(1, 0);
     f.tick(10.0);
@@ -276,7 +313,7 @@ fn click_glow_pulse_linear_and_reversed_timing_restore_at_the_endpoint() {
         (false, [0.5, 0.875, 1.25, 1.625, 0.5]),
         (true, [2.0, 1.625, 1.25, 0.875, 0.5]),
     ] {
-        let mut f = Fixture::new(Some(GlowUpdate::default().intensity(0.5)));
+        let mut f = Fixture::new(Some(EffectUpdate::default().intensity(0.5)));
         let attachment = f.effect(0);
         f.scene
             .live(&mut f.session)
@@ -307,7 +344,7 @@ fn value_equal_radius_edit_adopts_a_temporary_click_attachment_without_stopping_
     f.tick(1.0);
     f.tick(1.25);
     let radius = f.glow(0).unwrap().radius();
-    f.update(0, GlowUpdate::default().radius(radius));
+    f.update(0, EffectUpdate::default().radius(radius));
     assert_eq!(f.effect(0), Some(attachment));
     assert!(f.session.interactions_active());
     f.tick(1.5);
@@ -322,7 +359,7 @@ fn value_equal_radius_edit_adopts_a_temporary_click_attachment_without_stopping_
 #[test]
 fn click_glow_pulse_keeps_disjoint_color_and_radius_edits() {
     let mut f = Fixture::new(Some(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::RED)
             .radius(Pixels(3.0))
             .intensity(0.8),
@@ -334,19 +371,21 @@ fn click_glow_pulse_keeps_disjoint_color_and_radius_edits() {
     let intensity = f.glow(0).unwrap().intensity();
     f.update(
         0,
-        GlowUpdate::default().color(Color::BLUE).radius(Pixels(7.0)),
+        EffectUpdate::default()
+            .color(Color::BLUE)
+            .radius(Pixels(7.0)),
     );
     close(f.glow(0).unwrap().intensity(), intensity);
     f.tick(1.5);
     let peak = f.glow(0).unwrap();
     close(peak.intensity(), 2.0);
     assert_eq!(peak.color(), Color::BLUE);
-    assert_eq!(peak.radius(), GlowRadius::Pixels(7.0));
+    assert_eq!(peak.radius(), EffectRadius::Pixels(7.0));
     f.tick(2.0);
     let restored = f.glow(0).unwrap();
     close(restored.intensity(), 0.8);
     assert_eq!(restored.color(), Color::BLUE);
-    assert_eq!(restored.radius(), GlowRadius::Pixels(7.0));
+    assert_eq!(restored.radius(), EffectRadius::Pixels(7.0));
     assert_eq!(f.effect(0), Some(attachment));
 }
 
@@ -359,7 +398,7 @@ fn explicit_intensity_write_adopts_and_supersedes_click_ownership_even_when_valu
         f.tick(1.0);
         f.tick(time);
         close(f.glow(0).unwrap().intensity(), intensity);
-        f.update(0, GlowUpdate::default().intensity(intensity));
+        f.update(0, EffectUpdate::default().intensity(intensity));
         f.tick(1.75);
         close(f.glow(0).unwrap().intensity(), intensity);
         f.tick(2.0);
@@ -413,7 +452,7 @@ fn click_glow_pulse_failed_seek_is_atomic_and_successful_seek_retires_the_tempor
 
 #[test]
 fn foreign_semantic_store_cannot_publish_click_input_or_advance_a_persistent_pulse() {
-    let mut f = Fixture::new(Some(GlowUpdate::default().intensity(0.5)));
+    let mut f = Fixture::new(Some(EffectUpdate::default().intensity(0.5)));
     let mut foreign = noon_core::SemanticStore::new();
     let foreign_revision = foreign.scene_revision();
     let revision = f.scene.revision();
@@ -487,7 +526,11 @@ fn rejected_click_input_never_enrolls_and_retired_handles_cannot_mutate_a_new_ge
     assert!(f
         .scene
         .live(&mut f.session)
-        .set_effect(&f.targets[0], &stale, GlowUpdate::default().intensity(4.0))
+        .set_effect(
+            &f.targets[0],
+            &stale,
+            EffectUpdate::default().intensity(4.0)
+        )
         .is_err());
     assert_eq!(f.scene.revision(), revision);
     assert_eq!(f.effect(0), Some(current));
@@ -511,7 +554,7 @@ fn invalid_persistent_edit_does_not_adopt_the_temporary_click_attachment() {
         .live(&mut f.session)
         .set_glow(
             &f.targets[0],
-            GlowUpdate::default().radius(Pixels(f64::NAN))
+            EffectUpdate::default().radius(Pixels(f64::NAN))
         )
         .is_err());
     assert_eq!(f.scene.revision(), revision);

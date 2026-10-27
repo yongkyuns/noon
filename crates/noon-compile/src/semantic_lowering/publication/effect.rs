@@ -2,21 +2,21 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use noon_core::{
-    EffectDefinition, PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeCreation,
-    SemanticNodeId, SemanticTransactionNodeRef,
+    PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeCreation, SemanticNodeId,
+    SemanticTransactionNodeRef,
 };
 
 use super::{
     SemanticExecutionIndex, SemanticExecutionReachability, SemanticPublicationLoweringError,
 };
-use crate::{CompiledGlow, ExecutionPatch, SemanticLoweringError};
+use crate::{CompiledEffect, ExecutionPatch, SemanticLoweringError};
 
 /// Read final staged state, including allocator-proven pending attachment IDs.
 /// Detached targets remain inert; callers invoke this only for execution rows.
 pub(super) fn lower_prepared_attachment(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     owner: SemanticTransactionNodeRef,
-) -> Result<Option<Arc<CompiledGlow>>, SemanticPublicationLoweringError> {
+) -> Result<Option<Arc<CompiledEffect>>, SemanticPublicationLoweringError> {
     let semantic = prepared
         .planned_node_id(owner)
         .ok_or(SemanticPublicationLoweringError::PlannedObjectIdUnavailable { object: owner })?;
@@ -25,12 +25,12 @@ pub(super) fn lower_prepared_attachment(
         return Ok(None);
     }
     let [effect] = effects.as_slice() else {
-        return Err(SemanticLoweringError::UnsupportedGlowProfile { owner: semantic }.into());
+        return Err(SemanticLoweringError::UnsupportedEffectProfile { owner: semantic }.into());
     };
     let state = prepared.proposed_object_state(owner)?;
-    super::super::projection::validate_glow_source_profile(semantic, &state, prepared.store())?;
-    let EffectDefinition::Glow(definition) = effect.definition;
-    Ok(Some(Arc::new(CompiledGlow {
+    super::super::projection::validate_effect_source_profile(semantic, &state, prepared.store())?;
+    let definition = effect.definition;
+    Ok(Some(Arc::new(CompiledEffect {
         attachment: effect.attachment,
         definition,
     })))
@@ -77,7 +77,7 @@ pub(super) fn lower_changes(
         let Some(object) = index.execution_object_id(owner) else {
             // A reachable family cannot quietly accept a per-leaf treatment
             // in place of an unimplemented composed-group effect.
-            return Err(SemanticLoweringError::UnsupportedGlowProfile { owner }.into());
+            return Err(SemanticLoweringError::UnsupportedEffectProfile { owner }.into());
         };
         let original = prepared
             .store()
@@ -86,29 +86,29 @@ pub(super) fn lower_changes(
         let previous = match original.as_slice() {
             [] => None,
             [effect] => {
-                let EffectDefinition::Glow(definition) = effect.definition;
-                Some(CompiledGlow {
+                let definition = effect.definition;
+                Some(CompiledEffect {
                     attachment: effect.attachment,
                     definition,
                 })
             }
-            _ => return Err(SemanticLoweringError::UnsupportedGlowProfile { owner }.into()),
+            _ => return Err(SemanticLoweringError::UnsupportedEffectProfile { owner }.into()),
         };
         let next = lower_prepared_attachment(prepared, owner.into())?;
         if previous.as_ref() == next.as_deref() {
             continue;
         }
-        let expected = previous.as_ref().map(|glow| glow.attachment);
-        if expected == next.as_ref().map(|glow| glow.attachment) {
-            mutations.push(ExecutionPatch::SetGlow {
+        let expected = previous.as_ref().map(|effect| effect.attachment);
+        if expected == next.as_ref().map(|effect| effect.attachment) {
+            mutations.push(ExecutionPatch::SetEffect {
                 object,
-                glow: next.expect("a changed same-generation column is present"),
+                effect: next.expect("a changed same-generation column is present"),
             });
         } else {
-            mutations.push(ExecutionPatch::SetGlowAttachment {
+            mutations.push(ExecutionPatch::SetEffectAttachment {
                 object,
                 expected,
-                glow: next,
+                effect: next,
             });
         }
     }

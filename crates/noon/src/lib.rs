@@ -92,7 +92,8 @@ pub mod number_line_example;
 pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{
-        EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
+        Blur, EffectDefinition, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
+        Pixels,
     };
 }
 mod drawing;

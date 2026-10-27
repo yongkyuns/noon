@@ -452,15 +452,15 @@ pub enum Property {
     Reveal,
     Morph,
     /// Independent appearance-only channels of one existing leaf attachment.
-    GlowColor,
-    GlowRadius,
-    GlowIntensity,
+    EffectColor,
+    EffectRadius,
+    EffectIntensity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
     Paint,
-    Glow,
+    Effect,
     Bool,
     ZIndex,
     Scalar,
@@ -477,7 +477,7 @@ impl Property {
     }
     pub const fn value_kind(self) -> ValueKind {
         match self {
-            Self::GlowColor | Self::GlowRadius | Self::GlowIntensity => ValueKind::Glow,
+            Self::EffectColor | Self::EffectRadius | Self::EffectIntensity => ValueKind::Effect,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -502,45 +502,53 @@ impl Property {
 /// A typed endpoint for a single glow channel. Radius and intensity retain f64
 /// precision; no renderer units, timing or attachment identity are inferred here.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub enum GlowTrackValue {
+pub enum EffectTrackValue {
     Color(crate::Color),
-    Radius(crate::GlowRadius),
+    Radius(crate::EffectRadius),
     Intensity(f64),
 }
 
-impl GlowTrackValue {
-    pub fn from_definition(property: Property, glow: crate::Glow) -> Option<Self> {
+impl EffectTrackValue {
+    pub fn from_definition(
+        property: Property,
+        definition: impl Into<crate::EffectDefinition>,
+    ) -> Option<Self> {
+        let definition = definition.into();
         match property {
-            Property::GlowColor => Some(Self::Color(glow.color())),
-            Property::GlowRadius => Some(Self::Radius(glow.radius())),
-            Property::GlowIntensity => Some(Self::Intensity(glow.intensity())),
+            Property::EffectColor => definition
+                .as_glow()
+                .map(|effect| Self::Color(effect.color())),
+            Property::EffectRadius => Some(Self::Radius(definition.radius())),
+            Property::EffectIntensity => definition
+                .as_glow()
+                .map(|effect| Self::Intensity(effect.intensity())),
             _ => None,
         }
     }
 
     pub const fn property(self) -> Property {
         match self {
-            Self::Color(_) => Property::GlowColor,
-            Self::Radius(_) => Property::GlowRadius,
-            Self::Intensity(_) => Property::GlowIntensity,
+            Self::Color(_) => Property::EffectColor,
+            Self::Radius(_) => Property::EffectRadius,
+            Self::Intensity(_) => Property::EffectIntensity,
         }
     }
 
-    pub fn update(self) -> crate::GlowUpdate {
+    pub fn update(self) -> crate::EffectUpdate {
         match self {
-            Self::Color(value) => crate::GlowUpdate::default().color(value),
-            Self::Radius(value) => crate::GlowUpdate::default().radius(value),
-            Self::Intensity(value) => crate::GlowUpdate::default().intensity(value),
+            Self::Color(value) => crate::EffectUpdate::default().color(value),
+            Self::Radius(value) => crate::EffectUpdate::default().radius(value),
+            Self::Intensity(value) => crate::EffectUpdate::default().intensity(value),
         }
     }
 
     /// Use the same checked interpolation contract as semantic glow targets.
     /// The returned patch owns only this channel, not the whole definition.
-    pub fn sample(self, to: Self, alpha: f64) -> Result<crate::GlowUpdate, TimelineError> {
+    pub fn sample(self, to: Self, alpha: f64) -> Result<crate::EffectUpdate, TimelineError> {
         if self.property() != to.property() {
-            return Err(TimelineError::InvalidGlowValues(self.property()));
+            return Err(TimelineError::InvalidEffectValues(self.property()));
         }
-        let invalid = |_| TimelineError::InvalidGlowValues(self.property());
+        let invalid = |_| TimelineError::InvalidEffectValues(self.property());
         let source = self
             .update()
             .apply_to(crate::Glow::default())
@@ -624,7 +632,7 @@ impl std::fmt::Display for TrackValueEndpoint {
 /// This is independent of the leaf's amplitude/easing function.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum GlowTrackEndBehavior {
+pub enum EffectTrackEndBehavior {
     /// Keep the ordinary terminal sample selected by the leaf's rate function.
     #[default]
     Sample,
@@ -632,7 +640,7 @@ pub enum GlowTrackEndBehavior {
     RestoreSource,
 }
 
-impl GlowTrackEndBehavior {
+impl EffectTrackEndBehavior {
     const fn is_sample(&self) -> bool {
         matches!(self, Self::Sample)
     }
@@ -647,12 +655,12 @@ pub enum TrackValues {
     },
     /// Generation is captured at activation; a reused object slot or attachment
     /// name never redirects an already prepared effect track.
-    Glow {
+    Effect {
         attachment: crate::SemanticNodeId,
-        from: GlowTrackValue,
-        to: GlowTrackValue,
-        #[serde(default, skip_serializing_if = "GlowTrackEndBehavior::is_sample")]
-        end_behavior: GlowTrackEndBehavior,
+        from: EffectTrackValue,
+        to: EffectTrackValue,
+        #[serde(default, skip_serializing_if = "EffectTrackEndBehavior::is_sample")]
+        end_behavior: EffectTrackEndBehavior,
     },
     /// Exact finite f64 priorities; never lowered to shader precision or interpolated.
     ZIndex {
@@ -725,8 +733,8 @@ impl TrackValues {
     /// the existing f32 terminal-rate contract.
     pub fn terminal_progress(&self, timing: TrackTiming) -> f32 {
         match self {
-            Self::Glow {
-                end_behavior: GlowTrackEndBehavior::RestoreSource,
+            Self::Effect {
+                end_behavior: EffectTrackEndBehavior::RestoreSource,
                 ..
             } => 0.0,
             _ => timing.terminal_progress(),
@@ -736,8 +744,8 @@ impl TrackValues {
     /// f64-preserving terminal sampling for glow and spatial runtime channels.
     pub fn terminal_progress_f64(&self, timing: TrackTiming) -> f64 {
         match self {
-            Self::Glow {
-                end_behavior: GlowTrackEndBehavior::RestoreSource,
+            Self::Effect {
+                end_behavior: EffectTrackEndBehavior::RestoreSource,
                 ..
             } => 0.0,
             _ => timing.terminal_progress_f64(),
@@ -747,7 +755,7 @@ impl TrackValues {
     pub const fn value_kind(&self) -> ValueKind {
         match self {
             Self::Paint { .. } => ValueKind::Paint,
-            Self::Glow { .. } => ValueKind::Glow,
+            Self::Effect { .. } => ValueKind::Effect,
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
             Self::Scalar { .. } => ValueKind::Scalar,
@@ -766,12 +774,12 @@ impl TrackValues {
         property: Property,
     ) -> Result<(), TimelineError> {
         match self {
-            Self::Glow { from, to, .. } => {
+            Self::Effect { from, to, .. } => {
                 if from.property() != property
                     || to.property() != property
                     || from.sample(*to, 0.0).is_err()
                 {
-                    return Err(TimelineError::InvalidGlowValues(property));
+                    return Err(TimelineError::InvalidEffectValues(property));
                 }
                 Ok(())
             }
@@ -1021,9 +1029,9 @@ pub struct TrackDefinition {
 pub enum TimelineError {
     InvalidPaintValues,
     UnsupportedPaintRateFunction(RateFunction),
-    InvalidGlowValues(Property),
+    InvalidEffectValues(Property),
     UnsupportedGlowRateFunction(RateFunction),
-    InvalidGlowAttachment {
+    InvalidEffectAttachment {
         object: ObjectId,
         attachment: crate::SemanticNodeId,
     },
@@ -1083,9 +1091,9 @@ impl std::fmt::Display for TimelineError {
         match self {
             Self::InvalidPaintValues => formatter.write_str("continuous paint track is outside the finite planar fill profile"),
             Self::UnsupportedPaintRateFunction(rate) => write!(formatter, "continuous paint tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
-            Self::InvalidGlowValues(property) => write!(formatter, "invalid or incompatible glow endpoints for {property:?}"),
+            Self::InvalidEffectValues(property) => write!(formatter, "invalid or incompatible effect endpoints for {property:?}"),
             Self::UnsupportedGlowRateFunction(rate) => write!(formatter, "glow tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
-            Self::InvalidGlowAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
+            Self::InvalidEffectAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),
             Self::InvalidDuration(value) => write!(formatter, "invalid duration {value}"),
             Self::InvalidInstantDuration { property, duration } => write!(
@@ -1228,7 +1236,7 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     track
         .values
         .validate_numeric_values(track.object, track.property)?;
-    if matches!(track.values, TrackValues::Glow { .. })
+    if matches!(track.values, TrackValues::Effect { .. })
         && !track.timing.easing.preserves_unit_interval()
     {
         return Err(TimelineError::UnsupportedGlowRateFunction(
@@ -1244,13 +1252,13 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     }
     if matches!(
         track.values,
-        TrackValues::Glow {
-            end_behavior: GlowTrackEndBehavior::RestoreSource,
+        TrackValues::Effect {
+            end_behavior: EffectTrackEndBehavior::RestoreSource,
             ..
         }
     ) {
-        if track.property != Property::GlowIntensity {
-            return Err(TimelineError::InvalidGlowValues(track.property));
+        if track.property != Property::EffectIntensity {
+            return Err(TimelineError::InvalidEffectValues(track.property));
         }
         if track.timing.duration <= 0.0 {
             return Err(TimelineError::InvalidDuration(track.timing.duration));

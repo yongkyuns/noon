@@ -161,12 +161,13 @@ fn indicate_ticks_and_release_preserve_unowned_effective_channels() {
     assert_eq!(runtime.publication_context(), settled);
 }
 
-fn glow_runtime(intensity: f64) -> (SceneInstance, ObjectId, noon_compile::CompiledGlow) {
+fn glow_runtime(intensity: f64) -> (SceneInstance, ObjectId, noon_compile::CompiledEffect) {
     let object = ObjectId::new(1);
-    let glow = noon_compile::CompiledGlow {
+    let glow = noon_compile::CompiledEffect {
         attachment: SemanticNodeId::new(4, 2),
-        definition: noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(intensity))
-            .unwrap(),
+        definition: (noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(intensity))
+            .unwrap())
+        .into(),
     };
     let mut compiled = CompiledObject::new(
         object,
@@ -178,7 +179,7 @@ fn glow_runtime(intensity: f64) -> (SceneInstance, ObjectId, noon_compile::Compi
             ..Style::default()
         },
     );
-    compiled.glow = Some(std::sync::Arc::new(glow));
+    compiled.effect = Some(std::sync::Arc::new(glow));
     (
         SceneInstance::new(CompiledScene::compile_objects(vec![compiled], &[]).unwrap()),
         object,
@@ -243,20 +244,22 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
         runtime
             .effective_object(object)
             .unwrap()
-            .glow
+            .effect
             .as_ref()
             .unwrap()
             .definition
+            .as_glow()
+            .unwrap()
             .intensity(),
         2.0
     );
-    let edited = noon_core::GlowUpdate::default()
+    let edited = noon_core::EffectUpdate::default()
         .color(Color::BLUE)
-        .radius(noon_core::GlowRadius::Scene(0.3));
+        .radius(noon_core::EffectRadius::Scene(0.3));
     runtime
-        .apply_execution_patch(&noon_compile::ExecutionPatch::SetGlow {
+        .apply_execution_patch(&noon_compile::ExecutionPatch::SetEffect {
             object,
-            glow: std::sync::Arc::new(noon_compile::CompiledGlow {
+            effect: std::sync::Arc::new(noon_compile::CompiledEffect {
                 attachment: glow.attachment,
                 definition: edited.apply_to(glow.definition).unwrap(),
             }),
@@ -268,11 +271,11 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
     let final_glow = runtime
         .effective_object(object)
         .unwrap()
-        .glow
+        .effect
         .as_ref()
         .unwrap()
         .definition;
-    assert_eq!(final_glow.color(), Color::BLUE);
-    assert_eq!(final_glow.radius(), noon_core::GlowRadius::Scene(0.3));
-    assert_eq!(final_glow.intensity(), 0.4);
+    assert_eq!(final_glow.as_glow().unwrap().color(), Color::BLUE);
+    assert_eq!(final_glow.radius(), noon_core::EffectRadius::Scene(0.3));
+    assert_eq!(final_glow.as_glow().unwrap().intensity(), 0.4);
 }

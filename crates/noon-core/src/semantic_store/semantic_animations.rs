@@ -968,7 +968,7 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
-        crate::Glow::new(crate::GlowUpdate::default().intensity(intensity))
+        crate::Glow::new(crate::EffectUpdate::default().intensity(intensity))
             .map_err(|_| SemanticAnimationError::InvalidGlowPulseIntensity)?;
         validate_authored_animation_options(options)?;
         Ok(

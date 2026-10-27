@@ -151,7 +151,7 @@ fn assign_expected(
             style.stroke_width = stroke_width
         }
         EffectivePropertyWrite::Opacity { opacity, .. } => style.opacity = opacity,
-        EffectivePropertyWrite::GlowIntensity { .. } => {
+        EffectivePropertyWrite::EffectIntensity { .. } => {
             unreachable!("the affine/style reference fixture has no glow attachment")
         }
     }

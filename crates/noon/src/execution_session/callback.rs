@@ -604,7 +604,7 @@ fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
         EffectiveSemanticPropertyWrite::Stroke { .. } => CALLBACK_STROKE,
         EffectiveSemanticPropertyWrite::StrokeWidth { .. } => CALLBACK_STROKE_WIDTH,
         EffectiveSemanticPropertyWrite::Opacity { .. } => CALLBACK_OPACITY,
-        EffectiveSemanticPropertyWrite::GlowIntensity { .. } => 0,
+        EffectiveSemanticPropertyWrite::EffectIntensity { .. } => 0,
     }
 }
 
@@ -764,7 +764,7 @@ impl CallbackPhaseOverlay {
         let mut transform = current.transform;
         let mut style = current.style;
         match write {
-            EffectiveSemanticPropertyWrite::GlowIntensity { .. } => {
+            EffectiveSemanticPropertyWrite::EffectIntensity { .. } => {
                 return Err(ExecutionSessionCallbackError::UnsupportedGlowWrite(object));
             }
             EffectiveSemanticPropertyWrite::WorldTransform { .. } => {
@@ -2078,7 +2078,10 @@ impl ExecutionSession {
         let mut writes = Vec::with_capacity(batch.writes.len());
         for write in batch.writes {
             let semantic = write.object();
-            if matches!(write, EffectiveSemanticPropertyWrite::GlowIntensity { .. }) {
+            if matches!(
+                write,
+                EffectiveSemanticPropertyWrite::EffectIntensity { .. }
+            ) {
                 return Err(ExecutionSessionCallbackError::UnsupportedGlowWrite(
                     semantic,
                 ));

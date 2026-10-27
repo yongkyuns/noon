@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    resolve_glow_pulse_animation_options, AnimationDefaults, AnimationOptions, Glow, GlowUpdate,
+    resolve_glow_pulse_animation_options, AnimationDefaults, AnimationOptions, EffectUpdate, Glow,
     RateFunction, SemanticAnimationIntent, SemanticClickAction, SemanticClickGlowPulse,
     SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind, SemanticStore,
     SemanticStoreError,
@@ -17,7 +17,7 @@ fn glow_pulse_declaration(
 ) -> Result<SemanticClickGlowPulse, AuthoringError> {
     // Share the authored pulse's numerical and timing contracts. This prepares
     // only values; registration never captures or creates an attachment.
-    GlowUpdate::default()
+    EffectUpdate::default()
         .intensity(intensity)
         .prepare(Glow::default())?;
     let resolved = resolve_glow_pulse_animation_options(

@@ -101,9 +101,9 @@ impl PreparedSemanticAnimationActivation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
-    GlowTarget {
+    EffectTarget {
         animation: SemanticTransactionNodeRef,
-        error: super::glow_target::GlowTargetLoweringError,
+        error: super::glow_target::EffectTargetLoweringError,
     },
     GlowDriverConflict {
         first_animation: SemanticTransactionNodeRef,
@@ -312,14 +312,18 @@ where
         }
         let attachments = prepared
             .animation_effect_snapshot(leaf.target)
-            .map_err(|error| PreparedSemanticAnimationLoweringError::GlowTarget {
-                animation: leaf.animation,
-                error: super::glow_target::GlowTargetLoweringError::Read(error),
-            })?;
+            .map_err(
+                |error| PreparedSemanticAnimationLoweringError::EffectTarget {
+                    animation: leaf.animation,
+                    error: super::glow_target::EffectTargetLoweringError::Read(error),
+                },
+            )?;
         if let [attachment] = attachments.as_slice() {
-            let noon_core::EffectDefinition::Glow(definition) = attachment.definition;
+            let definition = attachment.definition;
             if attachment.name.as_ref() == "glow"
-                && definition.intensity() == 0.0
+                && definition
+                    .as_glow()
+                    .is_some_and(|effect| effect.intensity() == 0.0)
                 && prepared.store().node(attachment.attachment).is_none()
             {
                 temporary_attachments.insert(attachment.attachment);
@@ -602,24 +606,24 @@ where
                     start,
                 )
                 .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
-                let glow_error = |error| PreparedSemanticAnimationLoweringError::GlowTarget {
+                let glow_error = |error| PreparedSemanticAnimationLoweringError::EffectTarget {
                     animation: leaf.animation,
                     error,
                 };
                 let source_effects = prepared
                     .animation_effect_snapshot(leaf.target)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 let target_effects = prepared
                     .animation_effect_snapshot(target_state)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 let snapshot = prepared
                     .transform_effect_snapshot(leaf.animation)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
                 if snapshot.is_some()
-                    || from.glow.is_some()
+                    || from.effect.is_some()
                     || !source_effects.is_empty()
                     || !target_effects.is_empty()
                 {
@@ -643,7 +647,7 @@ where
                 // Newly admitted detached sources likewise start from their
                 // canonical authored attachment. Existing runtime rows must use
                 // their effective generation/value; no stale-generation fallback.
-                let effective_glow = from.glow.or_else(|| {
+                let effective_glow = from.effect.or_else(|| {
                     let [source_effect] = source_effects.as_slice() else {
                         return None;
                     };
@@ -652,13 +656,15 @@ where
                     {
                         return None;
                     }
-                    let noon_core::EffectDefinition::Glow(definition) = source_effect.definition;
-                    (newly_admitted || definition.intensity() == 0.0).then_some(
-                        crate::CompiledGlow {
-                            attachment: source_effect.attachment,
-                            definition,
-                        },
-                    )
+                    let definition = source_effect.definition;
+                    (newly_admitted
+                        || definition
+                            .as_glow()
+                            .is_some_and(|effect| effect.intensity() == 0.0))
+                    .then_some(crate::CompiledEffect {
+                        attachment: source_effect.attachment,
+                        definition,
+                    })
                 });
                 let glow_channels = super::glow_target::channels(
                     snapshot,
@@ -818,7 +824,7 @@ where
             }
             PreparedSemanticScheduledAnimationPayload::GlowPulse { intensity } => {
                 super::glow_pulse::validate_options(leaf.options).map_err(|error| {
-                    PreparedSemanticAnimationLoweringError::GlowTarget {
+                    PreparedSemanticAnimationLoweringError::EffectTarget {
                         animation: leaf.animation,
                         error,
                     }
@@ -830,22 +836,24 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let glow_error = |error| PreparedSemanticAnimationLoweringError::GlowTarget {
+                let glow_error = |error| PreparedSemanticAnimationLoweringError::EffectTarget {
                     animation: leaf.animation,
                     error,
                 };
                 let attachments = prepared
                     .animation_effect_snapshot(leaf.target)
-                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(super::glow_target::EffectTargetLoweringError::Read)
                     .map_err(glow_error)?;
-                if from.glow.is_none() {
+                if from.effect.is_none() {
                     if let [attachment] = attachments.as_slice() {
-                        let noon_core::EffectDefinition::Glow(definition) = attachment.definition;
+                        let definition = attachment.definition;
                         if admitted.contains(&leaf.target)
                             || (prepared.store().node(attachment.attachment).is_none()
-                                && definition.intensity() == 0.0)
+                                && definition
+                                    .as_glow()
+                                    .is_some_and(|effect| effect.intensity() == 0.0))
                         {
-                            from.glow = Some(crate::CompiledGlow {
+                            from.effect = Some(crate::CompiledEffect {
                                 attachment: attachment.attachment,
                                 definition,
                             });
@@ -860,21 +868,21 @@ where
                         .expect("validated pulse target"),
                     source,
                     &attachments,
-                    from.glow,
+                    from.effect,
                     intensity,
                 )
                 .map_err(glow_error)?;
                 super::glow_target::reserve(
                     &mut driven,
                     leaf.execution_object_id,
-                    Property::GlowIntensity,
+                    Property::EffectIntensity,
                     leaf.animation,
                 )
                 .map_err(|first_animation| {
                     PreparedSemanticAnimationLoweringError::GlowDriverConflict {
                         first_animation,
                         next_animation: leaf.animation,
-                        property: Property::GlowIntensity,
+                        property: Property::EffectIntensity,
                     }
                 })?;
                 let mut timing = leaf.timing;
@@ -883,7 +891,7 @@ where
                     animation: leaf.animation,
                     target: leaf.target,
                     execution_object_id: leaf.execution_object_id,
-                    property: Property::GlowIntensity,
+                    property: Property::EffectIntensity,
                     completion: super::glow_target::completion(&values, timing)
                         .map_err(glow_error)?,
                     values,
@@ -1399,7 +1407,7 @@ where
     } else if admitted {
         EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
@@ -1637,7 +1645,7 @@ mod tests {
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation,
@@ -2190,7 +2198,7 @@ mod tests {
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
             fill_gradient: None,
-            glow: None,
+            effect: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(3.0, 2.0),

@@ -16,7 +16,7 @@ fn geometry_frame(geometry: GeometryRef) -> FrameState {
         objects: vec![FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),

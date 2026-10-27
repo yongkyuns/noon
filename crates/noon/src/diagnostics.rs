@@ -3,6 +3,18 @@ use crate::ExecutionSession;
 use noon_core::{Color, GeometryRef, GeometryResource, GeometryResourceLookup, Rect, Vec2};
 use serde_json::{json, Value};
 
+fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
+    let definition = match effect.definition {
+        noon_core::EffectDefinition::Glow(glow) => {
+            json!({ "kind": "glow", "color": glow.color(), "radius": glow.radius(), "intensity": glow.intensity(), "source": match glow.source() { noon_core::GlowSource::Painted => "painted", noon_core::GlowSource::Silhouette => "silhouette" } })
+        }
+        noon_core::EffectDefinition::Blur(blur) => {
+            json!({ "kind": "blur", "radius": blur.radius() })
+        }
+    };
+    json!({ "attachment": effect.attachment, "definition": definition })
+}
+
 fn paint_json(color: Option<Color>, opacity: f32) -> Value {
     match color {
         Some(color) => json!({
@@ -172,18 +184,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                 "stroke_join": object.style.stroke_join, "stroke_cap": object.style.stroke_cap,
                 "style_opacity": object.style.opacity, "appearance": object.appearance,
                 "reveal": frame.reveal(index), "morph": frame.morph(index),
-                "glow": object.glow.as_deref().map(|glow| json!({
-                    "attachment": glow.attachment,
-                    "definition": {
-                        "color": glow.definition.color(),
-                        "radius": glow.definition.radius(),
-                        "intensity": glow.definition.intensity(),
-                        "source": match glow.definition.source() {
-                            noon_core::GlowSource::Painted => "painted",
-                            noon_core::GlowSource::Silhouette => "silhouette",
-                        },
-                    },
-                })),
+                "effect": object.effect.as_deref().map(effect_json),
             })
         })
         .collect::<Vec<_>>();
@@ -227,7 +228,7 @@ mod tests {
         let mut scene = Scene::new();
         let mut source = scene.circle(0.5).unwrap();
         source
-            .set_glow(crate::effects::GlowUpdate::default().intensity(0.5))
+            .set_glow(crate::effects::EffectUpdate::default().intensity(0.5))
             .unwrap();
         scene.add(&source).unwrap();
         let attachment = source.get_effect("glow").unwrap().node_id();
@@ -242,17 +243,19 @@ mod tests {
         let capture = execution_frame_value(session);
         assert_eq!(capture["interactions_active"], false);
         assert_eq!(
-            capture["objects"][0]["glow"]["attachment"],
+            capture["objects"][0]["effect"]["attachment"],
             json!(attachment)
         );
         assert_eq!(
-            capture["objects"][0]["glow"]["definition"]["intensity"],
+            capture["objects"][0]["effect"]["definition"]["intensity"],
             1.25
         );
-        let noon_core::EffectDefinition::Glow(authored) = source
+        let authored = source
             .get_effect("glow")
             .unwrap()
             .authored_definition()
+            .unwrap()
+            .as_glow()
             .unwrap();
         assert_eq!(authored.intensity(), 0.5);
         assert_eq!(session.publication_context(), before);

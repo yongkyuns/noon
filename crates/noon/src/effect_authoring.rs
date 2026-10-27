@@ -3,7 +3,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    EffectDefinition, Glow, GlowUpdate, SemanticMutationTransaction, SemanticNodeId, SemanticStore,
+    EffectDefinition, EffectUpdate, Glow, SemanticMutationTransaction, SemanticNodeId,
+    SemanticStore,
 };
 
 use crate::{AuthoringError, LiveSession, LiveSessionError, Mobject, Scene};
@@ -90,7 +91,7 @@ fn lookup(object: &Mobject, selector: EffectSelector<'_>) -> Result<EffectHandle
 
 fn glow_transaction(
     object: &Mobject,
-    update: GlowUpdate,
+    update: EffectUpdate,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     object.validate()?;
     let existing = object
@@ -99,6 +100,16 @@ fn glow_transaction(
         .effect_by_name(object.node_id(), "glow")?;
     let mut tx = SemanticMutationTransaction::new();
     if let Some(effect) = existing {
+        if object
+            .integration_store()
+            .borrow()
+            .semantic_effect_state(effect)?
+            .definition()
+            .as_glow()
+            .is_none()
+        {
+            return Err(noon_core::EffectParameterError::IncompatibleDefinition.into());
+        }
         tx.update_effect(effect, update);
     } else {
         tx.create_effect(object.node_id(), "glow", Glow::new(update)?);
@@ -120,7 +131,7 @@ fn add_transaction(
 fn update_transaction(
     object: &Mobject,
     selector: EffectSelector<'_>,
-    update: GlowUpdate,
+    update: EffectUpdate,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     let handle = lookup(object, selector)?;
     let mut tx = SemanticMutationTransaction::new();
@@ -148,6 +159,16 @@ fn remove_glow_transaction(
         .borrow()
         .effect_by_name(object.node_id(), "glow")?
     {
+        if object
+            .integration_store()
+            .borrow()
+            .semantic_effect_state(effect)?
+            .definition()
+            .as_glow()
+            .is_none()
+        {
+            return Err(noon_core::EffectParameterError::IncompatibleDefinition.into());
+        }
         tx.remove_node(effect);
     }
     Ok(tx)
@@ -156,7 +177,7 @@ fn remove_glow_transaction(
 impl Mobject {
     /// Author the canonical glow. Like other raw Mobject mutators, this is for
     /// pre-execution/target editing; running scenes must use Scene or LiveSession.
-    pub fn set_glow(&mut self, update: GlowUpdate) -> Result<(), AuthoringError> {
+    pub fn set_glow(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
         glow_transaction(self, update)?.apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
@@ -178,7 +199,7 @@ impl Mobject {
     pub fn set_effect<'a>(
         &mut self,
         selector: impl Into<EffectSelector<'a>>,
-        update: GlowUpdate,
+        update: EffectUpdate,
     ) -> Result<(), AuthoringError> {
         update_transaction(self, selector.into(), update)?
             .apply(&mut self.integration_store().borrow_mut())?;
@@ -204,7 +225,11 @@ impl Mobject {
 impl Scene {
     /// Declare a glow through the normal scene transaction. Execution validates
     /// the finite filled, unstroked planar circle/rectangle profile.
-    pub fn set_glow(&mut self, object: &Mobject, update: GlowUpdate) -> Result<(), AuthoringError> {
+    pub fn set_glow(
+        &mut self,
+        object: &Mobject,
+        update: EffectUpdate,
+    ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
         self.apply_semantic_transaction(glow_transaction(object, update)?)?;
         Ok(())
@@ -230,7 +255,7 @@ impl Scene {
         &mut self,
         object: &Mobject,
         selector: impl Into<EffectSelector<'a>>,
-        update: GlowUpdate,
+        update: EffectUpdate,
     ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
         self.apply_semantic_transaction(update_transaction(object, selector.into(), update)?)?;
@@ -260,7 +285,7 @@ impl LiveSession<'_> {
     pub fn set_glow(
         &mut self,
         object: &Mobject,
-        update: GlowUpdate,
+        update: EffectUpdate,
     ) -> Result<(), LiveSessionError> {
         require_store(self.integration_store(), object)?;
         self.apply(glow_transaction(object, update)?)?;
@@ -282,7 +307,7 @@ impl LiveSession<'_> {
         &mut self,
         object: &Mobject,
         selector: impl Into<EffectSelector<'a>>,
-        update: GlowUpdate,
+        update: EffectUpdate,
     ) -> Result<(), LiveSessionError> {
         require_store(self.integration_store(), object)?;
         self.apply(update_transaction(object, selector.into(), update)?)?;
@@ -308,6 +333,8 @@ impl LiveSession<'_> {
 
 #[cfg(test)]
 mod activation_tests;
+#[cfg(test)]
+mod blur_tests;
 #[cfg(test)]
 mod bridge_tests;
 #[cfg(test)]

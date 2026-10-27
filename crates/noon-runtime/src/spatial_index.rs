@@ -584,7 +584,7 @@ mod tests {
             objects: vec![crate::FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 z_index: 0.0,
                 id: ObjectId::new(0),
                 content: ObjectContentRef::Geometry(geometry),
@@ -612,7 +612,7 @@ mod tests {
             objects: vec![crate::FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 z_index: 0.0,
                 id: ObjectId::new(0),
                 content: ObjectContentRef::Text(TextResourceHandle {

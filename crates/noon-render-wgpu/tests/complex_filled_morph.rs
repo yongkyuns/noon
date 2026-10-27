@@ -30,7 +30,7 @@ fn frame(progress: f32, unrelated: usize) -> FrameState {
         .map(|index| FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             id: ObjectId::new(index as u64),
             z_index: 0.0,

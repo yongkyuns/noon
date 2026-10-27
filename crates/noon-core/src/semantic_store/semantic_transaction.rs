@@ -78,7 +78,7 @@ pub enum SemanticMutation {
     },
     UpdateEffect {
         effect: SemanticNodeId,
-        update: crate::GlowUpdate,
+        update: crate::EffectUpdate,
     },
     SetSignal {
         signal: SemanticNodeId,
@@ -495,7 +495,7 @@ pub(super) enum SemanticMutationKey {
     AudioClip(SemanticNodeId),
     EffectParameter {
         effect: SemanticNodeId,
-        parameter: crate::GlowParameter,
+        parameter: crate::EffectParameter,
     },
     Signal(SemanticNodeId),
     ObjectProperty {
@@ -557,7 +557,7 @@ pub enum SemanticMutationImpact {
     EffectParameter {
         owner: SemanticNodeId,
         effect: SemanticNodeId,
-        parameter: crate::GlowParameter,
+        parameter: crate::EffectParameter,
     },
     FamilyColor {
         node: SemanticNodeId,
@@ -778,7 +778,7 @@ impl SemanticMutationTransaction {
     pub fn update_effect(
         &mut self,
         effect: SemanticNodeId,
-        update: crate::GlowUpdate,
+        update: crate::EffectUpdate,
     ) -> &mut Self {
         self.mutations
             .push(SemanticMutation::UpdateEffect { effect, update });
@@ -4443,7 +4443,7 @@ pub enum SemanticMutationTransactionError {
     DuplicateEffectParameter {
         index: usize,
         effect: SemanticNodeId,
-        parameter: crate::GlowParameter,
+        parameter: crate::EffectParameter,
     },
     InvalidEffectAttachment {
         index: usize,
@@ -4452,7 +4452,7 @@ pub enum SemanticMutationTransactionError {
     EffectParameter {
         index: usize,
         effect: SemanticNodeId,
-        error: crate::GlowParameterError,
+        error: crate::EffectParameterError,
     },
     /// A transaction-local vector path contains a non-finite coordinate.
     InvalidPendingGeometryPath,

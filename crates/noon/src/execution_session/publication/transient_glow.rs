@@ -64,7 +64,7 @@ impl ExecutionSession {
                 let ExecutionPatch::AddTrack(track) = patch else {
                     continue;
                 };
-                let TrackValues::Glow { attachment, .. } = track.values else {
+                let TrackValues::Effect { attachment, .. } = track.values else {
                     continue;
                 };
                 if !self
@@ -75,7 +75,7 @@ impl ExecutionSession {
                     continue;
                 }
                 let intent = intents.entry((track.object, attachment)).or_default();
-                intent.authored_intensity_track |= track.property == Property::GlowIntensity;
+                intent.authored_intensity_track |= track.property == Property::EffectIntensity;
             }
         }
         if intents.is_empty() {
@@ -109,17 +109,20 @@ impl ExecutionSession {
             let Some(glow) = self
                 .runtime
                 .effective_object(object)
-                .and_then(|row| row.glow.as_deref())
+                .and_then(|row| row.effect.as_deref())
                 .filter(|glow| glow.attachment == attachment)
             else {
                 continue;
             };
-            writes.push(EffectivePropertyWrite::GlowIntensity {
+            let definition = glow.definition.as_glow().ok_or_else(|| {
+                ExecutionSessionPublicationError::Interaction(
+                    "input-owned GlowPulse attachment changed kind".into(),
+                )
+            })?;
+            writes.push(EffectivePropertyWrite::EffectIntensity {
                 object,
                 attachment,
-                intensity: intent
-                    .intensity
-                    .unwrap_or_else(|| glow.definition.intensity()),
+                intensity: intent.intensity.unwrap_or_else(|| definition.intensity()),
             });
             if !self.runtime.object_has_effective_driver(object)
                 && !original_carry.contains(&object)

@@ -27,14 +27,14 @@ pub(super) fn final_value_writes(
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetGlow { object, .. } => {
+            | ExecutionPatch::SetEffect { object, .. } => {
                 let lane = match patch {
                     ExecutionPatch::SetContent { .. } => 0,
                     ExecutionPatch::SetTransform { .. }
                     | ExecutionPatch::SetSemanticTransform { .. } => 1,
                     ExecutionPatch::SetSpatialState { .. } => 1,
                     ExecutionPatch::SetStyle { .. } => 2,
-                    ExecutionPatch::SetGlow { .. } => 3,
+                    ExecutionPatch::SetEffect { .. } => 3,
                     _ => unreachable!(),
                 };
                 if !final_writes.insert((*object, lane)) {
@@ -492,10 +492,10 @@ impl SceneInstance {
         }
         let mut objects = HashSet::with_capacity(transaction.mutations().len());
         for patch in transaction.mutations() {
-            let ExecutionPatch::SetGlowAttachment {
+            let ExecutionPatch::SetEffectAttachment {
                 object,
                 expected,
-                glow,
+                effect: glow,
             } = patch
             else {
                 return Err(AuthoredPublicationError::InvalidTransientGlowLifecycle);
@@ -509,20 +509,27 @@ impl SceneInstance {
                 .object_index(*object)
                 .ok_or(CompilePatchError::UnknownObject(*object))? as usize;
             let compiled = &self.compiled.objects()[index];
-            let current = compiled.glow.as_deref();
-            let effective = self.frame.objects[index].glow.as_deref();
+            let current = compiled.effect.as_deref();
+            let effective = self.frame.objects[index].effect.as_deref();
             let valid = match (expected, glow.as_deref()) {
                 (None, Some(next)) => {
                     current.is_none()
                         && effective.is_none()
-                        && !compiled.dynamic.glow
-                        && next.definition.intensity() == 0.0
+                        && !compiled.dynamic.effect
+                        && next
+                            .definition
+                            .as_glow()
+                            .is_some_and(|definition| definition.intensity() == 0.0)
                 }
                 (Some(attachment), None) => {
                     current.is_some_and(|glow| {
-                        glow.attachment == *attachment && glow.definition.intensity() == 0.0
+                        glow.attachment == *attachment
+                            && glow
+                                .definition
+                                .as_glow()
+                                .is_some_and(|definition| definition.intensity() == 0.0)
                     }) && effective.is_some_and(|glow| glow.attachment == *attachment)
-                        && !compiled.dynamic.glow
+                        && !compiled.dynamic.effect
                         && self.transient_glow_attachment(*object) == Some((*attachment, true))
                 }
                 _ => false,
@@ -652,8 +659,8 @@ impl SceneInstance {
                     | ExecutionPatch::SetSemanticTransform { object, .. }
                     | ExecutionPatch::SetSpatialState { object, .. }
                     | ExecutionPatch::SetStyle { object, .. }
-                    | ExecutionPatch::SetGlow { object, .. }
-                    | ExecutionPatch::SetGlowAttachment { object, .. }
+                    | ExecutionPatch::SetEffect { object, .. }
+                    | ExecutionPatch::SetEffectAttachment { object, .. }
                     | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
                     _ => None,
                 };
@@ -782,11 +789,12 @@ mod tests {
         (instance, object)
     }
 
-    fn neutral_glow(attachment: noon_core::SemanticNodeId) -> Arc<noon_compile::CompiledGlow> {
-        Arc::new(noon_compile::CompiledGlow {
+    fn neutral_glow(attachment: noon_core::SemanticNodeId) -> Arc<noon_compile::CompiledEffect> {
+        Arc::new(noon_compile::CompiledEffect {
             attachment,
-            definition: noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
-                .unwrap(),
+            definition: (noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
+                .unwrap())
+            .into(),
         })
     }
 
@@ -813,10 +821,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let transaction =
-            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetGlowAttachment {
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffectAttachment {
                 object,
                 expected: None,
-                glow: Some(glow),
+                effect: Some(glow),
             }]);
         instance
             .preflight_transient_glow_lifecycle_transaction(
@@ -859,10 +867,10 @@ mod tests {
         instance
             .apply_transient_glow_lifecycle_transaction_with_frame(
                 &ExecutionMutationTransaction::from_mutations([
-                    ExecutionPatch::SetGlowAttachment {
+                    ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: Some(attachment),
-                        glow: None,
+                        effect: None,
                     },
                 ]),
                 CompiledResources::default(),
@@ -961,7 +969,7 @@ mod tests {
             retire_temporary_glow(&mut instance, object);
             assert!(instance.supports_immutable_playback());
             assert!(!instance.interactions_active());
-            assert!(instance.effective_object(object).unwrap().glow.is_none());
+            assert!(instance.effective_object(object).unwrap().effect.is_none());
         }
         assert_ne!(
             instance.publication_context().execution_revision(),
@@ -1013,10 +1021,10 @@ mod tests {
     fn transient_glow_lifecycle_rejects_mixed_or_non_neutral_edits_atomically() {
         let (mut instance, object) = semantic_instance();
         let attachment = noon_core::SemanticNodeId::new(90, 1);
-        let add = ExecutionPatch::SetGlowAttachment {
+        let add = ExecutionPatch::SetEffectAttachment {
             object,
             expected: None,
-            glow: Some(neutral_glow(attachment)),
+            effect: Some(neutral_glow(attachment)),
         };
         let style = ExecutionPatch::SetStyle {
             object,
@@ -1026,18 +1034,18 @@ mod tests {
                 ..Style::default()
             },
         };
-        let non_neutral = ExecutionPatch::SetGlowAttachment {
+        let non_neutral = ExecutionPatch::SetEffectAttachment {
             object,
             expected: None,
-            glow: Some(Arc::new(noon_compile::CompiledGlow {
+            effect: Some(Arc::new(noon_compile::CompiledEffect {
                 attachment,
-                definition: noon_core::Glow::default(),
+                definition: (noon_core::Glow::default()).into(),
             })),
         };
-        let remove = ExecutionPatch::SetGlowAttachment {
+        let remove = ExecutionPatch::SetEffectAttachment {
             object,
             expected: Some(attachment),
-            glow: None,
+            effect: None,
         };
         instance.take_frame_changes();
         for transaction in [
@@ -1108,15 +1116,15 @@ mod tests {
         let before = instance.publication_context();
         let before_frame = instance.frame().clone();
         for patch in [
-            ExecutionPatch::SetGlowAttachment {
+            ExecutionPatch::SetEffectAttachment {
                 object,
                 expected: Some(noon_core::SemanticNodeId::new(90, 2)),
-                glow: None,
+                effect: None,
             },
-            ExecutionPatch::SetGlowAttachment {
+            ExecutionPatch::SetEffectAttachment {
                 object,
                 expected: Some(attachment),
-                glow: Some(neutral_glow(noon_core::SemanticNodeId::new(91, 1))),
+                effect: Some(neutral_glow(noon_core::SemanticNodeId::new(91, 1))),
             },
         ] {
             assert!(matches!(
@@ -1137,10 +1145,10 @@ mod tests {
         assert!(matches!(
             instance.apply_transient_glow_lifecycle_transaction_with_frame(
                 &ExecutionMutationTransaction::from_mutations([
-                    ExecutionPatch::SetGlowAttachment {
+                    ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: Some(attachment),
-                        glow: None,
+                        effect: None,
                     }
                 ]),
                 CompiledResources::default(),
@@ -1161,7 +1169,7 @@ mod tests {
         let attachment = noon_core::SemanticNodeId::new(90, 1);
         enroll_temporary_glow(&mut instance, object, attachment);
         let (property, values) = neutral_glow(attachment)
-            .parameter_channels(noon_core::GlowUpdate::default().radius(0.3))
+            .parameter_channels(noon_core::EffectUpdate::default().radius(0.3))
             .unwrap()
             .pop()
             .unwrap();
@@ -1180,10 +1188,10 @@ mod tests {
         assert!(matches!(
             instance.apply_transient_glow_lifecycle_transaction_with_frame(
                 &ExecutionMutationTransaction::from_mutations([
-                    ExecutionPatch::SetGlowAttachment {
+                    ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: Some(attachment),
-                        glow: None,
+                        effect: None,
                     }
                 ]),
                 CompiledResources::default(),
@@ -1226,10 +1234,10 @@ mod tests {
         assert!(matches!(
             sealed.apply_transient_glow_lifecycle_transaction_with_frame(
                 &ExecutionMutationTransaction::from_mutations([
-                    ExecutionPatch::SetGlowAttachment {
+                    ExecutionPatch::SetEffectAttachment {
                         object,
                         expected: None,
-                        glow: Some(neutral_glow(noon_core::SemanticNodeId::new(90, 1))),
+                        effect: Some(neutral_glow(noon_core::SemanticNodeId::new(90, 1))),
                     }
                 ]),
                 CompiledResources::default(),
@@ -1259,7 +1267,7 @@ mod tests {
         assert_eq!(instance.publication_context(), before);
         assert!(instance.interactions_active());
         retire_temporary_glow(&mut instance, object);
-        assert!(instance.effective_object(object).unwrap().glow.is_none());
+        assert!(instance.effective_object(object).unwrap().effect.is_none());
         instance
             .begin_replay_retention(crate::ReplayLimits::default())
             .unwrap();

@@ -269,7 +269,7 @@ mod tests {
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -291,7 +291,7 @@ mod tests {
             objects: vec![FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(10),
@@ -403,7 +403,7 @@ mod tests {
         let object = noon_runtime::FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
@@ -426,7 +426,7 @@ mod tests {
             objects: vec![FrameObjectState {
                 fill_gradient: None,
                 draw_enabled: true,
-                glow: None,
+                effect: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),

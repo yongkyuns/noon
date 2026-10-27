@@ -44,12 +44,12 @@ const expectedJavascriptSurface = [
   "livePromoteFamilyOwnPoints(",
   "livePromoteMobjectOwnPoints(",
   // Generated bindings must match the optional Python effects facade. Checking
-  // the exact class token avoids mistaking WasmGlowUpdate for WasmGlow.
-  "export class WasmGlow {",
+  // the exact class token avoids mistaking WasmEffectUpdate for WasmEffectDefinition.
+  "export class WasmEffectDefinition {",
+  "export class WasmEffectUpdate {",
   "export class WasmLinearGradient {",
   "setFillGradient(",
   "liveSetFillGradient(",
-  "export class WasmGlowUpdate {",
   "export class WasmEffectHandle {",
   "authoredDefinition()",
   "setGlow(",
@@ -648,6 +648,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyStateSmokeRenderer(",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectGlowPulseSmokeRenderer(",
+    "export function createDirectBlurSmokeRenderer(",
     "export function createDirectGradientGlowSmokeRenderer(",
     "export function createDirectClickGlowPulseRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
@@ -741,6 +742,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyStateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectGlowPulseSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectBlurSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectClickGlowPulseRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyArrangementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectPaintQueriesGradientsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

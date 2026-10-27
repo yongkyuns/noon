@@ -13,7 +13,7 @@ fn frame() -> FrameState {
         .map(|(index, z_index)| FrameObjectState {
             fill_gradient: None,
             draw_enabled: true,
-            glow: None,
+            effect: None,
             spatial: None,
             id: ObjectId::new(40 + index as u64),
             z_index,

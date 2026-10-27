@@ -532,7 +532,7 @@ impl SceneInstance {
                 .map(|write| {
                     let glow = self
                         .effective_object(write.object())
-                        .and_then(|row| row.glow.as_deref())
+                        .and_then(|row| row.effect.as_deref())
                         .copied();
                     write.as_execution_patch(glow)
                 })

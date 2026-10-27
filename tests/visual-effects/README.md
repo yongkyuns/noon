@@ -10,7 +10,7 @@ intensity and defaults to one second with `there_and_back`. Its Rust counterpart
 Construction does not enroll an attachment or capture a source value.
 
 The shared compiler captures coherent effective intensity at activation and emits
-an ordinary `Property::GlowIntensity` track with `GlowTrackEndBehavior::RestoreSource`.
+an ordinary `Property::GlowIntensity` track with `EffectTrackEndBehavior::RestoreSource`.
 The existing composition time map runs before the leaf amplitude map. At the mapped
 child endpoint the channel restores its captured source, including when a Linear
 or other non-returning rate override makes that restoration discontinuous. A later
@@ -232,7 +232,7 @@ The compiler rejects axis collapse anywhere in the interval, GPU precision loss,
 opening/closing subpixel stop gaps, overshooting leaf rates and unsupported sources
 before publication. Immediate edits may change stop count. Native reactive fill
 drivers retain existing conflict admission. Initial support is planar positive-area
-circle/rectangle/path fills. Strokes, text/image fills, source effects, content morphs,
+circle/rectangle/path fills. Strokes, text/image fills, content morphs,
 derived displays, callback paint edits and group fills remain explicitly unsupported.
 Scalar color queries reject continuous paint; fill opacity reports its multiplier.
 
@@ -249,25 +249,27 @@ are qualification gates, not claims of a pass on every physical device.
 
 ## Implemented shared Rust boundary
 
-`crates/noon-core/src/object_state/glow.rs` contains production, renderer-independent
-values: `Glow`, `GlowUpdate`, `GlowRadius`, `Pixels`, `GlowSource`, typed parameter
-errors, and `PreparedGlowUpdate`. The existing object-state module exports them.
+`crates/noon-core/src/object_state/glow.rs` contains the production,
+renderer-independent `Glow` and `GlowSource` values. Its sibling
+`effect_parameters.rs` owns `EffectUpdate`, `EffectRadius`, `Pixels`, typed
+parameter errors and `PreparedEffectUpdate`, shared with `Blur`. The existing
+object-state module exports them.
 They use Noon's existing `Color`, not a parallel color type or Python validator.
 No new crate, dependency, identity allocator, scene store, timeline or shader exists.
 
-`Glow` is a complete validated value with private fields. `GlowUpdate::default()`
+`Glow` is a complete validated value with private fields. `EffectUpdate::default()`
 is an empty partial request, not a reset to appearance defaults. A whole request
 is validated before a replacement value is returned. The following is actual Rust
 API, also covered by a compilable rustdoc example:
 
 ```rust
-use noon_core::{Glow, GlowParameterError, GlowUpdate, Pixels};
+use noon_core::{Glow, EffectParameterError, EffectUpdate, Pixels};
 
-fn parameters() -> Result<(), GlowParameterError> {
+fn parameters() -> Result<(), EffectParameterError> {
     let halo = Glow::new(
-        GlowUpdate::default().radius(Pixels(12.0)).intensity(0.25),
+        EffectUpdate::default().radius(Pixels(12.0)).intensity(0.25),
     )?;
-    let brighter = GlowUpdate::default().intensity(1.4).apply_to(halo)?;
+    let brighter = EffectUpdate::default().intensity(1.4).apply_to(halo)?;
     assert_eq!(brighter.radius(), halo.radius());
     assert_eq!(halo.intensity(), 0.25);
     Ok(())
@@ -277,7 +279,7 @@ fn parameters() -> Result<(), GlowParameterError> {
 These are inert shared inputs, not wrapper-owned mutable attachment state.
 `request.prepare(captured)` accepts an explicit coherent activation-time value;
 it does not obtain that value from a store, activate a driver, or check a lease.
-`PreparedGlowUpdate::sample(mapped_alpha)` returns a **partial update**, never an
+`PreparedEffectUpdate::sample(mapped_alpha)` returns a **partial update**, never an
 old complete appearance snapshot. Intensity-only sampling therefore cannot write
 radius/color/source. An explicitly supplied unchanged parameter still has a write
 channel; omitted parameters do not. Callers remain responsible for real attachment
@@ -313,16 +315,16 @@ mock scene. Its complete source is `crates/noon/examples/effect_authoring_contra
 
 ```rust
 use noon::{AnimationOptions, Scene};
-use noon::effects::GlowUpdate;
+use noon::effects::EffectUpdate;
 
 fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08)?;
     scene.add(&dot)?;
-    scene.set_glow(&dot, GlowUpdate::default().intensity(0.25))?;
+    scene.set_glow(&dot, EffectUpdate::default().intensity(0.25))?;
     let mut target = dot.target_editor()?;
     target.shift(2.0, 0.0)?;
-    target.set_effect("glow", GlowUpdate::default().intensity(1.4))?;
+    target.set_effect("glow", EffectUpdate::default().intensity(1.4))?;
     let movement = scene.declare_transform_to(
         &dot, &target, AnimationOptions::new().run_time(1.5),
     )?;
@@ -367,7 +369,7 @@ writers to the same parameter fail atomically even when they request equal value
 Empty patches own no channels but still validate the attachment handle. Scalar,
 color, radius, and source writes retain the same typed validation rules.
 
-`GlowUpdate::parameters()` enumerates only explicitly supplied channels without
+`EffectUpdate::parameters()` enumerates only explicitly supplied channels without
 allocation. Preflight composes disjoint updates against the staged value. Commit
 emits `SemanticMutationImpact::EffectParameter` only for changed parameters;
 unchanged explicit values still participate in conflict admission without dirtying
@@ -436,7 +438,7 @@ kind of animated scene object or introduce `play_effect`, `GlowTo` or `AnimateGl
 
 | Intent | Python design | Rust design / existing owner |
 | --- | --- | --- |
-| Persistent canonical glow | `obj.set_glow(**patch) -> obj` | Scene/live `set_glow(&obj, GlowUpdate)`, fallible coherent publication |
+| Persistent canonical glow | `obj.set_glow(**patch) -> obj` | Scene/live `set_glow(&obj, EffectUpdate)`, fallible coherent publication |
 | Add a named treatment | `obj.add_effect(Glow(...), name="accent") -> obj` | Scene/live attachment creation through the same semantic transaction |
 | Inspect a binding | `obj.get_effect("accent") -> bound handle` | typed generational lookup, not a copied state object |
 | Update one binding | `obj.set_effect("accent", **patch) -> obj` | Scene/live typed parameter update; no whole-object ownership |
@@ -460,7 +462,7 @@ already defined them. The leaf declaration exports/bindings below are implemente
 `Glow` describes values; `GlowPulse` describes a timed action. Python appearance
 parameters are keyword-only. On setters, `None` means omitted/preserve, like
 ordinary style setters; on initial construction it selects the documented default.
-Rust's `GlowUpdate` expresses the same distinction with `Option`. Boolean, string
+Rust's `EffectUpdate` expresses the same distinction with `Option`. Boolean, string
 numbers, nonfinite numbers and unknown keys are rejected, not coerced permissively.
 The operator reference's narrow scalar parser is not the shipping wrapper parser.
 Names are required, case-sensitive nonempty strings. The first slice has no
@@ -837,8 +839,8 @@ successful plain wait is not evidence that a glow was rendered.
 A useful mutation control bypasses `_noon_effects._call`'s live context and calls
 the raw authored handle instead. The fixture's post-wait unsupported-operation
 assertion must fail; restore the exact source and require it to pass. Separately,
-removing the exact `WasmGlow` class export must make `check-web-package.mjs` fail
-without confusing `WasmGlowUpdate` for that missing class. Preserve red/green logs
+removing the exact `WasmEffectDefinition` class export must make `check-web-package.mjs` fail
+without confusing `WasmEffectUpdate` for that missing class. Preserve red/green logs
 and source/package hashes; these are correctness controls, not performance runs.
 
 ## Qualification baseline and implementation handoff
@@ -896,7 +898,7 @@ performance evidence establishes a current-head merge pass.
 
 ### M1 ordinary parameter-channel integration (still guarded at Scene orchestration)
 
-`CompiledGlow::parameter_channels` derives only requested color, radius and
+`CompiledEffect::parameter_channels` derives only requested color, radius and
 intensity endpoints from a coherent activation-time runtime value. These become
 ordinary `TrackDefinition` values with the existing TrackIds, timing, nested time
 maps and scheduler. Attachment generation travels with each track; the compiler
@@ -958,3 +960,57 @@ borrows the normal browser host's device for explicit test readback on WebGPU
 and WebGL2; the maximum-radius field has independent full-support point probes.
 These are raster correctness/resource checks, not public animation, source
 capture/placement, group semantics or physical-device performance evidence.
+
+### Shared Blur authoring and capture
+
+`Blur` is an immutable finite built-in with a checked `radius`. It uses the same
+`EffectDefinition`, generational attachment, `EffectUpdate`, ordinary radius
+channel, completion and replay publication as Glow. `EffectRadius::Scene` resolves
+against the full output view; `Pixels` uses final physical output pixels. Radius
+is Gaussian standard deviation, independent of object scale. The retained LDR
+profile supports sigma through 64 pixels with full square support `ceil(3*sigma)`
+and transparent extension. Zero radius restores the ordinary source submission.
+
+```rust
+use noon::effects::{Blur, EffectUpdate, Pixels};
+// Given a shared Rust Scene and its ordinary Mobject:
+let soften = Blur::new(EffectUpdate::default().radius(Pixels(10.0)))?;
+scene.add_effect(&image, soften, "soften")?;
+let mut target = image.target_editor()?;
+target.set_effect("soften", EffectUpdate::default().radius(Pixels(20.0)))?;
+```
+
+The equivalent Python declaration is
+`image.add_effect(Blur(radius=Pixels(10)), name="soften")`, with
+`image.animate.set_effect("soften", radius=Pixels(20))` using the ordinary target
+builder. Complete paired scenes are `noon::example_scenes::blur::program` and
+`web/python/examples/blur.py`; the direct WASM factory is
+`createDirectBlurSmokeRenderer`. Glow-only fields on Blur fail in shared Rust,
+including explicit same-valued writes. Glow conveniences also reject a Blur
+attachment named `glow`. Attachment kind changes require a new generation.
+
+The existing isolated source capture and painter placement now accept both
+finite definitions. Glow retains its alpha-mask operator; Blur filters all four
+encoded-premultiplied RGBA channels through the qualified Gaussian operator.
+Common capture accounting includes 32 bytes per pixel for Blur's source and
+seven filter textures, plus source MSAA where required. Each warmed scope retains
+one boxed finite filter state. Clean publications upload and encode nothing.
+The same sparse row publication supplies native and direct Rust/WASM hosts.
+The genuine Python worker envelope is generation 19 and carries a checked tagged
+effect definition; unsupported fields are rejected at that external boundary.
+No compatibility aliases, semantic identity allocator or effect clock is added.
+
+`public_scene_blur_rgba_pixels_seek_neutral_and_removal` compares normal public
+Scene output against an independent direct two-dimensional RGBA convolution of
+separately rendered ordinary sources. Circle, rectangle, asymmetric image,
+mirrored stroked path, alpha gradient, text and math profiles cover scene/pixel
+units, partial opacity, forward/backward seek, neutral
+submission, exact removal and zero-work clean frames. Local Apple M6/Metal
+qualification produced 70 full-image samples across 14 profiles with maximum
+RGBA8 error 1. Browser parity and merge qualification remain separate gates;
+`scripts/blur-qualification.mjs` requires identical real Rust/WASM and Python
+pixels on WebGPU and WebGL2, including a visible outside-source Blur witness.
+
+This slice admits one finite attachment per qualified 2D leaf. Composed groups,
+ordered stacks, shadows, backdrops, HDR/bloom and custom WGSL remain owned by
+#1897 and are not implied by the Blur operator.

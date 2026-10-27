@@ -121,13 +121,13 @@ impl CompiledScene {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetGlow { object, .. } => {
+            | ExecutionPatch::SetEffect { object, .. } => {
                 rows.insert(index(*object)?);
             }
-            ExecutionPatch::SetGlowAttachment { object, .. } => {
+            ExecutionPatch::SetEffectAttachment { object, .. } => {
                 let slot = index(*object)?;
                 rows.insert(slot);
-                for property in crate::CompiledGlow::PARAMETER_PROPERTIES {
+                for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
                     let channel = CompiledChannelKey::new(slot, property);
                     if !self.channel_tracks(channel).is_empty() {
                         channels.insert(channel);

@@ -166,7 +166,7 @@ impl ExecutionSession {
         prepared: &noon_core::PreparedSemanticMutationTransaction<'_>,
     ) -> Result<(), super::ExecutionSessionPublicationError> {
         use noon_core::{EffectDefinition, SemanticMutation, SemanticNodeCreation};
-        let neutral = noon_core::Glow::new(noon_core::GlowUpdate::default().intensity(0.0))
+        let neutral = noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
             .expect("neutral glow is valid");
         for mutation in prepared.mutations() {
             let valid = match mutation {

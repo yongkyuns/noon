@@ -8,7 +8,7 @@ mod analytic_glow;
 mod derived_display;
 mod linear_gradient;
 mod source_capture;
-pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
+pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
 mod gaussian_blur;
 mod glow_filter;
 pub use gaussian_blur::{
@@ -16,8 +16,8 @@ pub use gaussian_blur::{
     GaussianBlurScope, GaussianBlurStats,
 };
 pub use glow_filter::{
-    GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
-    GlowRasterStats, GlowScope,
+    EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
+    EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
 mod overlay;
 mod path_batching;
@@ -512,8 +512,8 @@ impl std::error::Error for PathPreloadUploadError {}
 #[derive(Debug)]
 pub struct GpuRenderer {
     fill_gradients: Option<Box<linear_gradient::LinearGradientGpu>>,
-    analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
-    retained_glow: retained_text::glow_publication::RetainedGlowPublication,
+    effect_captures: Option<Box<analytic_glow::EffectCaptureGpu>>,
+    retained_effects: retained_text::glow_publication::RetainedEffectPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
@@ -877,9 +877,9 @@ impl GpuRenderer {
             mega_path_vertex_instance_buffer,
             derived_display,
             images: None,
-            analytic_glows: None,
+            effect_captures: None,
             fill_gradients: None,
-            retained_glow: Default::default(),
+            retained_effects: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
@@ -1376,7 +1376,7 @@ impl GpuRenderer {
             query_set,
         } = composition;
 
-        if !secondary_viewports.is_empty() && self.has_analytic_glows() {
+        if !secondary_viewports.is_empty() && self.has_effect_captures() {
             return Err(SecondaryViewportError::GlowSecondaryViewUnsupported);
         }
         for secondary in secondary_viewports {
@@ -2508,7 +2508,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
@@ -2521,7 +2521,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(3),
@@ -2537,7 +2537,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
@@ -2571,7 +2571,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
@@ -2591,7 +2591,7 @@ mod tests {
                 FrameObjectState {
                     fill_gradient: None,
                     draw_enabled: true,
-                    glow: None,
+                    effect: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),

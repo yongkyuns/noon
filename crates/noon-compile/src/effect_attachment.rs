@@ -4,29 +4,29 @@ use std::sync::Arc;
 use noon_core::{ObjectId, SemanticNodeId};
 
 use crate::{
-    CompilePatchError, CompiledChannelKey, CompiledGlow, CompiledPatchStats, CompiledScene,
+    CompilePatchError, CompiledChannelKey, CompiledEffect, CompiledPatchStats, CompiledScene,
 };
 
 pub(crate) fn validate_change(
     object: ObjectId,
-    previous: Option<&CompiledGlow>,
+    previous: Option<&CompiledEffect>,
     expected: Option<SemanticNodeId>,
-    next: Option<&CompiledGlow>,
+    next: Option<&CompiledEffect>,
 ) -> Result<(), CompilePatchError> {
-    if previous.map(|glow| glow.attachment) != expected
-        || next.is_some_and(|glow| Some(glow.attachment) == expected)
+    if previous.map(|effect| effect.attachment) != expected
+        || next.is_some_and(|effect| Some(effect.attachment) == expected)
     {
-        return Err(CompilePatchError::InvalidGlowAttachmentChange { object });
+        return Err(CompilePatchError::InvalidEffectAttachmentChange { object });
     }
     Ok(())
 }
 
 impl CompiledScene {
-    pub(crate) fn apply_glow_attachment(
+    pub(crate) fn apply_effect_attachment(
         &mut self,
         object: ObjectId,
         expected: Option<SemanticNodeId>,
-        next: Option<Arc<CompiledGlow>>,
+        next: Option<Arc<CompiledEffect>>,
         stats: &mut CompiledPatchStats,
     ) -> Result<(), CompilePatchError> {
         let index = self
@@ -34,11 +34,11 @@ impl CompiledScene {
             .ok_or(CompilePatchError::UnknownObject(object))?;
         validate_change(
             object,
-            self.objects[index as usize].glow.as_deref(),
+            self.objects[index as usize].effect.as_deref(),
             expected,
             next.as_deref(),
         )?;
-        for property in CompiledGlow::PARAMETER_PROPERTIES {
+        for property in CompiledEffect::PARAMETER_PROPERTIES {
             let channel = CompiledChannelKey::new(index, property);
             if let Some(retired) = self.tracks.remove(&channel) {
                 self.track_count -= retired.len();
@@ -49,10 +49,10 @@ impl CompiledScene {
             }
         }
         let row = &mut self.objects[index as usize];
-        row.glow = next;
+        row.effect = next;
         // All three glow channels are now empty. Do not traverse unrelated
         // channels, recompute motion, or move any retained object/track slot.
-        row.dynamic.glow = false;
+        row.dynamic.effect = false;
         Ok(())
     }
 }

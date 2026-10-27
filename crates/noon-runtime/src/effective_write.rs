@@ -65,7 +65,7 @@ pub enum EffectivePropertyWrite<I = ObjectId> {
     },
     /// One exact attachment's intensity. Other glow parameters remain owned by
     /// their ordinary authored/timeline drivers.
-    GlowIntensity {
+    EffectIntensity {
         object: I,
         attachment: noon_core::SemanticNodeId,
         intensity: f64,
@@ -86,7 +86,7 @@ impl<I: Copy> EffectivePropertyWrite<I> {
             | Self::Stroke { object, .. }
             | Self::StrokeWidth { object, .. }
             | Self::Opacity { object, .. }
-            | Self::GlowIntensity { object, .. } => object,
+            | Self::EffectIntensity { object, .. } => object,
         }
     }
 
@@ -120,11 +120,11 @@ impl<I: Copy> EffectivePropertyWrite<I> {
                 stroke_width,
             },
             Self::Opacity { opacity, .. } => EffectivePropertyWrite::Opacity { object, opacity },
-            Self::GlowIntensity {
+            Self::EffectIntensity {
                 attachment,
                 intensity,
                 ..
-            } => EffectivePropertyWrite::GlowIntensity {
+            } => EffectivePropertyWrite::EffectIntensity {
                 object,
                 attachment,
                 intensity,
@@ -139,24 +139,24 @@ impl EffectivePropertyWrite {
     /// to the execution plan or used to assign a whole effective row.
     pub(crate) fn as_execution_patch(
         self,
-        glow: Option<noon_compile::CompiledGlow>,
+        glow: Option<noon_compile::CompiledEffect>,
     ) -> Result<ExecutionPatch, noon_compile::CompilePatchError> {
         Ok(match self {
-            Self::GlowIntensity {
+            Self::EffectIntensity {
                 object,
                 attachment,
                 intensity,
             } => {
                 let mut glow = glow
                     .filter(|glow| glow.attachment == attachment)
-                    .ok_or(noon_compile::CompilePatchError::InvalidGlowUpdate { object })?;
-                glow.definition = noon_core::GlowUpdate::default()
+                    .ok_or(noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
+                glow.definition = noon_core::EffectUpdate::default()
                     .intensity(intensity)
                     .apply_to(glow.definition)
-                    .map_err(|_| noon_compile::CompilePatchError::InvalidGlowUpdate { object })?;
-                ExecutionPatch::SetGlow {
+                    .map_err(|_| noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
+                ExecutionPatch::SetEffect {
                     object,
-                    glow: std::sync::Arc::new(glow),
+                    effect: std::sync::Arc::new(glow),
                 }
             }
             Self::Presence { object, .. } => ExecutionPatch::SetStyle {
@@ -248,13 +248,13 @@ pub(crate) fn apply_effective_property_to_row(
     write: EffectivePropertyWrite,
 ) {
     let (property, value) = match write {
-        EffectivePropertyWrite::GlowIntensity {
+        EffectivePropertyWrite::EffectIntensity {
             attachment,
             intensity,
             ..
         } => {
             let Some(glow) = row
-                .glow
+                .effect
                 .as_mut()
                 .filter(|glow| glow.attachment == attachment)
             else {
@@ -262,7 +262,7 @@ pub(crate) fn apply_effective_property_to_row(
                 // recreate an attachment or transfer a write to its replacement.
                 return;
             };
-            let next = noon_core::GlowUpdate::default()
+            let next = noon_core::EffectUpdate::default()
                 .intensity(intensity)
                 .apply_to(glow.definition)
                 .expect("preflighted glow intensity");

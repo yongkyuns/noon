@@ -48,7 +48,7 @@ impl LiveContinuation for PaintedSurface {
                         if self.glow {
                             live.set_glow(
                                 &target,
-                                crate::effects::GlowUpdate::default()
+                                crate::effects::EffectUpdate::default()
                                     .radius(crate::effects::Pixels(10.0))
                                     .intensity(1.4),
                             )
@@ -107,7 +107,7 @@ fn program_inner(glow: bool) -> Result<LiveProgram<PaintedSurface>, String> {
     if glow {
         panel
             .set_glow(
-                crate::effects::GlowUpdate::default()
+                crate::effects::EffectUpdate::default()
                     .color(Color::WHITE)
                     .radius(crate::effects::Pixels(6.0))
                     .intensity(0.4),

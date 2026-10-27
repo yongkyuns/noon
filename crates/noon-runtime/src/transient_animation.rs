@@ -149,7 +149,7 @@ impl SceneInstance {
             &[],
             EffectiveAnimationProperties {
                 fill_gradient: row.fill_gradient.clone(),
-                glow: row.glow.as_deref().copied(),
+                effect: row.effect.as_deref().copied(),
                 z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,
@@ -224,7 +224,7 @@ impl SceneInstance {
         &self,
         object: ObjectId,
         binding: SemanticClickGlowPulse,
-        glow: noon_compile::CompiledGlow,
+        glow: noon_compile::CompiledEffect,
         temporary: bool,
         publication: PublicationContext,
     ) -> Result<Option<PreparedTransientAnimation>, String> {
@@ -234,6 +234,10 @@ impl SceneInstance {
         if !binding.is_valid() {
             return Err("invalid click GlowPulse options".into());
         }
+        let definition = glow
+            .definition
+            .as_glow()
+            .ok_or("GlowPulse requires a Glow attachment")?;
         self.preflight_transient_glow_edits(1)?;
         let expected = if temporary {
             PublicationContext::new(
@@ -261,15 +265,15 @@ impl SceneInstance {
             .filter(|&index| self.object_slot_is_live(index))
             .ok_or("interaction target is not live")?;
         let row = &self.frame.objects[index];
-        match row.glow.as_deref() {
+        match row.effect.as_deref() {
             Some(current) if *current == glow => {}
-            None if temporary && glow.definition.intensity() == 0.0 => {}
+            None if temporary && definition.intensity() == 0.0 => {}
             _ => return Err("foreign or stale click glow attachment".into()),
         }
         if self.interaction_properties_conflict(
             object,
             index,
-            [Property::GlowIntensity],
+            [Property::EffectIntensity],
             self.frame.time,
         ) {
             return Ok(None);
@@ -286,7 +290,7 @@ impl SceneInstance {
             origin: None,
             glow: Some(TransientGlowPulse {
                 attachment: glow.attachment,
-                source: glow.definition.intensity(),
+                source: definition.intensity(),
                 target: binding.intensity(),
                 rate: binding.rate_func(),
                 reverse: binding.reverse_rate_function(),
@@ -312,13 +316,15 @@ impl SceneInstance {
                     let row = &self.frame.objects[index];
                     self.object_slot_is_live(index)
                         && if let Some(pulse) = prepared.glow {
-                            row.glow.as_deref().is_some_and(|glow| {
+                            row.effect.as_deref().is_some_and(|glow| {
                                 glow.attachment == pulse.attachment
-                                    && glow.definition.intensity() == pulse.source
+                                    && glow.definition.as_glow().is_some_and(|definition| {
+                                        definition.intensity() == pulse.source
+                                    })
                             }) && !self.interaction_properties_conflict(
                                 prepared.object,
                                 index,
-                                [Property::GlowIntensity],
+                                [Property::EffectIntensity],
                                 prepared.authored_time,
                             )
                         } else {
@@ -412,13 +418,13 @@ impl SceneInstance {
                 .filter(|&index| self.object_slot_is_live(index));
             if let Some(pulse) = driver.glow {
                 let exact = index
-                    .and_then(|index| self.frame.objects[index].glow.as_deref())
+                    .and_then(|index| self.frame.objects[index].effect.as_deref())
                     .is_some_and(|glow| glow.attachment == pulse.attachment);
                 let conflict = index.is_some_and(|index| {
                     self.interaction_properties_conflict(
                         object,
                         index,
-                        [Property::GlowIntensity],
+                        [Property::EffectIntensity],
                         driver.authored_time,
                     )
                 });
@@ -446,13 +452,13 @@ impl SceneInstance {
                     let alpha = timing
                         .evaluate_progress_f64((elapsed / driver.duration).clamp(0.0, 1.0))
                         .clamp(0.0, 1.0);
-                    noon_core::GlowTrackValue::Intensity(pulse.source)
-                        .sample(noon_core::GlowTrackValue::Intensity(pulse.target), alpha)
+                    noon_core::EffectTrackValue::Intensity(pulse.source)
+                        .sample(noon_core::EffectTrackValue::Intensity(pulse.target), alpha)
                         .expect("validated pulse endpoints and bounded timing")
                         .intensity
                         .expect("intensity sampling owns one parameter")
                 };
-                writes.push(EffectivePropertyWrite::GlowIntensity {
+                writes.push(EffectivePropertyWrite::EffectIntensity {
                     object,
                     attachment: pulse.attachment,
                     intensity,
@@ -668,7 +674,7 @@ impl SceneInstance {
                     && !self.interaction_properties_conflict(
                         object,
                         index,
-                        [Property::GlowIntensity],
+                        [Property::EffectIntensity],
                         self.frame.time,
                     )
             })
@@ -810,7 +816,7 @@ impl TransientAnimations {
     /// barrier to a drag.
     pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
         self.active.get(&object).is_some_and(|effect| {
-            (effect.glow.is_some() && property == Property::GlowIntensity)
+            (effect.glow.is_some() && property == Property::EffectIntensity)
                 || effect
                     .channels
                     .iter()
