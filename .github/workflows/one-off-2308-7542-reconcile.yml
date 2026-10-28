@@ -5,6 +5,7 @@ on:
       - agent/2308-7542-readonly-inventory-20261028
     paths:
       - .github/workflows/one-off-2308-7542-reconcile.yml
+      - scripts/one-off-2308-7542-resolve.py
 permissions:
   contents: read
   actions: read
@@ -22,6 +23,7 @@ jobs:
       SOURCE_RUN: "40617408583"
       SOURCE_SHA256: "42d70d6fcba3566c29e51a5f9b3a6495955ab9d05eace8ab1a74f44ccc3043e3"
       SOURCE_TREE: "87cb42b53885c192e539fdddf3ddcf970e67bee4"
+      EXPECTED_CANDIDATE_TREE: "bec14e0f22d8be668e6e4f38f5c0e982bf2b953f"
       EXPECTED_OLD_MASTER: "5b38eab85a86f4cc9019e8179e263c7b29771827"
       NEW_MASTER: "7542dfafb8ce50cbdf7718766a67d98f547ca84e"
       FEATURE: "b3a4b7f484e607a4b14bc57e70f4947f8520ca42"
@@ -101,6 +103,7 @@ jobs:
           assert not git('ls-files','-u').stdout.strip()
           resolved_tree=git('write-tree').stdout.strip()
           (out/'tree-before-format.txt').write_text(resolved_tree+'\n')
+          assert resolved_tree==os.environ['EXPECTED_CANDIDATE_TREE'], ('unrecognized local candidate tree',resolved_tree)
           (out/'reconciliation.patch').write_text(
               git('diff','--cached','--binary',prepared).stdout)
           report={'source_run':int(os.environ['SOURCE_RUN']),'source_archive_sha256':sha,
@@ -136,6 +139,7 @@ jobs:
           tree="$(git write-tree)"
           before="$(cat "$EVIDENCE/tree-before-format.txt")"
           printf 'BEFORE=%s\nAFTER=%s\n' "$before" "$tree" > "$EVIDENCE/format-trees.txt"
+          test "$tree" = "$EXPECTED_CANDIDATE_TREE"
           local_prepared="$(python3 -c 'import json,os;print(json.load(open(os.environ["EVIDENCE"]+"/source-proof.json"))["local_prepared_commit"])')"
           commit="$(printf 'Integrate prepared playback locally with composed-effects master\n' | git commit-tree "$tree" -p "$local_prepared" -p "$NEW_MASTER")"
           test "$(git show -s --format=%P "$commit" | awk '{print NF}')" = 2
