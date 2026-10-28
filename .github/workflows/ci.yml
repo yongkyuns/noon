@@ -259,7 +259,7 @@ jobs:
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
       - name: Qualify authored glass lens and native export
         env:
-          NOON_GLASS_ARTIFACTS: glass-lens-native-artifacts
+          NOON_GLASS_ARTIFACTS: ${{ github.workspace }}/glass-lens-native-artifacts
         run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture
       - name: Qualify authored cell sampling and export
         run: cargo test -p noon-export --test pixelate -- --ignored --nocapture
@@ -267,11 +267,15 @@ jobs:
         run: cargo test -p noon-render-wgpu --lib gpu::sample_filter::tests -- --include-ignored --nocapture
       - name: Qualify clipped backdrop replacement and real-shader negative controls
         env:
-          NOON_BACKDROP_ARTIFACT_DIR: backdrop-raster-artifacts
+          NOON_BACKDROP_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-raster-artifacts
         run: cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests -- --include-ignored --nocapture
+      - name: Qualify retained backdrop camera, resize, Visibility and lifecycle
+        env:
+          NOON_BACKDROP_COORDINATOR_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-coordinator-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::analytic_glow::backdrop::tests -- --include-ignored --nocapture
       - name: Qualify painter-prefix capture against independent layer references
         env:
-          NOON_PREFIX_ARTIFACT_DIR: prefix-raster-artifacts
+          NOON_PREFIX_ARTIFACT_DIR: ${{ github.workspace }}/prefix-raster-artifacts
         run: cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests -- --include-ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
@@ -320,6 +324,7 @@ jobs:
             backdrop-raster-artifacts
             prefix-raster-artifacts
             glass-lens-native-artifacts
+            backdrop-coordinator-raster-artifacts
           if-no-files-found: warn
           retention-days: 3
 
