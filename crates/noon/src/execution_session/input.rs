@@ -495,6 +495,7 @@ impl ExecutionSession {
                             self.publication_context(),
                         )
                         .map_err(ExecutionSessionInputError::Interaction)?
+                        .map(Box::new)
                         .map(super::interactions::PreparedClickAction::Animation);
                 } else {
                     if attachment.is_some() {
@@ -561,7 +562,7 @@ impl ExecutionSession {
                         pending.activation_scene_revision = store.scene_revision();
                     }
                     metadata.action = Some(super::interactions::PreparedClickAction::Animation(
-                        animation,
+                        Box::new(animation),
                     ));
                     return self.commit_prepared_native_pointer_metadata(timeline, metadata);
                 }
@@ -596,7 +597,7 @@ impl ExecutionSession {
         let playback_control = match action {
             Some(super::interactions::PreparedClickAction::Animation(animation)) => {
                 self.runtime
-                    .start_transient_animation(animation)
+                    .start_transient_animation(*animation)
                     .expect("admitted native input cannot change authored revision or time");
                 None
             }

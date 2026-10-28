@@ -20,7 +20,7 @@ fn srgb(x: f64) -> f64 {
         ((x + 0.055) / 1.055).powf(2.4)
     }
 }
-fn expected(color: bool, opacity: f64, clear: [f64; 4]) -> Vec<[f64; 4]> {
+fn expected(color: bool, opacity: f64, clear: [f64; 4], emission: f64) -> Vec<[f64; 4]> {
     (0..SIDE * SIDE)
         .map(|at| {
             let x = (f64::from(at % SIDE) + 0.5) / 8.0 - 0.5;
@@ -49,7 +49,8 @@ fn expected(color: bool, opacity: f64, clear: [f64; 4]) -> Vec<[f64; 4]> {
                         ]
                     };
                     for c in 0..4 {
-                        value[c] += source[c] * w * opacity;
+                        value[c] +=
+                            source[c] * w * opacity * if c < 3 { 1.0 + emission } else { 1.0 };
                     }
                 }
             }
@@ -99,12 +100,11 @@ fn shader_override(renderer: &mut TextGlyphGpuRenderer, device: &wgpu::Device, m
         "actual color association/decode negative",
     );
 }
-#[test]
-#[ignore = "requires real native float blending; missing adapter fails qualification"]
-fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_negatives() {
+fn qualify_glyph_emission(emission: f64) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    eprintln!("glyph emission adapter: {:?}", adapter.get_info());
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("linear glyph proof"),
@@ -125,6 +125,7 @@ fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_neg
         std::env::var_os("NOON_GLYPH_WORKING_COLOR_ARTIFACT_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &artifact {
         std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("adapter.txt"), format!("{:?}", adapter.get_info())).unwrap();
     }
     let mut profiles = 0;
     let mut max_error = 0.0f64;
@@ -169,6 +170,7 @@ fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_neg
                     panic!("nonempty fixture")
                 };
                 let quads = [GlyphQuadInstance {
+                    emission: emission as f32,
                     origin: [-1.0, -1.0],
                     axis_x: [2.0, 0.0],
                     axis_y: [0.0, 2.0],
@@ -207,7 +209,7 @@ fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_neg
                     object_glyph_slots: &slots,
                     stats: Default::default(),
                 };
-                let reference = expected(color, opacity, clear);
+                let reference = expected(color, opacity, clear, emission);
                 for mode in 0..=2 {
                     if mode == 2 && !color {
                         continue;
@@ -255,6 +257,26 @@ fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_neg
                     atlas.acknowledge_pending_uploads();
                     let pixels = read(&device, &queue, &target);
                     let actual = decode(&pixels);
+                    // Failed numeric profiles are evidence too. Write before
+                    // checking the envelope so the offending atlas samples survive.
+                    if let Some(dir) = &artifact {
+                        std::fs::write(
+                            dir.join(format!("raw-glyph-{profiles}-{mode}.rgba16f")),
+                            &pixels,
+                        )
+                        .unwrap();
+                        std::fs::write(
+                            dir.join(format!("raw-glyph-{profiles}.expected-rgba64f")),
+                            reference
+                                .iter()
+                                .flatten()
+                                .flat_map(|v| v.to_le_bytes())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
+                        std::fs::write(dir.join(format!("raw-glyph-{profiles}.json")),
+                            format!("{{\"color\":{color},\"opacity\":{opacity},\"clear\":{clear:?},\"emission\":{emission}}}")).unwrap();
+                    }
                     assert!(actual.iter().all(|v| v.is_finite()));
                     let error = actual
                         .iter()
@@ -263,7 +285,17 @@ fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_neg
                         .fold(0.0, f64::max);
                     if mode == 0 {
                         assert!(
-                            error <= 0.002,
+                            actual
+                                .iter()
+                                .zip(reference.iter().flatten())
+                                .enumerate()
+                                .all(|(channel, (a, e))| (a - e).abs()
+                                    <= 0.002
+                                        + if emission > 0.0 && channel % 4 != 3 {
+                                            0.001 * e.abs()
+                                        } else {
+                                            0.0
+                                        }),
                             "glyph profile {profiles} color={color}: {error}"
                         );
                         max_error = max_error.max(error);
@@ -308,9 +340,27 @@ fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_neg
             }
         }
     }
-    let manifest=format!("{{\"profiles\":{profiles},\"float_channels\":{},\"linear_bound\":0.002,\"max_linear_error\":{max_error},\"actual_encoded_tint_or_unassociated_filter_negative\":{},\"actual_double_atlas_decode_negative\":{}}}",profiles*1024,negatives[1],negatives[2]);
+    let manifest=format!("{{\"profiles\":{profiles},\"float_channels\":{},\"rgb_absolute_bound\":0.002,\"rgb_relative_bound\":{},\"alpha_absolute_bound\":0.002,\"emission_strength\":{emission},\"max_linear_error\":{max_error},\"actual_encoded_tint_or_unassociated_filter_negative\":{},\"actual_double_atlas_decode_negative\":{}}}",profiles*1024,if emission > 0.0 {0.001} else {0.0},negatives[1],negatives[2]);
     if let Some(dir) = &artifact {
         std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
     }
     eprintln!("glyph working color: {manifest}");
+}
+
+#[test]
+#[ignore = "requires real native float blending; missing adapter fails qualification"]
+fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_negatives() {
+    qualify_glyph_emission(0.0);
+}
+
+#[test]
+#[ignore = "requires real native float blending; missing adapter fails qualification"]
+fn glyph_emission_is_linear_before_association_for_mask_and_color_atlases() {
+    qualify_glyph_emission(7.0);
+}
+
+#[test]
+#[ignore = "requires real native float blending; missing adapter fails qualification"]
+fn maximum_glyph_emission_preserves_coverage_and_atlas_reconstruction() {
+    qualify_glyph_emission(63.0);
 }

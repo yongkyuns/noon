@@ -3,6 +3,7 @@ struct GradientStopUniform {
     position: vec4<f32>,
 };
 struct PaintUniform {
+    emission: vec4<f32>,
     bounds: vec4<f32>,
     endpoints: vec4<f32>,
     metadata: vec4<u32>,
@@ -140,7 +141,7 @@ fn hatch_field(local: vec2<f32>) -> f32 {
 
 // Return straight encoded-sRGB for the shared source quantizer. Interpolation
 // itself is premultiplied so invisible RGB cannot leak into visible samples.
-fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
+fn base_paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
     let point = (local - paint.bounds.xy) / paint.bounds.zw;
     if paint.metadata.y == 1u {
         let uv = vec2(dot(paint.image_u.xyz, vec3(point, 1.0)), dot(paint.image_v.xyz, vec3(point, 1.0)));
@@ -183,4 +184,10 @@ fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
     }
     if color.a <= 0.0 { return vec4<f32>(0.0); }
     return vec4<f32>(color.rgb / color.a, color.a * carrier.a);
+}
+
+// The base sampler has already decoded authored inputs in an HDR view.
+fn paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
+    let value = base_paint_fill(local, carrier);
+    return vec4(value.rgb * (1.0 + paint.emission.x), value.a);
 }

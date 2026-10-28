@@ -131,6 +131,7 @@ impl From<noon_core::PointArrayShapeError> for AuthoringError {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    Emission(noon_core::EmissionError),
     PaintTransition(noon_core::PaintTransitionError),
     /// Immutable audio PCM preparation or resource admission failed.
     AudioResource(noon_core::AudioResourceError),
@@ -342,6 +343,7 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Emission(error) => error.fmt(f),
             Self::PaintTransition(error) => error.fmt(f),
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
@@ -497,6 +499,7 @@ impl std::fmt::Display for AuthoringError {
 impl std::error::Error for AuthoringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Emission(error) => Some(error),
             Self::PaintTransition(error) => Some(error),
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),

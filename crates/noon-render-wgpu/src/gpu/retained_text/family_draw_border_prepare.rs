@@ -576,6 +576,7 @@ pub(super) fn draw_border_style(
             stroke_join: StrokeJoin::Miter,
             stroke_cap: StrokeCap::Butt,
             opacity: object_style.opacity,
+            emission: object_style.emission,
         },
         RetainedDrawBorderThenFillPhase::Fill { progress } => {
             let progress = progress.clamp(0.0, 1.0);
@@ -625,6 +626,7 @@ pub(super) fn draw_border_style(
                 stroke_join,
                 stroke_cap,
                 opacity: object_style.opacity,
+                emission: object_style.emission,
             }
         }
     }

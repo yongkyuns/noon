@@ -32,7 +32,8 @@ impl InteractionBindings {
 }
 
 pub(super) enum PreparedClickAction {
-    Animation(PreparedTransientAnimation),
+    // Keep queued control metadata small as captured material state grows.
+    Animation(Box<PreparedTransientAnimation>),
     GlowPulse {
         target: SemanticNodeId,
         binding: noon_core::SemanticClickGlowPulse,
@@ -312,7 +313,7 @@ impl ExecutionSession {
             SemanticClickAction::Indicate(indication) => self
                 .runtime
                 .prepare_click_indicate(object, indication)
-                .map(|animation| animation.map(PreparedClickAction::Animation))
+                .map(|animation| animation.map(Box::new).map(PreparedClickAction::Animation))
                 .map_err(ExecutionSessionInputError::Interaction),
             SemanticClickAction::GlowPulse(binding) => {
                 if !self.runtime.can_prepare_click_glow_pulse(object) {

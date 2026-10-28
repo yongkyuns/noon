@@ -2294,6 +2294,7 @@ pub fn ordinary_moving_camera_center_program(
         stroke_join: StrokeJoin::Miter,
         stroke_cap: StrokeCap::Butt,
         object_opacity: 1.0,
+        emission: noon_core::Emission::NONE,
     };
     let mut triangle = scene
         .path(triangle_path, triangle_style)

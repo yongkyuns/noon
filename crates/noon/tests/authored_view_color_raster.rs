@@ -79,6 +79,9 @@ fn srgb_decode(x: f64) -> f64 {
     }
 }
 fn expected(paint: bool, reverse: bool, clear: [f64; 4]) -> Vec<[f64; 4]> {
+    expected_emission(paint, reverse, clear, 0.0)
+}
+fn expected_emission(paint: bool, reverse: bool, clear: [f64; 4], strength: f64) -> Vec<[f64; 4]> {
     (0..SIZE * SIZE)
         .map(|at| {
             let x = at % SIZE;
@@ -92,6 +95,9 @@ fn expected(paint: bool, reverse: bool, clear: [f64; 4]) -> Vec<[f64; 4]> {
                 } else {
                     srgb_decode(OVER[c])
                 };
+            }
+            for channel in &mut over[..3] {
+                *channel *= 1.0 + strength;
             }
             over[3] *= 0.5;
             let mut layers = [(base, true), (over, x < 8)];
@@ -243,7 +249,7 @@ fn reference(
     }
     (linear, bytes)
 }
-fn qualify_authored_scene(retained: bool, visible: bool) {
+fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
@@ -278,7 +284,9 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
         intensity: 1.5,
         scratch_budget_bytes: 1024 * 1024,
     };
-    let artifact = std::env::var_os(if visible {
+    let artifact = std::env::var_os(if emission > 0.0 {
+        "NOON_EMISSION_VIEW_ARTIFACT_DIR"
+    } else if visible {
         "NOON_VISIBLE_VIEW_ARTIFACT_DIR"
     } else if retained {
         "NOON_RETAINED_VIEW_ARTIFACT_DIR"
@@ -294,12 +302,29 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
     let mut max_linear_error = 0.0f64;
     let mut max_display_error = 0;
     let mut negative_error = 0.0f64;
+    let mut max_source_radiance = 0.0f64;
+    let mut ignored_emission_error = 0.0f64;
     for paint in [false, true] {
         for path in [false, true] {
             for reverse in [false, true] {
                 for clear in [[0.0; 4], [0.125, 0.0625, 0.03125, 1.0]] {
-                    let (scene, camera, _) = scene(path, paint, reverse);
+                    let (scene, camera, mut material) = scene(path, paint, reverse);
+                    material.set_emission(emission).unwrap();
                     let mut session = scene.execution_session().unwrap();
+                    if emission > 0.0 {
+                        let initial = session.take_renderer_publication();
+                        let mut unsupported = RetainedFramePreparer::new();
+                        assert!(matches!(
+                            unsupported.prepare_publication(
+                                &device,
+                                &initial,
+                                noon_render_wgpu::text::TextDeviceMetrics::uniform(2.0).unwrap()
+                            ),
+                            Err(noon_render_wgpu::RetainedPrepareError::UnsupportedEmission(
+                                _
+                            ))
+                        ));
+                    }
                     let mut tx = SemanticMutationTransaction::new();
                     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
                     scene.live(&mut session).apply(tx).unwrap();
@@ -360,7 +385,12 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                     }
                     queue.submit([encoder.finish()]);
                     let pixels = read(&device, &queue, &target);
-                    let expected = expected(paint, reverse, clear);
+                    let expected = expected_emission(paint, reverse, clear, emission);
+                    let neutral = self::expected(paint, reverse, clear);
+                    for (a, n) in decode(&pixels).iter().zip(neutral.iter().flatten()) {
+                        max_source_radiance = max_source_radiance.max(*a);
+                        ignored_emission_error = ignored_emission_error.max((a - n).abs());
+                    }
                     for (at, (a, e)) in decode(&pixels)
                         .iter()
                         .zip(expected.iter().flatten())
@@ -369,7 +399,13 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                         let error = (a - e).abs();
                         max_linear_error = max_linear_error.max(error);
                         assert!(
-                            a.is_finite() && error <= 0.002,
+                            a.is_finite()
+                                && error
+                                    <= if emission > 0.0 && at % 4 != 3 {
+                                        0.006 + 0.004 * e.abs()
+                                    } else {
+                                        0.002
+                                    },
                             "profile {profiles}, channel {at}: {a} != {e}"
                         );
                     }
@@ -449,7 +485,7 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                         }
                     }
                     if let Some(dir) = &artifact {
-                        std::fs::write(dir.join(format!("case-{profiles}.json")),format!("{{\"paint\":{paint},\"path\":{path},\"reverse\":{reverse},\"clear\":{clear:?}}}")).unwrap();
+                        std::fs::write(dir.join(format!("case-{profiles}.json")),format!("{{\"paint\":{paint},\"path\":{path},\"reverse\":{reverse},\"clear\":{clear:?},\"emission\":{emission}}}")).unwrap();
                         std::fs::write(dir.join(format!("case-{profiles}.rgba16f")), pixels)
                             .unwrap();
                         std::fs::write(
@@ -473,7 +509,18 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
             }
         }
     }
-    let manifest=format!("{{\"profiles\":{profiles},\"width\":{SIZE},\"height\":{SIZE},\"linear_channels\":{},\"display_channels\":{},\"max_linear_error\":{max_linear_error},\"linear_bound\":0.002,\"max_display_error\":{max_display_error},\"display_bound\":2,\"missing_decode_negative_error\":{negative_error}}}",profiles*SIZE as u64*SIZE as u64*4,profiles*SIZE as u64*SIZE as u64*4);
+    if emission > 0.0 {
+        assert!(
+            max_source_radiance > 1.0,
+            "authored emission must survive above one before Bloom"
+        );
+        assert!(
+            ignored_emission_error > 0.5,
+            "a missing material publication must fail this corpus"
+        );
+    }
+    eprintln!("emission={emission}, maximum pre-Bloom radiance={max_source_radiance}, ignored-material difference={ignored_emission_error}");
+    let manifest=format!("{{\"profiles\":{profiles},\"width\":{SIZE},\"height\":{SIZE},\"linear_channels\":{},\"display_channels\":{},\"max_linear_error\":{max_linear_error},\"rgb_absolute_bound\":{},\"rgb_relative_bound\":{},\"alpha_absolute_bound\":0.002,\"emission_strength\":{emission},\"max_display_error\":{max_display_error},\"display_bound\":2,\"missing_decode_negative_error\":{negative_error}}}",profiles*SIZE as u64*SIZE as u64*4,profiles*SIZE as u64*SIZE as u64*4,if emission > 0.0 {0.006} else {0.002},if emission > 0.0 {0.004} else {0.0});
     if let Some(dir) = &artifact {
         std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
     }
@@ -483,13 +530,13 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
-    qualify_authored_scene(false, false);
+    qualify_authored_scene(false, false, 0.0);
 }
 
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn retained_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
-    qualify_authored_scene(true, false);
+    qualify_authored_scene(true, false, 0.0);
 }
 
 mod retained_color_assets;
@@ -497,9 +544,21 @@ mod retained_color_assets;
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn visible_retained_view_profile_matches_independent_bloom_pixels() {
-    qualify_authored_scene(true, true);
+    qualify_authored_scene(true, true, 0.0);
 }
 
 mod hdr_captures;
 
 mod view_bloom;
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn authored_emission_survives_above_one_before_bloom_with_unchanged_alpha() {
+    qualify_authored_scene(true, false, 7.0);
+}
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn authored_maximum_emission_uses_the_hdr_envelope_without_changing_alpha() {
+    qualify_authored_scene(true, false, 63.0);
+}

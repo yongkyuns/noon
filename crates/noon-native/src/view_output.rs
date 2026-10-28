@@ -94,6 +94,13 @@ impl NativeViewOutput {
         size: [u32; 2],
     ) -> Result<ViewColorProfile, NativeHostError> {
         let profile = publication.color_profile();
+        noon_render_wgpu::validate_emission_profile(
+            publication.frame(),
+            publication.changes(),
+            profile,
+            self.is_hdr() != (profile == ViewColorProfile::LinearHdr),
+        )
+        .map_err(|e| error(&e.to_string()))?;
         if profile == ViewColorProfile::Compatibility {
             if self.source.take().is_some() {
                 self.scope.clear();

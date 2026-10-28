@@ -1000,7 +1000,7 @@ impl FramePreparer {
                 PreparedSlot::Absent => {}
                 PreparedSlot::Circle(index) => {
                     let packed = pack_circle(object, frame.reveal(object_index))
-                        .with_color_profile(self.color_profile);
+                        .with_color_profile(self.color_profile, object.style.emission);
                     instances_repacked += 1;
                     if self.circles[index] != packed {
                         self.circles[index] = packed;
@@ -1008,7 +1008,8 @@ impl FramePreparer {
                     }
                 }
                 PreparedSlot::Rectangle(index) => {
-                    let packed = pack_rectangle(object).with_color_profile(self.color_profile);
+                    let packed = pack_rectangle(object)
+                        .with_color_profile(self.color_profile, object.style.emission);
                     instances_repacked += 1;
                     if self.rectangles[index] != packed {
                         self.rectangles[index] = packed;
@@ -1017,7 +1018,7 @@ impl FramePreparer {
                 }
                 PreparedSlot::Line(index) => {
                     let packed = pack_line(object, frame.reveal(object_index))
-                        .with_color_profile(self.color_profile);
+                        .with_color_profile(self.color_profile, object.style.emission);
                     instances_repacked += 1;
                     if self.lines[index] != packed {
                         self.lines[index] = packed;
@@ -1036,7 +1037,7 @@ impl FramePreparer {
                         // The temporary geometry already *is* Manim's partial VMobject.
                         // Never apply the legacy path shader reveal a second time.
                         pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
-                            .with_color_profile(self.color_profile)
+                            .with_color_profile(self.color_profile, object.style.emission)
                     } else {
                         pack_path(
                             object,
@@ -1044,7 +1045,7 @@ impl FramePreparer {
                             reveal,
                             frame.morph(object_index),
                         )
-                        .with_color_profile(self.color_profile)
+                        .with_color_profile(self.color_profile, object.style.emission)
                     };
                     instances_repacked += 1;
                     if self.paths[index] != packed {
@@ -1061,7 +1062,7 @@ impl FramePreparer {
                             reveal,
                             frame.morph(object_index),
                         )
-                        .with_color_profile(self.color_profile);
+                        .with_color_profile(self.color_profile, object.style.emission);
                         // Analytic partial geometry already contains its endpoint.
                         if partial_reveal_bits.is_some() {
                             packed_head.style.opacity = 0.0;
@@ -1199,24 +1200,30 @@ impl FramePreparer {
             GeometryRef::Circle { .. } => {
                 let index = self.circles.len();
                 self.circle_ids.push(object.id);
-                self.circles
-                    .push(pack_circle(object, reveal).with_color_profile(self.color_profile));
+                self.circles.push(
+                    pack_circle(object, reveal)
+                        .with_color_profile(self.color_profile, object.style.emission),
+                );
                 push_dirty_range(&mut self.circle_dirty_ranges, index);
                 PreparedSlot::Circle(index)
             }
             GeometryRef::Rectangle { .. } => {
                 let index = self.rectangles.len();
                 self.rectangle_ids.push(object.id);
-                self.rectangles
-                    .push(pack_rectangle(object).with_color_profile(self.color_profile));
+                self.rectangles.push(
+                    pack_rectangle(object)
+                        .with_color_profile(self.color_profile, object.style.emission),
+                );
                 push_dirty_range(&mut self.rectangle_dirty_ranges, index);
                 PreparedSlot::Rectangle(index)
             }
             GeometryRef::Line { .. } => {
                 let index = self.lines.len();
                 self.line_ids.push(object.id);
-                self.lines
-                    .push(pack_line(object, reveal).with_color_profile(self.color_profile));
+                self.lines.push(
+                    pack_line(object, reveal)
+                        .with_color_profile(self.color_profile, object.style.emission),
+                );
                 push_dirty_range(&mut self.line_dirty_ranges, index);
                 PreparedSlot::Line(index)
             }
@@ -1266,7 +1273,7 @@ impl FramePreparer {
 
         let packed = if partial_reveal_bits.is_some() {
             pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
-                .with_color_profile(self.color_profile)
+                .with_color_profile(self.color_profile, object.style.emission)
         } else {
             pack_path(
                 object,
@@ -1274,7 +1281,7 @@ impl FramePreparer {
                 reveal,
                 frame.morph(object_index),
             )
-            .with_color_profile(self.color_profile)
+            .with_color_profile(self.color_profile, object.style.emission)
         };
         let path_index = self.paths.len();
         self.path_ids.push(object.id);
@@ -1291,7 +1298,7 @@ impl FramePreparer {
                         reveal,
                         frame.morph(object_index),
                     )
-                    .with_color_profile(self.color_profile),
+                    .with_color_profile(self.color_profile, object.style.emission),
                 )
             } else {
                 None
@@ -1611,7 +1618,7 @@ impl FramePreparer {
                     reveal,
                     frame.morph(object_index),
                 )
-                .with_color_profile(self.color_profile),
+                .with_color_profile(self.color_profile, object.style.emission),
             );
             push_dirty_range(&mut self.line_dirty_ranges, index);
             Some(index)
@@ -1742,7 +1749,7 @@ impl FramePreparer {
                     .instances
                     .push(if partial_reveal_bits.is_some() {
                         pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
-                            .with_color_profile(self.color_profile)
+                            .with_color_profile(self.color_profile, object.style.emission)
                     } else {
                         pack_path(
                             object,
@@ -1750,7 +1757,7 @@ impl FramePreparer {
                             reveal,
                             frame.morph(object_index),
                         )
-                        .with_color_profile(self.color_profile)
+                        .with_color_profile(self.color_profile, object.style.emission)
                     });
                 let reveal_head = if partial_reveal_bits.is_none()
                     && should_create_path_reveal_head(object, reveal)
@@ -1765,7 +1772,7 @@ impl FramePreparer {
                             reveal,
                             frame.morph(object_index),
                         )
-                        .with_color_profile(self.color_profile),
+                        .with_color_profile(self.color_profile, object.style.emission),
                     );
                     Some(head_index)
                 } else {
@@ -1789,7 +1796,7 @@ impl FramePreparer {
                     self.circle_ids.push(object.id);
                     self.circles.push(
                         pack_circle(object, frame.reveal(object_index))
-                            .with_color_profile(self.color_profile),
+                            .with_color_profile(self.color_profile, object.style.emission),
                     );
                 }
                 GeometryRef::Rectangle { .. } => {
@@ -1797,8 +1804,10 @@ impl FramePreparer {
                         .push(PreparedSlot::Rectangle(self.rectangles.len()));
                     self.slot_presences.push(true);
                     self.rectangle_ids.push(object.id);
-                    self.rectangles
-                        .push(pack_rectangle(object).with_color_profile(self.color_profile));
+                    self.rectangles.push(
+                        pack_rectangle(object)
+                            .with_color_profile(self.color_profile, object.style.emission),
+                    );
                 }
                 GeometryRef::Line { .. } => {
                     self.slots.push(PreparedSlot::Line(self.lines.len()));
@@ -1806,7 +1815,7 @@ impl FramePreparer {
                     self.line_ids.push(object.id);
                     self.lines.push(
                         pack_line(object, frame.reveal(object_index))
-                            .with_color_profile(self.color_profile),
+                            .with_color_profile(self.color_profile, object.style.emission),
                     );
                 }
                 GeometryRef::VectorPath(_) => {

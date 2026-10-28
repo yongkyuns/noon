@@ -22,6 +22,7 @@ struct StopUniform {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 struct PaintUniform {
+    emission: [f32; 4],
     bounds: [f32; 4],
     endpoints: [f32; 4],
     metadata: [u32; 4],
@@ -69,6 +70,7 @@ impl PaintUniform {
         images: Option<&super::raster_image_gpu::RasterImageGpuRenderer>,
     ) -> Self {
         let mut result = Self::zeroed();
+        result.emission[0] = value.emission.strength() as f32;
         let extent = value.bounds.max - value.bounds.min;
         result.bounds = [value.bounds.min.x, value.bounds.min.y, extent.x, extent.y];
         let transform = value.transform;

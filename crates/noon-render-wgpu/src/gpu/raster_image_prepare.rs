@@ -16,7 +16,7 @@ pub(super) struct ImageUniform {
     rotation: f32,
     opacity: f32,
     sampling: u32,
-    padding: u32,
+    emission: f32,
     dimensions: [f32; 2],
     crop_origin: [f32; 2],
 }
@@ -55,7 +55,7 @@ impl ImageUniform {
             rotation: 0.0,
             opacity: 1.0,
             sampling: 2,
-            padding: 0,
+            emission: 0.0,
             dimensions: [pixels[0] as f32, pixels[1] as f32],
             crop_origin: [0.0; 2],
         }
@@ -299,7 +299,7 @@ impl RasterImageFramePreparer {
                     RasterImageSampling::Linear => 1,
                     RasterImageSampling::Bicubic => 2,
                 },
-                padding: 0,
+                emission: object.style.emission.strength() as f32,
                 dimensions: [content.width() as f32, content.height() as f32],
                 crop_origin: [0.0; 2],
             };

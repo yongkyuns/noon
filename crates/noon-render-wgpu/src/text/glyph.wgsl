@@ -17,6 +17,7 @@ struct GlyphVertexInput {
     @location(3) uv_min: vec2<f32>,
     @location(4) uv_max: vec2<f32>,
     @location(5) color: vec4<f32>,
+    @location(6) emission: f32,
 };
 
 struct GlyphVertexOutput {
@@ -48,7 +49,7 @@ fn vs_glyph(input: GlyphVertexInput) -> GlyphVertexOutput {
     output.local_uv = vec2<f32>(corner.x, 1.0 - corner.y);
     output.atlas_uv_min = input.uv_min;
     output.atlas_uv_max = input.uv_max;
-    output.color = vec4(working_color_rgb(input.color.rgb), input.color.a);
+    output.color = vec4(working_color_rgb(input.color.rgb) * (1.0 + input.emission), input.color.a);
     return output;
 }
 

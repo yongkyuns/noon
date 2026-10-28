@@ -507,6 +507,7 @@ impl RetainedFramePreparer {
                             stroke_join: StrokeJoin::Round,
                             stroke_cap: StrokeCap::Round,
                             opacity: object.style.opacity,
+                            emission: object.style.emission,
                         },
                         object.appearance,
                         reveal,

@@ -316,6 +316,7 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
+pub use noon_core::{Emission, EmissionError};
 pub use noon_core::{
     GradientError, GradientStop, LinearGradient, PaintTransitionError, RadialGradient,
 };

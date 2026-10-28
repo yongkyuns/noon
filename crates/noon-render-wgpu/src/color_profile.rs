@@ -11,17 +11,17 @@ fn decode(channel: f32) -> f32 {
     }
 }
 
-fn convert(color: &mut [f32; 4], profile: ViewColorProfile) {
+fn convert(color: &mut [f32; 4], profile: ViewColorProfile, emission: noon_core::Emission) {
     if profile == ViewColorProfile::LinearHdr {
         for channel in &mut color[..3] {
-            *channel = decode(*channel);
+            *channel = decode(*channel) * emission.radiance_multiplier() as f32;
         }
     }
 }
 
 pub(crate) fn authored_color(color: Color, profile: ViewColorProfile) -> Color {
     let mut channels = [color.red, color.green, color.blue, color.alpha];
-    convert(&mut channels, profile);
+    convert(&mut channels, profile, noon_core::Emission::NONE);
     Color {
         red: channels[0],
         green: channels[1],
@@ -31,13 +31,17 @@ pub(crate) fn authored_color(color: Color, profile: ViewColorProfile) -> Color {
 }
 
 pub(crate) trait WithColorProfile {
-    fn with_color_profile(self, profile: ViewColorProfile) -> Self;
+    fn with_color_profile(self, profile: ViewColorProfile, emission: noon_core::Emission) -> Self;
 }
 
 impl WithColorProfile for PackedStyle {
-    fn with_color_profile(mut self, profile: ViewColorProfile) -> Self {
-        convert(&mut self.fill, profile);
-        convert(&mut self.stroke, profile);
+    fn with_color_profile(
+        mut self,
+        profile: ViewColorProfile,
+        emission: noon_core::Emission,
+    ) -> Self {
+        convert(&mut self.fill, profile, emission);
+        convert(&mut self.stroke, profile, emission);
         self
     }
 }
@@ -45,8 +49,8 @@ impl WithColorProfile for PackedStyle {
 macro_rules! analytic {
     ($($instance:ty),*) => {$(
         impl WithColorProfile for $instance {
-            fn with_color_profile(mut self, profile: ViewColorProfile) -> Self {
-                self.style = self.style.with_color_profile(profile);
+            fn with_color_profile(mut self, profile: ViewColorProfile, emission: noon_core::Emission) -> Self {
+                self.style = self.style.with_color_profile(profile, emission);
                 self
             }
         }
@@ -55,9 +59,13 @@ macro_rules! analytic {
 analytic!(CircleInstance, RectangleInstance, LineInstance);
 
 impl WithColorProfile for PathInstance {
-    fn with_color_profile(mut self, profile: ViewColorProfile) -> Self {
-        self.style = self.style.with_color_profile(profile);
-        convert(&mut self.background_stroke, profile);
+    fn with_color_profile(
+        mut self,
+        profile: ViewColorProfile,
+        emission: noon_core::Emission,
+    ) -> Self {
+        self.style = self.style.with_color_profile(profile, emission);
+        convert(&mut self.background_stroke, profile, emission);
         self
     }
 }

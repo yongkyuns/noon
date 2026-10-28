@@ -367,6 +367,26 @@ pub struct Style {
     #[serde(default)]
     pub stroke_cap: StrokeCap,
     pub opacity: f32,
+    /// Checked material radiance; projected explicitly at the draw boundary.
+    #[serde(default, skip_serializing_if = "Emission::is_neutral")]
+    pub emission: Emission,
+}
+
+impl Style {
+    /// Unit authored paint bounds make colored radiance at most 64 times alpha.
+    /// Ordinary non-emissive/raw rendering retains its existing numeric profile.
+    pub fn supports_emission(self) -> bool {
+        self.emission.is_neutral()
+            || ((0.0..=1.0).contains(&self.opacity)
+                && [self.fill, self.stroke, self.background_stroke]
+                    .into_iter()
+                    .flatten()
+                    .all(|c| {
+                        [c.red, c.green, c.blue, c.alpha]
+                            .into_iter()
+                            .all(|v| (0.0..=1.0).contains(&v))
+                    }))
+    }
 }
 
 impl Default for Style {
@@ -381,6 +401,7 @@ impl Default for Style {
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
             opacity: 1.0,
+            emission: Emission::NONE,
         }
     }
 }

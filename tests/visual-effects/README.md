@@ -1991,3 +1991,48 @@ example. Browser/Python HDR hosts, checked emission, broader view/capture profil
 public WGSL extensions, physical presentation/performance and remaining M5
 qualification remain open. New-device resource recreation is not a claim of
 automatic OS/device-loss recovery.
+
+
+### Checked material emission — implementation qualification in progress (#1897 M4)
+
+The candidate shared material value retains a checked f64 strength `e` in
+`[0, 63]`. Zero is neutral. Colored material radiance is
+`decode_srgb(base_rgb) * (1 + e)`: apply this before painted coverage,
+object/group opacity, blending and ordered filtering. Emission does not add
+coverage, change alpha, or create an independent halo. A normal opacity fade
+removes its energy too. Bloom remains the separately authored view treatment.
+
+The finite first profile requires unit base paints and opacity, primary planar
+linear-HDR output, and the existing qualified capture/view capabilities.
+Compatibility and spatial emission reject before retained view changes. The
+native host performs material admission before discarding previous view targets.
+Paint/image reconstruction retains its established association and filtering
+order; the radiance multiplier never passes through an sRGB transfer. Semantic
+copy/target/effective-style capture retains the material value. GPU projections
+remain disposable and local; no engine boundary or authored clock is added.
+
+Amplified RGB uses the **existing** HDR float16 envelope
+`.006 + .004 * abs(reference)` and the existing two-byte display bound.
+Emission never amplifies alpha: its absolute bound remains `.002`. Ordinary
+neutral-material cases retain their original `.002` bound on every channel.
+The glyph-input subprofile uses the stricter RGB envelope
+`.002 + .001 * abs(reference)` for emission, again with `.002` on alpha.
+These declarations precede maximum-strength qualification. A prototype image
+trial used the ordinary absolute-only bound for amplified values and failed
+at `4.0` versus `4.002846107423764`; that failed trial and raw samples remain
+archived, not reclassified as passing the original bound. Float16 spacing at
+four is `.00390625`; the HDR envelope accounts for pass/blend rounding.
+
+The prototype Rust setter/getter and static native proofs do **not** complete
+emission authoring. Independent timeline/property channels, ordinary target
+animation, shared family behavior, supported callback semantics, equivalent
+Python creator scripts, direct-WASM/browser/native-Python host qualification,
+ordered composed captures, and complete publication/recovery/performance gates
+remain open. Do not promote this candidate as the completed M4 creator release.
+
+Maximum-strength glyph input qualification remains **failed** under the declared
+stricter glyph envelope. The first observed maximum absolute difference was
+`.035375612963292724` in the color-atlas corpus. This is not accepted by widening
+the glyph gate. Raw failing samples are retained before assertions; investigate
+atlas decode/reconstruction precision and requalify the candidate before public
+promotion. The static shape/image proofs do not resolve this failure.

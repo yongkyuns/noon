@@ -77,6 +77,15 @@ fn over(source: [f64; 4], below: [f64; 4]) -> [f64; 4] {
     std::array::from_fn(|c| source[c] + below[c] * (1.0 - source[3]))
 }
 fn expected(kind: usize, reverse: bool, clear: [f64; 4], opacity: f64) -> Vec<[f64; 4]> {
+    expected_emission(kind, reverse, clear, opacity, 0.0)
+}
+fn expected_emission(
+    kind: usize,
+    reverse: bool,
+    clear: [f64; 4],
+    opacity: f64,
+    emission: f64,
+) -> Vec<[f64; 4]> {
     let base = [
         srgb_decode(0.25) * 0.5,
         srgb_decode(0.5) * 0.5,
@@ -85,7 +94,10 @@ fn expected(kind: usize, reverse: bool, clear: [f64; 4], opacity: f64) -> Vec<[f
     ];
     (0..SIZE * SIZE)
         .map(|i| {
-            let image = sample(i % SIZE, i / SIZE, kind, opacity);
+            let mut image = sample(i % SIZE, i / SIZE, kind, opacity);
+            for channel in &mut image[..3] {
+                *channel *= 1.0 + emission;
+            }
             if reverse {
                 over(base, over(image, clear))
             } else {
@@ -95,9 +107,7 @@ fn expected(kind: usize, reverse: bool, clear: [f64; 4], opacity: f64) -> Vec<[f
         .collect()
 }
 
-#[test]
-#[ignore = "requires real native float targets; missing adapter fails qualification"]
-fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
+fn qualify_image_emission(emission: f64) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
@@ -158,6 +168,7 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
                         scene.image(options).unwrap()
                     };
                     image.set_object_opacity(0.5).unwrap();
+                    image.set_emission(emission).unwrap();
                     if reverse {
                         scene.add(&image).unwrap();
                         scene.add(&base).unwrap();
@@ -205,7 +216,24 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
                         .unwrap();
                     queue.submit([encoder.finish()]);
                     let pixels = read(&device, &queue, &target);
-                    let expected = expected(kind, reverse, clear, 0.5);
+                    let expected = expected_emission(kind, reverse, clear, 0.5, emission);
+                    // Preserve failing samples too; qualification must not erase
+                    // the phase that exceeded its declared numeric envelope.
+                    if let Some(dir) = &artifact {
+                        std::fs::write(dir.join(format!("raw-{profiles}.rgba16f")), &pixels)
+                            .unwrap();
+                        std::fs::write(
+                            dir.join(format!("raw-{profiles}.expected-rgba64f")),
+                            expected
+                                .iter()
+                                .flatten()
+                                .flat_map(|v| v.to_le_bytes())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
+                        std::fs::write(dir.join(format!("raw-{profiles}.json")),
+                            format!("{{\"paint\":{paint},\"kind\":{kind},\"reverse\":{reverse},\"clear\":{clear:?},\"emission\":{emission}}}")).unwrap();
+                    }
                     for (at, (a, e)) in decode(&pixels)
                         .iter()
                         .zip(expected.iter().flatten())
@@ -214,7 +242,13 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
                         let err = (a - e).abs();
                         max_error = max_error.max(err);
                         assert!(
-                            a.is_finite() && err <= 0.002,
+                            a.is_finite()
+                                && err
+                                    <= if emission > 0.0 && at % 4 != 3 {
+                                        0.006 + 0.004 * e.abs()
+                                    } else {
+                                        0.002
+                                    },
                             "asset {profiles} paint={paint} kind={kind} channel={at} {a} != {e}"
                         );
                     }
@@ -332,7 +366,7 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
             }
         }
     }
-    let manifest=format!("{{\"profiles\":{profiles},\"float_channels\":{},\"display_channels\":{},\"linear_bound\":0.002,\"max_linear_error\":{max_error},\"display_bound\":2,\"max_display_error\":{max_display_error},\"exact_restorations\":{profiles}}}",profiles*1024,profiles*1024);
+    let manifest=format!("{{\"profiles\":{profiles},\"float_channels\":{},\"display_channels\":{},\"rgb_absolute_bound\":{},\"rgb_relative_bound\":{},\"alpha_absolute_bound\":0.002,\"emission_strength\":{emission},\"max_linear_error\":{max_error},\"display_bound\":2,\"max_display_error\":{max_display_error},\"exact_restorations\":{profiles}}}",profiles*1024,profiles*1024,if emission > 0.0 {0.006} else {0.002},if emission > 0.0 {0.004} else {0.0});
     if let Some(dir) = &artifact {
         std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
     }
@@ -341,3 +375,20 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
 
 #[cfg(feature = "native-text")]
 mod text_scene;
+
+#[test]
+#[ignore = "requires real native float targets; missing adapter fails qualification"]
+fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
+    qualify_image_emission(0.0);
+}
+#[test]
+#[ignore = "requires real native float targets; missing adapter fails qualification"]
+fn authored_image_emission_preserves_alpha_and_fades_without_resource_uploads() {
+    qualify_image_emission(7.0);
+}
+
+#[test]
+#[ignore = "requires real native float targets; missing adapter fails qualification"]
+fn maximum_image_emission_keeps_alpha_and_exact_opacity_restoration() {
+    qualify_image_emission(63.0);
+}

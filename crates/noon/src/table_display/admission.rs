@@ -213,6 +213,7 @@ fn line_style() -> SemanticStyle {
         stroke_join: noon_core::StrokeJoin::Miter,
         stroke_cap: noon_core::StrokeCap::Butt,
         object_opacity: 1.0,
+        emission: noon_core::Emission::NONE,
     }
 }
 fn table_line_style(options: TableOptions) -> SemanticStyle {

@@ -864,6 +864,19 @@ impl Mobject {
             state.style.background_stroke_opacity,
         )
     }
+    /// Set checked colored emission for a linear-HDR material. This changes
+    /// radiance before association; it does not change alpha or create a halo.
+    pub fn set_emission(&mut self, strength: f64) -> Result<(), AuthoringError> {
+        let emission = noon_core::Emission::new(strength).map_err(AuthoringError::Emission)?;
+        let mut state = self.state()?;
+        state.style.emission = emission;
+        self.commit_state(state)
+    }
+
+    pub fn emission(&self) -> Result<f64, AuthoringError> {
+        Ok(self.state()?.style.emission.strength())
+    }
+
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;

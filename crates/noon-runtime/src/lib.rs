@@ -3494,6 +3494,10 @@ fn interpolate_style(from: Style, to: Style, progress: f32) -> Style {
             from.stroke_cap
         },
         opacity: lerp(from.opacity, to.opacity, progress),
+        emission: from
+            .emission
+            .interpolate(to.emission, f64::from(progress))
+            .expect("finite style interpolation"),
     }
 }
 
