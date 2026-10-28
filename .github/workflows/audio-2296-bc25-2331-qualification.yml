@@ -4,9 +4,9 @@ name: Audio 2296 bc25 plus 2331 recovery qualification
 on:
   push:
     branches:
-      - codex/audio-2296-bc25-2331-2331-workbench
+      - codex/audio-2296-bc25-2331-workbench
     paths:
-      - .github/workflows/audio-2296-bc25-2331-2331-qualification.yml
+      - .github/workflows/audio-2296-bc25-2331-qualification.yml
 
 permissions:
   contents: read
