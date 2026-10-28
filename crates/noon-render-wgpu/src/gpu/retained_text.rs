@@ -4521,6 +4521,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: 0,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let source_items = vec![PreparedTextItem::GlyphBatch {
             object_index: 0,
@@ -4533,6 +4534,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: 1,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let source_quad = GlyphQuadInstance {
             origin: [1.0, 2.0],
