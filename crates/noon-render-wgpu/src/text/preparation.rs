@@ -119,6 +119,9 @@ pub enum PreparedTextItem {
         plane: GlyphAtlasPlane,
         page: u32,
         instance_range: Range<u32>,
+        /// Effective object opacity before paint alpha, for isolated original
+        /// coverage. Ordinary glyph shading continues using the packed color.
+        object_opacity: f32,
     },
     Vector {
         object_index: u32,
@@ -555,16 +558,18 @@ impl RetainedTextQuadPreparer {
             let object_opacity = object.style.opacity * object.appearance;
 
             for &slot in &self.object_glyph_slots[index] {
-                let item = &self.items[slot];
+                let item = &mut self.items[slot];
                 let PreparedTextItem::GlyphBatch {
                     run_index,
                     plane,
                     instance_range,
+                    object_opacity: coverage_opacity,
                     ..
                 } = item
                 else {
                     continue;
                 };
+                *coverage_opacity = object_opacity;
                 let run = &resource.runs[*run_index as usize];
                 let paint =
                     super::resolve_text_paint(run.fill, object.style.fill).unwrap_or(Color::WHITE);
@@ -947,11 +952,13 @@ impl RetainedTextQuadPreparer {
                 atlas_image.plane,
                 atlas_image.page,
                 instance_index,
+                object_opacity,
             );
         }
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_glyph_batch(
         &mut self,
         object_index: u32,
@@ -960,6 +967,7 @@ impl RetainedTextQuadPreparer {
         plane: GlyphAtlasPlane,
         page: u32,
         instance_index: usize,
+        object_opacity: f32,
     ) {
         let start = u32::try_from(instance_index).expect("text quad count exceeds u32 draw limits");
         let end = start
@@ -972,6 +980,7 @@ impl RetainedTextQuadPreparer {
             plane: last_plane,
             page: last_page,
             instance_range,
+            ..
         }) = self.items.last_mut()
         {
             if *last_object == object_index
@@ -992,6 +1001,7 @@ impl RetainedTextQuadPreparer {
             plane,
             page,
             instance_range: start..end,
+            object_opacity,
         });
     }
 }

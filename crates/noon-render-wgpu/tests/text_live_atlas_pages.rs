@@ -129,6 +129,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
         plane: GlyphAtlasPlane::Mask,
         page: page_zero.page,
         instance_range: 0..1,
+        object_opacity: 1.0,
     }];
     let first = prepared_mask_frame(&first_quads, &first_items);
     let mut renderer = TextGlyphGpuRenderer::new(
@@ -165,6 +166,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
         plane: GlyphAtlasPlane::Mask,
         page: page_one.page,
         instance_range: 0..1,
+        object_opacity: 1.0,
     }];
     let second = prepared_mask_frame(&second_quads, &second_items);
     renderer.upload(&device, &queue, &second, &atlas);

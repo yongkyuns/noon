@@ -11,6 +11,7 @@ use noon_runtime::SceneInstance;
 
 mod cap_bounds;
 mod composed_publication;
+mod glyph_opacity;
 
 const SIZE: [u32; 2] = [80, 60];
 const IMAGE_SIZE: [usize; 2] = [16, 12];

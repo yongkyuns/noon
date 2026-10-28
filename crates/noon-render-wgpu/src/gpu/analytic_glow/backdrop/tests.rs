@@ -7,6 +7,7 @@ use noon_core::{BackdropBlur, Color, EffectUpdate, Pixels, SemanticNodeId, Style
 use noon_runtime::{ExecutionSlotId, ExecutionSpatialIndex, SceneInstance};
 
 mod mixed;
+mod resize;
 mod visibility;
 
 const VIEW: [u32; 2] = [80, 60];
@@ -83,6 +84,23 @@ impl Fixture {
             source_bounds_override: None,
         }
     }
+    fn resize(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: [u32; 2]) {
+        self.renderer.set_viewport(device, queue, size[0], size[1]);
+        self.target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("resized backdrop integration output"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+    }
     fn render(
         &mut self,
         device: &wgpu::Device,
@@ -122,18 +140,19 @@ impl Fixture {
             .map(|&i| i as usize)
             .collect::<Vec<_>>();
         let camera = self.renderer.camera;
+        let viewport = self.renderer.viewport_size;
         let visible = self
             .renderer
             .effect_source_visibility(&publication, &visible)?;
         let scale = Vec2::new(
-            VIEW[0] as f32 / camera.world_size.x,
-            VIEW[1] as f32 / camera.world_size.y,
+            viewport[0] as f32 / camera.world_size.x,
+            viewport[1] as f32 / camera.world_size.y,
         );
         let metrics = TextDeviceMetrics::new(scale)
             .unwrap()
             .with_world_origin_pixels(Vec2::new(
-                VIEW[0] as f32 * 0.5 - camera.center.x * scale.x,
-                VIEW[1] as f32 * 0.5 + camera.center.y * scale.y,
+                viewport[0] as f32 * 0.5 - camera.center.x * scale.x,
+                viewport[1] as f32 * 0.5 + camera.center.y * scale.y,
             ))
             .unwrap();
         let prepared = self

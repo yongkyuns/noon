@@ -6,7 +6,7 @@ use noon_core::{
     RasterImageSampling, SemanticImageContent, TextResourceArena, VectorPath,
 };
 
-fn inputs() -> (CompiledResources, Vec<CompiledObject>, Vec<CompiledObject>) {
+pub(super) fn inputs() -> (CompiledResources, Vec<CompiledObject>, Vec<CompiledObject>) {
     let mut resources = CompiledResources::default();
     let mut images = RasterImageResourceArena::new();
     let pixels: Vec<u8> = (0..12)
@@ -127,7 +127,7 @@ fn inputs() -> (CompiledResources, Vec<CompiledObject>, Vec<CompiledObject>) {
     target[2].base_style.stroke_width = 0.13;
     (resources, prefix, target)
 }
-fn scene(objects: Vec<CompiledObject>, resources: &CompiledResources) -> SceneInstance {
+pub(super) fn scene(objects: Vec<CompiledObject>, resources: &CompiledResources) -> SceneInstance {
     let mut compiled = CompiledScene::compile_objects(objects, &[]).unwrap();
     compiled.merge_prepared_resources(resources.clone());
     SceneInstance::new(compiled)
