@@ -1,0 +1,300 @@
+name: One-off 2308 ordinary playback and ordered-effects browser qualification
+'on':
+  push:
+    branches:
+    - agent/2308-default-browser-qualification-20261027
+    paths:
+    - .github/workflows/one-off-2308-default-browser.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  default-browser:
+    name: Ordinary playback plus ordered-effects pixels
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      PIN_RUN: '40594768816'
+      PIN_HELPER: c27c51ec74c856d442b43d79abe41b87f043978d
+      PIN_ARTIFACT: '12777201318'
+      PIN_SOURCE_SHA256: 8a14e43e1d60ec82587d586080724a48939d03b9036557d2b0b4fa6b114c8f1f
+      PIN_SOURCE_TREE: e25761096604fbae14fb4479a67476f0844f1f03
+    steps:
+    - name: Checkout isolated helper without retained credentials
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+        fetch-depth: 1
+    - name: Authenticate exact green ordered-effects source
+      id: source
+      working-directory: ${{ github.workspace }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        export SOURCE_ROOT="$RUNNER_TEMP/noon2308-default-source"
+        export EVIDENCE="$RUNNER_TEMP/noon2308-default-evidence"
+        mkdir -p "$SOURCE_ROOT" "$EVIDENCE/incoming"
+        printf 'SOURCE_ROOT=%s\nEVIDENCE=%s\n' "$SOURCE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
+        gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PIN_RUN" > "$EVIDENCE/source-run.json"
+        gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PIN_ARTIFACT" > "$EVIDENCE/source-artifact.json"
+        gh run download "$PIN_RUN" --repo "$GITHUB_REPOSITORY" \
+          -n noon2308-ordered-effects-combined-qualification -D "$EVIDENCE/incoming"
+        python3 - <<'PY_SOURCE'
+        import hashlib,io,json,os,subprocess,tarfile
+        from pathlib import Path
+        root=Path(os.environ['SOURCE_ROOT']); evidence=Path(os.environ['EVIDENCE'])
+        run=json.loads((evidence/'source-run.json').read_text())
+        artifact=json.loads((evidence/'source-artifact.json').read_text())
+        assert run['id']==int(os.environ['PIN_RUN'])
+        assert run['head_sha']==os.environ['PIN_HELPER']
+        assert run['status']=='completed' and run['conclusion']=='success'
+        assert artifact['id']==int(os.environ['PIN_ARTIFACT']) and not artifact['expired']
+        assert artifact['name']=='noon2308-ordered-effects-combined-qualification'
+        assert artifact['workflow_run']['id']==run['id']
+        assert artifact['workflow_run']['head_sha']==run['head_sha']
+        assert artifact['digest']=='sha256:d54060a972cd0498aa6d8f73dd1915ef6bf6f8647764fb337c4a947ced0e0d7d'
+        manifest=json.loads((evidence/'incoming/manifest.json').read_text())
+        payload=(evidence/'incoming/combined-source.tar.gz').read_bytes()
+        digest=hashlib.sha256(payload).hexdigest()
+        assert digest==os.environ['PIN_SOURCE_SHA256']==manifest['source_archive_sha256']
+        assert manifest['tested_tree']==os.environ['PIN_SOURCE_TREE']
+        assert manifest['tracked_source_unchanged'] is True
+        assert all(manifest['command_exit_codes'][k]==0 for k in ('fast','prepared','controls','wasm','web'))
+        with tarfile.open(fileobj=io.BytesIO(payload),mode='r:gz') as archive:
+            archive.extractall(root,filter='data')
+        def git(*args):
+            return subprocess.check_output(['git',*args],cwd=root).decode().strip()
+        git('init','-q','--initial-branch=qualification')
+        git('config','user.name','Noon isolated qualification')
+        git('config','user.email','qualification@example.invalid')
+        git('add','--all')
+        tree=git('write-tree'); assert tree==os.environ['PIN_SOURCE_TREE'],tree
+        git('commit','-q','-m','Freeze exact ordered-effects candidate for ordinary browser regression')
+        assert git('rev-parse','HEAD^{tree}')==tree
+        report={'source_run':run['id'],'source_helper':run['head_sha'],'source_artifact':artifact['id'],
+                'source_tree':tree,'source_archive_sha256':digest,'qualification_helper':os.environ['GITHUB_SHA'],
+                'scope':'isolated ordinary/default browser regression on pinned combined #2308/#2317 plus bc25e92',
+                'limitations':'not current-master or published PR acceptance; not physical GPU/performance',
+                'feature_or_master_ref_modified':False,'default_playback_changed':False}
+        (evidence/'source.json').write_text(json.dumps(report,indent=2)+'\n')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+            output.write('cargo_lock_sha='+hashlib.sha256((root/'Cargo.lock').read_bytes()).hexdigest()+'\n')
+        print(json.dumps(report,indent=2))
+        PY_SOURCE
+    - name: Use repository-pinned Rust and WASM target
+      id: rust
+      run: |
+        rustup install
+        rustup show active-toolchain
+        rustc --version --verbose
+        rustup target add wasm32-unknown-unknown
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Restore Cargo sources without writing cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-sources-2308-default-${{ steps.source.outputs.cargo_lock_sha }}
+        restore-keys: ${{ runner.os }}-cargo-sources-
+    - name: Use read-only compiler cache
+      id: compiler
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      with:
+        version: v0.16.0
+    - name: Install pinned wasm-pack
+      id: wasmpack
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+      with:
+        tool: wasm-pack@0.15.0
+        fallback: none
+    - name: Test native replay history and locality
+      id: native_replay
+      if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.rust.outcome == 'success' && steps.compiler.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/native_replay.exit"; exit "$code"' EXIT
+        {
+          cargo test -p noon --no-default-features --test finite_replay_history
+          cargo test -p noon-runtime --test finite_replay_locality
+        } 2>&1 | tee "$EVIDENCE/native_replay.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Test shared pointer selection and renderer-less WASM build
+      id: native_pointer
+      if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.rust.outcome == 'success' && steps.compiler.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/native_pointer.exit"; exit "$code"' EXIT
+        {
+          cargo test -p noon-web --all-features --lib direct_pointer_presentation::tests -- --nocapture
+          cargo test -p noon-web --all-features --lib selection_overlay_transport::tests -- --nocapture
+          cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture
+          cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown
+        } 2>&1 | tee "$EVIDENCE/native_pointer.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Build browser package
+      env:
+        NOON_WASM_SKIP_OPT: '1'
+        NOON_RENDERER_SMOKE: '1'
+      id: build
+      if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.rust.outcome == 'success' && steps.compiler.outcome == 'success' && steps.wasmpack.outcome
+        == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/build.exit"; exit "$code"' EXIT
+        {
+          bash scripts/build-web-demo.sh
+        } 2>&1 | tee "$EVIDENCE/build.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Restore pinned Chromium cache
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-chromium-1.62.1
+    - name: Install Playwright Chromium
+      id: browser
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      run: |
+        npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+        npx playwright install chromium
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Qualify actual DOM samples and paused click-selection pixels
+      id: pointer_pixels
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/pointer_pixels.exit"; exit "$code"' EXIT
+        {
+          node --test scripts/pointer-selection-raster-contract.test.mjs
+          node scripts/browser-pointer-input-smoke.mjs
+          node scripts/pointer-selection-qualification.mjs
+          node scripts/pointer-selection-direct-qualification.mjs
+          node scripts/platform-interaction-parity.mjs
+          node scripts/direct-pointer-presentation-qualification.mjs
+          node scripts/direct-inspection-qualification.mjs
+          node scripts/worker-inspection-qualification.mjs
+        } 2>&1 | tee "$EVIDENCE/pointer_pixels.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Qualify public gallery pointer selection
+      env:
+        NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/gallery-pointer-selection
+      id: gallery_selection
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/gallery_selection.exit"; exit "$code"' EXIT
+        {
+          node scripts/playground-gallery-selection-smoke.mjs
+        } 2>&1 | tee "$EVIDENCE/gallery_selection.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Test public playback controls
+      env:
+        NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
+      id: transport
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/transport.exit"; exit "$code"' EXIT
+        {
+          node scripts/playground-playback-controls-smoke.mjs
+        } 2>&1 | tee "$EVIDENCE/transport.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Stress reruns across playback states
+      env:
+        NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
+      id: rerun_stress
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/rerun_stress.exit"; exit "$code"' EXIT
+        {
+          node scripts/playground-playback-rerun-stress.mjs
+        } 2>&1 | tee "$EVIDENCE/rerun_stress.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Verify wait clock against real time
+      id: wait_clock
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/wait_clock.exit"; exit "$code"' EXIT
+        {
+          node scripts/playground-wait-clock-regression.mjs
+          NOON_WAIT_BACKEND=webgpu NOON_WAIT_ARTIFACTS=browser-smoke-artifacts/playground-wait-clock-webgpu node scripts/playground-wait-clock-regression.mjs
+        } 2>&1 | tee "$EVIDENCE/wait_clock.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Verify morph endpoints and holds against source playback
+      id: morph
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/morph.exit"; exit "$code"' EXIT
+        {
+          node scripts/playground-playback-morph-regression.mjs
+          NOON_MORPH_BACKEND=webgpu NOON_MORPH_REGRESSION_ARTIFACTS=browser-smoke-artifacts/playground-playback-morph-webgpu node scripts/playground-playback-morph-regression.mjs
+        } 2>&1 | tee "$EVIDENCE/morph.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Verify dynamic load membership and content history
+      id: dynamic_history
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/dynamic_history.exit"; exit "$code"' EXIT
+        {
+          NOON_REPLAY_CASE=dynamic node scripts/playground-playback-morph-regression.mjs
+          NOON_REPLAY_CASE=dynamic NOON_MORPH_BACKEND=webgpu NOON_MORPH_REGRESSION_ARTIFACTS=browser-smoke-artifacts/playground-playback-dynamic-webgpu node scripts/playground-playback-morph-regression.mjs
+        } 2>&1 | tee "$EVIDENCE/dynamic_history.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Qualify ordered effects with the existing independent RGBA oracle
+      id: ordered_effects
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        trap 'code=$?; printf "%s\n" "$code" > "$EVIDENCE/ordered_effects.exit"; exit "$code"' EXIT
+        {
+          node scripts/ordered-effects-qualification.mjs
+        } 2>&1 | tee "$EVIDENCE/ordered_effects.log"
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Freeze final source integrity and every independent gate receipt
+      if: ${{ always() && steps.source.outcome == 'success' }}
+      run: |
+        set -euo pipefail
+        git status --porcelain=v1 > "$EVIDENCE/source-status.txt"
+        git diff --exit-code
+        git diff --cached --exit-code
+        python3 - <<'PY_FINAL'
+        import json,os,subprocess
+        from pathlib import Path
+        out=Path(os.environ['EVIDENCE'])
+        required=['native_replay', 'native_pointer', 'build', 'pointer_pixels', 'gallery_selection', 'transport', 'rerun_stress', 'wait_clock', 'morph', 'dynamic_history', 'ordered_effects']
+        codes={key:int((out/(key+'.exit')).read_text()) if (out/(key+'.exit')).exists() else None for key in required}
+        status=subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=no']).decode()
+        tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}']).decode().strip()
+        report={'qualification_helper':os.environ['GITHUB_SHA'],'source_tree':tree,'tracked_source_unchanged':not status,
+                'command_exit_codes':codes,'all_required_commands_passed':all(codes[key]==0 for key in required),
+                'scope':'ordinary/default renderer-smoke package, native replay, public controls, and ordered-effects pixels; no prepared default switch'}
+        (out/'qualification.json').write_text(json.dumps(report,indent=2)+'\n')
+        print(json.dumps(report,indent=2))
+        assert tree==os.environ['PIN_SOURCE_TREE']
+        assert not status,'tracked source changed'
+        assert report['all_required_commands_passed'],'inspect individual gate logs and exits'
+        PY_FINAL
+      working-directory: ${{ runner.temp }}/noon2308-default-source
+    - name: Preserve every gate log and actual browser image
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: noon2308-ordered-effects-default-browser-qualification
+        path: |
+          ${{ runner.temp }}/noon2308-default-evidence
+          ${{ runner.temp }}/noon2308-default-source/browser-smoke-artifacts
+        if-no-files-found: error
+        retention-days: 7
