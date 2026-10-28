@@ -1,0 +1,100 @@
+name: One-off 2308 vs HDR master read-only merge inventory
+
+on:
+  push:
+    branches: [agent/2308-master-6a5d-inventory-20261028]
+    paths:
+      - .github/workflows/one-off-2308-master-6a5d-inventory.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Authenticate refs and inventory actual three-way conflicts only
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FEATURE: '58fb5e7adaab7669cae87115cca07e01308aa430'
+      MASTER: '6a5db8c4ab11200684540f4b751ccd14df7cee13'
+      OLD_MASTER: '1f1120f1060c6d0823a2cd21e9f00cee13058e94'
+    steps:
+      - name: Checkout isolated helper without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify pinned history and perform noncommitting Git merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OUTPUT_DIR="$RUNNER_TEMP/noon2308-6a5d-inventory"
+          mkdir -p "$OUTPUT_DIR"
+          python3 - <<'PY'
+          import json,os,subprocess,hashlib
+          from pathlib import Path
+          root=Path(os.environ['GITHUB_WORKSPACE'])
+          out=Path(os.environ['OUTPUT_DIR'])
+          pins={key:os.environ[key] for key in ('FEATURE','MASTER','OLD_MASTER')}
+          def run(*args,check=True):
+              return subprocess.run(['git',*args],cwd=root,text=True,capture_output=True,check=check)
+          run('config','user.name','Read-only Noon integration inventory')
+          run('config','user.email','integration-inventory@example.invalid')
+          fetched=run('fetch','--no-tags','--depth=250','https://github.com/'+os.environ['GITHUB_REPOSITORY']+'.git',*pins.values())
+          (out/'fetch.txt').write_text(fetched.stdout+fetched.stderr)
+          for name,sha in pins.items():
+              assert run('rev-parse',sha+'^{commit}').stdout.strip()==sha,('pin failed',name)
+          run('checkout','-q','-B','read-only-feature',pins['FEATURE'])
+          assert run('rev-parse','HEAD').stdout.strip()==pins['FEATURE']
+          base=run('merge-base','HEAD',pins['MASTER']).stdout.strip()
+          assert base==pins['OLD_MASTER'],('unexpected merge base',base)
+          def paths(*args):
+              return run('diff','--name-only',*args).stdout.splitlines()
+          upstream=paths(pins['OLD_MASTER'],pins['MASTER'])
+          downstream=paths(pins['OLD_MASTER'],pins['FEATURE'])
+          overlap=sorted(set(upstream)&set(downstream))
+          (out/'upstream-paths.txt').write_text('\n'.join(upstream)+'\n')
+          (out/'feature-paths.txt').write_text('\n'.join(downstream)+'\n')
+          (out/'overlapping-paths.txt').write_text('\n'.join(overlap)+'\n')
+          merged=run('merge','--no-commit','--no-ff',pins['MASTER'],check=False)
+          (out/'actual-merge.stdout-stderr.txt').write_text(merged.stdout+merged.stderr)
+          assert merged.returncode in (0,1),('unexpected merge command failure',merged.returncode)
+          conflicts=run('diff','--name-only','--diff-filter=U').stdout.splitlines()
+          index=run('ls-files','-u').stdout
+          (out/'unmerged-index.txt').write_text(index)
+          (out/'conflicts.txt').write_text('\n'.join(conflicts)+'\n')
+          (out/'conflicts-combined.diff').write_text(run('diff','--cc').stdout)
+          (out/'git-status.txt').write_text(run('status','--porcelain=v1').stdout)
+          assert (merged.returncode==0)==(not conflicts),('git merge returned a contradiction',merged.returncode,conflicts)
+          assert set(conflicts).issubset(upstream),('unexpected conflict files',conflicts)
+          for path in conflicts:
+              for stage in (1,2,3):
+                  payload=run('show',f':{stage}:{path}',check=False)
+                  if payload.returncode:
+                      continue
+                  dst=out/'versions'/str(stage)/path
+                  dst.parent.mkdir(parents=True,exist_ok=True)
+                  dst.write_text(payload.stdout)
+          report={'mode':'read-only local Git merge inventory: no source or master remote writes',
+             'pins':pins,'verified_merge_base':base,
+             'master_changed_path_count':len(upstream),
+             'feature_changed_path_count':len(downstream),
+             'overlap_count':len(overlap),
+             'git_merge_exit':merged.returncode,
+             'confirmed_conflict_count':len(conflicts),
+             'confirmed_conflict_paths':conflicts,
+             'index_stage_line_count':len(index.splitlines()),
+             'clean_merge':merged.returncode==0}
+          if not conflicts:
+              report['merged_tree']=run('write-tree').stdout.strip()
+          (out/'inventory.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2),flush=True)
+          PY
+      - name: Preserve inventory and authenticated conflicting versions
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-master-6a5d-readonly-conflicts
+          path: ${{ runner.temp }}/noon2308-6a5d-inventory
+          if-no-files-found: warn
+          retention-days: 5
