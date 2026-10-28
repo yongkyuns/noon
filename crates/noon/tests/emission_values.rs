@@ -384,3 +384,54 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         }
     }
 }
+
+#[test]
+fn completed_material_tracks_hold_their_endpoint_between_future_animations() {
+    let mut execution = noon::example_scenes::camera_bloom::execution().unwrap();
+    for (time, emission, intensity) in [
+        (0.0, 0.0, 0.0),
+        (0.5, 0.0, 0.0),
+        (1.5, 3.5, 1.5),
+        (2.5, 7.0, 3.0),
+        (2.75, 7.0, 3.0),
+        (3.0, 7.0, 3.0),
+        (4.0, 3.5, 1.5),
+        (5.0, 0.0, 0.0),
+        (5.5, 0.0, 0.0),
+        (2.75, 7.0, 3.0),
+        (0.0, 0.0, 0.0),
+    ] {
+        execution.seek(time).unwrap();
+        let frame = execution.session().frame();
+        let panel = frame
+            .objects
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.content.geometry(),
+                    Some(noon_core::GeometryRef::Circle { .. })
+                )
+            })
+            .unwrap();
+        assert!(
+            (panel.style.emission.strength() - emission).abs() < 1e-12,
+            "material at {time}: {} != {emission}",
+            panel.style.emission.strength()
+        );
+        let publication = execution.session_mut().take_renderer_publication();
+        let definition = publication
+            .view_effects()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .definition;
+        let noon_core::EffectDefinition::Bloom(bloom) = definition else {
+            panic!("camera Bloom")
+        };
+        assert!(
+            (bloom.intensity() - intensity).abs() < 1e-12,
+            "camera intensity at {time}"
+        );
+    }
+}

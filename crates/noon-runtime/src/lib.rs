@@ -2662,7 +2662,12 @@ fn apply_group_to_row(
         Property::WorldTransform | Property::CameraProfile | Property::Emission
     ) {
         let latest = &tracks[group.cursor - 1];
-        if latest.reconciled && time >= latest.timing.start_time + latest.timing.duration {
+        // A historical material endpoint owns gaps before later tracks, just as
+        // ordinary affine/paint channels do. Only the final track releases base.
+        if latest.reconciled
+            && time >= latest.timing.start_time + latest.timing.duration
+            && (group.channel.property != Property::Emission || group.cursor == tracks.len())
+        {
             if group.channel.property == Property::Emission {
                 return apply_evaluated_value(
                     &mut row,
