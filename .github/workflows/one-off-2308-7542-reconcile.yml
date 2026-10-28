@@ -174,9 +174,14 @@ jobs:
           test -n "${WORK:-}" || exit 0
           test -d "$WORK/.git" || exit 0
           cd "$WORK"
+          # The local merge is intentionally staged against the previously
+          # qualified HEAD. Requiring an empty git status would falsely reject
+          # every candidate even if no test changed a single tracked source.
           git status --porcelain --untracked-files=no > "$EVIDENCE/source-status.txt"
-          diff -u /dev/null "$EVIDENCE/source-status.txt"
+          git diff --name-only > "$EVIDENCE/unstaged-postqualification.txt"
+          test ! -s "$EVIDENCE/unstaged-postqualification.txt"
           test "$(git write-tree)" = "$(cat "$EVIDENCE/candidate-tree.txt")"
+          git diff --cached --binary HEAD | cmp - "$EVIDENCE/integrated-source.patch"
       - name: Keep source-bound local evidence even when qualification fails
         if: always()
         uses: actions/upload-artifact@v7
