@@ -139,8 +139,9 @@ impl PrefixReader {
     }
     pub fn advance_interactions(&mut self, wall_time: f64) -> Result<(), PrefixError> {
         self.session
+            .runtime
             .advance_interactions(wall_time)
-            .map_err(|error| PrefixError::Interaction(error.to_string()))
+            .map_err(PrefixError::Interaction)
     }
     pub fn interactions_active(&self) -> bool {
         self.session.interactions_active()

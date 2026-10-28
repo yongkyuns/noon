@@ -251,8 +251,9 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -263,8 +264,9 @@ mod tests {
             text_bounds: None,
         };
         let circle = noon_runtime::FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -297,8 +299,9 @@ mod tests {
         store.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
@@ -309,8 +312,9 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(21),
@@ -336,8 +340,9 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(20),
@@ -348,8 +353,9 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(21),
@@ -440,8 +446,9 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(resource).unwrap();
         let object = FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),

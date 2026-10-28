@@ -54,11 +54,12 @@ fn app(action: Option<PlaybackControl>, audio: bool) -> NativeApp {
             )
             .unwrap();
     }
+    let section_navigation = scene.section_navigation();
     let mut app = NativeApp::new(
-        scene.execution_session().unwrap(),
+        scene.into_execution().unwrap(),
         NativeViewportConfig {
             playback_controls: true,
-            section_navigation: scene.section_navigation(),
+            section_navigation,
             ..Default::default()
         },
     );

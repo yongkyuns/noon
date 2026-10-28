@@ -545,15 +545,18 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
+                fill_paint: None,
                 draw_enabled: true,
                 slot,
                 order: 0,
                 object: ObjectId::new(21),
-                glow: None,
+                effects: Vec::new(),
+                visibility: None,
                 z_index: 0.0,
-                content: TransportObjectContent::from(&ObjectContentRef::Geometry(
+                content: TransportObjectContent::try_from(&ObjectContentRef::Geometry(
                     GeometryRef::circle(1.0),
-                )),
+                ))
+                .unwrap(),
                 transform,
                 spatial: None,
                 style: Style::default(),

@@ -93,7 +93,7 @@ impl CompiledScene {
                     if !object.live
                         || object.id != physical.id
                         || object.spatial.is_some()
-                        || object.glow.is_some()
+                        || object.effects.is_some()
                     {
                         return None;
                     }

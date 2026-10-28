@@ -311,5 +311,5 @@ pub async fn create_bar_chart_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::bar_chart::session(compiler)
         .map_err(crate::authoring_error::js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }

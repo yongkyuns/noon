@@ -8,6 +8,23 @@ use crate::{
     CompiledSpatialState,
 };
 
+/// Validate the finite continuous-paint execution profile at a genuine external
+/// boundary as well as typed execution-plan publication.
+pub fn validate_fill_paint(
+    object: ObjectId,
+    gradient: Option<&noon_core::SemanticPaint>,
+) -> Result<(), crate::CompilePatchError> {
+    if let Some(gradient) = gradient {
+        crate::semantic_lowering::paint::validate_definition(gradient).map_err(|_| {
+            crate::CompilePatchError::InvalidObjectState {
+                object,
+                field: noon_core::ObjectStateField::Style,
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// Sparse lowered relation between ordinary rectangle rows. Geometry and pose
 /// remain owned by those rows; this contains no separately evaluated view state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +106,7 @@ pub enum ExecutionPatch {
     SetStyle {
         object: ObjectId,
         style: Style,
+        fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     },
     /// Replace one display's relation. The camera may be detached; the relation
     /// becomes visible only while both execution rows are live.
@@ -96,22 +114,18 @@ pub enum ExecutionPatch {
         object: ObjectId,
         view: Option<CompiledInset2DView>,
     },
-    /// Replace the authored parameter base of one existing attachment.
-    /// Attachment generation, radius units and source mode must be unchanged;
-    /// structural attachment edits are not ordinary value publication.
-    SetGlow {
+    /// Replace one immutable parameter column. The complete ordered identity
+    /// list and every surviving kind/unit/source schema must remain unchanged.
+    SetEffects {
         object: ObjectId,
-        glow: std::sync::Arc<crate::CompiledGlow>,
+        effects: std::sync::Arc<crate::CompiledEffectStack>,
     },
-    /// Attach, remove or replace the single lowered leaf glow at a semantic
-    /// publication boundary. `expected` must match the currently installed
-    /// attachment exactly. A replacement must have a different semantic identity;
-    /// parameter-only writes use `SetGlow` instead. Retires only the old glow's
-    /// parameter tracks; object identity, motion and painter position survive.
-    SetGlowAttachment {
+    /// Replace ordered attachment topology after checking the complete identity
+    /// list. Retire only removed generations; value-only edits use SetEffects.
+    SetEffectStack {
         object: ObjectId,
-        expected: Option<noon_core::SemanticNodeId>,
-        glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+        expected: Box<[noon_core::SemanticNodeId]>,
+        effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     },
     /// Replace one graph root's complete endpoint dependency declaration.
     /// Empty dependencies retire that root without relocating unrelated slots.
@@ -221,38 +235,50 @@ impl CompiledScene {
     /// Commit one style value whose object slot and payload were already validated
     /// by the caller's prepared publication proof.
     #[doc(hidden)]
-    pub fn commit_prepared_style_value(&mut self, object_index: u32, style: Style) {
-        self.objects[object_index as usize].base_style = style;
+    pub fn commit_prepared_style_value(
+        &mut self,
+        object_index: u32,
+        style: Style,
+        fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
+    ) {
+        let object = &mut self.objects[object_index as usize];
+        object.base_style = style;
+        object.fill_paint = fill_paint;
     }
 }
 
 impl CompiledScene {
     /// Commit an already-preflighted existing attachment value on one stable row.
     #[doc(hidden)]
-    pub fn commit_prepared_glow_value(
+    pub fn commit_prepared_effect_values(
         &mut self,
         object_index: u32,
-        glow: std::sync::Arc<crate::CompiledGlow>,
+        effects: std::sync::Arc<crate::CompiledEffectStack>,
     ) {
-        self.objects[object_index as usize].glow = Some(glow);
+        self.objects[object_index as usize].effects = Some(effects);
     }
 }
 
 /// Value updates must not rebind compiled track endpoints to another generation
 /// or silently reinterpret radius/source channels. Definition fields are validated
-/// by Glow's typed construction before this boundary.
-pub(crate) fn validate_glow_replacement(
+/// by each effect's typed construction before this boundary. Discrete fields
+/// without a driver may have a checked persistent-update policy distinct from
+/// interpolation (for example, a dissolve seed).
+pub(crate) fn validate_effect_values(
     object: ObjectId,
-    previous: Option<&crate::CompiledGlow>,
-    next: &crate::CompiledGlow,
+    previous: Option<&crate::CompiledEffectStack>,
+    next: &crate::CompiledEffectStack,
 ) -> Result<(), crate::CompilePatchError> {
-    let previous = previous
-        .filter(|previous| previous.attachment == next.attachment)
-        .ok_or(crate::CompilePatchError::InvalidGlowUpdate { object })?;
-    noon_core::GlowUpdate::default()
-        .radius(next.definition.radius())
-        .source(next.definition.source())
-        .prepare(previous.definition)
-        .map_err(|_| crate::CompilePatchError::InvalidGlowUpdate { object })?;
+    let previous = previous.ok_or(crate::CompilePatchError::InvalidEffectUpdate { object })?;
+    if previous.attachments() != next.attachments()
+        || previous.visibility().map(|value| value.attachment)
+            != next.visibility().map(|value| value.attachment)
+    {
+        return Err(crate::CompilePatchError::InvalidEffectUpdate { object });
+    }
+    for (old, new) in previous.iter().zip(next.iter()) {
+        noon_core::EffectValue::validate_effect_value_update(old.definition, new.definition)
+            .map_err(|_| crate::CompilePatchError::InvalidEffectUpdate { object })?;
+    }
     Ok(())
 }

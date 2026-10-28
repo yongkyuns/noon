@@ -1,7 +1,7 @@
 //! An absent glow becomes a neutral attachment only when its target animation activates.
 //! Paired with web/python/examples/glow_scene_worker_pixels.py on the same shared engine.
 use noon::{
-    effects::{EffectDefinition, GlowUpdate, Pixels},
+    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, RateFunction, Scene,
 };
 
@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = live.target_editor(&dot)?;
     live.set_glow(
         &target,
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::BLUE)
             .radius(Pixels(6.5))
             .intensity(1.4),
@@ -33,12 +33,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .rate_func(RateFunction::Linear),
     )?;
     let attachment = dot.get_effect("glow")?;
-    let EffectDefinition::Glow(neutral) = attachment.authored_definition()?;
+    let neutral = (attachment.authored_definition()?).as_glow().unwrap();
     assert_eq!(neutral.intensity(), 0.0);
     live.advance_segment_to(segment, 0.125)?;
     live.advance_segment_to(segment, 0.25)?;
     live.complete_segment(segment)?;
-    let EffectDefinition::Glow(completed) = attachment.authored_definition()?;
+    let completed = (attachment.authored_definition()?).as_glow().unwrap();
     assert_eq!(completed.intensity(), 1.4);
     live.remove_glow(&dot)?;
     assert!(

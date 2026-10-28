@@ -95,6 +95,8 @@ impl Fixture {
         self.session.seal_replay().unwrap();
         configure(&mut self.session);
         // The authored store and its deleted node are not needed by playback.
+        // Input below uses PrefixReader's existing presentation-only admission;
+        // Indicate ticks use the same storeless runtime path as PrefixReader.
         self.session
     }
 }
@@ -140,7 +142,7 @@ fn submit(
 ) -> NativePointerInputPublication {
     let token = session.native_pointer_input_token().unwrap();
     session
-        .submit_native_pointer_input(&token, input(&token, sequence, press))
+        .submit_prepared_pointer_presentation(&token, input(&token, sequence, press))
         .unwrap()
 }
 
@@ -159,8 +161,9 @@ fn exercise_action(
     let history = session.replay_stats();
     let context = session.publication_context();
     assert!(session.interactions_active());
-    session.advance_interactions(wall_time).unwrap();
+    session.runtime.advance_interactions(wall_time).unwrap();
     session
+        .runtime
         .advance_interactions(wall_time + binding.run_time() * 0.5)
         .unwrap();
     let index = session.runtime.frame_index_for_object(object).unwrap();
@@ -172,6 +175,7 @@ fn exercise_action(
     );
     assert_eq!(session.frame().time, baseline.time);
     session
+        .runtime
         .advance_interactions(wall_time + binding.run_time())
         .unwrap();
     assert!(!session.interactions_active());
@@ -282,7 +286,7 @@ fn historical_pointer_identity_seek_cancels_gestures_and_stale_input_is_atomic()
     let context = session.publication_context();
     let history = session.replay_stats();
     assert!(matches!(
-        session.submit_native_pointer_input(&stale, input(&stale, 1, false)),
+        session.submit_prepared_pointer_presentation(&stale, input(&stale, 1, false)),
         Err(ExecutionSessionInputError::StalePointerPublication { .. })
     ));
     assert_eq!(session.frame(), &baseline);
@@ -349,13 +353,13 @@ fn historical_pointer_identity_forward_removal_retires_selection_and_effect() {
     let mut session = fixture.seal();
     session.seek(0.5).unwrap();
     click(&mut session, 0);
-    session.advance_interactions(10.0).unwrap();
+    session.runtime.advance_interactions(10.0).unwrap();
     session.advance_to(0.75).unwrap();
-    session.advance_interactions(10.125).unwrap();
+    session.runtime.advance_interactions(10.125).unwrap();
     assert_eq!(session.selected_pointer_target(), Some(node));
     assert!(session.interactions_active());
     session.advance_to(1.5).unwrap();
-    session.advance_interactions(10.25).unwrap();
+    session.runtime.advance_interactions(10.25).unwrap();
     assert_eq!(session.interaction_semantic_object_id(object), None);
     assert_eq!(session.selected_pointer_target(), None);
     assert!(session.pointer_selection_highlight().is_none());
@@ -374,8 +378,8 @@ fn historical_pointer_identity_discard_returns_to_current_source_membership() {
     configure(&mut fixture.session);
     fixture.session.seek(0.5).unwrap();
     click(&mut fixture.session, 0);
-    fixture.session.advance_interactions(10.0).unwrap();
-    fixture.session.advance_interactions(10.25).unwrap();
+    fixture.session.runtime.advance_interactions(10.0).unwrap();
+    fixture.session.runtime.advance_interactions(10.25).unwrap();
     fixture.session.discard_replay_retention();
     assert!(!fixture.session.replay_scope_active());
     assert!(!fixture.session.interactions_active());

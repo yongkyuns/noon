@@ -203,21 +203,21 @@ pub(crate) fn cancel_browser_pointer_input(
     Ok(())
 }
 
-impl BrowserPointerTarget for ExecutionSession {
+impl BrowserPointerTarget for noon::SceneExecution {
     fn has_native_pointer_subscribers(&self) -> bool {
-        ExecutionSession::has_native_pointer_subscribers(self)
+        ExecutionSession::has_native_pointer_subscribers(self.session())
     }
     fn translation_drag_active(&self) -> bool {
-        ExecutionSession::translation_drag_active(self)
+        ExecutionSession::translation_drag_active(self.session())
     }
     fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError> {
-        ExecutionSession::inspection_camera(self)
+        ExecutionSession::inspection_camera(self.session())
     }
     fn capture_pointer_frame(
         &self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
-        ExecutionSession::capture_pointer_frame(self, view)
+        ExecutionSession::capture_pointer_frame(self.session(), view)
     }
     fn validate_pointer_frame(
         &self,
@@ -226,9 +226,13 @@ impl BrowserPointerTarget for ExecutionSession {
         validation: PointerFrameValidation,
     ) -> Result<(), PointerFrameError> {
         match validation {
-            PointerFrameValidation::Input => frame.validate_current(self, view),
-            PointerFrameValidation::Presentation => frame.validate_presentation(self, view),
-            PointerFrameValidation::CapturedGesture => frame.validate_captured_gesture(self, view),
+            PointerFrameValidation::Input => frame.validate_current(self.session(), view),
+            PointerFrameValidation::Presentation => {
+                frame.validate_presentation(self.session(), view)
+            }
+            PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(self.session(), view)
+            }
         }
     }
     fn pointer_input_token_for_frame(
@@ -236,24 +240,29 @@ impl BrowserPointerTarget for ExecutionSession {
         frame: &PointerFrameSnapshot,
         view: PointerFrameView,
     ) -> Result<NativePointerInputToken, PointerFrameError> {
-        frame.input_token(self, view)
+        frame.input_token(self.session(), view)
     }
     fn observe_pointer_frame(
         &mut self,
         frame: &PointerFrameSnapshot,
     ) -> Result<(), PointerFrameError> {
-        self.refresh_pointer_hover(frame, frame.view()).map(|_| ())
+        self.session_mut()
+            .refresh_pointer_hover(frame, frame.view())
+            .map(|_| ())
     }
     fn configure_pointer(
         &mut self,
         pointer: NativePointerId,
         view: u64,
     ) -> Result<NativePointerInputToken, String> {
-        self.configure_native_pointer_input(pointer, view)
+        self.session_mut()
+            .configure_native_pointer_input(pointer, view)
             .map_err(|e| e.to_string())
     }
     fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
-        self.native_pointer_input_token().map_err(|e| e.to_string())
+        self.session()
+            .native_pointer_input_token()
+            .map_err(|e| e.to_string())
     }
     fn scroll_inspection(
         &mut self,
@@ -262,7 +271,8 @@ impl BrowserPointerTarget for ExecutionSession {
         surface: Vec2,
         delta_pixels: f64,
     ) -> Result<bool, String> {
-        self.scroll_inspection_view(frame, view, surface, delta_pixels)
+        self.session_mut()
+            .scroll_inspection_view(frame, view, surface, delta_pixels)
             .map_err(|error| error.to_string())
     }
     fn submit_pointer(
@@ -280,21 +290,21 @@ where
     C::Error: std::fmt::Display,
 {
     fn has_native_pointer_subscribers(&self) -> bool {
-        BrowserPointerTarget::has_native_pointer_subscribers(self.session())
+        (self.session()).has_native_pointer_subscribers()
     }
     fn translation_drag_active(&self) -> bool {
-        BrowserPointerTarget::translation_drag_active(self.session())
+        (self.session()).translation_drag_active()
     }
     fn inspection_camera(
         &self,
     ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
-        BrowserPointerTarget::inspection_camera(self.session())
+        (self.session()).inspection_camera()
     }
     fn capture_pointer_frame(
         &self,
         view: noon::integration::PointerFrameView,
     ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError> {
-        BrowserPointerTarget::capture_pointer_frame(self.session(), view)
+        (self.session()).capture_pointer_frame(view)
     }
     fn validate_pointer_frame(
         &self,
@@ -302,14 +312,24 @@ where
         view: noon::integration::PointerFrameView,
         validation: crate::browser_pointer_input::PointerFrameValidation,
     ) -> Result<(), noon::integration::PointerFrameError> {
-        BrowserPointerTarget::validate_pointer_frame(self.session(), frame, view, validation)
+        match validation {
+            crate::browser_pointer_input::PointerFrameValidation::Input => {
+                frame.validate_current(self.session(), view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::Presentation => {
+                frame.validate_presentation(self.session(), view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(self.session(), view)
+            }
+        }
     }
     fn pointer_input_token_for_frame(
         &self,
         frame: &noon::integration::PointerFrameSnapshot,
         view: noon::integration::PointerFrameView,
     ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
-        BrowserPointerTarget::pointer_input_token_for_frame(self.session(), frame, view)
+        frame.input_token(self.session(), view)
     }
     fn observe_pointer_frame(
         &mut self,

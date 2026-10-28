@@ -35,6 +35,7 @@ impl InstalledRetainedExecutionMirror {
         );
         wire.extend_installed_image_handles(&resources.image_handle_remap());
         wire.extend_installed_geometry_handles(&resources.geometry_handle_remap());
+        wire.extend_installed_composed_sources(&resources.composed_source_remap());
         Ok(Self {
             wire,
             resources,
@@ -93,6 +94,7 @@ impl InstalledRetainedExecutionMirror {
                 self.family.plans(),
                 self.family.active_indices(),
                 self.wire.painter_order(),
+                &self.wire,
             ),
         )
     }
@@ -183,6 +185,16 @@ impl InstalledRetainedExecutionMirror {
         if snapshot && validate_snapshot_resources {
             self.validate_snapshot_resources(&delta)?;
         }
+        let stale = self.wire.session() == Some(delta.session)
+            && self
+                .wire
+                .applied_sequence()
+                .is_some_and(|sequence| delta.sequence <= sequence);
+        if validate_snapshot_resources && !stale {
+            validate_hatch_geometry(&delta, |handle| {
+                self.resources.geometry_for_transport(handle)
+            })?;
+        }
 
         let (outcome, changes) = self.wire.apply(delta)?;
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
@@ -227,6 +239,8 @@ impl InstalledRetainedExecutionMirror {
         }
         self.resources.retire(&retirements);
         self.wire
+            .remove_installed_composed_sources(retirements.composed_sources.iter());
+        self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
@@ -243,6 +257,41 @@ impl InstalledRetainedExecutionMirror {
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let additions = self.resources.prepare_additions_with_render(bundle)?;
+        let composed_sources = additions.composed_source_remap();
+        let referenced_sources = delta
+            .retained
+            .objects
+            .iter()
+            .filter_map(|row| {
+                if let TransportObjectContent::Composed { source } = row.content {
+                    Some(source)
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::HashSet<_>>();
+        // Reusing an installed immutable key is valid for parameter rows. A new
+        // resource must belong to this accepted publication and a proposed row;
+        // retired keys cannot be rebound or unused plans accumulated as preload.
+        for key in composed_sources.keys() {
+            if key.session != delta.retained.session
+                || key.version != delta.retained.sequence
+                || !referenced_sources.contains(key)
+            {
+                return Err(RetainedResourceTransportError::InvalidComposedSource {
+                    handle: *key,
+                    reason: "new plan must bind a row in its originating publication".into(),
+                }
+                .into());
+            }
+        }
+        // Validate the changed rows against the existing plus staged immutable
+        // geometry closure before publishing any resource or worker state.
+        validate_hatch_geometry(&delta.retained, |handle| {
+            additions
+                .geometry_for_transport(handle)
+                .or_else(|| self.resources.geometry_for_transport(handle))
+        })?;
         self.validate_render_geometry_replacements(
             &delta.retained,
             additions.render_geometry_updates(),
@@ -255,6 +304,8 @@ impl InstalledRetainedExecutionMirror {
         let geometry_handles = additions.geometry_handle_remap();
         self.wire
             .extend_installed_geometry_handles(&geometry_handles);
+        self.wire
+            .extend_installed_composed_sources(&composed_sources);
 
         let render_rollback = match (
             additions.render_geometry_session(),
@@ -267,6 +318,8 @@ impl InstalledRetainedExecutionMirror {
                 {
                     Ok(rollback) => Some(rollback),
                     Err(error) => {
+                        self.wire
+                            .remove_installed_composed_sources(composed_sources.keys());
                         self.wire
                             .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
@@ -284,6 +337,8 @@ impl InstalledRetainedExecutionMirror {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
@@ -297,6 +352,8 @@ impl InstalledRetainedExecutionMirror {
         let prepared_transient = match self.prepare_transient_presentations(&delta) {
             Ok(prepared) => prepared,
             Err(error) => {
+                self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
                 self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
@@ -314,6 +371,8 @@ impl InstalledRetainedExecutionMirror {
             Ok(applied) => applied,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
@@ -325,6 +384,8 @@ impl InstalledRetainedExecutionMirror {
             }
         };
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            self.wire
+                .remove_installed_composed_sources(composed_sources.keys());
             self.wire
                 .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
@@ -338,6 +399,8 @@ impl InstalledRetainedExecutionMirror {
 
         self.resources.commit_additions_with_render(additions);
         self.resources.retire(&retirements);
+        self.wire
+            .remove_installed_composed_sources(retirements.composed_sources.iter());
         self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
@@ -356,6 +419,31 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedFamilyExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         let staged = self.resource_roots.stage(&delta.retained);
+        let released = self.resource_roots.retirements(&staged);
+        let retired = delta
+            .resource_retirements
+            .composed_sources
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        for source in released.composed_sources {
+            if !retired.contains(&source) {
+                return Err(
+                    RetainedResourceTransportError::MissingComposedSourceRetirement(source).into(),
+                );
+            }
+        }
+        for source in &delta.resource_retirements.composed_sources {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Composed(*source))
+                > 0
+            {
+                return Err(
+                    RetainedResourceTransportError::RetiredLiveComposedSource(*source).into(),
+                );
+            }
+        }
         for image in &delta.resource_retirements.images {
             if self
                 .resource_roots
@@ -549,6 +637,29 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let TransportObjectContent::Composed { source } = object.content {
+                if self.resources.composed_source(source).is_none() {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownComposedSource(source).into(),
+                    );
+                }
+            }
+            if let Some(image) = object
+                .fill_paint
+                .as_deref()
+                .and_then(noon_core::SemanticPaint::as_image)
+            {
+                let handle = image.resource().into();
+                if self
+                    .resources
+                    .resolve_image_handle(handle, image.sampling().into())
+                    .is_none()
+                {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownImageResource(handle).into(),
+                    );
+                }
+            }
             if let TransportObjectContent::Image { image, sampling } = object.content {
                 if self
                     .resources
@@ -584,6 +695,43 @@ impl InstalledRetainedExecutionMirror {
         }
         Ok(())
     }
+}
+
+fn validate_hatch_geometry<'a>(
+    delta: &RetainedExecutionDeltaEnvelope,
+    mut lookup: impl FnMut(
+        crate::TransportGeometryResourceHandle,
+    ) -> Option<&'a noon_core::GeometryResource>,
+) -> Result<(), InstalledExecutionError> {
+    for object in &delta.objects {
+        let Some(hatch) = object
+            .fill_paint
+            .as_deref()
+            .and_then(noon_core::SemanticPaint::as_hatch)
+        else {
+            continue;
+        };
+        if let TransportObjectContent::Geometry {
+            resource: Some(handle),
+            ..
+        } = object.content
+        {
+            let resource = lookup(handle).ok_or(
+                RetainedExecutionTransportError::UnknownGeometryResource(handle),
+            )?;
+            let noon_core::GeometryResource::VectorPath(path) = resource else {
+                return Err(
+                    RetainedExecutionTransportError::InvalidObjectPatch(object.slot).into(),
+                );
+            };
+            let bounds = path.conservative_bounds().ok_or(
+                RetainedExecutionTransportError::InvalidObjectPatch(object.slot),
+            )?;
+            noon_compile::validate_hatch_bounds(hatch, bounds)
+                .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -642,7 +790,7 @@ impl From<serde_json::Error> for InstalledExecutionError {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, GeometryRef, MeshResource, ObjectId,
+        Color, FamilyAnimationMode, FamilyAnimationState, GeometryRef, MeshResource, ObjectId,
         RateFunction, Transform2D, Vec2, VectorPath,
     };
 
@@ -660,7 +808,8 @@ mod tests {
             .text(noon::Text::new("World").with_font_size(72.0))
             .unwrap();
         scene.add_many(&[(&hello).into(), (&world).into()]).unwrap();
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap()
     }
 
     fn geometry_engine() -> SemanticExecutionPlayer {
@@ -670,7 +819,139 @@ mod tests {
         scene
             .add_many(&[(&first).into(), (&second).into()])
             .unwrap();
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap()
+    }
+
+    #[test]
+    fn hatch_external_bounds_reject_before_worker_publication_and_recover_same_sequence() {
+        let mut scene = noon::Scene::new();
+        let mut source = scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-2.0, -1.0))
+                    .line_to(Vec2::new(2.0, -1.0))
+                    .line_to(Vec2::new(2.0, 1.0))
+                    .line_to(Vec2::new(-2.0, 1.0))
+                    .close(),
+                Default::default(),
+            )
+            .unwrap();
+        source
+            .set_fill_hatch(
+                noon::HatchPaint::new(Color::RED, Color::BLUE, noon::HatchPaintOptions::default())
+                    .unwrap(),
+                Some(0.7),
+            )
+            .unwrap();
+        scene.add(&source).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+                .unwrap();
+        let mut snapshot: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+        // Ordinary lowering may inline its resolved path. Explicitly exercise
+        // the versioned external-geometry form of the worker boundary as well.
+        let mut geometries = noon_core::GeometryResourceArena::new();
+        let path = |extent: f32| {
+            VectorPath::new()
+                .move_to(Vec2::new(-extent, -1.0))
+                .line_to(Vec2::new(extent, -1.0))
+                .line_to(Vec2::new(extent, 1.0))
+                .line_to(Vec2::new(-extent, 1.0))
+                .close()
+        };
+        let handle = geometries.insert_path(path(2.0));
+        let bundle = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [handle],
+            &noon_core::TextResourceArena::new(),
+            &geometries,
+            &noon_core::FontResourceArena::new(),
+            &crate::RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&bundle.encode_binary().unwrap())
+                .unwrap();
+        snapshot.retained.objects[0].content = TransportObjectContent::Geometry {
+            geometry: GeometryRef::External(handle.id),
+            resource: Some(handle.into()),
+        };
+        assert!(matches!(
+            snapshot.retained.objects[0].content,
+            TransportObjectContent::Geometry {
+                resource: Some(_),
+                ..
+            }
+        ));
+        let invalid = std::sync::Arc::new(noon_core::SemanticPaint::Hatch(std::sync::Arc::new(
+            noon::HatchPaint::new(
+                Color::RED,
+                Color::BLUE,
+                noon::HatchPaintOptions {
+                    spacing: 1e-6,
+                    width: 1e-7,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )));
+        let mut rejected = snapshot.clone();
+        rejected.retained.objects[0].fill_paint = Some(invalid.clone());
+        assert!(mirror.apply_family(rejected).is_err());
+        assert!(mirror.frame().is_none());
+        assert_eq!(mirror.wire.applied_sequence(), None);
+        mirror.apply_family(snapshot.clone()).unwrap();
+        let coherent = mirror.frame().unwrap().clone();
+        let mut next = snapshot;
+        next.retained.snapshot = false;
+        next.retained.sequence = 1;
+        let mut rejected = next.clone();
+        rejected.retained.objects[0].fill_paint = Some(invalid);
+        assert!(mirror.apply_family(rejected.clone()).is_err());
+        assert_eq!(mirror.frame(), Some(&coherent));
+        assert_eq!(mirror.wire.applied_sequence(), Some(0));
+        mirror.apply_family(next.clone()).unwrap();
+        assert_eq!(mirror.wire.applied_sequence(), Some(1));
+        // An old publication may reference obsolete geometry. Its hatch
+        // profile must not be revalidated after the sequence was superseded.
+        assert_eq!(
+            mirror.apply(rejected.retained).unwrap().0,
+            RetainedTransportApplyOutcome::DroppedStale
+        );
+        assert_eq!(mirror.wire.applied_sequence(), Some(1));
+        for (extent, accepted) in [(1_000_000.0, false), (1.5, true)] {
+            let handle = geometries.insert_path(path(extent));
+            let additions = RetainedResourceBundle::capture_additions_with_geometries(
+                [],
+                [handle],
+                &noon_core::TextResourceArena::new(),
+                &geometries,
+                &noon_core::FontResourceArena::new(),
+                &crate::RetainedResourceInventory::default(),
+            )
+            .unwrap();
+            let mut candidate = next.clone();
+            candidate.retained.sequence = 2;
+            candidate.retained.objects[0].content = TransportObjectContent::Geometry {
+                geometry: GeometryRef::External(handle.id),
+                resource: Some(handle.into()),
+            };
+            candidate.resource_additions = Some(additions);
+            let before = mirror.frame().unwrap().clone();
+            let geometry_count = mirror.resources.geometry_count();
+            if accepted {
+                mirror.apply_family(candidate).unwrap();
+                assert_eq!(mirror.wire.applied_sequence(), Some(2));
+                assert_eq!(mirror.resources.geometry_count(), geometry_count + 1);
+            } else {
+                assert!(mirror.apply_family(candidate).is_err());
+                assert_eq!(mirror.frame(), Some(&before));
+                assert_eq!(mirror.wire.applied_sequence(), Some(1));
+                assert_eq!(mirror.resources.geometry_count(), geometry_count);
+            }
+        }
     }
 
     #[test]
@@ -720,15 +1001,16 @@ mod tests {
             InstalledRetainedExecutionMirror::from_bundle_bytes(&bundle.encode_binary().unwrap())
                 .unwrap();
         let local_handle = mirror.resources().geometry_handle_remap()[&source_handle];
-        let compiled_glow = noon_compile::CompiledGlow {
+        let compiled_glow = noon_compile::CompiledEffect {
             attachment: noon_core::SemanticNodeId::new(90, 1),
-            definition: noon_core::Glow::new(
-                noon::effects::GlowUpdate::default()
+            definition: (noon_core::Glow::new(
+                noon::effects::EffectUpdate::default()
                     .color(noon::Color::BLUE)
                     .radius(noon::effects::Pixels(8.0))
                     .intensity(1.25),
             )
-            .unwrap(),
+            .unwrap())
+            .into(),
         };
         let context = noon_core::PublicationContext::default();
         let retained = RetainedExecutionDeltaEnvelope {
@@ -742,6 +1024,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![crate::RetainedTransportObjectState {
+                fill_paint: None,
                 draw_enabled: true,
                 slot: crate::TransportSlotId {
                     slot: 0,
@@ -749,7 +1032,8 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(90),
-                glow: Some(crate::TransportGlowState::from(&compiled_glow)),
+                effects: vec![crate::TransportEffectState::from(&compiled_glow)],
+                visibility: None,
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -801,7 +1085,16 @@ mod tests {
         );
         assert_eq!(resolved_frame.reveals[0], 0.35);
         assert_eq!(
-            resolved.glow.as_deref().unwrap().definition.intensity(),
+            resolved
+                .effects
+                .as_deref()
+                .unwrap()
+                .get(compiled_glow.attachment)
+                .unwrap()
+                .definition
+                .as_glow()
+                .unwrap()
+                .intensity(),
             1.25
         );
     }
@@ -809,7 +1102,7 @@ mod tests {
     #[test]
     fn actual_surface_player_binds_mesh_before_worker_install_and_keeps_motion_local() {
         let session = noon::example_scenes::spatial_surface::session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 81).unwrap();
+        let mut player = SemanticExecutionPlayer::from_scene_execution(session, 2.0, 81).unwrap();
         let mut mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(&player.resource_bundle_bytes())
                 .unwrap();
@@ -949,6 +1242,7 @@ mod tests {
                 camera: Camera2DState::default(),
                 inset_2d_views: Vec::new(),
                 objects: vec![crate::RetainedTransportObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot: 0,
@@ -956,7 +1250,8 @@ mod tests {
                     },
                     order: 0,
                     object: ObjectId::new(90),
-                    glow: None,
+                    effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -995,6 +1290,7 @@ mod tests {
                                      camera_projection: Option<crate::TransportProjection3D>,
                                      point_light: bool| {
                 crate::RetainedTransportObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
                     slot: crate::TransportSlotId {
                         slot,
@@ -1002,7 +1298,8 @@ mod tests {
                     },
                     order: slot,
                     object: ObjectId::new(object),
-                    glow: None,
+                    effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1131,6 +1428,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,
@@ -1138,7 +1436,8 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        glow: None,
+                        effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1214,6 +1513,7 @@ mod tests {
                     camera: Camera2DState::default(),
                     inset_2d_views: Vec::new(),
                     objects: vec![crate::RetainedTransportObjectState {
+                        fill_paint: None,
                         draw_enabled: true,
                         slot: crate::TransportSlotId {
                             slot: 0,
@@ -1221,7 +1521,8 @@ mod tests {
                         },
                         order: 0,
                         object: ObjectId::new(90),
-                        glow: None,
+                        effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),
@@ -1334,7 +1635,9 @@ mod tests {
             .collect::<Vec<_>>();
         let wire_text = match wire.objects[0].content {
             TransportObjectContent::Text { text } => text,
-            TransportObjectContent::Image { .. } | TransportObjectContent::Geometry { .. } => {
+            TransportObjectContent::Image { .. }
+            | TransportObjectContent::Geometry { .. }
+            | TransportObjectContent::Composed { .. } => {
                 panic!("expected text")
             }
         };
@@ -1767,5 +2070,7 @@ mod tests {
 #[cfg(test)]
 mod morph_tests;
 
+#[cfg(test)]
+mod composed_tests;
 #[cfg(test)]
 mod image_tests;

@@ -1,7 +1,7 @@
 //! Persistent glow through public Scene/LiveSession; paired with the Python example.
 //! Runs without a Python/browser host. The native raster test qualifies its shared renderer path.
 use noon::{
-    effects::{EffectDefinition, GlowUpdate, Pixels},
+    effects::{EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, Color, MathTypst, RateFunction, Scene,
     SemanticAnimationCompositionKind, SemanticPaint, SemanticStyle, TransformToRequest, Vec2,
     VectorPath,
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dot.disable_stroke()?;
     dot.set_fill(1.0, 1.0, 1.0, 1.0)?;
     dot.set_glow(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::RED)
             .radius(Pixels(3.25))
             .intensity(0.4000000000000123),
@@ -39,13 +39,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .math_typst(MathTypst::new("integral_0^1 x^2 dif x = frac(1, 3)").with_font_size(34.0))?;
     formula.shift(0.0, -0.2)?;
     path.set_glow(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::BLUE)
             .radius(Pixels(7.0))
             .intensity(1.2),
     )?;
     formula.set_glow(
-        GlowUpdate::default()
+        EffectUpdate::default()
             .color(Color::RED)
             .radius(Pixels(6.0))
             .intensity(0.9),
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         live.shift(&target, 2.0, 0.0)?;
         live.set_glow(
             &target,
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .color(Color::BLUE)
                 .radius(Pixels(6.5))
                 .intensity(1.4),
@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         live.advance_segment_to(segment, 1.0)?;
         live.complete_segment(segment)?;
-        let EffectDefinition::Glow(complete) = original.authored_definition()?;
+        let complete = (original.authored_definition()?).as_glow().unwrap();
         assert_eq!(complete.intensity(), 1.4);
         assert_eq!(complete.radius(), Pixels(6.5).into());
         assert_eq!(live.effective_layout(&dot)?.center.0, 2.0);
@@ -79,12 +79,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let path_target = live.target_editor(&path)?;
         live.set_glow(
             &path_target,
-            GlowUpdate::default().intensity(1.8).radius(Pixels(10.0)),
+            EffectUpdate::default().intensity(1.8).radius(Pixels(10.0)),
         )?;
         let formula_target = live.target_editor(&formula)?;
         live.set_glow(
             &formula_target,
-            GlowUpdate::default().intensity(1.4).color(Color::BLUE),
+            EffectUpdate::default().intensity(1.4).color(Color::BLUE),
         )?;
         let formula_glow = formula.get_effect("glow")?;
         let reveal = AnimationOptions::new()
@@ -124,22 +124,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .frame()
         .objects
         .iter()
-        .filter_map(|object| object.glow.as_deref())
-        .find(|glow| glow.attachment == path_glow.node_id())
+        .find_map(|object| {
+            object
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(path_glow.node_id()))
+        })
         .expect("effective path glow at the midpoint");
-    assert!((midpoint.definition.intensity() - 1.5).abs() < 1e-9);
+    assert!((midpoint.definition.as_glow().unwrap().intensity() - 1.5).abs() < 1e-9);
     let mut live = scene.live(&mut session);
     live.advance_segment_to(composition, 2.5)?;
     live.complete_segment(composition)?;
-    let EffectDefinition::Glow(final_glow) = path_glow.authored_definition()?;
+    let final_glow = (path_glow.authored_definition()?).as_glow().unwrap();
     assert_eq!(final_glow.intensity(), 1.8);
     assert_eq!(final_glow.radius(), Pixels(10.0).into());
-    let EffectDefinition::Glow(final_formula_glow) = formula_glow.authored_definition()?;
+    let final_formula_glow = (formula_glow.authored_definition()?).as_glow().unwrap();
     assert_eq!(final_formula_glow.intensity(), 1.4);
     assert_eq!(final_formula_glow.radius(), Pixels(6.0).into());
 
     let neutral = live.target_editor(&dot)?;
-    live.set_glow(&neutral, GlowUpdate::default().intensity(0.0))?;
+    live.set_glow(&neutral, EffectUpdate::default().intensity(0.0))?;
     let fade = live.declare_and_activate_transform_to(
         &dot,
         &neutral,
@@ -149,7 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     live.advance_segment_to(fade, 3.0)?;
     live.complete_segment(fade)?;
-    let EffectDefinition::Glow(complete) = original.authored_definition()?;
+    let complete = (original.authored_definition()?).as_glow().unwrap();
     assert_eq!(complete.intensity(), 0.0);
     live.remove_glow(&dot)?;
     assert!(original.authored_definition().is_err());

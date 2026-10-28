@@ -17,6 +17,7 @@ use super::{
 /// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
+    InvalidComposedSource(crate::CompiledComposedSourceError),
     TooManyObjects(usize),
     TooManyGraphDependencies(usize),
     InvalidPresentation {
@@ -49,6 +50,7 @@ pub enum SemanticCompiledSceneError {
 impl std::fmt::Display for SemanticCompiledSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidPresentation { node } => write!(
                 formatter,
                 "semantic object {}:{} contains a non-finite z-index",
@@ -162,10 +164,17 @@ fn materialize_semantic_projection(
         }
     }
     ordered.sort_by(|left, right| {
-        left.presentation
-            .z_index
-            .partial_cmp(&right.presentation.z_index)
-            .unwrap()
+        matches!(left.content, super::SemanticExecutionContent::Composed(_))
+            .cmp(&matches!(
+                right.content,
+                super::SemanticExecutionContent::Composed(_)
+            ))
+            .then_with(|| {
+                left.presentation
+                    .z_index
+                    .partial_cmp(&right.presentation.z_index)
+                    .unwrap()
+            })
     });
 
     let count = ordered.len();
@@ -205,8 +214,14 @@ fn materialize_semantic_projection(
 
         let object_index =
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
-        let (content, text_bounds) =
-            lower_content(object.semantic_id, object.content, store, &mut resources)?;
+        let (content, text_bounds) = match &object.content {
+            super::SemanticExecutionContent::Object(content) => {
+                lower_content(object.semantic_id, *content, store, &mut resources)?
+            }
+            super::SemanticExecutionContent::Composed(source) => {
+                (ObjectContentRef::Composed(source.clone()), None)
+            }
+        };
         if (object.click_indicate.is_some() && !object.signal_bindings.is_empty())
             || crate::validate_click_indicate_binding(
                 object.execution_id,
@@ -219,10 +234,25 @@ fn materialize_semantic_projection(
                 node: object.semantic_id,
             });
         }
+        if let Some(paint) = object.fill_paint.as_deref() {
+            if let Some(image) = paint.as_image() {
+                let store = store.ok_or(SemanticCompiledSceneError::Resource {
+                    node: object.semantic_id,
+                    error: CompiledResourceError::MissingImage(image.resource()),
+                })?;
+                resources
+                    .capture_paint_from_arena(store.raster_image_resources(), paint)
+                    .map_err(|error| SemanticCompiledSceneError::Resource {
+                        node: object.semantic_id,
+                        error,
+                    })?;
+            }
+        }
         objects.push(CompiledObject {
+            fill_paint: object.fill_paint.clone(),
             draw_enabled: object.presentation.draw_enabled,
+            effects: object.effects.clone(),
             click_indicate: object.click_indicate.clone(),
-            glow: object.glow.clone(),
             id: object.execution_id,
             content,
             text_bounds,
@@ -404,6 +434,7 @@ fn materialize_semantic_projection(
         object_indices,
         retired_object_indices: BTreeMap::new(),
         inset_2d_views: projection.inset_2d_views.clone(),
+        composed_dependencies: Default::default(),
         track_locators: BTreeMap::new(),
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),
@@ -425,6 +456,9 @@ fn materialize_semantic_projection(
         resources,
     };
     compiled.rebuild_spatial_anchor_groups();
+    compiled
+        .rebuild_composed_dependencies()
+        .map_err(SemanticCompiledSceneError::InvalidComposedSource)?;
     if let Some(store) = store {
         let anchors = compiled.spatial_anchor_families();
         for anchor in anchors {

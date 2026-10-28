@@ -157,10 +157,10 @@ fn authored_boundary_curves_survive_subsequent_selection() {
 fn paired_path_selection_runs_on_shared_runtime() {
     let mut session = noon::example_scenes::path_selection::session().unwrap();
     session.seek(0.).unwrap();
-    let initial = session.frame().objects.clone();
+    let initial = session.session().frame().objects.clone();
     assert_eq!(initial.len(), 2);
     session.seek(0.2).unwrap();
-    assert_eq!(session.frame().objects, initial);
+    assert_eq!(session.session().frame().objects, initial);
 }
 
 #[test]

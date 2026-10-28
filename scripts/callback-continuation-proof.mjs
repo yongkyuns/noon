@@ -111,7 +111,8 @@ export async function finishCallbackProof(endpoint) {
     if (authored.duration !== endpoint ||
         authored.semanticExecution.contextId !== proof.registration.semanticExecution.contextId ||
         authored.semanticExecution.continuationGeneration !== proof.registration.generation ||
-        !Number.isSafeInteger(authored.semanticExecution.callbackSessionId)) {
+        !Number.isSafeInteger(authored.semanticExecution.callbackSessionId) ||
+        authored.semanticExecution.callbackSessionId !== proof.registration.semanticExecution.callbackSessionId) {
       throw new Error("callback completion changed duration, context, generation, or callback identity");
     }
     const metrics = (await proof.wait(proof.execution.metrics(), "final renderer observation")).metrics;

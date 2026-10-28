@@ -39,7 +39,8 @@ fn effective(x: f32) -> EffectiveAnimationProperties {
 
 fn effective_with_appearance(x: f32, appearance: f32) -> EffectiveAnimationProperties {
     EffectiveAnimationProperties {
-        glow: None,
+        fill_paint: None,
+        effects: None,
         world_transform: None,
         camera_profile: None,
         z_index: 0.0,

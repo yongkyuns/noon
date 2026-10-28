@@ -1,7 +1,7 @@
 //! Paired Circle.surround sizing on authored and live native/direct-WASM paths.
-use crate::{ExecutionSession, LayoutAnchor, Scene};
+use crate::{LayoutAnchor, Scene};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut left_target = scene.rectangle(2.0, 1.0)?;
@@ -53,7 +53,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let wait = live.wait_segment(0.1)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

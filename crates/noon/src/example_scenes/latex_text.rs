@@ -1,8 +1,8 @@
 //! The same real-LaTeX scene for native, direct WASM, and Python authoring.
-use crate::{ExecutionSession, LatexBackend, MathTex, Scene, Tex, Vec2, BLUE, YELLOW};
+use crate::{LatexBackend, MathTex, Scene, Tex, Vec2, BLUE, YELLOW};
 
-pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
-    scene(backend).and_then(|scene| scene.execution_session().map_err(|error| error.to_string()))
+pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution, String> {
+    scene(backend).and_then(|scene| scene.into_execution().map_err(|error| error.to_string()))
 }
 
 fn scene(backend: &mut impl LatexBackend) -> Result<Scene, String> {

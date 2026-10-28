@@ -432,6 +432,7 @@ pub enum PlaybackControl {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticClickAction {
     Indicate(SemanticClickIndicate),
+    GlowPulse(SemanticClickGlowPulse),
     Playback(PlaybackControl),
 }
 
@@ -439,8 +440,64 @@ impl SemanticClickAction {
     pub fn is_valid(self) -> bool {
         match self {
             Self::Indicate(indication) => indication.is_valid(),
+            Self::GlowPulse(pulse) => pulse.is_valid(),
             Self::Playback(_) => true,
         }
+    }
+}
+
+/// Typed authored `click -> GlowPulse` declaration for one analytic object.
+///
+/// Registration stores only the requested peak and timing. Activation captures
+/// the current glow through the shared execution session; the declaration owns
+/// no attachment, captured baseline, animation clock, or runtime channel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticClickGlowPulse {
+    intensity: f64,
+    run_time: f64,
+    rate_func: crate::RateFunction,
+    reverse_rate_function: bool,
+}
+
+impl SemanticClickGlowPulse {
+    pub const fn new(
+        intensity: f64,
+        run_time: f64,
+        rate_func: crate::RateFunction,
+        reverse_rate_function: bool,
+    ) -> Self {
+        Self {
+            intensity,
+            run_time,
+            rate_func,
+            reverse_rate_function,
+        }
+    }
+
+    pub const fn intensity(self) -> f64 {
+        self.intensity
+    }
+
+    pub const fn run_time(self) -> f64 {
+        self.run_time
+    }
+
+    pub const fn rate_func(self) -> crate::RateFunction {
+        self.rate_func
+    }
+
+    pub const fn reverse_rate_function(self) -> bool {
+        self.reverse_rate_function
+    }
+
+    pub fn is_valid(self) -> bool {
+        crate::EffectUpdate::default()
+            .intensity(self.intensity)
+            .prepare(crate::Glow::default())
+            .is_ok()
+            && self.run_time.is_finite()
+            && self.run_time > 0.0
+            && self.rate_func.preserves_unit_interval()
     }
 }
 
@@ -675,7 +732,13 @@ impl SemanticObjectState {
             }
             match paint {
                 None => true,
-                Some(crate::SemanticPaint::Resource(_)) => false,
+                Some(
+                    crate::SemanticPaint::LinearGradient(_)
+                    | crate::SemanticPaint::RadialGradient(_)
+                    | crate::SemanticPaint::Noise(_)
+                    | crate::SemanticPaint::Hatch(_)
+                    | crate::SemanticPaint::Image(_),
+                ) => false,
                 Some(crate::SemanticPaint::Solid(color)) => {
                     let alpha = f64::from(color.alpha) * opacity;
                     [color.red, color.green, color.blue, color.alpha]
@@ -1041,37 +1104,99 @@ impl std::fmt::Display for SemanticCameraDeclarationError {
 }
 impl std::error::Error for SemanticCameraDeclarationError {}
 
+/// Immutable derived inputs of one composed source. Semantic family membership
+/// remains in the store; these are existing execution identities in painter order.
+/// The compiler validates isolation/containment before publishing this plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposedSource {
+    members: Box<[crate::ObjectId]>,
+    parent_scope: Option<crate::ObjectId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposedSourceError {
+    Empty,
+    Duplicate(crate::ObjectId),
+    ParentIsMember(crate::ObjectId),
+}
+
+impl std::fmt::Display for ComposedSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid composed source: {self:?}")
+    }
+}
+impl std::error::Error for ComposedSourceError {}
+
+impl ComposedSource {
+    pub fn new(
+        members: impl IntoIterator<Item = crate::ObjectId>,
+        parent_scope: Option<crate::ObjectId>,
+    ) -> Result<Self, ComposedSourceError> {
+        let members = members.into_iter().collect::<Box<[_]>>();
+        if members.is_empty() {
+            return Err(ComposedSourceError::Empty);
+        }
+        let mut seen = std::collections::HashSet::with_capacity(members.len());
+        for &member in &members {
+            if !seen.insert(member) {
+                return Err(ComposedSourceError::Duplicate(member));
+            }
+        }
+        if let Some(parent) = parent_scope.filter(|parent| seen.contains(parent)) {
+            return Err(ComposedSourceError::ParentIsMember(parent));
+        }
+        Ok(Self {
+            members,
+            parent_scope,
+        })
+    }
+    pub fn members(&self) -> &[crate::ObjectId] {
+        &self.members
+    }
+    pub const fn parent_scope(&self) -> Option<crate::ObjectId> {
+        self.parent_scope
+    }
+}
+
 /// Renderer-independent lowered content referenced by one compiled object slot.
-///
-/// The execution plan and runtime carry this same payload so geometry and text
-/// share identity, ordering, timeline evaluation, and incremental invalidation.
-/// Heavy text stays behind its immutable resource handle.
+/// Execution and runtime share this payload and immutable resource references.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectContentRef {
     Geometry(GeometryRef),
     Text(TextResourceHandle),
     Image(crate::RasterImageContentRef),
+    /// Non-drawable execution target for a composed effect scope. This is a
+    /// derived capture plan, never authored geometry or a second scene graph.
+    Composed(Arc<ComposedSource>),
 }
 
 impl ObjectContentRef {
     pub const fn image(&self) -> Option<crate::RasterImageContentRef> {
         match self {
             Self::Image(image) => Some(*image),
-            Self::Geometry(_) | Self::Text(_) => None,
+            Self::Geometry(_) | Self::Text(_) | Self::Composed(_) => None,
         }
     }
 
     pub fn geometry(&self) -> Option<&GeometryRef> {
         match self {
             Self::Geometry(geometry) => Some(geometry),
-            Self::Text(_) | Self::Image(_) => None,
+            Self::Text(_) | Self::Image(_) | Self::Composed(_) => None,
         }
     }
 
     pub const fn text(&self) -> Option<TextResourceHandle> {
         match self {
-            Self::Geometry(_) | Self::Image(_) => None,
+            Self::Geometry(_) | Self::Image(_) | Self::Composed(_) => None,
             Self::Text(handle) => Some(*handle),
+        }
+    }
+
+    pub fn composed_source(&self) -> Option<&ComposedSource> {
+        if let Self::Composed(source) = self {
+            Some(source)
+        } else {
+            None
         }
     }
 }
@@ -1098,6 +1223,39 @@ impl From<TextResourceHandle> for ObjectContentRef {
 mod tests {
     use super::*;
     use crate::{Color, GeometryResourceArena, SemanticVec3, TextResourceId, Vec2, VectorPath};
+
+    #[test]
+    fn composed_execution_content_has_no_fabricated_drawable_or_duplicate_input() {
+        use crate::ObjectId;
+        let a = ObjectId::new(7);
+        let b = ObjectId::new((1_u64 << 32) | 7);
+        let parent = ObjectId::new(12);
+        assert_eq!(
+            ComposedSource::new([], None),
+            Err(ComposedSourceError::Empty)
+        );
+        assert_eq!(
+            ComposedSource::new([a, a], None),
+            Err(ComposedSourceError::Duplicate(a))
+        );
+        assert_eq!(
+            ComposedSource::new([a, b], Some(a)),
+            Err(ComposedSourceError::ParentIsMember(a))
+        );
+        let content = ObjectContentRef::Composed(Arc::new(
+            ComposedSource::new([a, b], Some(parent)).unwrap(),
+        ));
+        assert!(content.geometry().is_none());
+        assert!(content.text().is_none());
+        assert!(content.image().is_none());
+        let source = content.composed_source().unwrap();
+        assert_eq!(source.members(), &[a, b]);
+        assert_eq!(source.parent_scope(), Some(parent));
+        let members =
+            crate::RetainedAnimationMembers::resolve(&content, &crate::TextResourceArena::new())
+                .unwrap();
+        assert_eq!(members.member_count(), 0);
+    }
 
     #[test]
     fn numeric_metadata_is_an_optional_shared_pointer() {

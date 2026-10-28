@@ -1,8 +1,8 @@
 //! Analytic workloads for native/direct-WASM profiling, paired with `analytic_profile.py`.
 
 use crate::{
-    AnimationOptions, ExecutionSession, MobjectTarget, RateFunction, Scene,
-    SemanticAnimationCompositionKind, SemanticVec3,
+    AnimationOptions, MobjectTarget, RateFunction, Scene, SemanticAnimationCompositionKind,
+    SemanticVec3,
 };
 use noon_core::{
     CompositionTimeMap, SemanticAnimationIntent, SemanticMutationTransaction,
@@ -36,7 +36,7 @@ pub fn session(
     layout: Layout,
     aspect: f64,
     duration: f64,
-) -> Result<ExecutionSession, String> {
+) -> Result<crate::SceneExecution, String> {
     if !(1..=100_000).contains(&count) {
         return Err("analytic object count must be between 1 and 100000".into());
     }
@@ -134,7 +134,7 @@ pub fn session(
         },
         AnimationOptions::new(),
     )?;
-    scene.execution_session_with_animation_root(&root)
+    scene.into_execution_with_animation_root(&root)
 }
 
 #[cfg(test)]
@@ -146,15 +146,18 @@ mod tests {
         for layout in [Layout::Fit, Layout::Fixed, Layout::Overdraw] {
             let mut forward = session(100, layout, 16.0 / 9.0, 60.0).unwrap();
             let mut direct_seek = session(100, layout, 16.0 / 9.0, 60.0).unwrap();
-            forward.take_frame_changes();
-            let before = forward.frame().objects.clone();
+            forward.session_mut().take_frame_changes();
+            let before = forward.session().frame().objects.clone();
             assert_eq!(before.len(), 101, "100 circles and their semantic camera");
-            forward.advance_to(1.0).unwrap();
-            let changes = forward.take_frame_changes();
+            forward.session_mut().advance_to(1.0).unwrap();
+            let changes = forward.session_mut().take_frame_changes();
             assert_eq!(changes.object_indices().len(), 1);
             let driver = changes.object_indices()[0];
             assert!(
-                (forward.frame().objects[driver].transform.translation.x
+                (forward.session().frame().objects[driver]
+                    .transform
+                    .translation
+                    .x
                     - before[driver].transform.translation.x
                     - 8.0 / 60.0)
                     .abs()
@@ -162,22 +165,27 @@ mod tests {
             );
             direct_seek.seek(1.0).unwrap();
             assert_eq!(
-                forward.frame().objects.len(),
-                direct_seek.frame().objects.len()
+                forward.session().frame().objects.len(),
+                direct_seek.session().frame().objects.len()
             );
             for (left, right) in forward
+                .session()
                 .frame()
                 .objects
                 .iter()
-                .zip(&direct_seek.frame().objects)
+                .zip(&direct_seek.session().frame().objects)
             {
                 assert_eq!(left.transform, right.transform);
                 assert_eq!(left.style, right.style);
             }
-            forward.advance_to(1.0).unwrap();
-            assert!(forward.take_frame_changes().object_indices().is_empty());
+            forward.session_mut().advance_to(1.0).unwrap();
+            assert!(forward
+                .session_mut()
+                .take_frame_changes()
+                .object_indices()
+                .is_empty());
             let expected_height = if layout == Layout::Fit { 8.0 } else { 6.0 };
-            assert!((forward.camera().unwrap().height - expected_height).abs() < 1e-5);
+            assert!((forward.session().camera().unwrap().height - expected_height).abs() < 1e-5);
         }
     }
 

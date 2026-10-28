@@ -302,6 +302,9 @@ fn semantic_camera_object(
 ) -> Result<Option<(SemanticNodeId, ObjectId)>, SemanticExecutionLoweringError> {
     let mut camera = None;
     for object in projection.objects() {
+        if matches!(object.content, super::SemanticExecutionContent::Composed(_)) {
+            continue;
+        }
         let state = store
             .node(object.semantic_id)
             .and_then(|node| node.semantic_object_state())

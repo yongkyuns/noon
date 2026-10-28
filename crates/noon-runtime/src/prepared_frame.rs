@@ -7,9 +7,9 @@ use noon_core::{ReactiveValue, SignalId};
 use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
-    effective_object_conservative_bounds_with_resources, upper_bound_start, EffectiveBoundsBasis,
-    EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity,
-    SceneInstance, TrackGroup, PROPERTY_ORDER,
+    effective_object_conservative_bounds_with_resources, evaluation_property_channels,
+    upper_bound_start, EffectiveBoundsBasis, EffectiveObjectProperties, EffectivePropertyWrite,
+    FrameRowState, FrameState, RuntimeIdentity, SceneInstance, TrackGroup, PROPERTY_ORDER,
 };
 use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
 
@@ -93,6 +93,11 @@ impl PreparedEffectivePropertyBatch {
     pub fn is_empty(&self) -> bool {
         self.writes.is_empty()
     }
+
+    /// Sparse targets of this already-validated batch, in retained write order.
+    pub fn objects(&self) -> impl Iterator<Item = noon_core::ObjectId> + '_ {
+        self.writes.iter().map(|(_, write)| write.object())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,6 +146,25 @@ impl std::fmt::Display for PreparedFrameCommitError {
 impl std::error::Error for PreparedFrameCommitError {}
 
 impl SceneInstance {
+    /// Append component writes to an existing current-publication carry.
+    /// Existing write order is preserved, and all final writes use the ordinary
+    /// effective-property validator before any publication can commit.
+    pub fn extend_effective_property_batch(
+        &self,
+        existing: Option<PreparedEffectivePropertyBatch>,
+        additional: &[EffectivePropertyWrite],
+    ) -> Result<PreparedEffectivePropertyBatch, crate::AuthoredPublicationError> {
+        if let Some(existing) = existing.as_ref() {
+            self.preflight_effective_carry_forward(existing, self.publication_context())?;
+        }
+        let mut writes = existing.map_or_else(Vec::new, |batch| {
+            batch.writes.into_iter().map(|(_, write)| write).collect()
+        });
+        writes.extend_from_slice(additional);
+        self.prepare_effective_property_batch(&writes)
+            .map_err(crate::AuthoredPublicationError::Compile)
+    }
+
     /// Publish already-validated transient effective writes without advancing the
     /// authored timeline or touching replay retention.  This is deliberately
     /// narrower than `commit_prepared_frame`: interaction drivers use it while a
@@ -330,8 +354,9 @@ impl SceneInstance {
             prior_driver_rows += 1;
             let mut row = FrameRowState::from_frame(&self.frame, object_index);
             let base_content = &self.frame.objects[object_index].content;
-            for property in PROPERTY_ORDER {
-                let channel = CompiledChannelKey::new(object_index as u32, property);
+            for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
+                evaluation_property_channels(&self.compiled, object_index as u32, property)
+            }) {
                 let tracks = self.compiled.channel_tracks(channel);
                 let Some(group) = self.groups.get(&channel) else {
                     continue;
@@ -505,7 +530,16 @@ impl SceneInstance {
             writes
                 .iter()
                 .copied()
-                .map(EffectivePropertyWrite::as_execution_patch),
+                .map(|write| {
+                    let glow = if let EffectivePropertyWrite::EffectIntensity { .. } = write {
+                        self.effective_object(write.object())
+                            .and_then(|row| row.effects.clone())
+                    } else {
+                        None
+                    };
+                    write.as_execution_patch(glow)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         );
         self.compiled
             .preflight_execution_transaction(&transaction)?;
@@ -517,7 +551,13 @@ impl SceneInstance {
             // order, coalescing only later writes of the exact same shape.
             // Even superseded writes have already passed validation above.
             let property_tag = std::mem::discriminant(&write);
-            if !seen.insert((write.object(), property_tag)) {
+            let attachment =
+                if let EffectivePropertyWrite::EffectIntensity { attachment, .. } = write {
+                    Some(attachment)
+                } else {
+                    None
+                };
+            if !seen.insert((write.object(), property_tag, attachment)) {
                 continue;
             }
             let object_index = self
@@ -1121,6 +1161,7 @@ mod tests {
         let object = instance.frame().objects[0].id;
         instance
             .apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object,
                 style: Style {
                     opacity: 0.5,

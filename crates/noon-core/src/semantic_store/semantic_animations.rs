@@ -35,6 +35,9 @@ pub enum SemanticObjectTrackProperty {
 /// execution snapshots and prepared morph payloads do not enter the semantic store.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
+    Paint {
+        transition: std::sync::Arc<crate::PaintTransition>,
+    },
     Bool {
         from: bool,
         to: bool,
@@ -69,6 +72,7 @@ pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SemanticObjectTrackValueKind {
+    Paint,
     Bool,
     Scalar,
     Vec3,
@@ -103,8 +107,20 @@ impl SemanticObjectTrackProperty {
 }
 
 impl<R> SemanticObjectTrackValues<R> {
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        let transition = match self {
+            Self::Paint { transition } => Some(transition),
+            _ => None,
+        };
+        transition
+            .into_iter()
+            .flat_map(|transition| transition.image_resources())
+    }
     const fn value_kind(&self) -> SemanticObjectTrackValueKind {
         match self {
+            Self::Paint { .. } => SemanticObjectTrackValueKind::Paint,
             Self::Bool { .. } => SemanticObjectTrackValueKind::Bool,
             Self::Scalar { .. } => SemanticObjectTrackValueKind::Scalar,
             Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
@@ -320,6 +336,14 @@ pub enum SemanticAnimationIntent {
         /// Ordinary Transform leaves source priority unchanged.
         complete_priority: bool,
     },
+    /// Drive only existing effect attachments toward an authored target column.
+    /// This addresses either an object or an unrendered composed family owner;
+    /// geometry, membership and affine state are outside this operation.
+    EffectTargetTo {
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        method_target: bool,
+    },
     /// Animate an object's effective world pose to a typed spatial endpoint.
     /// The source pose is captured from the current effective frame at activation.
     WorldTransformTo {
@@ -349,6 +373,11 @@ pub enum SemanticAnimationIntent {
     },
     /// Temporarily drive only glow intensity from its activation-effective value.
     /// Attachment enrollment and restoration belong to shared activation/completion.
+    Dissolve {
+        target: SemanticNodeId,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+    },
     GlowPulse {
         target: SemanticNodeId,
         intensity: f64,
@@ -428,10 +457,12 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { target, .. }
             | Self::MoveAlongPath { target, .. }
             | Self::TransformTo { target, .. }
+            | Self::EffectTargetTo { target, .. }
             | Self::WorldTransformTo { target, .. }
             | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::GlowPulse { target, .. }
+            | Self::Dissolve { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -449,6 +480,7 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. }
+            | Self::EffectTargetTo { target_state, .. }
             | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
             Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
@@ -456,6 +488,7 @@ impl SemanticAnimationIntent {
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -495,11 +528,13 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -520,11 +555,13 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -555,6 +592,35 @@ pub struct SemanticAnimationState {
 }
 
 impl SemanticAnimationState {
+    pub(crate) fn image_resources(
+        &self,
+    ) -> impl Iterator<Item = crate::RasterImageResourceHandle> + '_ {
+        let values = match self.intent() {
+            SemanticAnimationIntent::ObjectPropertyTrack { values, .. } => Some(values),
+            _ => None,
+        };
+        values
+            .into_iter()
+            .flat_map(SemanticObjectTrackValues::image_resources)
+    }
+
+    pub(crate) fn remap_image_resources(
+        &mut self,
+        remap: impl FnMut(crate::RasterImageResourceHandle) -> crate::RasterImageResourceHandle,
+    ) {
+        if let SemanticAnimationIntent::ObjectPropertyTrack {
+            values: SemanticObjectTrackValues::Paint { transition },
+            ..
+        } = &mut self.intent
+        {
+            if transition.images().is_none() {
+                return;
+            }
+            let mut mapped = transition.as_ref().clone();
+            mapped.remap_image_resources(remap);
+            *transition = std::sync::Arc::new(mapped);
+        }
+    }
     pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
         Self {
             intent,
@@ -711,7 +777,9 @@ pub(crate) fn validate_object_property_track<R>(
     timing: TrackTiming,
     time_map: &CompositionTimeMap,
 ) -> Result<(), SemanticAnimationError> {
-    if property.value_kind() != values.value_kind()
+    if (property.value_kind() != values.value_kind()
+        && !(property == SemanticObjectTrackProperty::Fill
+            && values.value_kind() == SemanticObjectTrackValueKind::Paint))
         || !timing.start_time.is_finite()
         || !timing.duration.is_finite()
         || timing.duration < 0.0
@@ -727,6 +795,11 @@ pub(crate) fn validate_object_property_track<R>(
         return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
     }
     match values {
+        SemanticObjectTrackValues::Paint { .. } => {
+            if !timing.easing.preserves_unit_interval() {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
         SemanticObjectTrackValues::Scalar { from, to } => {
             if !from.is_finite()
                 || !to.is_finite()
@@ -956,12 +1029,36 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
-        crate::Glow::new(crate::GlowUpdate::default().intensity(intensity))
+        crate::Glow::new(crate::EffectUpdate::default().intensity(intensity))
             .map_err(|_| SemanticAnimationError::InvalidGlowPulseIntensity)?;
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::GlowPulse { target, intensity },
+                options,
+            )),
+        )
+    }
+
+    pub fn insert_semantic_dissolve_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        if !self.node(target).is_some_and(|node| node.can_own_members()) {
+            return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(target).into());
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Dissolve {
+                    target,
+                    direction,
+                    style,
+                },
                 options,
             )),
         )

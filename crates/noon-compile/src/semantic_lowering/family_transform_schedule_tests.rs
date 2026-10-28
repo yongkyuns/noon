@@ -27,7 +27,8 @@ fn family(store: &mut SemanticStore, count: usize) -> noon_core::SemanticNodeId 
 
 fn effective() -> EffectiveAnimationProperties {
     EffectiveAnimationProperties {
-        glow: None,
+        fill_paint: None,
+        effects: None,
         z_index: 0.0,
         transform: Transform2D::default(),
         style: Style::default(),

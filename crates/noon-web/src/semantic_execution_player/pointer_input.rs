@@ -14,7 +14,7 @@ use noon_core::{NativePointerId, NativePointerInput, Vec2};
 /// ordinary native pointer behavior.
 pub(super) struct PlayerPointerTarget<'a> {
     pub(super) session: &'a mut ExecutionSession,
-    pub(super) semantics: Option<&'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    pub(super) semantics: &'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
 }
 
@@ -28,21 +28,21 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
             .map(|_| ())
     }
     fn has_native_pointer_subscribers(&self) -> bool {
-        BrowserPointerTarget::has_native_pointer_subscribers(&*self.session)
+        self.session.has_native_pointer_subscribers()
     }
     fn translation_drag_active(&self) -> bool {
-        BrowserPointerTarget::translation_drag_active(&*self.session)
+        self.session.translation_drag_active()
     }
     fn inspection_camera(
         &self,
     ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
-        BrowserPointerTarget::inspection_camera(&*self.session)
+        self.session.inspection_camera()
     }
     fn capture_pointer_frame(
         &self,
         view: noon::integration::PointerFrameView,
     ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError> {
-        BrowserPointerTarget::capture_pointer_frame(&*self.session, view)
+        self.session.capture_pointer_frame(view)
     }
     fn validate_pointer_frame(
         &self,
@@ -50,14 +50,24 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         view: noon::integration::PointerFrameView,
         validation: crate::browser_pointer_input::PointerFrameValidation,
     ) -> Result<(), noon::integration::PointerFrameError> {
-        BrowserPointerTarget::validate_pointer_frame(&*self.session, frame, view, validation)
+        match validation {
+            crate::browser_pointer_input::PointerFrameValidation::Input => {
+                frame.validate_current(&*self.session, view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::Presentation => {
+                frame.validate_presentation(&*self.session, view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(&*self.session, view)
+            }
+        }
     }
     fn pointer_input_token_for_frame(
         &self,
         frame: &noon::integration::PointerFrameSnapshot,
         view: noon::integration::PointerFrameView,
     ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
-        BrowserPointerTarget::pointer_input_token_for_frame(&*self.session, frame, view)
+        frame.input_token(&*self.session, view)
     }
 
     fn configure_pointer(
@@ -93,14 +103,8 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, String> {
-        let Some(semantics) = self.semantics.as_ref() else {
-            return self
-                .session
-                .submit_native_pointer_input(token, input)
-                .map_err(|error| error.to_string());
-        };
         self.session
-            .submit_translation_drag_input(&mut semantics.borrow_mut(), token, input)
+            .submit_translation_drag_input(&mut self.semantics.borrow_mut(), token, input)
             .map(|receipt| {
                 if let Some(undo) = receipt.undo {
                     *self.translation_drag_undo = Some(undo);
@@ -154,8 +158,16 @@ fn submit_test_frame(
 #[cfg(test)]
 impl SemanticExecutionPlayer {
     fn submit_test_frame_input(&mut self, input: BrowserPointerInput) -> Result<(), String> {
+        let mut target = PlayerPointerTarget {
+            session: &mut self.session,
+            semantics: self
+                .semantics
+                .as_ref()
+                .ok_or("execution player lost its semantic store")?,
+            translation_drag_undo: &mut self.translation_drag_undo,
+        };
         submit_test_frame(
-            &mut self.session,
+            &mut target,
             &mut self.browser_pointer_binding,
             &mut self.next_native_event_sequence,
             input,

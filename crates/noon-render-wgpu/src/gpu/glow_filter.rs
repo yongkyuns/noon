@@ -9,7 +9,7 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::{Glow, GlowParameterError, GlowSource};
+use noon_core::{EffectParameterError, Glow, GlowSource};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const MAX_SIGMA: f64 = 64.0;
@@ -34,12 +34,12 @@ pub struct GlowCapture<'a> {
  * Negative origins are valid: offscreen geometry can contribute a halo.
  */
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GlowPixelBounds {
+pub struct EffectPixelBounds {
     pub min: [f64; 2],
     pub max: [f64; 2],
 }
 
-impl GlowPixelBounds {
+impl EffectPixelBounds {
     /// Project one filled, unstroked M1 circle/rectangle through the existing
     /// effective 2D camera. Object nonuniform scale deforms the source, NOT
     /// the Gaussian radius; that radius stays in output/world units.
@@ -48,7 +48,7 @@ impl GlowPixelBounds {
         transform: noon_core::Transform2D,
         camera: super::Camera2D,
         viewport: [u32; 2],
-    ) -> Result<Self, GlowPrepareError> {
+    ) -> Result<Self, EffectPrepareError> {
         Self::projected_analytic_in_view(
             geometry,
             transform,
@@ -66,7 +66,7 @@ impl GlowPixelBounds {
         camera: super::Camera2D,
         viewport: [u32; 2],
         logical_viewport: noon_core::Vec2,
-    ) -> Result<Self, GlowPrepareError> {
+    ) -> Result<Self, EffectPrepareError> {
         Self::validate_planar_view(transform, camera, viewport, logical_viewport)?;
         let x_pixels_per_world = f64::from(viewport[0]) / f64::from(camera.world_size.x);
         let y_pixels_per_world = f64::from(viewport[1]) / f64::from(camera.world_size.y);
@@ -92,9 +92,9 @@ impl GlowPixelBounds {
                 )
             }
             noon_core::GeometryRef::Circle { .. } | noon_core::GeometryRef::Rectangle { .. } => {
-                return Err(GlowPrepareError::InvalidSourceBounds);
+                return Err(EffectPrepareError::InvalidSourceBounds);
             }
-            _ => return Err(GlowPrepareError::UnsupportedCapture),
+            _ => return Err(EffectPrepareError::UnsupportedCapture),
         };
         let screen_x = (f64::from(transform.translation.x) - f64::from(camera.center.x))
             * x_pixels_per_world
@@ -109,7 +109,7 @@ impl GlowPixelBounds {
             max: [screen_x + horizontal, screen_y + vertical],
         };
         if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite) {
-            return Err(GlowPrepareError::CaptureCoordinatesOutOfRange);
+            return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
         }
         Ok(bounds)
     }
@@ -118,7 +118,7 @@ impl GlowPixelBounds {
         camera: super::Camera2D,
         viewport: [u32; 2],
         logical_viewport: noon_core::Vec2,
-    ) -> Result<(), GlowPrepareError> {
+    ) -> Result<(), EffectPrepareError> {
         if viewport.contains(&0)
             || ![
                 camera.center.x,
@@ -142,21 +142,21 @@ impl GlowPixelBounds {
             || transform.scale.x == 0.0
             || transform.scale.y == 0.0
         {
-            return Err(GlowPrepareError::InvalidProjection);
+            return Err(EffectPrepareError::InvalidProjection);
         }
         let logical_x_per_world = f64::from(logical_viewport.x) / f64::from(camera.world_size.x);
         let logical_y_per_world = f64::from(logical_viewport.y) / f64::from(camera.world_size.y);
         let disparity = (logical_x_per_world - logical_y_per_world).abs()
             / logical_x_per_world.max(logical_y_per_world);
         if disparity > 1e-5 {
-            return Err(GlowPrepareError::InvalidProjection);
+            return Err(EffectPrepareError::InvalidProjection);
         }
         Ok(())
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GlowCaptureTile {
+pub struct EffectCaptureTile {
     pub origin: [i32; 2],
     pub size: [u32; 2],
     pub viewport_origin: [u32; 2],
@@ -168,41 +168,153 @@ pub struct GlowCaptureTile {
     pub capture_and_scratch_bytes: u64,
 }
 
-impl GlowCaptureTile {
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CaptureDemand {
+    pub required_by_parent: bool,
+    pub isolate: bool,
+    /// A composed ancestor needs this scope's original coverage before its
+    /// authored paint filters, with the scope opacity applied by placement.
+    pub original_by_parent: bool,
+}
+
+impl EffectCaptureTile {
     /// Check before any GPU allocation. Return None only for validated
     /// neutral contributions or tiles whose entire halo misses the output.
     pub fn prepare(
-        bounds: GlowPixelBounds,
+        bounds: EffectPixelBounds,
         viewport: [u32; 2],
-        parameters: GlowParameters,
+        parameters: impl Into<EffectCaptureParameters>,
         maximum_texture_dimension: u32,
         memory_budget_bytes: u64,
-    ) -> Result<Option<Self>, GlowPrepareError> {
-        let sigma = GlowUniform::validate(parameters)?;
+    ) -> Result<Option<Self>, EffectPrepareError> {
+        let parameters = parameters.into();
+        Self::prepare_stack(
+            bounds,
+            viewport,
+            &[parameters.definition],
+            super::EffectStackParameters {
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                scope_opacity: parameters.scope_opacity,
+                scratch_budget_bytes: memory_budget_bytes,
+                source_bounds: None,
+            },
+            maximum_texture_dimension,
+            memory_budget_bytes,
+        )
+    }
+
+    /// Plan the full cumulative finite support before capture or GPU mutation.
+    /// Silhouette glow always starts from original geometry; every painted
+    /// operator expands the preceding output. AA padding applies once.
+    pub fn prepare_stack(
+        bounds: EffectPixelBounds,
+        viewport: [u32; 2],
+        definitions: &[noon_core::EffectDefinition],
+        parameters: super::EffectStackParameters,
+        maximum_texture_dimension: u32,
+        memory_budget_bytes: u64,
+    ) -> Result<Option<Self>, EffectPrepareError> {
+        Self::prepare_stack_input(
+            bounds,
+            viewport,
+            definitions,
+            parameters,
+            maximum_texture_dimension,
+            memory_budget_bytes,
+            CaptureDemand::default(),
+        )
+    }
+
+    /// An ancestor filter can consume pixels that are outside the final view.
+    /// This changes contribution clipping only, never output units or the camera.
+    pub(super) fn prepare_stack_input(
+        bounds: EffectPixelBounds,
+        viewport: [u32; 2],
+        definitions: &[noon_core::EffectDefinition],
+        parameters: super::EffectStackParameters,
+        maximum_texture_dimension: u32,
+        memory_budget_bytes: u64,
+        demand: CaptureDemand,
+    ) -> Result<Option<Self>, EffectPrepareError> {
+        let CaptureDemand {
+            required_by_parent,
+            isolate,
+            original_by_parent,
+        } = demand;
+        if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
+            return Err(EffectPrepareError::StackExceedsProfile);
+        }
+        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
+        {
+            return Err(EffectPrepareError::InvalidScopeOpacity);
+        }
+        noon_core::EffectRadius::Scene(0.0)
+            .to_output_pixels(parameters.output_height, parameters.world_view_height)
+            .map_err(EffectPrepareError::Parameter)?;
         if viewport.contains(&0) {
-            return Err(GlowPrepareError::Parameter(GlowParameterError::InvalidView));
+            return Err(EffectPrepareError::Parameter(
+                EffectParameterError::InvalidView,
+            ));
         }
         if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite)
             || (0..2).any(|axis| bounds.min[axis] >= bounds.max[axis])
         {
-            return Err(GlowPrepareError::InvalidSourceBounds);
+            return Err(EffectPrepareError::InvalidSourceBounds);
         }
-        if parameters.definition.is_neutral() || parameters.scope_opacity == 0.0 {
+        let original = EffectPixelBounds {
+            min: bounds.min.map(|v| v - 1.0),
+            max: bounds.max.map(|v| v + 1.0),
+        };
+        let mut extent = original;
+        let mut support_radius = 0_u32;
+        let mut active = false;
+        let mut cost_per_pixel = 4_u64; // one RGBA8 source
+        let mut silhouette = original_by_parent;
+        for &definition in definitions {
+            let value = EffectCaptureParameters {
+                definition,
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                scope_opacity: parameters.scope_opacity,
+            };
+            let sigma = value.sigma_pixels()?;
+            let offset = value.offset_pixels()?;
+            let mask = definition
+                .as_glow()
+                .is_some_and(|glow| glow.source() == GlowSource::Silhouette);
+            silhouette |= mask;
+            // Include warm neutral storage in the conservative scope budget.
+            cost_per_pixel += value.filter_bytes_per_pixel();
+            if value.is_neutral_at_sigma(sigma) {
+                continue;
+            }
+            active = true;
+            let support = (3.0 * sigma).ceil() as u32;
+            support_radius += support;
+            let input = if mask { original } else { extent };
+            for (axis, offset) in offset.into_iter().enumerate() {
+                extent.min[axis] =
+                    extent.min[axis].min(input.min[axis] + offset.min(0.0) - f64::from(support));
+                extent.max[axis] =
+                    extent.max[axis].max(input.max[axis] + offset.max(0.0) + f64::from(support));
+            }
+        }
+        cost_per_pixel += if silhouette { 4 } else { 0 };
+        if !isolate && !original_by_parent && (!active || parameters.scope_opacity == 0.0) {
             return Ok(None);
         }
-        let support_radius = (3.0 * sigma).ceil() as u32;
-        let padding = f64::from(support_radius) + 1.0; // analytic AA footprint
         let mut start = [0_i64; 2];
         let mut end = [0_i64; 2];
         for axis in 0..2 {
-            let left = (bounds.min[axis] - padding).floor();
-            let right = (bounds.max[axis] + padding).ceil();
+            let left = extent.min[axis].floor();
+            let right = extent.max[axis].ceil();
             if !left.is_finite()
                 || !right.is_finite()
                 || left < f64::from(i32::MIN)
                 || right > f64::from(i32::MAX)
             {
-                return Err(GlowPrepareError::CaptureCoordinatesOutOfRange);
+                return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
             }
             // Match the output raster's 2x2 derivative-quad grid. Integer pixel
             // alignment alone is insufficient: shifting a capture by one pixel
@@ -216,7 +328,7 @@ impl GlowCaptureTile {
             end[0].min(i64::from(viewport[0])),
             end[1].min(i64::from(viewport[1])),
         ];
-        if (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
+        if !required_by_parent && (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
             return Ok(None);
         }
         let width = end[0] - start[0];
@@ -226,36 +338,102 @@ impl GlowCaptureTile {
             || width > i64::from(maximum_texture_dimension)
             || height > i64::from(maximum_texture_dimension)
         {
-            return Err(GlowPrepareError::ExtentExceedsDevice);
+            return Err(EffectPrepareError::ExtentExceedsDevice);
         }
         let size = [width as u32, height as u32];
-        let cost_per_pixel: u64 = if parameters.definition.source() == GlowSource::Silhouette {
-            20
-        } else {
-            16
-        };
         let bytes = u64::from(size[0])
             .checked_mul(u64::from(size[1]))
             .and_then(|pixels| pixels.checked_mul(cost_per_pixel))
-            .ok_or(GlowPrepareError::ScratchBudgetExceeded)?;
+            .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
         if bytes > memory_budget_bytes {
-            return Err(GlowPrepareError::ScratchBudgetExceeded);
+            return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        Ok(Some(Self {
+        let mut tile = Self {
             origin: [start[0] as i32, start[1] as i32],
             size,
-            viewport_origin: [visible_start[0] as u32, visible_start[1] as u32],
-            local_origin: [
-                (visible_start[0] - start[0]) as u32,
-                (visible_start[1] - start[1]) as u32,
-            ],
-            visible_size: [
-                (visible_end[0] - visible_start[0]) as u32,
-                (visible_end[1] - visible_start[1]) as u32,
-            ],
+            viewport_origin: [0; 2],
+            local_origin: [0; 2],
+            visible_size: [0; 2],
             support_radius,
             capture_and_scratch_bytes: bytes,
-        }))
+        };
+        tile.refresh_visible_region(viewport);
+        Ok(Some(tile))
+    }
+
+    pub(super) fn refresh_visible_region(&mut self, viewport: [u32; 2]) {
+        for (axis, viewport) in viewport.into_iter().enumerate() {
+            let origin = i64::from(self.origin[axis]);
+            let start = origin.clamp(0, i64::from(viewport));
+            let end = (origin + i64::from(self.size[axis])).clamp(0, i64::from(viewport));
+            self.viewport_origin[axis] = start as u32;
+            self.local_origin[axis] = (start - origin).clamp(0, i64::from(self.size[axis])) as u32;
+            self.visible_size[axis] = (end - start).max(0) as u32;
+        }
+    }
+}
+
+/// Common isolated capture footprint for the finite built-ins.
+#[derive(Clone, Copy, Debug)]
+pub struct EffectCaptureParameters {
+    pub definition: noon_core::EffectDefinition,
+    pub output_height: u32,
+    pub world_view_height: f64,
+    pub scope_opacity: f32,
+}
+impl EffectCaptureParameters {
+    pub(super) fn is_neutral_at_sigma(self, sigma: f64) -> bool {
+        self.definition.is_neutral()
+            || (matches!(self.definition, noon_core::EffectDefinition::Blur(_)) && sigma == 0.0)
+    }
+    pub(super) fn sigma_pixels(self) -> Result<f64, EffectPrepareError> {
+        let sigma = self
+            .definition
+            .radius()
+            .unwrap_or(noon_core::EffectRadius::Pixels(0.0))
+            .to_output_pixels(self.output_height, self.world_view_height)
+            .map_err(EffectPrepareError::Parameter)?;
+        if sigma > MAX_SIGMA {
+            return Err(EffectPrepareError::RadiusExceedsProfile);
+        }
+        if !self.scope_opacity.is_finite() || !(0.0..=1.0).contains(&self.scope_opacity) {
+            return Err(EffectPrepareError::InvalidScopeOpacity);
+        }
+        Ok(sigma)
+    }
+    pub(super) fn offset_pixels(self) -> Result<[f64; 2], EffectPrepareError> {
+        let Some(shadow) = self.definition.as_shadow() else {
+            return Ok([0.0; 2]);
+        };
+        let [x, y] = shadow
+            .offset()
+            .to_output_pixels(self.output_height, self.world_view_height)
+            .map_err(EffectPrepareError::Parameter)?;
+        if [x, y]
+            .into_iter()
+            .any(|v| !(v as f32).is_finite() || (f64::from(v as f32) - v).abs() > 1.0 / 256.0)
+        {
+            return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
+        }
+        Ok([x, -y])
+    }
+    pub(crate) fn filter_bytes_per_pixel(self) -> u64 {
+        match self.definition {
+            noon_core::EffectDefinition::NoiseDissolve(_) => 4,
+            noon_core::EffectDefinition::Glow(_) => 12,
+            noon_core::EffectDefinition::Blur(_) => 28,
+            noon_core::EffectDefinition::Shadow(_) => 32,
+        }
+    }
+}
+impl From<GlowParameters> for EffectCaptureParameters {
+    fn from(value: GlowParameters) -> Self {
+        Self {
+            definition: value.definition.into(),
+            output_height: value.output_height,
+            world_view_height: value.world_view_height,
+            scope_opacity: value.scope_opacity,
+        }
     }
 }
 
@@ -274,8 +452,9 @@ pub struct GlowParameters {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GlowPrepareError {
-    Parameter(GlowParameterError),
+pub enum EffectPrepareError {
+    Blur(super::gaussian_blur::GaussianBlurPrepareError),
+    Parameter(EffectParameterError),
     InvalidScopeOpacity,
     RadiusExceedsProfile,
     UnsupportedCapture,
@@ -287,17 +466,19 @@ pub enum GlowPrepareError {
     CaptureSizeMismatch,
     ExtentExceedsDevice,
     ScratchBudgetExceeded,
+    StackExceedsProfile,
+    RevisionExhausted,
 }
-impl std::fmt::Display for GlowPrepareError {
+impl std::fmt::Display for EffectPrepareError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cannot prepare glow raster operator: {self:?}")
+        write!(f, "cannot prepare effect raster operator: {self:?}")
     }
 }
-impl std::error::Error for GlowPrepareError {}
+impl std::error::Error for EffectPrepareError {}
 
 /// Actual resource and work counters; no physical performance claim is implied.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct GlowRasterStats {
+pub struct EffectRasterStats {
     pub pipeline_compiles: usize,
     pub kernel_builds: usize,
     pub texture_allocations: usize,
@@ -321,27 +502,15 @@ struct GlowUniform {
 }
 
 impl GlowUniform {
-    fn validate(parameters: GlowParameters) -> Result<f64, GlowPrepareError> {
-        let sigma = parameters
-            .definition
-            .radius()
-            .to_output_pixels(parameters.output_height, parameters.world_view_height)
-            .map_err(GlowPrepareError::Parameter)?;
-        if sigma > MAX_SIGMA {
-            return Err(GlowPrepareError::RadiusExceedsProfile);
-        }
-        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
-        {
-            return Err(GlowPrepareError::InvalidScopeOpacity);
-        }
-        Ok(sigma)
+    fn validate(parameters: GlowParameters) -> Result<f64, EffectPrepareError> {
+        EffectCaptureParameters::from(parameters).sigma_pixels()
     }
 
     fn prepare(
         parameters: GlowParameters,
         size: [u32; 2],
         cached: Option<(f64, &Self)>,
-    ) -> Result<(f64, Self), GlowPrepareError> {
+    ) -> Result<(f64, Self), EffectPrepareError> {
         let sigma = Self::validate(parameters)?;
         let color = parameters.definition.color();
         let mut uniform = Self {
@@ -505,10 +674,10 @@ impl GlowFilter {
         scope: &mut GlowScope,
         capture: GlowCapture<'_>,
         parameters: GlowParameters,
-    ) -> Result<GlowRasterStats, GlowPrepareError> {
+    ) -> Result<EffectRasterStats, EffectPrepareError> {
         let size = [capture.source.width(), capture.source.height()];
         GlowUniform::validate(parameters)?;
-        let mut stats = GlowRasterStats::default();
+        let mut stats = EffectRasterStats::default();
         if parameters.definition.is_neutral() || parameters.scope_opacity == 0.0 {
             scope.active = false;
             stats.scratch_bytes = scope.scratch_bytes();
@@ -519,22 +688,22 @@ impl GlowFilter {
             GlowSource::Painted => capture.source,
             GlowSource::Silhouette => capture
                 .silhouette
-                .ok_or(GlowPrepareError::MissingSilhouette)?,
+                .ok_or(EffectPrepareError::MissingSilhouette)?,
         };
         validate_capture(mask)?;
         if size != [mask.width(), mask.height()] {
-            return Err(GlowPrepareError::CaptureSizeMismatch);
+            return Err(EffectPrepareError::CaptureSizeMismatch);
         }
         let limit = device.limits().max_texture_dimension_2d;
         if size.contains(&0) || size.iter().any(|&value| value > limit) {
-            return Err(GlowPrepareError::ExtentExceedsDevice);
+            return Err(EffectPrepareError::ExtentExceedsDevice);
         }
         let scratch_bytes = u64::from(size[0])
             .checked_mul(u64::from(size[1]))
             .and_then(|pixels| pixels.checked_mul(SCRATCH_BYTES_PER_PIXEL))
-            .ok_or(GlowPrepareError::ScratchBudgetExceeded)?;
+            .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
         if scratch_bytes > parameters.scratch_budget_bytes {
-            return Err(GlowPrepareError::ScratchBudgetExceeded);
+            return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
         let cached = scope.sigma_pixels.zip(scope.uniform.as_ref());
         let (sigma, uniform) = GlowUniform::prepare(parameters, size, cached)?;
@@ -599,10 +768,10 @@ impl GlowFilter {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scope: &mut GlowScope,
-    ) -> GlowRasterStats {
-        let mut stats = GlowRasterStats {
+    ) -> EffectRasterStats {
+        let mut stats = EffectRasterStats {
             scratch_bytes: scope.scratch_bytes(),
-            ..GlowRasterStats::default()
+            ..EffectRasterStats::default()
         };
         if !scope.active {
             return stats;
@@ -642,7 +811,7 @@ impl GlowFilter {
     }
 }
 
-fn validate_capture(texture: &wgpu::Texture) -> Result<(), GlowPrepareError> {
+pub(super) fn validate_capture(texture: &wgpu::Texture) -> Result<(), EffectPrepareError> {
     if !matches!(
         texture.format(),
         wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
@@ -653,7 +822,7 @@ fn validate_capture(texture: &wgpu::Texture) -> Result<(), GlowPrepareError> {
             .usage()
             .contains(wgpu::TextureUsages::TEXTURE_BINDING)
     {
-        return Err(GlowPrepareError::UnsupportedCapture);
+        return Err(EffectPrepareError::UnsupportedCapture);
     }
     Ok(())
 }

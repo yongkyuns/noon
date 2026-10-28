@@ -2330,6 +2330,20 @@ def _set_object_opacity(
 ) -> _base.Mobject:
     """Set the object-composite multiplier, distinct from Manim paint opacity."""
 
+    if _is_shared_family(self):
+        family = self._semantic_family_handle
+        alpha = _compat._opacity("object opacity", opacity)
+        context = _live_mutation_context(self)
+        if context is None:
+            context = _live_constructor_context("family object opacity")
+        try:
+            if context is None:
+                engine_call(family.setObjectOpacity, alpha)
+            else:
+                engine_call(context.liveSetFamilyObjectOpacity, family, alpha)
+        except Exception as error:
+            raise_engine_error(error)
+        return self
     handle = _handle_for(self)
     if handle is None:
         raise NotImplementedError("set_object_opacity requires the shared semantic authoring handle")

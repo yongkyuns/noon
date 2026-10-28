@@ -1,18 +1,19 @@
 //! Semantic attachment + ordinary execution channels -> published GPU pixels.
 //! This does not bypass/qualify the still-guarded public Scene host or worker path.
 use super::analytic_scene::{expected, frame, render_plain, semantic_runtime, target, SIGMA, VIEW};
+use super::only_effect;
 use super::pixels::{device, readback};
-use crate::{Camera2D, FramePreparer, GpuRenderer, PublishedAnalyticGlowRequest};
+use crate::{Camera2D, FramePreparer, GpuRenderer, PublishedEffectCaptureRequest};
 use noon_compile::{ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{
-    Color, Glow, GlowSource, GlowUpdate, Pixels, RateFunction, TrackDefinition, TrackId,
+    Color, EffectUpdate, Glow, GlowSource, Pixels, RateFunction, TrackDefinition, TrackId,
     TrackTiming, Vec2,
 };
 use noon_runtime::SceneInstance;
 
-fn append_channels(runtime: &mut SceneInstance, update: GlowUpdate) {
+fn append_channels(runtime: &mut SceneInstance, update: EffectUpdate) {
     let row = &runtime.frame().objects[1];
-    let captured = row.glow.as_ref().unwrap();
+    let captured = only_effect(row.effects.as_ref().unwrap());
     let tracks = captured
         .parameter_channels(update)
         .unwrap()
@@ -48,7 +49,7 @@ fn expected_parameters(start: Glow, end: Glow, alpha: f64) -> Glow {
     };
     let channel = |a: f32, b: f32| lerp(f64::from(a), f64::from(b)) as f32;
     let (a, b) = (start.color(), end.color());
-    GlowUpdate::default()
+    EffectUpdate::default()
         .radius(Pixels(lerp(start.radius().value(), end.radius().value())))
         .intensity(lerp(start.intensity(), end.intensity()))
         .color(Color::rgba(
@@ -74,7 +75,7 @@ fn animated_glow_publication_pixels() {
         (false, false, false, true),
     ] {
         let start = Glow::new(
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .radius(Pixels(SIGMA))
                 .intensity(2.4)
                 .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
@@ -86,9 +87,9 @@ fn animated_glow_publication_pixels() {
         )
         .unwrap();
         let update = if intensity_only {
-            GlowUpdate::default().intensity(0.0)
+            EffectUpdate::default().intensity(0.0)
         } else {
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .radius(Pixels(4.75))
                 .intensity(0.7)
                 .color(Color::rgba(0.15, 0.85, 0.25, 0.5))
@@ -101,7 +102,8 @@ fn animated_glow_publication_pixels() {
                 .unwrap();
         }
         append_channels(&mut runtime, update);
-        let attachment = runtime.frame().objects[1].glow.as_ref().unwrap().attachment;
+        let attachment =
+            only_effect(runtime.frame().objects[1].effects.as_ref().unwrap()).attachment;
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
         renderer.set_camera(
@@ -111,7 +113,7 @@ fn animated_glow_publication_pixels() {
         let mut preparer = FramePreparer::new();
         let output = target(&device, VIEW);
         let view = output.create_view(&Default::default());
-        let request = PublishedAnalyticGlowRequest {
+        let request = PublishedEffectCaptureRequest {
             object_index: 1,
             texture_budget_bytes: 1_000_000,
         };
@@ -120,20 +122,26 @@ fn animated_glow_publication_pixels() {
             runtime.evaluate(time).unwrap();
             let wanted = expected_parameters(start, end, time);
             let publication = runtime.take_renderer_publication();
-            let actual = publication.frame().objects[1].glow.as_ref().unwrap();
+            let actual = publication.frame().objects[1]
+                .effects
+                .as_ref()
+                .unwrap()
+                .get(attachment)
+                .unwrap();
             assert_eq!(
                 actual.attachment, attachment,
                 "animation cannot replace attachment identity"
             );
             assert_eq!(
-                actual.definition, wanted,
+                actual.definition,
+                (wanted).into(),
                 "runtime channels must match independent endpoint arithmetic"
             );
             let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             let stats = renderer
-                .prepare_published_analytic_glow(
+                .prepare_published_effect_capture(
                     &device,
                     &queue,
                     &mut encoder,
@@ -201,7 +209,7 @@ fn animated_glow_publication_pixels() {
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         renderer
-            .prepare_published_analytic_glow(
+            .prepare_published_effect_capture(
                 &device,
                 &queue,
                 &mut encoder,
@@ -211,7 +219,7 @@ fn animated_glow_publication_pixels() {
             )
             .unwrap();
         assert_eq!(
-            renderer.analytic_glow_texture_bytes(),
+            renderer.effect_capture_texture_bytes(),
             0,
             "removing animated source releases its retained textures"
         );
@@ -221,7 +229,7 @@ fn animated_glow_publication_pixels() {
 #[test]
 #[ignore = "requires raster adapter; prepared existing-value publication, not public Scene activation"]
 fn live_glow_value_publication_pixels() {
-    use noon_compile::CompiledGlow;
+    use noon_compile::CompiledEffect;
     use std::sync::Arc;
     let (device, queue) = device();
     for (rectangle, offscreen, transparent) in [
@@ -232,7 +240,7 @@ fn live_glow_value_publication_pixels() {
         (false, false, true),
     ] {
         let original = Glow::new(
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .radius(Pixels(SIGMA))
                 .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
                 .intensity(2.4)
@@ -248,7 +256,8 @@ fn live_glow_value_publication_pixels() {
             .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(1)))
             .unwrap();
         let owner = runtime.frame().objects[1].id;
-        let attachment = runtime.frame().objects[1].glow.as_ref().unwrap().attachment;
+        let attachment =
+            only_effect(runtime.frame().objects[1].effects.as_ref().unwrap()).attachment;
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
         renderer.set_camera(
@@ -258,22 +267,22 @@ fn live_glow_value_publication_pixels() {
         let mut preparer = FramePreparer::new();
         let output = target(&device, VIEW);
         let view = output.create_view(&Default::default());
-        let request = PublishedAnalyticGlowRequest {
+        let request = PublishedEffectCaptureRequest {
             object_index: 1,
             texture_budget_bytes: 1_000_000,
         };
         let definitions = [
             original,
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .intensity(0.8)
                 .apply_to(original)
                 .unwrap(),
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .color(Color::rgba(0.2, 0.7, 0.9, 0.75))
                 .radius(Pixels(4.75))
                 .apply_to(original)
                 .unwrap(),
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .intensity(0.0)
                 .apply_to(original)
                 .unwrap(),
@@ -285,17 +294,21 @@ fn live_glow_value_publication_pixels() {
             let old = runtime.frame().clone();
             let context = runtime.publication_context();
             let transaction =
-                ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetGlow {
+                ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffects {
                     object: owner,
-                    glow: Arc::new(CompiledGlow {
-                        attachment,
-                        definition,
-                    }),
+                    effects: Arc::new(
+                        noon_compile::CompiledEffectStack::new([CompiledEffect {
+                            attachment,
+                            definition: definition.into(),
+                        }])
+                        .unwrap(),
+                    ),
                 }]);
             let prepare = |runtime: &SceneInstance| {
                 runtime
                     .prepare_authored_value_publication(
                         &transaction,
+                        Default::default(),
                         context,
                         context.scene_revision().checked_next().unwrap(),
                     )
@@ -309,17 +322,19 @@ fn live_glow_value_publication_pixels() {
             let publication = runtime.take_renderer_publication();
             assert_eq!(
                 publication.frame().objects[1]
-                    .glow
+                    .effects
                     .as_ref()
                     .unwrap()
+                    .get(attachment)
+                    .unwrap()
                     .definition,
-                definition
+                (definition).into()
             );
             let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             let stats = renderer
-                .prepare_published_analytic_glow(
+                .prepare_published_effect_capture(
                     &device,
                     &queue,
                     &mut encoder,

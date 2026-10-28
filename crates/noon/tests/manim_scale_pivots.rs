@@ -115,6 +115,7 @@ fn paired_scale_example_uses_the_retained_execution_path() {
     assert_eq!(
         noon::example_scenes::scale_pivots::session()
             .unwrap()
+            .session()
             .frame()
             .objects
             .len(),

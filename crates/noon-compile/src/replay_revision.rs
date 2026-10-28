@@ -122,17 +122,30 @@ impl CompiledScene {
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetClickIndicate { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::SetGlow { object, .. } => {
+            | ExecutionPatch::SetEffects { object, .. } => {
                 rows.insert(index(*object)?);
             }
-            ExecutionPatch::SetGlowAttachment { object, .. } => {
+            ExecutionPatch::SetEffectStack {
+                object,
+                expected,
+                effects,
+            } => {
                 let slot = index(*object)?;
                 rows.insert(slot);
-                for property in crate::CompiledGlow::PARAMETER_PROPERTIES {
-                    let channel = CompiledChannelKey::new(slot, property);
-                    if !self.channel_tracks(channel).is_empty() {
-                        channels.insert(channel);
-                        tracks.extend(self.channel_tracks(channel).iter().map(|track| track.id));
+                for &attachment in expected {
+                    if effects
+                        .as_ref()
+                        .is_some_and(|stack| stack.get(attachment).is_some())
+                    {
+                        continue;
+                    }
+                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                        let channel = CompiledChannelKey::effect(slot, property, attachment);
+                        if !self.channel_tracks(channel).is_empty() {
+                            channels.insert(channel);
+                            tracks
+                                .extend(self.channel_tracks(channel).iter().map(|track| track.id));
+                        }
                     }
                 }
             }
@@ -140,7 +153,11 @@ impl CompiledScene {
                 tracks.insert(track.id);
                 let slot = index(track.object)?;
                 rows.insert(slot);
-                channels.insert(CompiledChannelKey::new(slot, track.property));
+                channels.insert(CompiledChannelKey::for_values(
+                    slot,
+                    track.property,
+                    &track.values,
+                ));
                 if let Some(channel) = self.channel_for_track(track.id) {
                     rows.insert(channel.object_index);
                     channels.insert(channel);
@@ -230,6 +247,7 @@ impl CompiledScene {
             let current = self.objects[index]
                 .live
                 .then(|| self.objects[index].clone());
+            let previous_composed = self.composed_plan(self.objects[index].id);
             let current_order = saved.order.map(|_| self.family_successor(saved.index));
             if saved.order.is_some() {
                 if let Some(rank) = self.family_ranks[index].take() {
@@ -277,6 +295,7 @@ impl CompiledScene {
                     self.reposition_painter_row(saved.index);
                 }
             }
+            self.update_composed_dependency(id, previous_composed);
             saved.object = current;
             saved.order = current_order;
         }
@@ -290,7 +309,7 @@ impl CompiledScene {
         }
         for (id, saved) in &mut revision.tracks {
             let current = self.track_locators.remove(id).map(|locator| {
-                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel = locator.channel();
                 let position = self.track_position(locator);
                 let tracks = self
                     .tracks
@@ -304,7 +323,7 @@ impl CompiledScene {
                 track
             });
             if let Some(track) = saved.take() {
-                let channel = CompiledChannelKey::new(track.object_index, track.property);
+                let channel = track.channel();
                 let tracks = self.tracks.entry(channel).or_default();
                 let position = crate::track_insertion_position(tracks, &track);
                 self.track_locators

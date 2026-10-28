@@ -2101,7 +2101,11 @@ mod wasm {
                         noon_core::SemanticPaint::Solid(color) => {
                             Some(WasmManimColor::from_color(color))
                         }
-                        noon_core::SemanticPaint::Resource(_) => None,
+                        noon_core::SemanticPaint::LinearGradient(_)
+                        | noon_core::SemanticPaint::RadialGradient(_)
+                        | noon_core::SemanticPaint::Noise(_)
+                        | noon_core::SemanticPaint::Hatch(_)
+                        | noon_core::SemanticPaint::Image(_) => None,
                     })
                 })
                 .map_err(js_error)
@@ -2116,7 +2120,11 @@ mod wasm {
                         noon_core::SemanticPaint::Solid(color) => {
                             Some(WasmManimColor::from_color(color))
                         }
-                        noon_core::SemanticPaint::Resource(_) => None,
+                        noon_core::SemanticPaint::LinearGradient(_)
+                        | noon_core::SemanticPaint::RadialGradient(_)
+                        | noon_core::SemanticPaint::Noise(_)
+                        | noon_core::SemanticPaint::Hatch(_)
+                        | noon_core::SemanticPaint::Image(_) => None,
                     })
                 })
                 .map_err(js_error)
@@ -2217,6 +2225,13 @@ mod wasm {
         pub fn set_own_opacity(&self, opacity: f64) -> Result<(), JsValue> {
             self.semantic_family()?
                 .set_own_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_object_opacity(opacity)
                 .map_err(js_error)
         }
 

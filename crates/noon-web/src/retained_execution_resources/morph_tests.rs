@@ -59,8 +59,8 @@ fn morph_endpoint_publishes_geometry_after_clearing_render_override() {
             AnimationOptions::new(),
         )
         .unwrap();
-    let session = scene.execution_session_with_animation_root(&root).unwrap();
-    let mut engine = SemanticExecutionPlayer::from_session(session, 2.0, 41).unwrap();
+    let session = scene.into_execution_with_animation_root(&root).unwrap();
+    let mut engine = SemanticExecutionPlayer::from_scene_execution(session, 2.0, 41).unwrap();
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
             .unwrap();

@@ -1,7 +1,7 @@
 //! Paired common style updates and matching on the ordinary retained path.
-use crate::{Color, ExecutionSession, Scene, StyleUpdate};
+use crate::{Color, Scene, StyleUpdate};
 
-pub fn session() -> Result<ExecutionSession, String> {
+pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut a = scene.square(1.0)?;
@@ -38,7 +38,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             live.advance_segment_to(segment, segment.end_time())?;
             live.complete_segment(segment)?;
         }
-        Ok(session)
+        Ok(scene.into_execution_with_session(session)?)
     };
     build().map_err(|error| error.to_string())
 }

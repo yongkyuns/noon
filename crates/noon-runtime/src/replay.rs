@@ -73,16 +73,18 @@ impl SceneInstance {
     /// Whether the initial complete projection admits immutable playback without
     /// an external effective owner or retained source history. The monotonic
     /// execution revision excludes prior live edits and destructive source
-    /// completion, even if a caller subsequently seeks back to time zero. Fresh
+    /// completion, even if a caller subsequently seeks back to time zero. Exact
+    /// neutral transient attachment lifetimes advance an internal admission
+    /// watermark only while that original projection remains intact. Fresh
     /// lowering establishes a new complete projection; this query never
-    /// reconstructs missing historical state.
+    /// reconstructs missing historical state or restores lost admission.
     ///
     /// This is an O(1) capability query over existing revision/ownership indices,
     /// not a new replay scope.
     /// Numeric text currently shares the effective-driver gate; extending that
     /// finite controlled profile is owned by #2263.
     pub fn supports_immutable_playback(&self) -> bool {
-        self.publication.execution_revision() == noon_core::ExecutionRevision::default()
+        self.publication.execution_revision() == self.immutable_playback_revision
             && self.replay_history.is_none()
             && self.effective_driver_rows.is_empty()
             && self.effective_content_drivers.is_empty()
@@ -92,6 +94,12 @@ impl SceneInstance {
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
         if self.replay_history.is_some() {
             return Err(ReplayError::AlreadyStarted);
+        }
+        // The current projection still contains an input-owned attachment whose
+        // removal is pending. Sealing a new history here would prevent that
+        // required semantic retirement and would capture an unrecorded click.
+        if self.has_temporary_glow_interactions() {
+            return Err(ReplayError::UnrecordedInput);
         }
         // Initial audio pins its immutable resource closure but does not yet
         // participate in bounded historical publication/retention (#2263).

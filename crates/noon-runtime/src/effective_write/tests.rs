@@ -151,6 +151,9 @@ fn assign_expected(
             style.stroke_width = stroke_width
         }
         EffectivePropertyWrite::Opacity { opacity, .. } => style.opacity = opacity,
+        EffectivePropertyWrite::EffectIntensity { .. } => {
+            unreachable!("the affine/style reference fixture has no glow attachment")
+        }
     }
 }
 
@@ -385,6 +388,7 @@ fn authored_transaction_and_narrow_carry_forward_merge_at_commit() {
             transform,
         },
         ExecutionPatch::SetStyle {
+            fill_paint: None,
             object: object(),
             style,
         },

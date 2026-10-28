@@ -90,6 +90,18 @@ class MatchingTimingScopeTests(unittest.TestCase):
                 self.assertEqual(parent.children[0][0], expected)
                 self.assertEqual(completed, [])
 
+    def test_returning_family_rate_is_forwarded_to_shared_rust_for_both_target_kinds(self):
+        for method_target in (False, True):
+            with self.subTest(method_target=method_target):
+                parent, completed = self.route(
+                    play={"rate_func": "there_and_back", "run_time": 1},
+                    matching=False, method_target=method_target,
+                )
+                tag, args = parent.children[0]
+                self.assertEqual(tag, "method-target" if method_target else "structural")
+                self.assertEqual(args[2:4], (1, "there_and_back"))
+                self.assertEqual(completed, [])
+
     def test_constructor_child_and_play_group_keep_distinct_rates_and_durations(self):
         cases = [({}, {}, "smooth", "linear", 1.0, None),
                  ({"rate_func": "linear"}, {}, "linear", "linear", 1.0, None),

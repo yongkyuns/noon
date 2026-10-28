@@ -2,9 +2,9 @@
 //! Samples are illustrative, not navigation simulation results.
 
 use crate::{
-    AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, ExecutionSession,
-    LiveContinuation, LiveProgram, LiveSession, ManimAxes, ManimAxesOptions, Mobject, RateFunction,
-    Scene, SemanticAnimationCompositionKind as Kind, Text, BLUE, YELLOW,
+    AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, LiveContinuation,
+    LiveProgram, LiveSession, ManimAxes, ManimAxesOptions, Mobject, RateFunction, Scene,
+    SceneExecution, SemanticAnimationCompositionKind as Kind, Text, BLUE, YELLOW,
 };
 
 struct PlotObjects {
@@ -138,8 +138,8 @@ pub fn program() -> Result<LiveProgram<CoordinatePlayback>, Box<dyn std::error::
     Ok(scene.into_live_program(CoordinatePlayback { objects, phase: 0 })?)
 }
 
-pub fn session() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
-    Ok(scene()?.execution_session()?)
+pub fn session() -> Result<SceneExecution, Box<dyn std::error::Error>> {
+    Ok(scene()?.into_execution()?)
 }
 
 #[cfg(test)]

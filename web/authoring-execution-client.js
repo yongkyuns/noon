@@ -275,6 +275,12 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.pause());
   }
 
+  async retireExecutionSource() {
+    if (this.#transition !== null) await this.#transition;
+    this.#requireStarted();
+    await this.#runTransition(() => this.#player.retireExecutionSource());
+  }
+
   async resume() {
     // Device activation belongs to this gesture and owner. A replacement
     // scene must receive its own explicit Play, never a retried unlock.

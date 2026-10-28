@@ -59,8 +59,23 @@ on:
       - "crates/noon-render-wgpu/src/gpu/glow_filter*"
       - "crates/noon-render-wgpu/src/gpu/glow_filter/**"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow*"
+      - "crates/noon-render-wgpu/src/gpu/gaussian_blur*"
+      - "crates/noon-render-wgpu/src/gpu/gaussian_blur/**"
+      - "scripts/gaussian-blur-*.mjs"
+      - "scripts/blur-qualification.mjs"
+      - "scripts/shadow-qualification.mjs"
+      - "scripts/ordered-effects-qualification.mjs"
+      - "scripts/composed-effects-qualification.mjs"
+      - "scripts/noise-dissolve-qualification.mjs"
+      - "scripts/dissolve-qualification.mjs"
+      - "scripts/dissolve-mask-*.mjs"
+      - "scripts/scope-opacity-qualification.mjs"
+      - "crates/noon-export/tests/scope_opacity.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
+      - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
+      - "crates/noon-render-wgpu/src/gpu/linear_gradient.rs"
+      - "crates/noon-render-wgpu/src/linear_gradient.rs"
       - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*"
       - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**"
       - "crates/noon-render-wgpu/src/gpu/mod.rs"
@@ -73,11 +88,29 @@ on:
       - "web/ci-workflow-topology.test.mjs"
       - "tests/visual-effects/**"
       - "scripts/glow-worker-*.mjs"
+      - "scripts/linear-gradient-qualification.mjs"
+      - "scripts/radial-gradient-qualification.mjs"
+      - "scripts/noise-paint-qualification.mjs"
+      - "scripts/noise-paint-reference.mjs"
+      - "scripts/noise-paint-reference.test.mjs"
+      - "scripts/hatch-paint-*.mjs"
+      - "crates/noon-core/src/object_state/hatch_paint*"
+      - "crates/noon-core/src/object_state/hatch_paint/**"
+      - "crates/noon-render-wgpu/src/paint*.wgsl"
+      - "scripts/image-fill-qualification.mjs"
       - "crates/noon-web/src/glow_worker_smoke.rs"
       - "crates/noon-web/src/retained_execution_canvas.rs"
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/composed/**"
+      - "crates/noon/tests/composed_effects.rs"
+      - "crates/noon/tests/linear_gradient_raster.rs"
+      - "crates/noon/tests/radial_gradient_raster.rs"
+      - "crates/noon/tests/noise_paint_raster.rs"
+      - "crates/noon/tests/noise_reference/**"
+      - "crates/noon/tests/hatch_paint_raster.rs"
+      - "crates/noon/tests/hatch_reference/**"
       - "crates/noon/examples/glow_scene_playback.rs"
       - "crates/noon/src/effect_authoring*"
       - "crates/noon/src/effect_authoring/**"
@@ -212,6 +245,20 @@ jobs:
           cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
           cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests
           cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
+      - name: Qualify RGBA Gaussian pixels and retained raster resources
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
+      - name: Qualify ordered effect composition against independent RGBA references
+        run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
+      - name: Qualify grouped glyph original coverage and paint alpha
+        env:
+          NOON_GLYPH_COVERAGE_ARTIFACT_DIR: ${{ github.workspace }}/glyph-coverage-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture
+      - name: Qualify public composed group pixels and lifecycle
+        run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
+      - name: Qualify native composed opacity and ancestor Visibility lifecycle
+        run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
+      - name: Qualify dissolve mask field and premultiplied alpha operator
+        run: cargo test -p noon-render-wgpu --lib dissolve_filter -- --ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
@@ -219,10 +266,44 @@ jobs:
           cargo run -p noon --example glow_scene_playback
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact authored_glow_pulse_pixels_restore_and_replay --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact click_glow_pulse_pixels_restore_and_retire --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
           cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_shadow_pixels_offset_animation_hard_shadow_and_retirement --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture
+      - name: Qualify public Rust image paint on native GPU
+        run: |
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes --nocapture
+      - name: Qualify public Rust animated linear paint on native GPU
+        # The linear-paint oracle uses the same public Scene and retained GPU path.
+        # Absence of the requested native adapter is a failure.
+        run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture
+      - name: Qualify public Rust radial paint on native GPU
+        run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture
+      - name: Qualify public Rust procedural noise paint on native GPU
+        run: |
+          cargo test -p noon --test noise_paint_raster -- --ignored --nocapture
+          cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture
+      - name: Qualify public Rust hatch paint on native GPU
+        # A missing GPU fails the required raster test, rather than skipping it.
+        run: |
+          cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture
+          cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture
+      - name: Preserve native glyph coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: glyph-coverage-raster-correctness
+          path: glyph-coverage-raster-artifacts
+          if-no-files-found: error
+          retention-days: 3
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -460,10 +541,38 @@ jobs:
         run: node scripts/camera-density-smoke.mjs
       - name: Test retained worker glow report and independent reference
         run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs scripts/glow-worker-transport.test.mjs
+      - name: Qualify reusable RGBA Gaussian raster on WebGPU and WebGL2
+        run: node scripts/gaussian-blur-qualification.mjs
+      - name: Qualify paired Rust and Python Blur authoring on WebGPU and WebGL2
+        run: node scripts/blur-qualification.mjs
+      - name: Qualify paired Rust and Python Shadow authoring on WebGPU and WebGL2
+        run: node scripts/shadow-qualification.mjs
+      - name: Qualify paired ordered effect stacks on WebGPU and WebGL2
+        run: node scripts/ordered-effects-qualification.mjs
+      - name: Qualify paired composed family controls on WebGPU and WebGL2
+        run: node scripts/composed-effects-qualification.mjs
+      - name: Qualify animated nested opacity and ancestor Visibility
+        run: node scripts/scope-opacity-qualification.mjs
+      - name: Qualify private visibility lifecycle through Rust and Python
+        run: node scripts/dissolve-qualification.mjs
+      - name: Qualify composed seeded masks through Rust and Python
+        run: node scripts/noise-dissolve-qualification.mjs
+      - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2
+        run: node scripts/image-fill-qualification.mjs
       - name: Qualify retained worker glow images and recovery
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker
         run: node scripts/glow-worker-qualification.mjs
+      - name: Qualify Rust-WASM and Python animated linear paint on WebGPU and WebGL
+        env:
+          NOON_GRADIENT_ARTIFACTS: browser-smoke-artifacts/linear-gradient
+        run: node scripts/linear-gradient-qualification.mjs
+      - name: Qualify paired radial paint authoring
+        run: node scripts/radial-gradient-qualification.mjs
+      - name: Qualify paired procedural noise paint authoring
+        run: node scripts/noise-paint-qualification.mjs
+      - name: Qualify paired hatch paint authoring
+        run: node scripts/hatch-paint-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage
@@ -495,4 +604,17 @@ jobs:
           name: browser-backend-visual-parity
           path: browser-backend-parity-report
           if-no-files-found: error
+          retention-days: 3
+      - name: Preserve finite effect pixel evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: finite-effect-authoring-pixels
+          path: |
+            browser-smoke-artifacts/ordered-effects
+            browser-smoke-artifacts/composed-effects
+            browser-smoke-artifacts/scope-opacity
+            browser-smoke-artifacts/dissolve
+            browser-smoke-artifacts/noise-dissolve
+          if-no-files-found: warn
           retention-days: 3

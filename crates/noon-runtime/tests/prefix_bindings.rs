@@ -251,6 +251,7 @@ fn rejected_binding_edits_preserve_history_and_an_active_effect() {
         ExecutionPatch::SetStyle {
             object: ObjectId::new(99),
             style: Style::default(),
+            fill_paint: None,
         },
     ]);
     assert!(source.apply_execution_transaction(&transaction).is_err());

@@ -247,7 +247,7 @@ impl NativeCapture {
             .map_err(CaptureError::gpu)?;
         let glow_visible = self
             .renderer
-            .glow_source_visibility(publication, visible)
+            .effect_source_visibility(publication, visible)
             .map_err(CaptureError::gpu)?;
         let prepared = self
             .preparer
@@ -269,14 +269,14 @@ impl NativeCapture {
             });
         let glow_work = self
             .renderer
-            .prepare_retained_analytic_glows(
+            .prepare_retained_effects(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 &prepared,
                 &self.text,
                 publication,
-                noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
             )
             .map_err(CaptureError::gpu)?;
         retained_upload_bytes += glow_work.bytes_uploaded;
@@ -294,7 +294,7 @@ impl NativeCapture {
                 None,
             )
             .map_err(|error| {
-                self.renderer.invalidate_analytic_glows();
+                self.renderer.invalidate_effect_captures();
                 CaptureError::gpu(error)
             })?;
         if read_pixels {
@@ -316,7 +316,7 @@ impl NativeCapture {
             );
         }
         if let Err(error) = self.fault.check() {
-            self.renderer.invalidate_analytic_glows();
+            self.renderer.invalidate_effect_captures();
             return Err(error);
         }
         let submission = self.queue.submit([encoder.finish()]);

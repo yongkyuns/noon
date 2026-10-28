@@ -236,14 +236,11 @@ pub fn program(case: CameraCase) -> Result<LiveProgram<CameraContinuation>, Stri
         .map_err(|e| e.to_string())
 }
 
-pub fn static_session(case: CameraCase) -> Result<crate::ExecutionSession, String> {
+pub fn static_session(case: CameraCase) -> Result<crate::SceneExecution, String> {
     if case.duration() != 0. {
         return Err("static camera session requires a static case".into());
     }
-    scene(case)?
-        .0
-        .execution_session()
-        .map_err(|e| e.to_string())
+    scene(case)?.0.into_execution().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -259,10 +256,11 @@ mod tests {
         ] {
             let session = static_session(case).unwrap();
             let draws: Vec<_> = session
+                .session()
                 .painter_order()
                 .iter()
                 .map(|&index| {
-                    session.frame().objects[index as usize]
+                    session.session().frame().objects[index as usize]
                         .spatial
                         .as_deref()
                         .unwrap()

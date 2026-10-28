@@ -8,8 +8,15 @@ use order_index::{move_order_row, reposition_order_row};
 mod audio;
 pub use audio::CompiledAudioClip;
 mod compaction;
+mod composed_dependencies;
+pub use composed_dependencies::{
+    validate_composed_sources, CompiledComposedSourceError, CompiledComposedSourceErrorKind,
+    ComposedDependencies, ComposedDependencyChanges, ComposedSourceGraphView,
+    ComposedValidationStats,
+};
+mod effect_attachment;
+pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};
 mod execution_patch;
-mod glow_attachment;
 mod graph_dependencies;
 pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
 mod replay_revision;
@@ -50,15 +57,15 @@ use noon_core::{
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
 pub use execution_patch::{
-    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, CompiledInset2DView,
-    ExecutionMutationTransaction, ExecutionPatch,
+    validate_fill_paint, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
+    CompiledInset2DView, ExecutionMutationTransaction, ExecutionPatch,
 };
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
-    pub glow: bool,
+    pub effect: bool,
     pub presence: bool,
     pub z_index: bool,
     pub transform: bool,
@@ -79,9 +86,13 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
-            Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
-                self.glow = true
-            }
+            Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectOffset
+            | Property::EffectProgress
+            | Property::EffectSoftness
+            | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
@@ -101,7 +112,7 @@ impl DynamicProperties {
     }
 
     pub const fn any(self) -> bool {
-        self.glow
+        self.effect
             || self.presence
             || self.z_index
             || self.transform
@@ -122,13 +133,15 @@ impl DynamicProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
+    /// Derived continuous fill definition; solid fills retain the compact style.
+    pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     /// Whether this object can draw; its query geometry remains available.
     pub draw_enabled: bool,
     /// Authored native click action, retained with this time-qualified execution row.
     /// Ordinary rows allocate no binding payload.
     pub click_indicate: Option<Arc<SemanticClickIndicate>>,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
-    pub glow: Option<Arc<CompiledGlow>>,
+    pub effects: Option<Arc<CompiledEffectStack>>,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
@@ -148,17 +161,21 @@ pub struct CompiledObject {
 /// One static attachment lowered from the existing generational semantic node.
 /// This is execution data, not a second attachment allocator or mutable scene.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CompiledGlow {
+pub struct CompiledEffect {
     pub attachment: noon_core::SemanticNodeId,
-    pub definition: noon_core::Glow,
+    pub definition: noon_core::EffectDefinition,
 }
 
-impl CompiledGlow {
+impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 3] = [
-        Property::GlowColor,
-        Property::GlowRadius,
-        Property::GlowIntensity,
+    pub const PARAMETER_PROPERTIES: [Property; 7] = [
+        Property::EffectColor,
+        Property::EffectRadius,
+        Property::EffectIntensity,
+        Property::EffectOffset,
+        Property::EffectProgress,
+        Property::EffectSoftness,
+        Property::EffectSeed,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -166,29 +183,38 @@ impl CompiledGlow {
     /// this value from the runtime row at activation, not an earlier authored copy.
     pub fn parameter_channels(
         &self,
-        update: noon_core::GlowUpdate,
-    ) -> Result<Vec<(Property, TrackValues)>, noon_core::GlowParameterError> {
+        update: noon_core::EffectUpdate,
+    ) -> Result<Vec<(Property, TrackValues)>, noon_core::EffectParameterError> {
         update.prepare(self.definition)?;
         let target = update.apply_to(self.definition)?;
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
-            + usize::from(update.intensity.is_some());
+            + usize::from(update.intensity.is_some())
+            + usize::from(update.offset.is_some())
+            + usize::from(update.progress.is_some())
+            + usize::from(update.softness.is_some());
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
-            (update.color.is_some(), Property::GlowColor),
-            (update.radius.is_some(), Property::GlowRadius),
-            (update.intensity.is_some(), Property::GlowIntensity),
+            (update.color.is_some(), Property::EffectColor),
+            (update.radius.is_some(), Property::EffectRadius),
+            (update.intensity.is_some(), Property::EffectIntensity),
+            (update.offset.is_some(), Property::EffectOffset),
+            (update.progress.is_some(), Property::EffectProgress),
+            (update.softness.is_some(), Property::EffectSoftness),
         ] {
             if requested {
                 channels.push((
                     property,
-                    TrackValues::Glow {
+                    TrackValues::Effect {
                         attachment: self.attachment,
-                        from: noon_core::GlowTrackValue::from_definition(property, self.definition)
+                        from: noon_core::EffectTrackValue::from_definition(
+                            property,
+                            self.definition,
+                        )
+                        .expect("glow property"),
+                        to: noon_core::EffectTrackValue::from_definition(property, target)
                             .expect("glow property"),
-                        to: noon_core::GlowTrackValue::from_definition(property, target)
-                            .expect("glow property"),
-                        end_behavior: noon_core::GlowTrackEndBehavior::Sample,
+                        end_behavior: noon_core::EffectTrackEndBehavior::Sample,
                     },
                 ));
             }
@@ -247,13 +273,14 @@ impl CompiledObject {
         base_style: Style,
     ) -> Self {
         Self {
+            fill_paint: None,
             draw_enabled: true,
             click_indicate: None,
             id,
             content: content.into(),
             text_bounds: None,
             base_transform,
-            glow: None,
+            effects: None,
             spatial: None,
             base_style,
             base_z_index: 0.0,
@@ -442,16 +469,49 @@ impl CompiledResources {
         source: &RasterImageResourceArena,
         content: SemanticImageContent,
     ) -> Result<RasterImageContentRef, CompiledResourceError> {
-        let handle = content.resource();
-        let resource = match self.images.entry(handle) {
+        let resource = self.capture_image_resource(source, content.resource())?;
+        Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
+    pub fn capture_paint_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        paint: &noon_core::SemanticPaint,
+    ) -> Result<(), CompiledResourceError> {
+        if let Some(image) = paint.as_image() {
+            self.capture_image_resource(source, image.resource())?;
+        }
+        Ok(())
+    }
+
+    pub fn capture_paint_track_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        values: &TrackValues,
+    ) -> Result<(), CompiledResourceError> {
+        if let TrackValues::Paint { transition } = values {
+            for (paint, _) in transition.endpoints() {
+                if let Some(paint) = paint {
+                    self.capture_paint_from_arena(source, paint)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn capture_image_resource(
+        &mut self,
+        source: &RasterImageResourceArena,
+        handle: RasterImageResourceHandle,
+    ) -> Result<&Arc<RasterImageResource>, CompiledResourceError> {
+        Ok(match self.images.entry(handle) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
                 source
                     .get_shared(handle)
                     .ok_or(CompiledResourceError::MissingImage(handle))?,
             ),
-        };
-        Ok(RasterImageContentRef::from_resource(content, resource))
+        })
     }
 
     /// Capture one producer-owned immutable text resource and its font/path
@@ -738,6 +798,7 @@ pub struct CompiledTrack {
 pub struct CompiledChannelKey {
     pub object_index: u32,
     pub property: Property,
+    attachment: Option<noon_core::SemanticNodeId>,
 }
 
 impl CompiledChannelKey {
@@ -745,7 +806,43 @@ impl CompiledChannelKey {
         Self {
             object_index,
             property,
+            attachment: None,
         }
+    }
+
+    /// An effect parameter belongs to an exact semantic attachment generation.
+    /// An ordinary object/property key never aliases an attachment channel.
+    pub const fn effect(
+        object_index: u32,
+        property: Property,
+        attachment: noon_core::SemanticNodeId,
+    ) -> Self {
+        Self {
+            object_index,
+            property,
+            attachment: Some(attachment),
+        }
+    }
+
+    pub const fn attachment(self) -> Option<noon_core::SemanticNodeId> {
+        self.attachment
+    }
+
+    /// Derive the address from the validated payload; never resolve a name or
+    /// substitute the current attachment for a track's captured generation.
+    pub fn for_values(object_index: u32, property: Property, values: &TrackValues) -> Self {
+        match values {
+            TrackValues::Effect { attachment, .. } => {
+                Self::effect(object_index, property, *attachment)
+            }
+            _ => Self::new(object_index, property),
+        }
+    }
+}
+
+impl CompiledTrack {
+    pub fn channel(&self) -> CompiledChannelKey {
+        CompiledChannelKey::for_values(self.object_index, self.property, &self.values)
     }
 }
 
@@ -760,6 +857,7 @@ impl Ord for CompiledChannelKey {
         self.object_index
             .cmp(&other.object_index)
             .then_with(|| property_rank(self.property).cmp(&property_rank(other.property)))
+            .then_with(|| self.attachment.cmp(&other.attachment))
     }
 }
 
@@ -767,6 +865,7 @@ impl Ord for CompiledChannelKey {
 struct CompiledTrackLocator {
     object_index: u32,
     property: Property,
+    attachment: Option<noon_core::SemanticNodeId>,
     start_time: f64,
     id: TrackId,
 }
@@ -776,8 +875,17 @@ impl CompiledTrackLocator {
         Self {
             object_index: track.object_index,
             property: track.property,
+            attachment: track.channel().attachment(),
             start_time: track.timing.start_time,
             id: track.id,
+        }
+    }
+
+    fn channel(self) -> CompiledChannelKey {
+        CompiledChannelKey {
+            object_index: self.object_index,
+            property: self.property,
+            attachment: self.attachment,
         }
     }
 }
@@ -810,6 +918,7 @@ pub struct CompiledPatchStats {
 /// Existing geometry/track payloads are never cloned for staging.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CompiledTransactionPreflightStats {
+    pub composed: ComposedValidationStats,
     /// Existing object identities resolved through the sparse transaction overlay.
     pub objects_indexed: usize,
     /// Existing track identities resolved through the sparse transaction overlay.
@@ -992,6 +1101,7 @@ pub struct CompiledScene {
     // Keyed by stable identity, so compaction needs no row remapping. Ordinary
     // scenes allocate no entries and ordinary frame rows carry no view payload.
     inset_2d_views: BTreeMap<ObjectId, CompiledInset2DView>,
+    composed_dependencies: composed_dependencies::ComposedDependencies,
     /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
     family_order: Vec<u32>,
     family_ranks: Vec<Option<u32>>,
@@ -1073,6 +1183,7 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
+    InvalidComposedSource(CompiledComposedSourceError),
     InvalidZIndex(ObjectId),
     InvalidClickIndicate(ObjectId),
     TooManyObjects(usize),
@@ -1089,6 +1200,7 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidZIndex(id) => {
                 write!(formatter, "object {} has non-finite z-index", id.get())
             }
@@ -1146,11 +1258,12 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    InvalidComposedSource(CompiledComposedSourceError),
     InvalidClickIndicate(ObjectId),
-    InvalidGlowAttachmentChange {
+    InvalidEffectAttachmentChange {
         object: ObjectId,
     },
-    InvalidGlowUpdate {
+    InvalidEffectUpdate {
         object: ObjectId,
     },
     InvalidInset2DView(ObjectId),
@@ -1207,6 +1320,7 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidClickIndicate(id) => write!(
                 formatter,
                 "object {} requires a valid click Indicate binding on analytic circle or rectangle content",
@@ -1260,13 +1374,13 @@ impl std::fmt::Display for CompilePatchError {
                 track.get(),
                 other.get()
             ),
-            Self::InvalidGlowAttachmentChange { object } => write!(
+            Self::InvalidEffectAttachmentChange { object } => write!(
                 formatter,
-                "glow attachment change must match the installed generation and replace or remove it for object {}",
+                "effect attachment change must match the installed generation and replace or remove it for object {}",
                 object.get()
             ),
-            Self::InvalidGlowUpdate { object } => write!(
-                formatter, "glow value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
+            Self::InvalidEffectUpdate { object } => write!(
+                formatter, "effect value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
             ),
             Self::InvalidObjectState { object, field } => write!(
                 formatter,
@@ -1370,17 +1484,17 @@ impl CompiledScene {
         &self,
         tracks: &[TrackDefinition],
     ) -> Result<(), CompilePatchError> {
-        self.preflight_reconcilable_track_additions_with_staged_glow(tracks, &BTreeMap::new())
+        self.preflight_reconcilable_track_additions_with_staged_effects(tracks, &BTreeMap::new())
     }
 
     /// Validate completion/overlap admission when the *same prepared semantic
     /// transaction* installs a fresh attachment immediately before its tracks.
     /// This is not an alternate publication path: the complete patch sequence
     /// still requires strict compiler/runtime preflight before semantic commit.
-    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+    pub fn preflight_reconcilable_track_additions_with_staged_effects(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &BTreeMap<ObjectId, CompiledGlow>,
+        staged_effects: &BTreeMap<ObjectId, CompiledEffectStack>,
     ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
@@ -1401,9 +1515,13 @@ impl CompiledScene {
                         | Property::WorldTransform
                         | Property::CameraProfile
                         | Property::ZIndex
-                        | Property::GlowColor
-                        | Property::GlowRadius
-                        | Property::GlowIntensity
+                        | Property::EffectColor
+                        | Property::EffectRadius
+                        | Property::EffectIntensity
+                        | Property::EffectOffset
+                        | Property::EffectProgress
+                        | Property::EffectSoftness
+                        | Property::EffectSeed
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1411,17 +1529,41 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
-            let resident_glow = self.objects[object_index as usize].glow.as_deref();
-            let staged = staged_glow.get(&track.object);
-            if staged.is_some() && resident_glow.is_some() {
-                return Err(CompilePatchError::InvalidGlowAttachmentChange {
+            let resident_effects = self.objects[object_index as usize].effects.as_deref();
+            let staged = staged_effects.get(&track.object);
+            if staged.is_some_and(|staged| {
+                resident_effects.is_some_and(|stack| {
+                    staged
+                        .attachments()
+                        .iter()
+                        .any(|id| stack.get(*id).is_some())
+                })
+            }) {
+                return Err(CompilePatchError::InvalidEffectAttachmentChange {
                     object: track.object,
                 });
             }
-            validate_glow_track_attachment(track, staged.or(resident_glow))
+            let effect = if let TrackValues::Effect { attachment, .. } = track.values {
+                staged
+                    .and_then(|stack| stack.get(attachment))
+                    .or_else(|| resident_effects.and_then(|stack| stack.get(attachment)))
+            } else {
+                None
+            };
+            validate_effect_track_attachment(track, effect)
                 .map_err(CompilePatchError::InvalidTrack)?;
+            validate_paint_track_profile(
+                track,
+                continuous_fill_content_supported(&self.objects[object_index as usize].content),
+                self.objects[object_index as usize].spatial.is_some(),
+            )
+            .map_err(CompilePatchError::InvalidTrack)?;
             candidates
-                .entry(CompiledChannelKey::new(object_index, track.property))
+                .entry(CompiledChannelKey::for_values(
+                    object_index,
+                    track.property,
+                    &track.values,
+                ))
                 .or_default()
                 .push(track);
         }
@@ -1473,6 +1615,16 @@ impl CompiledScene {
                 object.click_indicate.as_deref(),
             )
             .map_err(|_| CompileError::InvalidClickIndicate(object.id))?;
+            if let Some(gradient) = &object.fill_paint {
+                if !continuous_fill_content_supported(&object.content)
+                    || object.spatial.is_some()
+                    || semantic_lowering::paint::validate_definition(gradient).is_err()
+                {
+                    return Err(CompileError::InvalidTrack(
+                        TimelineError::InvalidPaintValues,
+                    ));
+                }
+            }
             if !object.base_z_index.is_finite() {
                 return Err(CompileError::InvalidZIndex(object.id));
             }
@@ -1497,7 +1649,9 @@ impl CompiledScene {
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
             validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
-            validate_glow_track(track, &objects[object_index as usize])
+            validate_effect_track(track, &objects[object_index as usize])
+                .map_err(CompileError::InvalidTrack)?;
+            validate_paint_track(track, &objects[object_index as usize])
                 .map_err(CompileError::InvalidTrack)?;
             if !valid_track_for_spatial(track, objects[object_index as usize].spatial.as_deref()) {
                 return Err(CompileError::InvalidTrack(
@@ -1534,7 +1688,7 @@ impl CompiledScene {
         let mut tracks_by_channel = BTreeMap::<CompiledChannelKey, Vec<CompiledTrack>>::new();
         for track in tracks {
             tracks_by_channel
-                .entry(CompiledChannelKey::new(track.object_index, track.property))
+                .entry(track.channel())
                 .or_default()
                 .push(track);
         }
@@ -1547,9 +1701,16 @@ impl CompiledScene {
         let mut painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
         painter_order.sort_by(|&a, &b| {
             objects[a as usize]
-                .base_z_index
-                .partial_cmp(&objects[b as usize].base_z_index)
-                .unwrap()
+                .content
+                .composed_source()
+                .is_some()
+                .cmp(&objects[b as usize].content.composed_source().is_some())
+                .then_with(|| {
+                    objects[a as usize]
+                        .base_z_index
+                        .partial_cmp(&objects[b as usize].base_z_index)
+                        .unwrap()
+                })
         });
         let mut painter_ranks = vec![None; objects.len()];
         for (rank, &index) in painter_order.iter().enumerate() {
@@ -1570,6 +1731,7 @@ impl CompiledScene {
             object_indices,
             retired_object_indices: BTreeMap::new(),
             inset_2d_views: BTreeMap::new(),
+            composed_dependencies: Default::default(),
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
@@ -1591,6 +1753,9 @@ impl CompiledScene {
             resources: CompiledResources::default(),
         };
         compiled.rebuild_spatial_anchor_groups();
+        compiled
+            .rebuild_composed_dependencies()
+            .map_err(CompileError::InvalidComposedSource)?;
         Ok(compiled)
     }
 
@@ -1678,9 +1843,16 @@ impl CompiledScene {
             index,
             |a, b| {
                 self.objects[a as usize]
-                    .base_z_index
-                    .partial_cmp(&self.objects[b as usize].base_z_index)
-                    .expect("validated finite priorities")
+                    .content
+                    .composed_source()
+                    .is_some()
+                    .cmp(&self.objects[b as usize].content.composed_source().is_some())
+                    .then_with(|| {
+                        self.objects[a as usize]
+                            .base_z_index
+                            .partial_cmp(&self.objects[b as usize].base_z_index)
+                            .expect("validated finite priorities")
+                    })
                     .then_with(|| self.family_ranks[a as usize].cmp(&self.family_ranks[b as usize]))
             },
         );
@@ -1833,7 +2005,7 @@ impl CompiledScene {
 
     pub fn track(&self, id: TrackId) -> Option<&CompiledTrack> {
         let locator = *self.track_locators.get(&id)?;
-        let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+        let channel = locator.channel();
         let tracks = self.tracks.get(&channel)?;
         let position = tracks
             .binary_search_by(|track| compare_track_locator(track, locator))
@@ -1847,10 +2019,7 @@ impl CompiledScene {
 
     pub fn channel_for_track(&self, id: TrackId) -> Option<CompiledChannelKey> {
         let locator = self.track_locators.get(&id)?;
-        Some(CompiledChannelKey::new(
-            locator.object_index,
-            locator.property,
-        ))
+        Some(locator.channel())
     }
 
     pub fn channel_tracks(&self, channel: CompiledChannelKey) -> &[CompiledTrack] {
@@ -1871,6 +2040,21 @@ impl CompiledScene {
         self.tracks
             .range(start..)
             .take_while(move |(channel, _)| channel.object_index == object_index)
+            .map(|(channel, _)| *channel)
+    }
+
+    /// Enumerate only this object's channels for one property. The ordered
+    /// prefix includes every attachment generation without scanning other rows.
+    pub fn channels_for_object_property(
+        &self,
+        object_index: u32,
+        property: Property,
+    ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+        self.tracks
+            .range(CompiledChannelKey::new(object_index, property)..)
+            .take_while(move |(channel, _)| {
+                channel.object_index == object_index && channel.property == property
+            })
             .map(|(channel, _)| *channel)
     }
 
@@ -1910,6 +2094,25 @@ impl CompiledScene {
             .ok_or(CompilePatchError::TooManyObjects(usize::MAX))?;
         if count != 0 && u32::try_from(count - 1).is_err() {
             return Err(CompilePatchError::TooManyObjects(count));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_continuous_paint_source(
+        &self,
+        index: u32,
+        supported: bool,
+    ) -> Result<(), CompilePatchError> {
+        if !supported
+            && (self.objects[index as usize].fill_paint.is_some()
+                || self
+                    .channel_tracks(CompiledChannelKey::new(index, Property::Fill))
+                    .iter()
+                    .any(|track| matches!(track.values, TrackValues::Paint { .. })))
+        {
+            return Err(CompilePatchError::InvalidTrack(
+                TimelineError::InvalidPaintValues,
+            ));
         }
         Ok(())
     }
@@ -1981,27 +2184,37 @@ impl CompiledScene {
                         != *binding
                 })
             }
-            ExecutionPatch::SetStyle { object, style } => self
-                .object_index(*object)
-                .is_none_or(|index| self.objects[index as usize].base_style != *style),
-            ExecutionPatch::SetGlow { object, glow } => {
+            ExecutionPatch::SetStyle {
+                object,
+                style,
+                fill_paint,
+            } => self.object_index(*object).is_none_or(|index| {
+                self.objects[index as usize].base_style != *style
+                    || self.objects[index as usize].fill_paint != *fill_paint
+            }),
+            ExecutionPatch::SetEffects { object, effects } => {
                 self.object_index(*object).is_none_or(|index| {
-                    self.objects[index as usize].glow.as_deref() != Some(glow.as_ref())
+                    self.objects[index as usize].effects.as_deref() != Some(effects.as_ref())
                 })
             }
-            ExecutionPatch::SetGlowAttachment {
+            ExecutionPatch::SetEffectStack {
                 object,
                 expected,
-                glow,
+                effects,
             } => {
                 self.object_index(*object).is_none_or(|index| {
                     // Invalid redundant changes must still reach validation. Only
                     // the exact absent -> absent case is an idempotent no-op.
-                    let previous = self.objects[index as usize].glow.as_deref();
-                    glow_attachment::validate_change(*object, previous, *expected, glow.as_deref())
-                        .is_err()
+                    let previous = self.objects[index as usize].effects.as_deref();
+                    effect_attachment::validate_change(
+                        *object,
+                        previous,
+                        expected,
+                        effects.as_deref(),
+                    )
+                    .is_err()
                         || previous.is_some()
-                        || glow.is_some()
+                        || effects.is_some()
                 })
             }
             ExecutionPatch::SetInset2DView { object, view } => {
@@ -2049,6 +2262,37 @@ impl CompiledScene {
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<CompiledPatchStats, CompilePatchError> {
+        self.preflight_composed_mutations(std::slice::from_ref(patch))?;
+        self.commit_preflighted_execution_patch_with_stats(patch)
+    }
+
+    /// Internal commit lane after the caller validated the complete transaction.
+    /// In particular, composed references may name rows installed later in that
+    /// same atomic publication. Ordinary per-patch payload checks still apply.
+    #[doc(hidden)]
+    pub fn commit_preflighted_execution_patch_with_stats(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
+        let owner = match patch {
+            ExecutionPatch::CreateObject(row) => Some(row.id),
+            ExecutionPatch::RemoveObject(id) | ExecutionPatch::SetContent { object: id, .. } => {
+                Some(*id)
+            }
+            _ => None,
+        };
+        let previous = owner.and_then(|id| self.composed_plan(id));
+        let stats = self.apply_execution_patch_inner(patch)?;
+        if let Some(owner) = owner {
+            self.update_composed_dependency(owner, previous);
+        }
+        Ok(stats)
+    }
+
+    fn apply_execution_patch_inner(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
         let mut stats = CompiledPatchStats::default();
         match patch {
             ExecutionPatch::CreateObject(object) => {
@@ -2056,6 +2300,11 @@ impl CompiledScene {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
                 validate_compiled_object(object)?;
+                validate_execution_paint_resources(
+                    &self.resources,
+                    None,
+                    object.fill_paint.as_deref(),
+                )?;
                 validate_execution_content_resource(
                     &self.resources,
                     None,
@@ -2228,6 +2477,10 @@ impl CompiledScene {
                     content,
                     *text_bounds,
                 )?;
+                self.require_continuous_paint_source(
+                    index,
+                    continuous_fill_content_supported(content),
+                )?;
                 for property in [Property::Transform, Property::Morph] {
                     let channel = CompiledChannelKey::new(index, property);
                     if let Some(track) = self
@@ -2287,6 +2540,7 @@ impl CompiledScene {
                     object: *object,
                     field: ObjectStateField::Transform,
                 })?;
+                self.require_continuous_paint_source(index, spatial.is_none())?;
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
                 self.update_spatial_anchor_group(index, previous.as_ref(), spatial.as_ref());
                 self.objects[index as usize].base_transform = base_transform;
@@ -2308,6 +2562,7 @@ impl CompiledScene {
                         field: ObjectStateField::Transform,
                     });
                 }
+                self.require_continuous_paint_source(index, spatial.is_none())?;
                 let object_is_mesh = self.compiled_object_is_mesh(index as usize);
                 if spatial.as_ref().is_some_and(|spatial| {
                     (spatial.draw_kind == CompiledSpatialDrawKind::Mesh) != object_is_mesh
@@ -2367,30 +2622,46 @@ impl CompiledScene {
                 }
                 self.refresh_cairo_path_control_points(index);
             }
-            ExecutionPatch::SetStyle { object, style } => {
+            ExecutionPatch::SetStyle {
+                object,
+                style,
+                fill_paint,
+            } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
+                execution_patch::validate_fill_paint(*object, fill_paint.as_deref())?;
+                validate_execution_paint_resources(&self.resources, None, fill_paint.as_deref())?;
+                let source = &self.objects[index as usize];
+                if fill_paint.is_some()
+                    && (!continuous_fill_content_supported(&source.content)
+                        || source.spatial.is_some())
+                {
+                    return Err(CompilePatchError::InvalidTrack(
+                        TimelineError::InvalidPaintValues,
+                    ));
+                }
                 self.objects[index as usize].base_style = *style;
+                self.objects[index as usize].fill_paint = fill_paint.clone();
             }
-            ExecutionPatch::SetGlow { object, glow } => {
+            ExecutionPatch::SetEffects { object, effects } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                execution_patch::validate_glow_replacement(
+                execution_patch::validate_effect_values(
                     *object,
-                    self.objects[index as usize].glow.as_deref(),
-                    glow,
+                    self.objects[index as usize].effects.as_deref(),
+                    effects,
                 )?;
-                self.objects[index as usize].glow = Some(Arc::clone(glow));
+                self.objects[index as usize].effects = Some(Arc::clone(effects));
             }
-            ExecutionPatch::SetGlowAttachment {
+            ExecutionPatch::SetEffectStack {
                 object,
                 expected,
-                glow,
+                effects,
             } => {
-                self.apply_glow_attachment(*object, *expected, glow.clone(), &mut stats)?;
+                self.apply_effect_stack(*object, expected, effects.clone(), &mut stats)?;
             }
             ExecutionPatch::SetInset2DView { object, view } => {
                 if self.object_index(*object).is_none() {
@@ -2432,7 +2703,7 @@ impl CompiledScene {
                 stats.presence_tracks_inspected +=
                     self.validate_presence_edit(None, Some(&compiled))?;
                 let locator = CompiledTrackLocator::from_track(&compiled);
-                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel = locator.channel();
                 let channel_tracks = self.tracks.entry(channel).or_default();
                 let position = track_insertion_position(channel_tracks, &compiled);
                 stats.dense_track_slots_shifted = channel_tracks.len().saturating_sub(position);
@@ -2473,8 +2744,7 @@ impl CompiledScene {
                     .get(&track.id)
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(track.id))?;
-                let old_channel =
-                    CompiledChannelKey::new(old_locator.object_index, old_locator.property);
+                let old_channel = old_locator.channel();
                 let old_position = self.track_position(old_locator);
                 let compiled = self.compile_patch_track(track)?;
                 stats.presence_tracks_inspected +=
@@ -2495,8 +2765,7 @@ impl CompiledScene {
                 }
 
                 let new_locator = CompiledTrackLocator::from_track(&compiled);
-                let new_channel =
-                    CompiledChannelKey::new(new_locator.object_index, new_locator.property);
+                let new_channel = new_locator.channel();
                 let new_tracks = self.tracks.entry(new_channel).or_default();
                 let new_position = track_insertion_position(new_tracks, &compiled);
                 stats.dense_track_slots_shifted += new_tracks.len().saturating_sub(new_position);
@@ -2515,8 +2784,7 @@ impl CompiledScene {
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(*id))?;
                 stats.presence_tracks_inspected += self.validate_presence_edit(Some(*id), None)?;
-                let channel =
-                    CompiledChannelKey::new(old_locator.object_index, old_locator.property);
+                let channel = old_locator.channel();
                 let position = self.track_position(old_locator);
                 let remove_channel = {
                     let tracks = self
@@ -2547,7 +2815,7 @@ impl CompiledScene {
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(*track))?;
                 let position = self.track_position(locator);
-                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel = locator.channel();
                 let compiled = &self.tracks[&channel][position];
                 if compiled.reconciled {
                     return Err(CompilePatchError::TrackAlreadyReconciled(*track));
@@ -2578,9 +2846,13 @@ impl CompiledScene {
                             | Property::WorldTransform
                             | Property::CameraProfile
                             | Property::ZIndex
-                            | Property::GlowColor
-                            | Property::GlowRadius
-                            | Property::GlowIntensity
+                            | Property::EffectColor
+                            | Property::EffectRadius
+                            | Property::EffectIntensity
+                            | Property::EffectOffset
+                            | Property::EffectProgress
+                            | Property::EffectSoftness
+                            | Property::EffectSeed
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -2617,11 +2889,14 @@ impl CompiledScene {
         &self,
         track: &TrackDefinition,
     ) -> Result<CompiledTrack, CompilePatchError> {
+        validate_execution_paint_track_resources(&self.resources, None, &track.values)?;
         let object_index = self
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
-        validate_glow_track(track, &self.objects[object_index as usize])
+        validate_effect_track(track, &self.objects[object_index as usize])
+            .map_err(CompilePatchError::InvalidTrack)?;
+        validate_paint_track(track, &self.objects[object_index as usize])
             .map_err(CompilePatchError::InvalidTrack)?;
         if !valid_track_for_spatial(
             track,
@@ -2638,7 +2913,7 @@ impl CompiledScene {
     }
 
     fn track_position(&self, locator: CompiledTrackLocator) -> usize {
-        let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+        let channel = locator.channel();
         self.channel_tracks(channel)
             .binary_search_by(|track| compare_track_locator(track, locator))
             .expect("track locator index must match channel-local sorted storage")
@@ -2744,34 +3019,93 @@ fn reject_geometry_track_on_text(
     Ok(())
 }
 
-pub(crate) fn validate_glow_track(
+pub(crate) fn continuous_fill_content_supported(content: &ObjectContentRef) -> bool {
+    match content.geometry() {
+        Some(GeometryRef::Circle { radius }) => *radius > 0.0,
+        Some(GeometryRef::Rectangle { size }) => size.x > 0.0 && size.y > 0.0,
+        Some(GeometryRef::VectorPath(path)) => path
+            .conservative_bounds()
+            .is_some_and(|bounds| bounds.max.x > bounds.min.x && bounds.max.y > bounds.min.y),
+        Some(GeometryRef::External(_)) => true,
+        _ => false,
+    }
+}
+
+fn validate_paint_track(
+    track: &TrackDefinition,
+    object: &CompiledObject,
+) -> Result<(), TimelineError> {
+    validate_paint_track_profile(
+        track,
+        continuous_fill_content_supported(&object.content),
+        object.spatial.is_some(),
+    )
+}
+
+pub(crate) fn validate_paint_track_profile(
+    track: &TrackDefinition,
+    supported_content: bool,
+    spatial: bool,
+) -> Result<(), TimelineError> {
+    if let TrackValues::Paint { transition } = &track.values {
+        if !supported_content || spatial {
+            return Err(TimelineError::InvalidPaintValues);
+        }
+        semantic_lowering::paint::validate_transition(transition)
+            .map_err(|_| TimelineError::InvalidPaintValues)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_effect_track(
     track: &TrackDefinition,
     object: &CompiledObject,
 ) -> Result<(), noon_core::TimelineError> {
-    validate_glow_track_attachment(track, object.glow.as_deref())
+    let effect = if let TrackValues::Effect { attachment, .. } = track.values {
+        object
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(attachment))
+    } else {
+        None
+    };
+    validate_effect_track_attachment(track, effect)
 }
 
-pub(crate) fn validate_glow_track_attachment(
+pub(crate) fn validate_effect_track_attachment(
     track: &TrackDefinition,
-    glow: Option<&CompiledGlow>,
+    effect: Option<CompiledEffect>,
 ) -> Result<(), noon_core::TimelineError> {
-    if let TrackValues::Glow {
+    if let TrackValues::Effect {
         attachment,
         from,
         to,
         ..
     } = track.values
     {
-        let Some(glow) = glow.filter(|glow| glow.attachment == attachment) else {
-            return Err(noon_core::TimelineError::InvalidGlowAttachment {
+        let Some(effect) = effect.filter(|effect| effect.attachment == attachment) else {
+            return Err(noon_core::TimelineError::InvalidEffectAttachment {
                 object: track.object,
                 attachment,
             });
         };
-        if from.update().prepare(glow.definition).is_err()
-            || to.update().prepare(glow.definition).is_err()
+        if let (noon_core::EffectTrackValue::Seed(a), noon_core::EffectTrackValue::Seed(b)) =
+            (from, to)
         {
-            return Err(noon_core::TimelineError::InvalidGlowValues(track.property));
+            return if a == b && effect.definition.as_noise_dissolve().is_some() {
+                Ok(())
+            } else {
+                Err(noon_core::TimelineError::InvalidEffectValues(
+                    track.property,
+                ))
+            };
+        }
+        if from.update().prepare(effect.definition).is_err()
+            || to.update().prepare(effect.definition).is_err()
+        {
+            return Err(noon_core::TimelineError::InvalidEffectValues(
+                track.property,
+            ));
         }
     }
     Ok(())
@@ -2838,6 +3172,11 @@ fn validate_execution_content(
     text_bounds: Option<Rect>,
 ) -> Result<(), CompilePatchError> {
     match content {
+        ObjectContentRef::Composed(source) => (text_bounds.is_none()
+            && !source.members().contains(&object)
+            && source.parent_scope() != Some(object))
+        .then_some(())
+        .ok_or(CompilePatchError::InvalidContentBounds(object)),
         ObjectContentRef::Geometry(geometry) => {
             if text_bounds.is_some() {
                 return Err(CompilePatchError::InvalidContentBounds(object));
@@ -2863,6 +3202,40 @@ fn validate_execution_content(
                 .ok_or(CompilePatchError::InvalidContentBounds(object))
         }
     }
+}
+
+fn validate_execution_paint_resources(
+    resources: &CompiledResources,
+    additions: Option<&CompiledResources>,
+    paint: Option<&noon_core::SemanticPaint>,
+) -> Result<(), CompilePatchError> {
+    if let Some(image) = paint.and_then(noon_core::SemanticPaint::as_image) {
+        let handle = image.resource();
+        if RasterImageResourceLookup::get(resources, handle)
+            .or_else(|| {
+                additions.and_then(|resources| RasterImageResourceLookup::get(resources, handle))
+            })
+            .is_none()
+        {
+            return Err(CompilePatchError::Resource(
+                CompiledResourceError::MissingImage(handle),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_execution_paint_track_resources(
+    resources: &CompiledResources,
+    additions: Option<&CompiledResources>,
+    values: &TrackValues,
+) -> Result<(), CompilePatchError> {
+    if let TrackValues::Paint { transition } = values {
+        for (paint, _) in transition.endpoints() {
+            validate_execution_paint_resources(resources, additions, paint)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_execution_content_resource(
@@ -2921,6 +3294,13 @@ fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchE
         is_click_indicate_target(&object.content),
         object.click_indicate.as_deref(),
     )?;
+    if object.fill_paint.is_some()
+        && (!continuous_fill_content_supported(&object.content) || object.spatial.is_some())
+    {
+        return Err(CompilePatchError::InvalidTrack(
+            TimelineError::InvalidPaintValues,
+        ));
+    }
     validate_z_index(object.id, object.base_z_index)?;
     if !valid_compiled_spatial(object.spatial.as_deref()) {
         return Err(CompilePatchError::InvalidObjectState {
@@ -2930,6 +3310,7 @@ fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchE
     }
     validate_execution_content(object.id, &object.content, object.text_bounds)?;
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
+    execution_patch::validate_fill_paint(object.id, object.fill_paint.as_deref())?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
 }
 
@@ -3230,18 +3611,16 @@ fn track_insertion_position(tracks: &[CompiledTrack], track: &CompiledTrack) -> 
 }
 
 fn compare_tracks(left: &CompiledTrack, right: &CompiledTrack) -> Ordering {
-    left.object_index
-        .cmp(&right.object_index)
-        .then_with(|| property_rank(left.property).cmp(&property_rank(right.property)))
+    left.channel()
+        .cmp(&right.channel())
         .then_with(|| left.timing.start_time.total_cmp(&right.timing.start_time))
         .then_with(|| left.id.cmp(&right.id))
 }
 
 fn compare_track_locator(track: &CompiledTrack, locator: CompiledTrackLocator) -> Ordering {
     track
-        .object_index
-        .cmp(&locator.object_index)
-        .then_with(|| property_rank(track.property).cmp(&property_rank(locator.property)))
+        .channel()
+        .cmp(&locator.channel())
         .then_with(|| track.timing.start_time.total_cmp(&locator.start_time))
         .then_with(|| track.id.cmp(&locator.id))
 }
@@ -3286,9 +3665,13 @@ const fn property_rank(property: Property) -> u8 {
         Property::Reveal => 12,
         Property::Morph => 13,
         Property::ZIndex => 14,
-        Property::GlowColor => 15,
-        Property::GlowRadius => 16,
-        Property::GlowIntensity => 17,
+        Property::EffectColor => 15,
+        Property::EffectRadius => 16,
+        Property::EffectIntensity => 17,
+        Property::EffectOffset => 18,
+        Property::EffectProgress => 19,
+        Property::EffectSoftness => 20,
+        Property::EffectSeed => 21,
     }
 }
 
@@ -3614,7 +3997,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -3662,7 +4045,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 scale: true,
                 ..DynamicProperties::default()
@@ -3693,7 +4076,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 stroke_width: true,
                 ..DynamicProperties::default()
@@ -3725,7 +4108,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 appearance: true,
                 ..DynamicProperties::default()
@@ -3760,7 +4143,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 presence: true,
                 ..DynamicProperties::default()
@@ -3980,7 +4363,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
-                glow: false,
+                effect: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -4207,9 +4590,9 @@ mod tests {
 
     fn object_with_late_channels(id: u64) -> (CompiledObject, Vec<TrackDefinition>) {
         let object = ObjectId::new(id);
-        let glow = CompiledGlow {
+        let effect = CompiledEffect {
             attachment: noon_core::SemanticNodeId::new(id as u32, 1),
-            definition: noon_core::Glow::default(),
+            definition: noon_core::Glow::default().into(),
         };
         let mut compiled = CompiledObject::new(
             object,
@@ -4217,7 +4600,7 @@ mod tests {
             Transform2D::IDENTITY,
             Style::default(),
         );
-        compiled.glow = Some(Arc::new(glow));
+        compiled.effects = Some(Arc::new(CompiledEffectStack::new([effect]).unwrap()));
         let mut channels = vec![
             (
                 Property::Position,
@@ -4229,13 +4612,14 @@ mod tests {
             (Property::ZIndex, TrackValues::ZIndex { from: 0.0, to: 2.0 }),
         ];
         channels.extend(
-            glow.parameter_channels(
-                noon_core::GlowUpdate::default()
-                    .color(noon_core::Color::BLUE)
-                    .radius(0.3)
-                    .intensity(0.8),
-            )
-            .unwrap(),
+            effect
+                .parameter_channels(
+                    noon_core::EffectUpdate::default()
+                        .color(noon_core::Color::BLUE)
+                        .radius(0.3)
+                        .intensity(0.8),
+                )
+                .unwrap(),
         );
         let tracks = channels
             .into_iter()
@@ -4300,7 +4684,7 @@ mod tests {
             tracks.len()
         );
         assert!(compiled.objects()[0].dynamic.z_index);
-        assert!(compiled.objects()[0].dynamic.glow);
+        assert!(compiled.objects()[0].dynamic.effect);
         assert!(compiled.objects()[0].dynamic.position);
         assert_eq!(compiled.objects()[1].dynamic, DynamicProperties::default());
 
@@ -4309,11 +4693,11 @@ mod tests {
             .unwrap();
         assert!(!compiled.objects()[0].dynamic.z_index);
         for (index, track) in tracks[2..].iter().enumerate() {
-            assert!(compiled.objects()[0].dynamic.glow);
+            assert!(compiled.objects()[0].dynamic.effect);
             compiled
                 .apply_execution_patch(&ExecutionPatch::RemoveTrack(track.id))
                 .unwrap();
-            assert_eq!(compiled.objects()[0].dynamic.glow, index < 2);
+            assert_eq!(compiled.objects()[0].dynamic.effect, index < 2);
         }
         assert!(compiled.objects()[0].dynamic.position);
         assert_eq!(compiled.objects()[1].dynamic, DynamicProperties::default());
@@ -4565,6 +4949,7 @@ mod tests {
         assert_eq!(compiled.objects()[0].base_transform, Transform2D::IDENTITY);
 
         let valid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+            fill_paint: None,
             object,
             style: Style::default(),
         }]);

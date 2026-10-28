@@ -49,6 +49,7 @@ fn repeated_local_property_edits_stay_bounded_and_local() {
             let mut style = live.frame().objects[TARGET_INDEX].style;
             style.opacity = 0.25 + 0.5 * ((edit % 8) as f32 / 7.0);
             live.apply_execution_patch(&ExecutionPatch::SetStyle {
+                fill_paint: None,
                 object: target,
                 style,
             })

@@ -1,10 +1,10 @@
 //! Ordinary timeline channel tests; public Scene orchestration is still guarded.
 use noon_compile::{
-    CompiledGlow, CompiledObject, CompiledScene, ExecutionMutationTransaction, ExecutionPatch,
+    CompiledEffect, CompiledObject, CompiledScene, ExecutionMutationTransaction, ExecutionPatch,
 };
 use noon_core::{
-    Color, CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Glow, GlowRadius,
-    GlowTrackEndBehavior, GlowTrackValue, GlowUpdate, ObjectId, Pixels, Property, RateFunction,
+    Color, CompositionTimeMap, CompositionTimeMapStep, EffectRadius, EffectTrackEndBehavior,
+    EffectTrackValue, EffectUpdate, GeometryRef, Glow, ObjectId, Pixels, Property, RateFunction,
     SemanticNodeId, Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
@@ -17,27 +17,33 @@ fn object() -> CompiledObject {
         Transform2D::IDENTITY,
         Style::default(),
     );
-    object.glow = Some(Arc::new(CompiledGlow {
-        attachment: SemanticNodeId::new(3, 7),
-        definition: Glow::new(
-            GlowUpdate::default()
-                .radius(Pixels(3.25))
-                .intensity(0.35)
-                .color(Color::RED),
-        )
+    object.effects = Some(Arc::new(
+        noon_compile::CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(3, 7),
+            definition: (Glow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(3.25))
+                    .intensity(0.35)
+                    .color(Color::RED),
+            )
+            .unwrap())
+            .into(),
+        }])
         .unwrap(),
-    }));
+    ));
     object
 }
 fn tracks(
     object: &CompiledObject,
-    update: GlowUpdate,
+    update: EffectUpdate,
     start: f64,
     easing: RateFunction,
 ) -> Vec<TrackDefinition> {
     object
-        .glow
+        .effects
         .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
         .unwrap()
         .parameter_channels(update)
         .unwrap()
@@ -54,7 +60,15 @@ fn tracks(
         .collect()
 }
 fn value(runtime: &SceneInstance) -> Glow {
-    runtime.frame().objects[0].glow.as_ref().unwrap().definition
+    (runtime.frame().objects[0]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
+        .unwrap()
+        .definition)
+        .as_glow()
+        .unwrap()
 }
 fn close(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-12, "{a} != {b}");
@@ -63,7 +77,7 @@ fn close(a: f64, b: f64) {
 #[test]
 fn independent_glow_channels_share_motion_timing_and_rewind() {
     let object = object();
-    let update = GlowUpdate::default()
+    let update = EffectUpdate::default()
         .color(Color::BLUE)
         .radius(Pixels(5.0))
         .intensity(1.2);
@@ -85,23 +99,54 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
         runtime.evaluate(time).unwrap();
         let alpha = ((time - 0.2) / 1.0).clamp(0.0, 1.0);
         let expected = update
-            .prepare(object.glow.as_ref().unwrap().definition)
+            .prepare(
+                object
+                    .effects
+                    .as_ref()
+                    .unwrap()
+                    .get(SemanticNodeId::new(3, 7))
+                    .unwrap()
+                    .definition,
+            )
             .unwrap()
             .sample(alpha)
             .unwrap()
-            .apply_to(object.glow.as_ref().unwrap().definition)
+            .apply_to(
+                object
+                    .effects
+                    .as_ref()
+                    .unwrap()
+                    .get(SemanticNodeId::new(3, 7))
+                    .unwrap()
+                    .definition,
+            )
             .unwrap();
-        assert_eq!(value(&runtime), expected);
+        assert_eq!(value(&runtime), (expected).as_glow().unwrap());
         let mut direct = SceneInstance::new(compiled.clone());
         direct.seek(time).unwrap();
         assert_eq!(runtime.frame(), direct.frame());
         assert_eq!(
-            runtime.frame().objects[0].glow.as_ref().unwrap().attachment,
+            runtime.frame().objects[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .get(SemanticNodeId::new(3, 7))
+                .unwrap()
+                .attachment,
             SemanticNodeId::new(3, 7)
         );
     }
     assert_eq!(
-        object.glow.as_ref().unwrap().definition.intensity(),
+        object
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(SemanticNodeId::new(3, 7))
+            .unwrap()
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity(),
         0.35,
         "authored source snapshot stays immutable"
     );
@@ -110,14 +155,21 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
 #[test]
 fn unchanged_frames_are_clean_and_constant_radius_keeps_f64_precision() {
     let mut object = object();
-    let radius = GlowRadius::Pixels(12.1234567890123);
-    Arc::make_mut(object.glow.as_mut().unwrap()).definition = GlowUpdate::default()
-        .radius(radius)
-        .apply_to(object.glow.as_ref().unwrap().definition)
+    let radius = EffectRadius::Pixels(12.1234567890123);
+    let mut effect = object
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
         .unwrap();
+    effect.definition = EffectUpdate::default()
+        .radius(radius)
+        .apply_to(effect.definition)
+        .unwrap();
+    Arc::make_mut(object.effects.as_mut().unwrap()).replace(effect);
     let channels = tracks(
         &object,
-        GlowUpdate::default().intensity(1.2),
+        EffectUpdate::default().intensity(1.2),
         0.0,
         RateFunction::Linear,
     );
@@ -126,14 +178,14 @@ fn unchanged_frames_are_clean_and_constant_radius_keeps_f64_precision() {
     runtime.advance_to(0.4).unwrap();
     assert_eq!(value(&runtime).radius(), radius);
     runtime.take_frame_changes();
-    let retained = runtime.frame().objects[0].glow.clone().unwrap();
+    let retained = runtime.frame().objects[0].effects.clone().unwrap();
     runtime.advance_to(0.4).unwrap();
     assert!(runtime.frame_changes().is_empty());
     // The existing scheduler samples an active channel again at equal time,
     // but an equal value must not clone/write its retained definition.
     assert!(Arc::ptr_eq(
         &retained,
-        runtime.frame().objects[0].glow.as_ref().unwrap()
+        runtime.frame().objects[0].effects.as_ref().unwrap()
     ));
     runtime.advance_to(2.0).unwrap();
     runtime.take_frame_changes();
@@ -147,7 +199,7 @@ fn prepared_publication_is_atomic_and_matches_direct_evaluation() {
     let object = object();
     let channels = tracks(
         &object,
-        GlowUpdate::default().radius(Pixels(6.0)).intensity(2.4),
+        EffectUpdate::default().radius(Pixels(6.0)).intensity(2.4),
         0.0,
         RateFunction::Smooth,
     );
@@ -170,11 +222,13 @@ fn prepared_publication_is_atomic_and_matches_direct_evaluation() {
     assert!(!publication.changes().is_empty());
     assert_eq!(
         publication.frame().objects[0]
-            .glow
+            .effects
             .as_ref()
             .unwrap()
+            .get(SemanticNodeId::new(3, 7))
+            .unwrap()
             .definition,
-        value(&direct)
+        (value(&direct)).into()
     );
 }
 
@@ -183,13 +237,13 @@ fn removing_one_channel_restores_only_its_own_base_value() {
     let object = object();
     let channels = tracks(
         &object,
-        GlowUpdate::default().radius(Pixels(6.0)).intensity(2.4),
+        EffectUpdate::default().radius(Pixels(6.0)).intensity(2.4),
         0.0,
         RateFunction::Linear,
     );
     let intensity = channels
         .iter()
-        .find(|track| track.property == Property::GlowIntensity)
+        .find(|track| track.property == Property::EffectIntensity)
         .unwrap()
         .id;
     let mut runtime =
@@ -203,7 +257,7 @@ fn removing_one_channel_restores_only_its_own_base_value() {
     assert_eq!(value(&runtime).radius(), radius);
     runtime.advance_to(0.8).unwrap();
     close(value(&runtime).intensity(), 0.35);
-    assert!(matches!(value(&runtime).radius(), GlowRadius::Pixels(_)));
+    assert!(matches!(value(&runtime).radius(), EffectRadius::Pixels(_)));
     close(value(&runtime).radius().value(), 5.45);
 }
 
@@ -212,12 +266,12 @@ fn wrong_generation_or_units_reject_before_transaction_prefix_commits() {
     let object = object();
     let mut track = tracks(
         &object,
-        GlowUpdate::default().intensity(1.2),
+        EffectUpdate::default().intensity(1.2),
         0.0,
         RateFunction::Linear,
     )
     .remove(0);
-    let TrackValues::Glow { attachment, .. } = &mut track.values else {
+    let TrackValues::Effect { attachment, .. } = &mut track.values else {
         panic!()
     };
     *attachment = SemanticNodeId::new(3, 6);
@@ -242,12 +296,12 @@ fn wrong_generation_or_units_reject_before_transaction_prefix_commits() {
     let invalid = TrackDefinition {
         id: TrackId::new(2),
         object: object.id,
-        property: Property::GlowRadius,
-        values: TrackValues::Glow {
-            attachment: object.glow.as_ref().unwrap().attachment,
-            from: GlowTrackValue::Radius(GlowRadius::Scene(1.0)),
-            to: GlowTrackValue::Radius(GlowRadius::Scene(2.0)),
-            end_behavior: GlowTrackEndBehavior::Sample,
+        property: Property::EffectRadius,
+        values: TrackValues::Effect {
+            attachment: SemanticNodeId::new(3, 7),
+            from: EffectTrackValue::Radius(EffectRadius::Scene(1.0)),
+            to: EffectTrackValue::Radius(EffectRadius::Scene(2.0)),
+            end_behavior: EffectTrackEndBehavior::Sample,
         },
         timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: Default::default(),
@@ -263,55 +317,61 @@ fn wrong_generation_or_units_reject_before_transaction_prefix_commits() {
 #[test]
 fn incompatible_parameter_values_and_discrete_updates_fail_admission() {
     let object = object();
-    let glow = object.glow.as_ref().unwrap();
-    assert!(glow
-        .parameter_channels(GlowUpdate::default().radius(1.0))
+    let effect = object
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
+        .unwrap();
+    assert!(effect
+        .parameter_channels(EffectUpdate::default().radius(1.0))
         .is_err());
-    assert!(glow
-        .parameter_channels(GlowUpdate::default().source(noon_core::GlowSource::Silhouette))
+    assert!(effect
+        .parameter_channels(EffectUpdate::default().source(noon_core::GlowSource::Silhouette))
         .is_err());
     for values in [
-        TrackValues::Glow {
-            attachment: glow.attachment,
-            from: GlowTrackValue::Intensity(0.5),
-            to: GlowTrackValue::Intensity(f64::NAN),
-            end_behavior: GlowTrackEndBehavior::Sample,
+        TrackValues::Effect {
+            attachment: effect.attachment,
+            from: EffectTrackValue::Intensity(0.5),
+            to: EffectTrackValue::Intensity(f64::NAN),
+            end_behavior: EffectTrackEndBehavior::Sample,
         },
-        TrackValues::Glow {
-            attachment: glow.attachment,
-            from: GlowTrackValue::Intensity(0.5),
-            to: GlowTrackValue::Intensity(8.1),
-            end_behavior: GlowTrackEndBehavior::Sample,
+        TrackValues::Effect {
+            attachment: effect.attachment,
+            from: EffectTrackValue::Intensity(0.5),
+            to: EffectTrackValue::Intensity(8.1),
+            end_behavior: EffectTrackEndBehavior::Sample,
         },
-        TrackValues::Glow {
-            attachment: glow.attachment,
-            from: GlowTrackValue::Radius(GlowRadius::Pixels(3.0)),
-            to: GlowTrackValue::Radius(GlowRadius::Pixels(4.0)),
-            end_behavior: GlowTrackEndBehavior::Sample,
+        TrackValues::Effect {
+            attachment: effect.attachment,
+            from: EffectTrackValue::Radius(EffectRadius::Pixels(3.0)),
+            to: EffectTrackValue::Radius(EffectRadius::Pixels(4.0)),
+            end_behavior: EffectTrackEndBehavior::Sample,
         },
-        TrackValues::Glow {
-            attachment: glow.attachment,
-            from: GlowTrackValue::Intensity(0.5),
-            to: GlowTrackValue::Color(Color::BLUE),
-            end_behavior: GlowTrackEndBehavior::Sample,
+        TrackValues::Effect {
+            attachment: effect.attachment,
+            from: EffectTrackValue::Intensity(0.5),
+            to: EffectTrackValue::Color(Color::BLUE),
+            end_behavior: EffectTrackEndBehavior::Sample,
         },
     ] {
         let track = TrackDefinition {
             id: TrackId::new(1),
             object: object.id,
-            property: Property::GlowIntensity,
+            property: Property::EffectIntensity,
             values,
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: Default::default(),
         };
         assert!(noon_core::validate_track_definition(&track).is_err());
     }
-    assert!(glow
-        .parameter_channels(GlowUpdate::default())
+    assert!(effect
+        .parameter_channels(EffectUpdate::default())
         .unwrap()
         .is_empty());
     assert_eq!(
-        glow.parameter_channels(GlowUpdate::default().intensity(0.35))
+        effect
+            .parameter_channels(EffectUpdate::default().intensity(0.35))
             .unwrap()
             .len(),
         1,
@@ -324,7 +384,7 @@ fn returning_and_nested_rates_use_the_existing_time_map() {
     let object = object();
     let mut channels = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     );
@@ -356,7 +416,7 @@ fn leaf_returning_and_reverse_rates_preserve_the_existing_terminal_contract() {
         (RateFunction::Linear, true),
     ] {
         let object = object();
-        let mut channels = tracks(&object, GlowUpdate::default().intensity(2.0), 0.0, rate);
+        let mut channels = tracks(&object, EffectUpdate::default().intensity(2.0), 0.0, rate);
         channels[0].timing.reverse_rate_function = reverse;
         let compiled = CompiledScene::compile_objects(vec![object], &channels).unwrap();
         let mut runtime = SceneInstance::new(compiled.clone());
@@ -382,18 +442,18 @@ fn restoring_pulse_finishes_inside_longer_parallel_motion_and_matches_direct_see
     let peak = 2.0;
     let mut channels = tracks(
         &object,
-        GlowUpdate::default().intensity(peak),
+        EffectUpdate::default().intensity(peak),
         0.0,
         RateFunction::Linear,
     );
-    let TrackValues::Glow {
+    let TrackValues::Effect {
         from, end_behavior, ..
     } = &mut channels[0].values
     else {
         panic!("glow parameter channel");
     };
-    *from = GlowTrackValue::Intensity(captured_intensity);
-    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    *from = EffectTrackValue::Intensity(captured_intensity);
+    *end_behavior = EffectTrackEndBehavior::RestoreSource;
     // This is the ordinary lowered map for a one-second child at t=1 in a
     // four-second composition. The parallel motion and radius continue to t=4.
     channels[0].timing.duration = 4.0;
@@ -415,7 +475,7 @@ fn restoring_pulse_finishes_inside_longer_parallel_motion_and_matches_direct_see
     });
     let mut radius = tracks(
         &object,
-        GlowUpdate::default().radius(Pixels(6.5)),
+        EffectUpdate::default().radius(Pixels(6.5)),
         0.0,
         RateFunction::Linear,
     )
@@ -456,14 +516,14 @@ fn restoring_pulse_reopens_with_returning_parent_and_root_finish_still_restores(
     let object = object();
     let mut channels = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     );
-    let TrackValues::Glow { end_behavior, .. } = &mut channels[0].values else {
+    let TrackValues::Effect { end_behavior, .. } = &mut channels[0].values else {
         panic!("glow parameter channel");
     };
-    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    *end_behavior = EffectTrackEndBehavior::RestoreSource;
     channels[0].time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
         0.0,
         0.5,
@@ -491,14 +551,14 @@ fn restoring_pulse_holds_an_early_easing_peak_until_its_actual_endpoint() {
     let object = object();
     let mut channels = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Lingering,
     );
-    let TrackValues::Glow { end_behavior, .. } = &mut channels[0].values else {
+    let TrackValues::Effect { end_behavior, .. } = &mut channels[0].values else {
         panic!("glow parameter channel");
     };
-    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    *end_behavior = EffectTrackEndBehavior::RestoreSource;
     let mut runtime =
         SceneInstance::new(CompiledScene::compile_objects(vec![object], &channels).unwrap());
     for (time, expected) in [(0.8, 2.0), (0.9, 2.0), (1.0, 0.35), (2.0, 0.35), (0.9, 2.0)] {
@@ -512,15 +572,15 @@ fn restoring_pulse_finishes_at_fractional_child_endpoint_without_losing_pre_end_
     let object = object();
     let mut track = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     )
     .remove(0);
-    let TrackValues::Glow { end_behavior, .. } = &mut track.values else {
+    let TrackValues::Effect { end_behavior, .. } = &mut track.values else {
         panic!("glow parameter channel");
     };
-    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    *end_behavior = EffectTrackEndBehavior::RestoreSource;
     track.timing.duration = 2.5;
     track.time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
         0.2,
@@ -548,15 +608,15 @@ fn restoring_pulse_releases_when_returning_parent_moves_before_delayed_child_sta
     let object = object();
     let mut pulse = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     )
     .remove(0);
-    let TrackValues::Glow { end_behavior, .. } = &mut pulse.values else {
+    let TrackValues::Effect { end_behavior, .. } = &mut pulse.values else {
         panic!("glow parameter channel");
     };
-    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    *end_behavior = EffectTrackEndBehavior::RestoreSource;
     pulse.time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
         0.25,
         0.25,
@@ -564,7 +624,7 @@ fn restoring_pulse_releases_when_returning_parent_moves_before_delayed_child_sta
     )]);
     let mut radius = tracks(
         &object,
-        GlowUpdate::default().radius(Pixels(6.5)),
+        EffectUpdate::default().radius(Pixels(6.5)),
         0.0,
         RateFunction::Linear,
     )
@@ -593,34 +653,34 @@ fn source_restoration_requires_a_positive_duration_intensity_channel() {
     let object = object();
     let mut track = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     )
     .remove(0);
     track.timing.duration = 0.0;
     assert!(noon_core::validate_track_definition(&track).is_ok());
-    let TrackValues::Glow { end_behavior, .. } = &mut track.values else {
+    let TrackValues::Effect { end_behavior, .. } = &mut track.values else {
         panic!("glow parameter channel");
     };
-    *end_behavior = GlowTrackEndBehavior::RestoreSource;
+    *end_behavior = EffectTrackEndBehavior::RestoreSource;
     assert!(matches!(
         noon_core::validate_track_definition(&track),
         Err(noon_core::TimelineError::InvalidDuration(0.0))
     ));
 
     track.timing.duration = 1.0;
-    track.property = Property::GlowRadius;
-    track.values = TrackValues::Glow {
-        attachment: object.glow.as_ref().unwrap().attachment,
-        from: GlowTrackValue::Radius(GlowRadius::Pixels(3.25)),
-        to: GlowTrackValue::Radius(GlowRadius::Pixels(6.5)),
-        end_behavior: GlowTrackEndBehavior::RestoreSource,
+    track.property = Property::EffectRadius;
+    track.values = TrackValues::Effect {
+        attachment: SemanticNodeId::new(3, 7),
+        from: EffectTrackValue::Radius(EffectRadius::Pixels(3.25)),
+        to: EffectTrackValue::Radius(EffectRadius::Pixels(6.5)),
+        end_behavior: EffectTrackEndBehavior::RestoreSource,
     };
     assert!(matches!(
         noon_core::validate_track_definition(&track),
-        Err(noon_core::TimelineError::InvalidGlowValues(
-            Property::GlowRadius
+        Err(noon_core::TimelineError::InvalidEffectValues(
+            Property::EffectRadius
         ))
     ));
 }
@@ -630,16 +690,16 @@ fn glow_rejects_overshooting_leaf_rates_but_accepts_bounded_rates_and_mapped_par
     let object = object();
     let mut track = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     )
     .remove(0);
     for end_behavior in [
-        GlowTrackEndBehavior::Sample,
-        GlowTrackEndBehavior::RestoreSource,
+        EffectTrackEndBehavior::Sample,
+        EffectTrackEndBehavior::RestoreSource,
     ] {
-        let TrackValues::Glow {
+        let TrackValues::Effect {
             end_behavior: mode, ..
         } = &mut track.values
         else {
@@ -711,16 +771,16 @@ fn bounded_polynomial_glow_normalizes_roundoff_at_the_peak() {
         .expect("bounded polynomial has near-endpoint positive roundoff");
     let mut track = tracks(
         &object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Smoothererstep,
     )
     .remove(0);
     for (end_behavior, endpoint) in [
-        (GlowTrackEndBehavior::Sample, 2.0),
-        (GlowTrackEndBehavior::RestoreSource, 0.35),
+        (EffectTrackEndBehavior::Sample, 2.0),
+        (EffectTrackEndBehavior::RestoreSource, 0.35),
     ] {
-        let TrackValues::Glow {
+        let TrackValues::Effect {
             end_behavior: mode, ..
         } = &mut track.values
         else {
@@ -745,14 +805,14 @@ fn bounded_polynomial_glow_normalizes_roundoff_at_the_peak() {
 
 #[test]
 fn public_endpoint_sampler_rejects_cross_parameter_pairs() {
-    assert!(GlowTrackValue::Intensity(0.5)
-        .sample(GlowTrackValue::Color(Color::BLUE), 0.5)
+    assert!(EffectTrackValue::Intensity(0.5)
+        .sample(EffectTrackValue::Color(Color::BLUE), 0.5)
         .is_err());
-    assert!(GlowTrackValue::Intensity(0.5)
-        .sample(GlowTrackValue::Intensity(1.0), f64::NAN)
+    assert!(EffectTrackValue::Intensity(0.5)
+        .sample(EffectTrackValue::Intensity(1.0), f64::NAN)
         .is_err());
-    assert!(GlowTrackValue::Radius(GlowRadius::Pixels(2.0))
-        .sample(GlowTrackValue::Radius(GlowRadius::Scene(3.0)), 0.5)
+    assert!(EffectTrackValue::Radius(EffectRadius::Pixels(2.0))
+        .sample(EffectTrackValue::Radius(EffectRadius::Scene(3.0)), 0.5)
         .is_err());
 }
 
@@ -761,7 +821,7 @@ fn one_animated_glow_stages_only_its_row_among_4096_unrelated_objects() {
     let glow_object = object();
     let tracks = tracks(
         &glow_object,
-        GlowUpdate::default().intensity(2.0),
+        EffectUpdate::default().intensity(2.0),
         0.0,
         RateFunction::Linear,
     );
@@ -790,7 +850,7 @@ fn one_animated_glow_stages_only_its_row_among_4096_unrelated_objects() {
         runtime.frame().objects[4096].transform,
         Transform2D::IDENTITY
     );
-    assert!(runtime.frame().objects[4096].glow.is_none());
+    assert!(runtime.frame().objects[4096].effects.is_none());
 }
 
 #[test]
@@ -798,7 +858,7 @@ fn sequential_channel_capture_uses_current_value_and_replays_historical_gaps() {
     let object = object();
     let first = tracks(
         &object,
-        GlowUpdate::default().intensity(1.0),
+        EffectUpdate::default().intensity(1.0),
         0.0,
         RateFunction::Linear,
     )
@@ -807,9 +867,14 @@ fn sequential_channel_capture_uses_current_value_and_replays_historical_gaps() {
         CompiledScene::compile_objects(vec![object.clone()], std::slice::from_ref(&first)).unwrap(),
     );
     runtime.advance_to(1.0).unwrap();
-    let captured = runtime.frame().objects[0].glow.clone().unwrap();
+    let captured = runtime.frame().objects[0]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(3, 7))
+        .unwrap();
     let (property, values) = captured
-        .parameter_channels(GlowUpdate::default().intensity(3.0))
+        .parameter_channels(EffectUpdate::default().intensity(3.0))
         .unwrap()
         .remove(0);
     let second = TrackDefinition {
@@ -828,7 +893,7 @@ fn sequential_channel_capture_uses_current_value_and_replays_historical_gaps() {
         close(value(&runtime).intensity(), expected);
     }
     assert_eq!(
-        captured.definition.intensity(),
+        captured.definition.as_glow().unwrap().intensity(),
         1.0,
         "captured endpoint must not be mutated by later frames"
     );
@@ -839,19 +904,19 @@ fn raw_overlapping_glow_tracks_follow_the_ordinary_channel_order_not_a_new_lease
     // Low-level timeline tracks permit overlap with canonical ordering. Authored
     // animation driver leases are a separate admission layer, not implemented here.
     let object = object();
-    let attachment = object.glow.as_ref().unwrap().attachment;
+    let attachment = SemanticNodeId::new(3, 7);
     let mut channels = Vec::new();
     for (i, start, duration, from, to) in [(1, 0.0, 2.0, 0.2, 0.8), (2, 0.5, 0.75, 0.35, 0.9)] {
         let timing = TrackTiming::new(start, duration, RateFunction::Linear);
         channels.push(TrackDefinition {
             id: TrackId::new(i),
             object: object.id,
-            property: Property::GlowIntensity,
-            values: TrackValues::Glow {
+            property: Property::EffectIntensity,
+            values: TrackValues::Effect {
                 attachment,
-                from: GlowTrackValue::Intensity(from),
-                to: GlowTrackValue::Intensity(to),
-                end_behavior: GlowTrackEndBehavior::Sample,
+                from: EffectTrackValue::Intensity(from),
+                to: EffectTrackValue::Intensity(to),
+                end_behavior: EffectTrackEndBehavior::Sample,
             },
             timing,
             time_map: Default::default(),

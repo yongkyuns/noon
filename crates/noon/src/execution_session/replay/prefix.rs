@@ -16,7 +16,7 @@ impl ExecutionSession {
             || self.translation_drag.has_targets()
             || self.runtime.inset_2d_views().next().is_some()
             || self.has_audio()
-            || self.has_playback_controls()
+            || !self.interaction_bindings.is_empty()
             || !self.signal_timeline.is_empty()
             || !self.reactive_projection.is_empty()
         {

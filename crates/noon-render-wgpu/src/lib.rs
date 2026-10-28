@@ -8,6 +8,7 @@
 
 mod gpu;
 mod mega_mesh;
+mod paint;
 mod path_residency;
 mod render_order;
 mod reveal;
@@ -272,6 +273,9 @@ pub struct RenderStats {
 
 #[derive(Debug)]
 pub struct PreparedFrame<'a> {
+    pub(crate) fill_paints: &'a HashMap<ObjectId, paint::PreparedPaint>,
+    pub(crate) paint_changes: &'a [ObjectId],
+    pub(crate) paint_indices: &'a [std::collections::BTreeSet<u32>; 3],
     pub time: f64,
     /// Resident identities aligned one-to-one with the corresponding packed
     /// instance arrays. Presence affects ordered submission, not this mapping.
@@ -638,6 +642,12 @@ struct PathGroup {
 
 #[derive(Debug, Default)]
 pub struct FramePreparer {
+    fill_paints: HashMap<ObjectId, paint::PreparedPaint>,
+    paint_changes: Vec<ObjectId>,
+    paint_order_changes: Vec<usize>,
+    paint_indices: [std::collections::BTreeSet<u32>; 3],
+    paint_routes: HashMap<ObjectId, (usize, u32)>,
+    paint_routes_pending: Vec<ObjectId>,
     circle_ids: Vec<ObjectId>,
     circles: Vec<CircleInstance>,
     rectangle_ids: Vec<ObjectId>,
@@ -826,9 +836,22 @@ impl FramePreparer {
 
         self.clear_dirty_ranges();
         let mut geometry_cache_misses = 0;
+        for &object_index in changes.object_indices() {
+            self.sync_fill_paint(frame, object_index);
+        }
         let mut path_vertices_repacked = 0;
         let mut path_indices_repacked = 0;
         let mut replacement_chunks = std::collections::BTreeSet::new();
+        for &index in &self.paint_order_changes {
+            let position = if self.painter_order_installed {
+                self.painter_order_positions.get(index).copied().flatten()
+            } else {
+                Some(index)
+            };
+            if let Some(position) = position {
+                replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+            }
+        }
         for object_index in replacement_indices {
             let previous_instance_count = prepared_slot_instance_count(self.slots[object_index]);
             let replacement = self
@@ -1031,6 +1054,7 @@ impl FramePreparer {
             self.prune_path_mesh_cache(frame, true);
         }
 
+        self.sync_paint_routes();
         self.prepared_frame(
             frame.time,
             0,
@@ -1583,10 +1607,16 @@ impl FramePreparer {
         self.zero_contribution = Default::default();
         self.clear_dirty_ranges();
 
+        self.paint_changes.extend(self.fill_paints.keys().copied());
+        self.fill_paints.clear();
+        self.paint_indices = Default::default();
+        self.paint_routes.clear();
+
         let mut path_groups = Vec::<PathGroup>::new();
         let mut path_group_lookup = HashMap::<usize, usize>::new();
         let mut geometry_cache_misses = 0;
         for (object_index, object) in frame.objects.iter().enumerate() {
+            self.sync_fill_paint(frame, object_index);
             if !frame.is_drawable(object_index) {
                 self.slots.push(PreparedSlot::Absent);
                 self.slot_presences.push(false);
@@ -1764,6 +1794,7 @@ impl FramePreparer {
             .filter(|(before, after)| after > before)
             .count();
 
+        self.sync_paint_routes();
         self.prepared_frame(
             frame.time,
             capacity_growths,
@@ -1883,6 +1914,9 @@ impl FramePreparer {
             + dirty_len(&self.line_dirty_ranges);
         let dirty_instance_count = dirty_instance_count + dirty_len(&self.path_dirty_ranges);
         PreparedFrame {
+            fill_paints: &self.fill_paints,
+            paint_changes: &self.paint_changes,
+            paint_indices: &self.paint_indices,
             time,
             circle_ids: &self.circle_ids,
             circles: &self.circles,
@@ -1979,6 +2013,9 @@ impl FramePreparer {
     }
 
     fn clear_dirty_ranges(&mut self) {
+        self.paint_changes.clear();
+        self.paint_order_changes.clear();
+        self.paint_routes_pending.clear();
         self.circle_dirty_ranges.clear();
         self.rectangle_dirty_ranges.clear();
         self.line_dirty_ranges.clear();
@@ -3091,8 +3128,9 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
@@ -5176,8 +5214,9 @@ mod structural_execution_delta_tests {
 
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),

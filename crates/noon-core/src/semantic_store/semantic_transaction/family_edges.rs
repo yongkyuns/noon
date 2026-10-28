@@ -167,6 +167,40 @@ impl FamilyEdgePreflight {
         members
     }
 
+    pub(super) fn parents_for_read(
+        &self,
+        store: &crate::SemanticStore,
+        member: SemanticTransactionNodeRef,
+    ) -> Vec<SemanticTransactionNodeRef> {
+        let mut seen = HashSet::new();
+        member
+            .existing()
+            .and_then(|id| store.node(id))
+            .into_iter()
+            .flat_map(|node| node.parents().iter().copied().map(Into::into))
+            .chain(
+                self.added_parents
+                    .get(&member)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            )
+            .filter(|family| {
+                seen.insert(*family)
+                    && self
+                        .overrides
+                        .get(&(*family, member))
+                        .copied()
+                        .unwrap_or_else(|| match (family.existing(), member.existing()) {
+                            (Some(family), Some(member)) => store
+                                .node(family)
+                                .is_some_and(|node| node.contains_member(member)),
+                            _ => false,
+                        })
+            })
+            .collect()
+    }
+
     fn not_member_error(
         &self,
         index: usize,

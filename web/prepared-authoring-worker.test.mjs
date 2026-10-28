@@ -51,6 +51,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
   const context = {
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
+    retireExecutionSource() { events.push("retire-source"); },
     livePrepareSegment() { counters.initial++; events.push("initial"); trap("initial"); if (completeError) throw completeError; },
     createPreparedExecutionPlayer(session) { trap("reader"); assert.equal(session, 3); events.push("reader"); return player; },
   };

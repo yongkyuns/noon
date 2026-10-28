@@ -1,4 +1,4 @@
-use noon_compile::{ExecutionMutationTransaction, ExecutionPatch};
+use noon_compile::{CompiledResources, ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{
     ExecutionRevision, FrameEpoch, Property, PublicationContext, SceneRevision, Style, Transform2D,
 };
@@ -20,15 +20,16 @@ enum PreparedAuthoredValueWrite {
         compiled_spatial: Option<Box<noon_compile::CompiledSpatialState>>,
         changes_execution: bool,
     },
-    Glow {
+    Effect {
         object_index: usize,
-        glow: std::sync::Arc<noon_compile::CompiledGlow>,
-        effective: std::sync::Arc<noon_compile::CompiledGlow>,
+        effects: std::sync::Arc<noon_compile::CompiledEffectStack>,
+        effective: std::sync::Arc<noon_compile::CompiledEffectStack>,
         changes_execution: bool,
     },
     Style {
         object_index: usize,
         style: Style,
+        fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
         changes_execution: bool,
     },
 }
@@ -39,7 +40,7 @@ impl PreparedAuthoredValueWrite {
             Self::Transform { object_index, .. }
             | Self::SemanticTransform { object_index, .. }
             | Self::Style { object_index, .. }
-            | Self::Glow { object_index, .. } => *object_index,
+            | Self::Effect { object_index, .. } => *object_index,
         }
     }
 
@@ -54,7 +55,7 @@ impl PreparedAuthoredValueWrite {
             | Self::SemanticTransform {
                 changes_execution, ..
             }
-            | Self::Glow {
+            | Self::Effect {
                 changes_execution, ..
             } => *changes_execution,
         }
@@ -75,6 +76,7 @@ pub struct PreparedAuthoredValuePublication {
     scene_revision: SceneRevision,
     execution_revision: ExecutionRevision,
     frame_epoch: FrameEpoch,
+    resource_additions: CompiledResources,
     writes: Vec<PreparedAuthoredValueWrite>,
 }
 
@@ -86,6 +88,7 @@ impl SceneInstance {
     pub fn prepare_authored_value_publication(
         &self,
         transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
@@ -100,7 +103,7 @@ impl SceneInstance {
                     | ExecutionPatch::SetSemanticTransform { .. }
                     | ExecutionPatch::SetSpatialState { .. }
                     | ExecutionPatch::SetStyle { .. }
-                    | ExecutionPatch::SetGlow { .. }
+                    | ExecutionPatch::SetEffects { .. }
             )
         }) {
             return Ok(None);
@@ -123,16 +126,17 @@ impl SceneInstance {
 
         // Validate every submitted write, including one superseded by a later value,
         // before retaining only the final value in each object/property lane.
-        self.compiled.preflight_execution_transaction(transaction)?;
+        self.compiled
+            .preflight_execution_transaction_with_resources(transaction, &resource_additions)?;
         let mut writes = Vec::new();
-        let mut execution_changed = false;
+        let mut execution_changed = !self.compiled.resources().contains_all(&resource_additions);
         for patch in final_value_writes(transaction) {
             let (object, prepared) = match patch {
                 ExecutionPatch::SetTransform { object, .. } => (*object, 0_u8),
                 ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetSpatialState { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
-                ExecutionPatch::SetGlow { object, .. } => (*object, 3_u8),
+                ExecutionPatch::SetEffects { object, .. } => (*object, 3_u8),
                 _ => return Ok(None),
             };
             let object_index = self
@@ -150,9 +154,15 @@ impl SceneInstance {
                         changes_execution,
                     }
                 }
-                (1, ExecutionPatch::SetStyle { style, .. }) => PreparedAuthoredValueWrite::Style {
+                (
+                    1,
+                    ExecutionPatch::SetStyle {
+                        style, fill_paint, ..
+                    },
+                ) => PreparedAuthoredValueWrite::Style {
                     object_index,
                     style: *style,
+                    fill_paint: fill_paint.clone(),
                     changes_execution,
                 },
                 (2, ExecutionPatch::SetSemanticTransform { transform, .. }) => {
@@ -186,12 +196,14 @@ impl SceneInstance {
                     spatial: spatial.clone().map(Box::new),
                     changes_execution,
                 },
-                (3, ExecutionPatch::SetGlow { glow, .. }) => PreparedAuthoredValueWrite::Glow {
-                    object_index,
-                    glow: std::sync::Arc::clone(glow),
-                    effective: self.prepare_effective_glow_value(object_index, glow),
-                    changes_execution,
-                },
+                (3, ExecutionPatch::SetEffects { effects, .. }) => {
+                    PreparedAuthoredValueWrite::Effect {
+                        object_index,
+                        effects: std::sync::Arc::clone(effects),
+                        effective: self.prepare_effective_effect_values(object_index, effects),
+                        changes_execution,
+                    }
+                }
                 _ => unreachable!("ordinary value publication classified above"),
             });
         }
@@ -217,6 +229,7 @@ impl SceneInstance {
             scene_revision,
             execution_revision,
             frame_epoch,
+            resource_additions,
             writes,
         }))
     }
@@ -225,8 +238,8 @@ impl SceneInstance {
     /// transaction has crossed the point of no return.
     ///
     /// The execution-session `PreparedPublication` owns exclusive access between
-    /// preparation and this call. No check, lookup, allocation, or fallible compile
-    /// operation remains here.
+    /// preparation and this call. The complete immutable resource set is already
+    /// owned and validated; no fallible compilation or preparation remains here.
     pub fn commit_prepared_authored_value_publication(
         &mut self,
         prepared: PreparedAuthoredValuePublication,
@@ -234,24 +247,26 @@ impl SceneInstance {
         debug_assert_eq!(prepared.runtime, self.runtime_identity());
         debug_assert_eq!(prepared.expected, self.publication_context());
         self.last_patch_stats = crate::RuntimePatchStats::default();
+        self.compiled
+            .merge_prepared_resources(prepared.resource_additions);
 
         for write in prepared.writes {
             if !write.changes_execution() {
                 continue;
             }
             let object_index = write.object_index();
-            // Glow has no geometry/layout dependencies. Its active channel values
+            // Effect has no geometry/layout dependencies. Its active channel values
             // and any Arc copy-on-write were already prepared before semantic commit.
-            if let PreparedAuthoredValueWrite::Glow {
-                glow, effective, ..
+            if let PreparedAuthoredValueWrite::Effect {
+                effects, effective, ..
             } = write
             {
                 self.compiled
-                    .commit_prepared_glow_value(object_index as u32, glow);
-                if self.frame.objects[object_index].glow.as_deref() != Some(effective.as_ref()) {
-                    self.frame.objects[object_index].glow = Some(effective);
+                    .commit_prepared_effect_values(object_index as u32, effects);
+                if self.frame.objects[object_index].effects.as_ref() != Some(&effective) {
                     self.changes.insert(object_index);
                 }
+                self.frame.objects[object_index].effects = Some(effective);
                 continue;
             }
             let before = FrameRowState::from_frame(&self.frame, object_index);
@@ -265,7 +280,7 @@ impl SceneInstance {
                 }
             }
             match write {
-                PreparedAuthoredValueWrite::Glow { .. } => {
+                PreparedAuthoredValueWrite::Effect { .. } => {
                     unreachable!("glow values were committed without spatial invalidation above")
                 }
                 PreparedAuthoredValueWrite::Transform {
@@ -327,12 +342,17 @@ impl SceneInstance {
                 }
                 PreparedAuthoredValueWrite::Style {
                     style,
+                    fill_paint,
                     object_index,
                     ..
                 } => {
-                    self.compiled
-                        .commit_prepared_style_value(object_index as u32, style);
+                    self.compiled.commit_prepared_style_value(
+                        object_index as u32,
+                        style,
+                        fill_paint.clone(),
+                    );
                     self.frame.objects[object_index].style = style;
+                    self.frame.objects[object_index].fill_paint = fill_paint;
                     self.reapply_properties(
                         object_index,
                         &[
@@ -348,7 +368,11 @@ impl SceneInstance {
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
             if before.differs_from_frame(&self.frame, object_index) {
-                self.mark_changed(object_index);
+                if before.spatially_differs_from_frame(&self.frame, object_index) {
+                    self.mark_changed(object_index);
+                } else {
+                    self.changes.insert(object_index);
+                }
             }
         }
 
@@ -364,31 +388,75 @@ impl SceneInstance {
 }
 
 impl SceneInstance {
-    fn prepare_effective_glow_value(
+    pub(crate) fn prepare_effective_effect_values(
         &self,
         object_index: usize,
-        base: &std::sync::Arc<noon_compile::CompiledGlow>,
-    ) -> std::sync::Arc<noon_compile::CompiledGlow> {
-        let mut effective = Some(std::sync::Arc::clone(base));
-        for property in [
-            Property::GlowColor,
-            Property::GlowRadius,
-            Property::GlowIntensity,
-        ] {
-            let channel = noon_compile::CompiledChannelKey::new(object_index as u32, property);
+        base: &std::sync::Arc<noon_compile::CompiledEffectStack>,
+    ) -> std::sync::Arc<noon_compile::CompiledEffectStack> {
+        let mut effective = std::sync::Arc::clone(base);
+        for binding in base.iter() {
+            let value = self.prepare_effective_attachment_value(object_index, binding);
+            if value != binding {
+                std::sync::Arc::make_mut(&mut effective).replace(value);
+            }
+        }
+        effective
+    }
+
+    fn prepare_effective_attachment_value(
+        &self,
+        object_index: usize,
+        base: noon_compile::CompiledEffect,
+    ) -> noon_compile::CompiledEffect {
+        let previous = self.compiled.objects()[object_index]
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(base.attachment));
+        let mut effective = self.frame.objects[object_index]
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.get(base.attachment))
+            .unwrap_or(base);
+        effective.definition = base
+            .definition
+            .discrete_parameters()
+            .apply_to(effective.definition)
+            .expect("validated surviving schema");
+        // Persistent edits own only the authored parameters they change. Preserve
+        // another parameter's effective driver, including an input-owned pulse.
+        for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
+            let next = noon_core::EffectTrackValue::from_definition(property, base.definition);
+            let old = previous.and_then(|value| {
+                noon_core::EffectTrackValue::from_definition(property, value.definition)
+            });
+            if next != old {
+                if let Some(next) = next {
+                    effective.definition = next
+                        .update()
+                        .apply_to(effective.definition)
+                        .expect("validated surviving schema");
+                }
+            }
+        }
+        for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
+            let channel = noon_compile::CompiledChannelKey::effect(
+                object_index as u32,
+                property,
+                base.attachment,
+            );
             let Some(mut group) = self.groups.get(&channel).cloned() else {
                 continue;
             };
             let tracks = self.compiled.channel_tracks(channel);
             group.cursor = crate::upper_bound_start(tracks, self.frame.time, &mut 0);
-            crate::apply_glow_channel(
-                Some(base.as_ref()),
+            crate::apply_effect_channel(
+                Some(&base),
                 &mut effective,
                 tracks,
                 &group,
                 self.frame.time,
             );
         }
-        effective.expect("existing generation validated before preparation")
+        effective
     }
 }

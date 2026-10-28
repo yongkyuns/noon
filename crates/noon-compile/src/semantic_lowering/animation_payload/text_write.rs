@@ -376,12 +376,7 @@ fn independent_effect_drivers(
 ) -> std::collections::HashSet<SemanticTransactionNodeRef> {
     let mut independent = std::collections::HashMap::new();
     for (animation, property) in tracks {
-        let effect_only = matches!(
-            property,
-            noon_core::Property::GlowColor
-                | noon_core::Property::GlowRadius
-                | noon_core::Property::GlowIntensity
-        );
+        let effect_only = property.is_effect();
         *independent.entry(animation).or_insert(true) &= effect_only;
     }
     independent

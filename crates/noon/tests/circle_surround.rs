@@ -196,5 +196,5 @@ fn live_circle_surround_publishes_once_and_preserves_unrelated_objects() {
 #[test]
 fn paired_circle_surround_builds_the_normal_native_execution_session() {
     let session = noon::example_scenes::circle_surround::session().unwrap();
-    assert_eq!(session.frame().objects.len(), 4);
+    assert_eq!(session.session().frame().objects.len(), 4);
 }

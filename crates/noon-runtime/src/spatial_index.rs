@@ -582,8 +582,9 @@ mod tests {
         FrameState {
             time: 0.0,
             objects: vec![crate::FrameObjectState {
+                fill_paint: None,
                 draw_enabled: true,
-                glow: None,
+                effects: None,
                 z_index: 0.0,
                 id: ObjectId::new(0),
                 content: ObjectContentRef::Geometry(geometry),
@@ -609,8 +610,9 @@ mod tests {
         let frame = FrameState {
             time: 0.0,
             objects: vec![crate::FrameObjectState {
+                fill_paint: None,
                 draw_enabled: true,
-                glow: None,
+                effects: None,
                 z_index: 0.0,
                 id: ObjectId::new(0),
                 content: ObjectContentRef::Text(TextResourceHandle {

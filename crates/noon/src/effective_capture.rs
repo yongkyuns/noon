@@ -76,7 +76,11 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
             state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
         }
         state.set_z_index(observed.object.z_index);
-        state.style = target_style_from_effective(&state.style, observed.object.style)?;
+        state.style = target_style_from_effective(
+            &state.style,
+            observed.object.style,
+            observed.object.fill_paint.as_ref(),
+        )?;
     }
     Ok(state)
 }
@@ -87,20 +91,23 @@ pub(crate) fn capture_mobject_state_with_graph_dependency(
 pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
     effective: Style,
+    fill_paint: Option<&std::sync::Arc<noon_core::SemanticPaint>>,
 ) -> Result<SemanticStyle, AuthoringError> {
-    if matches!(authored.fill.as_ref(), Some(SemanticPaint::Resource(_)))
-        || matches!(authored.stroke.as_ref(), Some(SemanticPaint::Resource(_)))
-    {
+    if matches!(
+        authored.stroke.as_ref(),
+        Some(
+            SemanticPaint::LinearGradient(_)
+                | SemanticPaint::RadialGradient(_)
+                | SemanticPaint::Noise(_)
+                | SemanticPaint::Hatch(_)
+                | SemanticPaint::Image(_)
+        )
+    ) {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));
     }
-    let (fill, fill_opacity) =
-        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
-            (authored.fill.clone(), authored.fill_opacity)
-        } else {
-            (effective.fill.map(SemanticPaint::Solid), 1.0)
-        };
+    let (fill, fill_opacity) = authored.capture_effective_fill(effective.fill, fill_paint);
     let (stroke, stroke_opacity) =
         if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
             == effective.stroke
@@ -167,6 +174,25 @@ pub(crate) fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
     }
 }
 
+/// Unrendered family roots own composite opacity independently from child
+/// paints. Capture that one runtime value, preserving exact authored precision
+/// when lowering has not changed it. Membership and capture scheduling stay in
+/// the existing root-local semantic copy preparation.
+pub(crate) fn capture_family_style(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+    style: &mut SemanticStyle,
+) -> Result<(), AuthoringError> {
+    if execution.semantic_object_is_reachable(source) {
+        preserve_or_capture_f32(
+            &mut style.object_opacity,
+            execution.effective_family_opacity(store, source)?,
+        );
+    }
+    Ok(())
+}
+
 /// Stage one independent attachment copy at the same coherent publication as
 /// the target's object state. Detached sources retain authored declarations;
 /// resident sources copy the effective value without borrowing their identity.
@@ -178,23 +204,32 @@ pub(crate) fn stage_effect_copy(
     target: noon_core::SemanticLocalNodeToken,
     transaction: &mut noon_core::SemanticMutationTransaction,
 ) -> Result<(), AuthoringError> {
+    let node = store
+        .node(source)
+        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
+    if node.effect_ids().is_empty() {
+        // Ordinary unrendered family roots intentionally have no execution row.
+        // There is no attachment state to capture or allocate for those roots.
+        return Ok(());
+    }
     if !execution.semantic_object_is_reachable(source) {
         store.copy_effects_into(source, target, transaction)?;
         return Ok(());
     }
-    let observed = execution.effective_semantic_object(store, source)?;
-    let node = store
-        .node(source)
-        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.glow.as_deref()) {
+    match (
+        node.effect_ids(),
+        execution.effective_effects(store, source)?,
+    ) {
         ([], None) => Ok(()),
-        ([attachment], Some(glow)) if *attachment == glow.attachment => {
-            store.copy_effect_into_with_definition(
-                *attachment,
-                target,
-                glow.definition,
-                transaction,
-            )?;
+        (attachments, Some(effects)) if attachments == effects.attachments() => {
+            for effect in effects.iter() {
+                store.copy_effect_into_with_definition(
+                    effect.attachment,
+                    target,
+                    effect.definition,
+                    transaction,
+                )?;
+            }
             Ok(())
         }
         // Never rebind a stale generation by name or silently lose an effect.

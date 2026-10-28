@@ -1,7 +1,8 @@
 mod affine;
+mod dissolve;
 mod glow_pulse;
 mod glow_target;
-pub use glow_target::GlowTargetLoweringError;
+pub use glow_target::EffectTargetLoweringError;
 mod family_transform;
 mod family_transform_activation;
 mod family_transform_channels;

@@ -1,8 +1,11 @@
 use super::*;
-use crate::FramePreparer;
+use crate::{FramePreparer, GlowParameters};
 use noon_compile::{CompiledObject, CompiledScene};
-use noon_core::{Color, GlowUpdate, Pixels, Style};
+use noon_core::Glow;
+use noon_core::{Color, EffectUpdate, Pixels, Style};
 use noon_runtime::{FrameChanges, SceneInstance};
+
+mod composed;
 
 fn runtime() -> SceneInstance {
     SceneInstance::new(
@@ -30,15 +33,20 @@ fn runtime() -> SceneInstance {
     )
 }
 
-fn glow(intensity: f64) -> AnalyticGlowRequest {
-    AnalyticGlowRequest {
+fn effect(intensity: f64) -> EffectDefinition {
+    Glow::new(
+        EffectUpdate::default()
+            .radius(Pixels(3.0))
+            .intensity(intensity),
+    )
+    .unwrap()
+    .into()
+}
+
+fn request(definitions: &[EffectDefinition]) -> EffectCaptureRequest<'_> {
+    EffectCaptureRequest {
         object_index: 1,
-        definition: Glow::new(
-            GlowUpdate::default()
-                .radius(Pixels(3.0))
-                .intensity(intensity),
-        )
-        .unwrap(),
+        definitions,
         texture_budget_bytes: 1_000_000,
     }
 }
@@ -47,14 +55,14 @@ fn glow(intensity: f64) -> AnalyticGlowRequest {
 fn tile_camera_preserves_full_output_pixel_grid() {
     let camera = Camera2D::new(Vec2::ZERO, Vec2::new(20.0, 10.0)).unwrap();
     let parameters = GlowParameters {
-        definition: glow(1.0).definition,
+        definition: effect(1.0).as_glow().unwrap(),
         output_height: 100,
         world_view_height: 10.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 1_000_000,
     };
-    let tile = GlowCaptureTile::prepare(
-        GlowPixelBounds {
+    let tile = EffectCaptureTile::prepare(
+        EffectPixelBounds {
             min: [-8.0, 20.0],
             max: [-4.0, 24.0],
         },
@@ -89,12 +97,24 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
     let target = CaptureImage::new(&device, wgpu::TextureFormat::Rgba8Unorm, [80, 60]);
     let mut encoder = device.create_command_encoder(&Default::default());
     let neutral = renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(0.0))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(0.0)]),
+        )
         .unwrap();
-    assert_eq!(neutral, AnalyticGlowStats::default());
-    assert!(renderer.analytic_glows.is_none());
+    assert_eq!(neutral, EffectCaptureStats::default());
+    assert!(renderer.effect_captures.is_none());
     let first = renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(1.0))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(1.0)]),
+        )
         .unwrap();
     assert_eq!(
         (
@@ -122,14 +142,20 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
         "before-source, effect-source, after-source"
     );
     queue.submit([encoder.finish()]);
-    let source = renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 1)]
+    let source = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
         .source
         .texture
         .clone();
     let prepared = preparer.prepare_incremental(runtime.frame(), &FrameChanges::default());
     let mut encoder = device.create_command_encoder(&Default::default());
     let clean = renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(1.0))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(1.0)]),
+        )
         .unwrap();
     assert_eq!(
         clean.source_passes + clean.source_bytes_uploaded + clean.placement_bytes_uploaded,
@@ -142,7 +168,13 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
     queue.submit([encoder.finish()]);
     let mut encoder = device.create_command_encoder(&Default::default());
     let edit = renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(0.4))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(0.4)]),
+        )
         .unwrap();
     assert_eq!(
         edit.source_passes + edit.source_bytes_uploaded + edit.source_texture_allocations,
@@ -161,7 +193,7 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
         (32, 0, 1)
     );
     assert_eq!(
-        renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 1)]
+        renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
             .source
             .texture,
         source
@@ -169,9 +201,15 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
     queue.submit([encoder.finish()]);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(0.0))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(0.0)]),
+        )
         .unwrap();
-    assert!(!renderer.has_analytic_glows());
+    assert!(!renderer.has_effect_captures());
     assert_eq!(
         renderer
             .encode(
@@ -184,9 +222,221 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
         1
     );
     queue.submit([encoder.finish()]);
-    renderer.remove_analytic_glow(ObjectId::new(2));
-    assert_eq!(renderer.analytic_glow_texture_bytes(), 0);
-    assert!(renderer.analytic_glows.as_ref().unwrap().scopes.is_empty());
+    renderer.remove_effect_capture(ObjectId::new(2));
+    assert_eq!(renderer.effect_capture_texture_bytes(), 0);
+    assert!(renderer.effect_captures.as_ref().unwrap().scopes.is_empty());
+}
+
+#[cfg(feature = "ci-noop")]
+#[test]
+fn truncating_a_warm_stack_rebinds_the_final_output_and_retires_neutral_suffix() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(&device, &queue, 80, 60);
+    renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+    );
+    let runtime = runtime();
+    let mut preparer = FramePreparer::new();
+    let prepared = preparer.prepare(runtime.frame());
+    renderer.upload(&device, &queue, &prepared);
+    let definitions = [
+        effect(1.0),
+        noon_core::Shadow::new(
+            EffectUpdate::default()
+                .radius(Pixels(0.0))
+                .offset(noon_core::EffectOffset::Pixels([0.0, 0.0])),
+        )
+        .unwrap()
+        .into(),
+    ];
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let first = renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&definitions),
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let last_output = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
+        .placement_output
+        .clone()
+        .unwrap();
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let truncated = renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&definitions[..1]),
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let scope = &renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)];
+    assert_eq!(
+        truncated.source_passes
+            + truncated.source_texture_allocations
+            + truncated.filter.texture_allocations,
+        0
+    );
+    assert_ne!(scope.placement_output.as_ref(), Some(&last_output));
+    assert_eq!(scope.placement_output.as_ref(), scope.filter.output());
+    assert!(truncated.retained_texture_bytes < first.retained_texture_bytes);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&definitions),
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let neutral = [EffectUpdate::default()
+        .intensity(0.0)
+        .apply_to(definitions[0])
+        .unwrap()];
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let neutral = renderer
+        .prepare_effect_capture(&device, &queue, &mut encoder, &prepared, request(&neutral))
+        .unwrap();
+    let scope = &renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)];
+    assert!(!scope.enabled);
+    assert!(scope.placement_output.is_none());
+    assert_eq!(
+        scope.filter.scratch_bytes(),
+        u64::from(scope.tile.size[0]) * u64::from(scope.tile.size[1]) * 12
+    );
+    assert_eq!(
+        neutral.retained_texture_bytes,
+        truncated.retained_texture_bytes
+    );
+    queue.submit([encoder.finish()]);
+}
+
+#[cfg(feature = "ci-noop")]
+#[test]
+fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(&device, &queue, 80, 60);
+    renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+    );
+    let make_runtime = |radius| {
+        SceneInstance::new(
+            CompiledScene::compile_objects(
+                vec![CompiledObject::new(
+                    ObjectId::new(2),
+                    GeometryRef::circle(radius),
+                    Transform2D::IDENTITY,
+                    Style {
+                        fill: Some(Color::WHITE),
+                        stroke: None,
+                        ..Style::default()
+                    },
+                )],
+                &[],
+            )
+            .unwrap(),
+        )
+    };
+    let mut preparer = FramePreparer::new();
+    let mask = noon_core::NoiseDissolve::default()
+        .with_progress(0.5)
+        .unwrap()
+        .into();
+    let normal = make_runtime(0.4);
+    let prepared = preparer.prepare(normal.frame());
+    renderer.upload(&device, &queue, &prepared);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            EffectCaptureRequest {
+                object_index: 0,
+                ..request(&[mask])
+            },
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let bytes = renderer.effect_capture_texture_bytes();
+    assert!(bytes > 0);
+    for index in 0..8 {
+        let value = noon_core::NoiseDissolve::new(index + 7, 0.4)
+            .unwrap()
+            .with_progress(0.25 + f64::from(index) * 0.05)
+            .unwrap()
+            .into();
+        for changed in [true, false] {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let stats = renderer
+                .prepare_effect_capture(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &prepared,
+                    EffectCaptureRequest {
+                        object_index: 0,
+                        ..request(&[value])
+                    },
+                )
+                .unwrap();
+            queue.submit([encoder.finish()]);
+            assert_eq!(
+                stats.source_passes
+                    + stats.source_bytes_uploaded
+                    + stats.source_texture_allocations,
+                0
+            );
+            assert_eq!(
+                stats.filter.texture_allocations
+                    + stats.filter.pipeline_compiles
+                    + stats.filter.kernel_builds,
+                0
+            );
+            assert_eq!(stats.filter.bytes_uploaded, if changed { 48 } else { 0 });
+            assert_eq!(stats.filter.composite_passes, usize::from(changed));
+            assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
+        }
+    }
+    let output = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)]
+        .filter
+        .output()
+        .unwrap()
+        .clone();
+    let revision = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)].output_revision;
+    let tiny = make_runtime(1e-6);
+    let prepared = preparer.prepare(tiny.frame());
+    renderer.upload(&device, &queue, &prepared);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert_eq!(
+        renderer.prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            EffectCaptureRequest {
+                object_index: 0,
+                ..request(&[mask])
+            }
+        ),
+        Err(EffectPrepareError::CaptureCoordinatesOutOfRange)
+    );
+    assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
+    let scope = &renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)];
+    assert_eq!(scope.filter.output(), Some(&output));
+    assert_eq!(scope.output_revision, revision);
 }
 
 #[cfg(feature = "ci-noop")]
@@ -205,48 +455,54 @@ fn budget_rejection_is_atomic_and_accounts_for_other_scopes() {
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     assert_eq!(
-        renderer.prepare_analytic_glow(
+        renderer.prepare_effect_capture(
             &device,
             &queue,
             &mut encoder,
             &prepared,
-            AnalyticGlowRequest {
+            EffectCaptureRequest {
                 texture_budget_bytes: 1,
-                ..glow(1.0)
+                ..request(&[effect(1.0)])
             }
         ),
-        Err(GlowPrepareError::ScratchBudgetExceeded)
+        Err(EffectPrepareError::ScratchBudgetExceeded)
     );
-    assert!(renderer.analytic_glows.is_none());
+    assert!(renderer.effect_captures.is_none());
     renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(1.0))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(1.0)]),
+        )
         .unwrap();
     queue.submit([encoder.finish()]);
-    let bytes = renderer.analytic_glow_texture_bytes();
-    let before = renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 1)]
+    let bytes = renderer.effect_capture_texture_bytes();
+    let before = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
         .filter
         .output()
         .unwrap()
         .clone();
     let mut encoder = device.create_command_encoder(&Default::default());
     assert_eq!(
-        renderer.prepare_analytic_glow(
+        renderer.prepare_effect_capture(
             &device,
             &queue,
             &mut encoder,
             &prepared,
-            AnalyticGlowRequest {
+            EffectCaptureRequest {
                 object_index: 0,
                 texture_budget_bytes: bytes,
-                ..glow(1.0)
+                ..request(&[effect(1.0)])
             }
         ),
-        Err(GlowPrepareError::ScratchBudgetExceeded)
+        Err(EffectPrepareError::ScratchBudgetExceeded)
     );
-    assert_eq!(renderer.analytic_glow_texture_bytes(), bytes);
-    assert_eq!(renderer.analytic_glows.as_ref().unwrap().scopes.len(), 1);
+    assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
+    assert_eq!(renderer.effect_captures.as_ref().unwrap().scopes.len(), 1);
     assert_eq!(
-        renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 1)]
+        renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
             .filter
             .output(),
         Some(&before)
@@ -273,23 +529,23 @@ fn transparent_paint_does_not_suppress_silhouette_and_abort_is_recoverable() {
         prepared.observe_object(1).unwrap().submission_membership,
         Some(false)
     );
-    let request = AnalyticGlowRequest {
-        definition: GlowUpdate::default()
+    let request = EffectCaptureRequest {
+        definitions: &[EffectUpdate::default()
             .source(GlowSource::Silhouette)
-            .apply_to(glow(1.0).definition)
-            .unwrap(),
-        ..glow(1.0)
+            .apply_to(effect(1.0))
+            .unwrap()],
+        ..request(&[])
     };
     let mut abandoned = device.create_command_encoder(&Default::default());
     let first = renderer
-        .prepare_analytic_glow(&device, &queue, &mut abandoned, &prepared, request)
+        .prepare_effect_capture(&device, &queue, &mut abandoned, &prepared, request)
         .unwrap();
     assert_eq!(first.source_passes, 2);
     drop(abandoned);
-    renderer.invalidate_analytic_glows();
+    renderer.invalidate_effect_captures();
     let mut encoder = device.create_command_encoder(&Default::default());
     let recovery = renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, request)
+        .prepare_effect_capture(&device, &queue, &mut encoder, &prepared, request)
         .unwrap();
     assert_eq!(
         (
@@ -334,31 +590,71 @@ fn repacked_source_retires_old_slot_and_does_not_double_count_memory() {
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(1.0))
-        .unwrap();
-    queue.submit([encoder.finish()]);
-    let cost = renderer.analytic_glow_texture_bytes();
-    frame.objects.swap(0, 1);
-    let prepared = preparer.prepare(&frame);
-    renderer.upload(&device, &queue, &prepared);
-    let mut encoder = device.create_command_encoder(&Default::default());
-    renderer
-        .prepare_analytic_glow(
+        .prepare_effect_capture(
             &device,
             &queue,
             &mut encoder,
             &prepared,
-            AnalyticGlowRequest {
+            request(&[effect(1.0)]),
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let cost = renderer.effect_capture_texture_bytes();
+    frame.objects.swap(0, 1);
+    let prepared = preparer.prepare(&frame);
+    renderer.upload(&device, &queue, &prepared);
+    // A neutral request after repacking must disable the source's old cache
+    // identity before ordinary batching, even before an active reprepare moves it.
+    let mut neutral_encoder = device.create_command_encoder(&Default::default());
+    let neutral = renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut neutral_encoder,
+            &prepared,
+            EffectCaptureRequest {
                 object_index: 0,
                 texture_budget_bytes: cost,
-                ..glow(1.0)
+                ..request(&[effect(0.0)])
             },
         )
         .unwrap();
-    assert_eq!(renderer.analytic_glow_texture_bytes(), cost);
-    assert_eq!(renderer.analytic_glows.as_ref().unwrap().scopes.len(), 1);
+    assert!(!renderer.has_effect_captures());
     assert_eq!(
-        renderer.analytic_glows.as_ref().unwrap().owners[&ObjectId::new(2)],
+        neutral.source_passes + neutral.filter.blur_passes + neutral.filter.composite_passes,
+        0
+    );
+    let neutral_output = CaptureImage::new(&device, wgpu::TextureFormat::Rgba8Unorm, [80, 60]);
+    assert_eq!(
+        renderer
+            .encode(
+                &mut neutral_encoder,
+                &neutral_output.view,
+                &prepared,
+                wgpu::Color::TRANSPARENT
+            )
+            .draw_calls,
+        1
+    );
+    queue.submit([neutral_encoder.finish()]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            EffectCaptureRequest {
+                object_index: 0,
+                texture_budget_bytes: cost,
+                ..request(&[effect(1.0)])
+            },
+        )
+        .unwrap();
+    assert_eq!(renderer.effect_capture_texture_bytes(), cost);
+    assert_eq!(renderer.effect_captures.as_ref().unwrap().scopes.len(), 1);
+    assert_eq!(
+        renderer.effect_captures.as_ref().unwrap().owners[&ObjectId::new(2)],
         (0, 0)
     );
     let output = CaptureImage::new(&device, wgpu::TextureFormat::Rgba8Unorm, [80, 60]);
@@ -374,8 +670,8 @@ fn repacked_source_retires_old_slot_and_does_not_double_count_memory() {
         2
     );
     queue.submit([encoder.finish()]);
-    renderer.remove_analytic_glow(ObjectId::new(2));
-    assert_eq!(renderer.analytic_glow_texture_bytes(), 0);
+    renderer.remove_effect_capture(ObjectId::new(2));
+    assert_eq!(renderer.effect_capture_texture_bytes(), 0);
 }
 
 #[cfg(feature = "ci-noop")]
@@ -394,24 +690,36 @@ fn fractional_translation_reuses_warmed_capture_capacity() {
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
-        .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(1.0))
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            request(&[effect(1.0)]),
+        )
         .unwrap();
     queue.submit([encoder.finish()]);
-    let bytes = renderer.analytic_glow_texture_bytes();
+    let bytes = renderer.effect_capture_texture_bytes();
     for step in 1..=100 {
         frame.objects[1].transform.translation.x = step as f32 * 0.003;
         let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         let stats = renderer
-            .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, glow(1.0))
+            .prepare_effect_capture(
+                &device,
+                &queue,
+                &mut encoder,
+                &prepared,
+                request(&[effect(1.0)]),
+            )
             .unwrap();
         assert_eq!(
             stats.source_texture_allocations + stats.filter.texture_allocations,
             0
         );
         assert_eq!(stats.filter.pipeline_compiles, 0);
-        assert_eq!(renderer.analytic_glow_texture_bytes(), bytes);
+        assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
         queue.submit([encoder.finish()]);
     }
 }
@@ -431,10 +739,13 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
                 ..Style::default()
             },
         );
-        object.glow = Some(Arc::new(noon_compile::CompiledGlow {
-            attachment: noon_core::SemanticNodeId::new(6, 2),
-            definition: glow(1.0).definition,
-        }));
+        object.effects = Some(Arc::new(
+            noon_compile::CompiledEffectStack::new([noon_compile::CompiledEffect {
+                attachment: noon_core::SemanticNodeId::new(6, 2),
+                definition: effect(1.0),
+            }])
+            .unwrap(),
+        ));
         object
     };
     let runtime_for =
@@ -451,13 +762,13 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
     let mut preparer = FramePreparer::new();
     let prepared = preparer.prepare(publication.frame());
     renderer.upload(&device, &queue, &prepared);
-    let request = PublishedAnalyticGlowRequest {
+    let request = PublishedEffectCaptureRequest {
         object_index: 0,
         texture_budget_bytes: 1_000_000,
     };
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
-        .prepare_published_analytic_glow(
+        .prepare_published_effect_capture(
             &device,
             &queue,
             &mut encoder,
@@ -467,8 +778,8 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
         )
         .unwrap();
     queue.submit([encoder.finish()]);
-    let bytes = renderer.analytic_glow_texture_bytes();
-    let output = renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 0)]
+    let bytes = renderer.effect_capture_texture_bytes();
+    let output = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)]
         .filter
         .output()
         .unwrap()
@@ -485,7 +796,7 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
         let other_publication = other.take_renderer_publication();
         let mut encoder = device.create_command_encoder(&Default::default());
         assert_eq!(
-            renderer.prepare_published_analytic_glow(
+            renderer.prepare_published_effect_capture(
                 &device,
                 &queue,
                 &mut encoder,
@@ -493,11 +804,11 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
                 &other_publication,
                 request
             ),
-            Err(GlowPrepareError::PublicationMismatch)
+            Err(EffectPrepareError::PublicationMismatch)
         );
-        assert_eq!(renderer.analytic_glow_texture_bytes(), bytes);
+        assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
         assert_eq!(
-            renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 0)]
+            renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)]
                 .filter
                 .output(),
             Some(&output)
@@ -523,5 +834,5 @@ fn logical_viewport_validation_is_atomic_and_physical_viewport_restores_default(
     }
     renderer.set_viewport(&device, &queue, 702, 394);
     assert_eq!(renderer.logical_viewport_size, Vec2::new(702.0, 394.0));
-    assert!(renderer.analytic_glows.is_none());
+    assert!(renderer.effect_captures.is_none());
 }

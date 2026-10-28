@@ -2,11 +2,14 @@
 use super::wasm::CanonicalAuthoringSceneContext;
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    authoring_error::js_error, WasmAuthoringMobjectHandle, WasmEffectHandle, WasmGlow,
-    WasmGlowUpdate,
+    authoring_error::js_error, WasmAuthoringMobjectHandle, WasmEffectDefinition, WasmEffectHandle,
+    WasmEffectUpdate,
 };
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+mod family;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -15,7 +18,7 @@ impl CanonicalAuthoringSceneContext {
     pub fn live_set_glow(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
-        update: &WasmGlowUpdate,
+        update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
         self.inner
             .active_live_player()
@@ -27,7 +30,7 @@ impl CanonicalAuthoringSceneContext {
     pub fn live_add_effect(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
-        definition: &WasmGlow,
+        definition: &WasmEffectDefinition,
         name: &str,
     ) -> Result<(), JsValue> {
         self.inner
@@ -41,7 +44,7 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         name: &str,
-        update: &WasmGlowUpdate,
+        update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
         self.inner
             .active_live_player()
@@ -54,7 +57,7 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         effect: &WasmEffectHandle,
-        update: &WasmGlowUpdate,
+        update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
         self.inner
             .active_live_player()
@@ -103,7 +106,105 @@ impl CanonicalAuthoringSceneContext {
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use noon::effects::{Glow, GlowUpdate};
+    use noon::effects::{EffectUpdate, Glow};
+
+    #[test]
+    fn family_adapter_preserves_one_live_owner_and_exact_attachment_generations() {
+        let mut context = CanonicalAuthoringScene::default();
+        let dot = context.scene.circle(0.4).unwrap();
+        let family = context.scene.family(&[(&dot).into()]).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Family(family.clone())],
+                bindings: vec![(ObjectId::new(0), dot.clone())],
+            })
+            .unwrap();
+        context.live_player(1.0).unwrap();
+        let player = context.active_live_player().unwrap();
+        let identity = player.ownership_identity();
+        let member = player
+            .session_mut_for_test()
+            .execution_object_id(dot.node_id())
+            .unwrap();
+        player
+            .live_add_effect(
+                &family,
+                noon::effects::Blur::new(
+                    EffectUpdate::default().radius(noon::effects::Pixels(2.0)),
+                )
+                .unwrap()
+                .into(),
+                "soften",
+            )
+            .unwrap();
+        let original = family.get_effect("soften").unwrap();
+        let owner = player
+            .session_mut_for_test()
+            .execution_object_id(family.node_id())
+            .unwrap();
+        player
+            .live_set_effect(
+                &family,
+                (&original).into(),
+                EffectUpdate::default().radius(noon::effects::Pixels(4.0)),
+            )
+            .unwrap();
+        let copied = player.live_copy_family(&family, &[]).unwrap();
+        let independent = copied.root().get_effect("soften").unwrap();
+        assert_ne!(independent.node_id(), original.node_id());
+        assert_eq!(
+            independent.authored_definition().unwrap(),
+            original.authored_definition().unwrap()
+        );
+        let before = player.session_mut_for_test().frame().clone();
+        assert!(player
+            .live_set_effect(copied.root(), (&original).into(), EffectUpdate::default())
+            .is_err());
+        assert_eq!(player.session_mut_for_test().frame(), &before);
+        player
+            .live_set_glow(&family, EffectUpdate::default().intensity(0.6))
+            .unwrap();
+        player
+            .live_remove_effect(&family, (&original).into())
+            .unwrap();
+        assert!(original.authored_definition().is_err());
+        assert!(player
+            .live_remove_effect(&family, (&original).into())
+            .is_err());
+        player.live_remove_glow(&family).unwrap();
+        player
+            .live_add_effect(&family, noon::effects::Blur::default().into(), "soften")
+            .unwrap();
+        assert_ne!(
+            family.get_effect("soften").unwrap().node_id(),
+            original.node_id()
+        );
+        assert_eq!(
+            player
+                .session_mut_for_test()
+                .execution_object_id(family.node_id()),
+            Some(owner)
+        );
+        assert_eq!(
+            player
+                .session_mut_for_test()
+                .execution_object_id(dot.node_id()),
+            Some(member)
+        );
+        assert_eq!(player.ownership_identity(), identity);
+        assert_eq!(player.time(), 0.0);
+        let mut foreign_scene = noon::Scene::new();
+        let foreign_dot = foreign_scene.circle(0.3).unwrap();
+        let foreign = foreign_scene.family(&[(&foreign_dot).into()]).unwrap();
+        let before = player.session_mut_for_test().frame().clone();
+        assert!(player
+            .live_add_effect(&foreign, Glow::default().into(), "foreign")
+            .is_err());
+        assert_eq!(player.session_mut_for_test().frame(), &before);
+        assert!(foreign.get_effect("foreign").is_err());
+    }
 
     #[test]
     fn adapter_rejects_unsupported_glow_profile_without_poisoning_publication() {
@@ -118,7 +219,7 @@ mod tests {
         let time = player.time();
         assert_eq!(
             player
-                .live_set_glow(&dot, GlowUpdate::default())
+                .live_set_glow(&dot, EffectUpdate::default())
                 .unwrap_err()
                 .category,
             "unsupported_operation"
@@ -131,7 +232,7 @@ mod tests {
             "unsupported_operation"
         );
         assert!(player
-            .live_set_effect(&dot, "missing".into(), GlowUpdate::default())
+            .live_set_effect(&dot, "missing".into(), EffectUpdate::default())
             .is_err());
         assert!(player.live_remove_effect(&dot, "missing".into()).is_err());
         player.live_remove_glow(&dot).unwrap();
@@ -155,7 +256,7 @@ mod playback_tests {
     use super::super::*;
     use crate::retained_execution_transport::RetainedExecutionDeltaEnvelope;
     use noon::{
-        effects::{EffectDefinition, GlowUpdate, Pixels},
+        effects::{EffectUpdate, Pixels},
         AnimationOptions, Color, RateFunction,
     };
 
@@ -172,7 +273,7 @@ mod playback_tests {
         player
             .live_set_glow(
                 &source,
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::RED)
                     .radius(Pixels(3.25))
                     .intensity(0.4),
@@ -182,10 +283,7 @@ mod playback_tests {
         let initial: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
         assert_eq!(initial.objects.len(), 1);
-        assert_eq!(
-            initial.objects[0].glow.unwrap().attachment,
-            original.node_id()
-        );
+        assert_eq!(initial.objects[0].effects[0].attachment, original.node_id());
         let target = player.live_target_editor(&source).unwrap();
         assert_ne!(
             target.get_effect("glow").unwrap().node_id(),
@@ -203,7 +301,7 @@ mod playback_tests {
         player
             .live_set_glow(
                 &target,
-                GlowUpdate::default()
+                EffectUpdate::default()
                     .color(Color::BLUE)
                     .radius(Pixels(6.5))
                     .intensity(1.4),
@@ -226,14 +324,24 @@ mod playback_tests {
         let midpoint: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
         assert_eq!(midpoint.objects.len(), 1);
-        let glow = midpoint.objects[0].glow.unwrap();
-        assert_eq!(glow.attachment, original.node_id());
-        assert_eq!(glow.intensity, 0.4 + (1.4 - 0.4) * 0.5);
-        assert_eq!(glow.radius, Pixels(4.875).into());
+        let [effect] = midpoint.objects[0].effects.as_slice() else {
+            panic!("one effect in the fixture");
+        };
+        assert_eq!(effect.attachment, original.node_id());
+        let crate::retained_execution_transport::TransportEffectDefinition::Glow {
+            intensity,
+            radius,
+            ..
+        } = effect.definition
+        else {
+            panic!("expected Glow");
+        };
+        assert_eq!(intensity, 0.4 + (1.4 - 0.4) * 0.5);
+        assert_eq!(radius, Pixels(4.875).into());
         assert_eq!(midpoint.objects[0].transform.translation.x, 1.0);
         player.live_advance_segment_to(endpoint).unwrap();
         player.live_complete_segment().unwrap();
-        let EffectDefinition::Glow(completed) = original.authored_definition().unwrap();
+        let completed = (original.authored_definition().unwrap()).as_glow().unwrap();
         assert_eq!(completed.intensity(), 1.4);
         assert_eq!(completed.radius(), Pixels(6.5).into());
         assert_eq!(completed.color(), Color::BLUE);
@@ -241,7 +349,7 @@ mod playback_tests {
         let removed: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
         assert_eq!(removed.objects.len(), 1);
-        assert!(removed.objects[0].glow.is_none());
+        assert!(removed.objects[0].effects.is_empty());
         assert!(
             removed.removed_slots.is_empty(),
             "effect removal is not source retirement"

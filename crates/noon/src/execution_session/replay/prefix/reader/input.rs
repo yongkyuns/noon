@@ -41,7 +41,8 @@ impl PrefixReader {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
-        self.session.submit_native_pointer_input(token, input)
+        self.session
+            .submit_prepared_pointer_presentation(token, input)
     }
     pub fn pick_native_pointer_fill(
         &mut self,

@@ -604,6 +604,7 @@ fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
         EffectiveSemanticPropertyWrite::Stroke { .. } => CALLBACK_STROKE,
         EffectiveSemanticPropertyWrite::StrokeWidth { .. } => CALLBACK_STROKE_WIDTH,
         EffectiveSemanticPropertyWrite::Opacity { .. } => CALLBACK_OPACITY,
+        EffectiveSemanticPropertyWrite::EffectIntensity { .. } => 0,
     }
 }
 
@@ -763,6 +764,9 @@ impl CallbackPhaseOverlay {
         let mut transform = current.transform;
         let mut style = current.style;
         match write {
+            EffectiveSemanticPropertyWrite::EffectIntensity { .. } => {
+                return Err(ExecutionSessionCallbackError::UnsupportedGlowWrite(object));
+            }
             EffectiveSemanticPropertyWrite::WorldTransform { .. } => {
                 return Err(ExecutionSessionCallbackError::UnsupportedWorldTransform(
                     object,
@@ -823,6 +827,7 @@ pub enum ExecutionSessionCallbackError {
     },
     UnsupportedCallbackTarget(SemanticNodeId),
     UnsupportedWorldTransform(SemanticNodeId),
+    UnsupportedGlowWrite(SemanticNodeId),
     UnknownObject(SemanticNodeId),
     Read(ExecutionSessionCallbackReadError),
     Evaluation(EvaluationError),
@@ -879,6 +884,11 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
                 "world-transform writes are not supported by the planar callback wire protocol for {}:{}",
                 target.slot(),
                 target.generation()
+            ),
+            Self::UnsupportedGlowWrite(target) => write!(
+                formatter,
+                "glow writes are not supported by the callback protocol for {}:{}",
+                target.slot(), target.generation()
             ),
             Self::UnknownObject(object) => write!(
                 formatter,
@@ -2068,6 +2078,14 @@ impl ExecutionSession {
         let mut writes = Vec::with_capacity(batch.writes.len());
         for write in batch.writes {
             let semantic = write.object();
+            if matches!(
+                write,
+                EffectiveSemanticPropertyWrite::EffectIntensity { .. }
+            ) {
+                return Err(ExecutionSessionCallbackError::UnsupportedGlowWrite(
+                    semantic,
+                ));
+            }
             if matches!(write, EffectiveSemanticPropertyWrite::WorldTransform { .. }) {
                 return Err(ExecutionSessionCallbackError::UnsupportedWorldTransform(
                     semantic,

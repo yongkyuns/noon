@@ -4,7 +4,7 @@
 //! No authored timeline or host callback is needed; scene time stays at t=0.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session =
-        noon::example_scenes::pointer_selection::click_indicate_scene()?.execution_session()?;
+        noon::example_scenes::pointer_selection::click_indicate_scene()?.into_execution()?;
     noon_native::run_with_config(
         session,
         noon_native::NativeViewportConfig {

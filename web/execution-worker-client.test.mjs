@@ -522,6 +522,29 @@ test("engine and render requests use independent issuance spaces", async () => {
   client.terminate();
 });
 
+test("retired source retains real renderer metrics without querying its released engine", async () => {
+  const { client, engine, render } = await startClient();
+  await client.retireExecutionSource();
+  assert.equal(engine.closed, true);
+  assert.equal(render.terminated, false);
+  await assert.rejects(client.state(), /has not been started/);
+  await assert.rejects(client.seek(0), /has not been started/);
+  const engineMessages = engine.messages.length;
+  const reportPromise = client.metrics();
+  reportPromise.catch(() => {});
+  const request = await waitForRequest(render, "metrics");
+  render.emitMessage(renderMessage("metrics", {
+    requestId: request.requestId,
+    metrics: { ready: true, presentedFrames: 17, objectCount: 2 },
+  }));
+  const report = await reportPromise;
+  assert.deepEqual(report.metrics, { ready: true, presentedFrames: 17, objectCount: 2 });
+  assert.equal(report.engineMetrics, null, "released engine observations are unavailable");
+  assert.equal(engine.messages.length, engineMessages);
+  client.terminate();
+  await assert.rejects(client.metrics(), /has not been started/);
+});
+
 test("render metrics options, including one-shot GPU identity, are explicit", async () => {
   const errors = [];
   const { client, engine, render } = await startClient(errors);

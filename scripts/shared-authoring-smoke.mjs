@@ -391,6 +391,9 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
     document.body.append(canvas);
     let resolveAttached;
     let rejectAttached;
+    let registration = null;
+    let settled = false;
+    let authoringFailure = null;
     const execution = new harness.AuthoringExecutionClient(canvas, {
       onError(error, owner) {
         const failure = new Error(`${canvasId} ${owner}: ${error}`);
@@ -404,22 +407,37 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
       rejectAttached = reject;
     });
     const authored = harness.authoring.run(source, {}, {
-      async onSemanticContinuation(registration) {
-        await execution.startSemanticExecution(registration.semanticExecution, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error(`${canvasId} registered more than one semantic context`);
+        }
+        registration = next;
+        await execution.startSemanticExecution(next.semanticExecution, {
           authoringClient: harness.authoring,
-          loopDurationSeconds: Math.max(1, registration.duration),
+          loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
           pacing: "external_samples",
         });
         resolveAttached();
       },
     });
-    authored.then(() => rejectAttached(new Error(`${canvasId} did not register a continuation`)), (error) => {
+    authored.then(() => {
+      settled = true;
+      rejectAttached(new Error(`${canvasId} did not register a continuation`));
+    }, (error) => {
+      settled = true;
+      authoringFailure = String(error?.message ?? error);
       console.error(`${canvasId} authoring: ${error}`);
       rejectAttached(error);
       execution.terminate();
     });
-    harness.sampledProof = { execution, authored };
+    harness.sampledProof = {
+      execution,
+      authored,
+      get registration() { return registration; },
+      get settled() { return settled; },
+      get authoringFailure() { return authoringFailure; },
+    };
     await attached;
   }, { source, canvasId, width, height });
   console.log(`Attached sampled source ${canvasId}`);
@@ -871,6 +889,11 @@ try {
       endpointTime: null, expectedFinalCenter: [2.2, 0],
       finalPixelPredicate: (_red, _green, blue, x) => x > 320 && blue > 80,
     },
+    {
+      filename: "blur.py", objectCount: 3, expectedDuration: 6,
+      endpointTime: null, expectedFinalCenter: [2.2, 0],
+      finalPixelPredicate: (_red, _green, blue, x) => x > 320 && blue > 80,
+    },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -1008,7 +1031,7 @@ try {
         }
 
         const initial = await waitForFrame();
-        if (expectedGlowPair || filename === "image_glow.py" || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
+        if (expectedGlowPair || filename === "image_glow.py" || filename === "blur.py" || filename === "ordinary_family_membership_order.py" || filename === "manim_parity_object_members.py") {
           // A source-owned Python continuation never admits external pause/seek.
           // harness.authoring.run resolves only after its final Rust execution
           // lease has returned and the final retained publication was presented.
@@ -2760,8 +2783,9 @@ class GlowPulseEndpoint(Scene):
     }
   }
 
-  // The scalar track follows the .25s wait; at .75s its value is exactly 1.
-  // Source assertions still prove once-per-phase invocation and sparse reads.
+  // Sparse reads retain one exact callback phase and canonical source context.
+  // External samples hold .75s (after the .25s wait) while pixels are observed;
+  // the same fixture also completes through the autonomous realtime driver.
   const callbackSparseReadsSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_callback_sparse_reads.py"),
     "utf8",

@@ -3,10 +3,10 @@
 //! camera extent, then crops only AFTER the full two-dimensional convolution.
 //! This is not yet a public authored Scene/effect-channel test.
 use super::pixels::{device, readback, reference};
-use crate::{AnalyticGlowRequest, Camera2D, FramePreparer, GpuRenderer};
+use crate::{Camera2D, EffectCaptureRequest, FramePreparer, GpuRenderer};
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, GeometryRef, Glow, GlowSource, GlowUpdate, ObjectId, Pixels, Style, Transform2D, Vec2,
+    Color, EffectUpdate, GeometryRef, Glow, GlowSource, ObjectId, Pixels, Style, Transform2D, Vec2,
 };
 use noon_runtime::{FrameState, SceneInstance};
 
@@ -89,27 +89,27 @@ pub(super) fn expected(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     frame: &FrameState,
-    glow: Glow,
+    definition: Glow,
 ) -> Vec<u8> {
     let size = [VIEW[0] + 2 * PAD, VIEW[1] + 2 * PAD];
     let mut source_frame = isolated(frame, 1);
     let opacity = source_frame.objects[1].style.opacity;
     source_frame.objects[1].style.opacity = 1.0;
     let source = render_plain(device, queue, &source_frame, size);
-    let mask = if glow.source() == GlowSource::Silhouette {
+    let mask = if definition.source() == GlowSource::Silhouette {
         source_frame.objects[1].style.fill = Some(Color::WHITE);
         render_plain(device, queue, &source_frame, size)
     } else {
         source.clone()
     };
-    let sigma = glow.radius().to_output_pixels(VIEW[1], 6.0).unwrap();
+    let sigma = definition.radius().to_output_pixels(VIEW[1], 6.0).unwrap();
     assert!(
         (3.0 * sigma).ceil() + 1.0 <= f64::from(PAD),
         "reference canvas must enclose full Gaussian support"
     );
     let blur = reference(&mask, size, sigma);
     assert!(blur.iter().copied().fold(0.0_f64, f64::max) > 1e-4);
-    let tint = glow.color();
+    let tint = definition.color();
     let tint = [tint.red, tint.green, tint.blue].map(f64::from);
     let mut effect = vec![0_u8; source.len()];
     for ((out, src), blurred) in effect
@@ -120,7 +120,8 @@ pub(super) fn expected(
         .zip(blur)
     {
         let alpha = f64::from(src[3]) / 255.0;
-        let halo = (glow.intensity() * f64::from(glow.color().alpha) * blurred).min(1.0);
+        let halo =
+            (definition.intensity() * f64::from(definition.color().alpha) * blurred).min(1.0);
         for channel in 0..4 {
             let component = if channel == 3 {
                 halo
@@ -229,17 +230,17 @@ fn retained_painter_glow_pixels() {
         } else {
             GlowSource::Painted
         };
-        let glow = Glow::new(
-            GlowUpdate::default()
+        let effect = Glow::new(
+            EffectUpdate::default()
                 .radius(Pixels(SIGMA))
                 .intensity(2.4)
                 .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
                 .source(mode),
         )
         .unwrap();
-        let request = AnalyticGlowRequest {
+        let request = EffectCaptureRequest {
             object_index: 1,
-            definition: glow,
+            definitions: &[effect.into()],
             texture_budget_bytes: 1_000_000,
         };
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -255,13 +256,13 @@ fn retained_painter_glow_pixels() {
         let view = texture.create_view(&Default::default());
         let mut encoder = device.create_command_encoder(&Default::default());
         let stats = renderer
-            .prepare_analytic_glow(&device, &queue, &mut encoder, &prepared, request)
+            .prepare_effect_capture(&device, &queue, &mut encoder, &prepared, request)
             .unwrap();
         assert_eq!(stats.source_passes, if transparent { 2 } else { 1 });
         renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::TRANSPARENT);
         queue.submit([encoder.finish()]);
         let actual = readback(&device, &queue, &texture);
-        let expected = expected(&device, &queue, &frame, glow);
+        let expected = expected(&device, &queue, &frame, effect);
         let max = actual
             .iter()
             .zip(&expected)
@@ -287,13 +288,17 @@ fn retained_painter_glow_pixels() {
         // Neutral must restore exact ordinary output, not a copied/composited approximation.
         let mut encoder = device.create_command_encoder(&Default::default());
         renderer
-            .prepare_analytic_glow(
+            .prepare_effect_capture(
                 &device,
                 &queue,
                 &mut encoder,
                 &prepared,
-                AnalyticGlowRequest {
-                    definition: GlowUpdate::default().intensity(0.0).apply_to(glow).unwrap(),
+                EffectCaptureRequest {
+                    definitions: &[(EffectUpdate::default()
+                        .intensity(0.0)
+                        .apply_to(effect)
+                        .unwrap())
+                    .into()],
                     ..request
                 },
             )
@@ -305,14 +310,14 @@ fn retained_painter_glow_pixels() {
             plain,
             "neutral must be bit-identical"
         );
-        renderer.remove_analytic_glow(ObjectId::new(2));
-        assert_eq!(renderer.analytic_glow_texture_bytes(), 0);
+        renderer.remove_effect_capture(ObjectId::new(2));
+        assert_eq!(renderer.effect_capture_texture_bytes(), 0);
     }
 }
 
 /// Build only through shared semantic transactions and the normal static object
 /// projection. Full Scene animation/live/host admission is still guarded.
-pub(super) fn semantic_runtime(source: &FrameState, glow: Glow) -> SceneInstance {
+pub(super) fn semantic_runtime(source: &FrameState, effect: Glow) -> SceneInstance {
     use noon_compile::SemanticExecutionIndex;
     use noon_core::{
         SemanticMutationTransaction, SemanticObjectState, SemanticStore, SemanticStyle,
@@ -346,14 +351,18 @@ pub(super) fn semantic_runtime(source: &FrameState, glow: Glow) -> SceneInstance
     }
     let owner = owner.unwrap();
     let mut tx = SemanticMutationTransaction::new();
-    let token = tx.create_effect(owner, "glow", glow);
+    let token = tx.create_effect(owner, "glow", effect);
     let attachment = tx.apply(&mut store).unwrap().resolve(token).unwrap();
     let mut index = SemanticExecutionIndex::new();
     let projection = index.lower_scene(&store).unwrap();
     let compiled = CompiledScene::from_semantic_projection(&projection).unwrap();
     assert_eq!(
-        compiled.objects()[1].glow.as_ref().unwrap().attachment,
-        attachment
+        compiled.objects()[1]
+            .effects
+            .as_ref()
+            .unwrap()
+            .attachments(),
+        &[attachment]
     );
     let mut runtime = SceneInstance::new(compiled);
     // Ordinary runtime translation channel and seek, not an effects clock.
@@ -380,7 +389,7 @@ pub(super) fn semantic_runtime(source: &FrameState, glow: Glow) -> SceneInstance
 #[test]
 #[ignore = "requires raster adapter; static semantic projection and published-frame integration"]
 fn semantic_static_glow_publication_pixels() {
-    use crate::PublishedAnalyticGlowRequest;
+    use crate::PublishedEffectCaptureRequest;
     let (device, queue) = device();
     for (rectangle, offscreen, transparent) in [
         (false, false, false),
@@ -389,8 +398,8 @@ fn semantic_static_glow_publication_pixels() {
         (true, true, true),
         (false, false, true),
     ] {
-        let glow = Glow::new(
-            GlowUpdate::default()
+        let effect = Glow::new(
+            EffectUpdate::default()
                 .radius(Pixels(SIGMA))
                 .intensity(2.4)
                 .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
@@ -401,7 +410,7 @@ fn semantic_static_glow_publication_pixels() {
                 }),
         )
         .unwrap();
-        let mut runtime = semantic_runtime(&frame(rectangle, offscreen, transparent), glow);
+        let mut runtime = semantic_runtime(&frame(rectangle, offscreen, transparent), effect);
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
         renderer.set_camera(
@@ -411,7 +420,7 @@ fn semantic_static_glow_publication_pixels() {
         let mut preparer = FramePreparer::new();
         let texture = target(&device, VIEW);
         let view = texture.create_view(&Default::default());
-        let request = PublishedAnalyticGlowRequest {
+        let request = PublishedEffectCaptureRequest {
             object_index: 1,
             texture_budget_bytes: 1_000_000,
         };
@@ -420,18 +429,15 @@ fn semantic_static_glow_publication_pixels() {
             runtime.seek(time).unwrap();
             let publication = runtime.take_renderer_publication();
             assert_eq!(
-                publication.frame().objects[1]
-                    .glow
-                    .as_ref()
-                    .unwrap()
+                super::only_effect(publication.frame().objects[1].effects.as_ref().unwrap())
                     .definition,
-                glow
+                (effect).into()
             );
             let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer
-                .prepare_published_analytic_glow(
+                .prepare_published_effect_capture(
                     &device,
                     &queue,
                     &mut encoder,
@@ -443,7 +449,7 @@ fn semantic_static_glow_publication_pixels() {
             renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::TRANSPARENT);
             queue.submit([encoder.finish()]);
             let pixels = readback(&device, &queue, &texture);
-            let reference = expected(&device, &queue, publication.frame(), glow);
+            let reference = expected(&device, &queue, publication.frame(), effect);
             let error = pixels
                 .iter()
                 .zip(reference)
@@ -480,7 +486,7 @@ fn semantic_static_glow_publication_pixels() {
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         renderer
-            .prepare_published_analytic_glow(
+            .prepare_published_effect_capture(
                 &device,
                 &queue,
                 &mut encoder,
@@ -489,6 +495,6 @@ fn semantic_static_glow_publication_pixels() {
                 request,
             )
             .unwrap();
-        assert_eq!(renderer.analytic_glow_texture_bytes(), 0);
+        assert_eq!(renderer.effect_capture_texture_bytes(), 0);
     }
 }

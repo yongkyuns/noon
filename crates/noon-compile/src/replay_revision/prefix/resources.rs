@@ -103,7 +103,10 @@ impl CompiledScene {
                         delta.geometry_handles.insert(*id, handle);
                         delta.geometries.insert(handle, resource);
                     }
-                    ObjectContentRef::Geometry(_) => {}
+                    // A composed scope refers to member object IDs, not
+                    // another raw resource. Member rows carry resource
+                    // dependencies through the existing closure.
+                    ObjectContentRef::Geometry(_) | ObjectContentRef::Composed(_) => {}
                 }
             }
         }

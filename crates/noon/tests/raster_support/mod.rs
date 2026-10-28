@@ -20,13 +20,32 @@ pub struct Raster {
     pub last_scene_upload_bytes: usize,
     pub last_overlay_upload_bytes: usize,
     pub last_scene_repacked: usize,
+    pub last_scene_path_batches: usize,
 }
 impl Raster {
+    // This support module is compiled separately by native and Vulkan test binaries.
+    #[allow(dead_code)]
     pub async fn new() -> Self {
         Self::with_dimensions(SIZE, SIZE).await
     }
 
+    #[allow(dead_code)]
     pub async fn with_dimensions(width: u32, height: u32) -> Self {
+        Self::with_adapter_dimensions(width, height, wgpu::Backends::VULKAN, true).await
+    }
+
+    // Explicit real native adapter qualification, also usable on Metal hosts.
+    #[allow(dead_code)]
+    pub async fn with_primary_dimensions(width: u32, height: u32) -> Self {
+        Self::with_adapter_dimensions(width, height, wgpu::Backends::PRIMARY, false).await
+    }
+
+    async fn with_adapter_dimensions(
+        width: u32,
+        height: u32,
+        backends: wgpu::Backends,
+        force_fallback_adapter: bool,
+    ) -> Self {
         let layout = Rgba8ReadbackLayout::new(
             width,
             height,
@@ -35,16 +54,16 @@ impl Raster {
         )
         .unwrap();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                force_fallback_adapter: true,
+                force_fallback_adapter,
                 ..Default::default()
             })
             .await
-            .expect("native raster qualification requires Vulkan");
+            .expect("native raster qualification requires the requested real adapter");
         eprintln!("native raster adapter: {:?}", adapter.get_info());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
@@ -91,6 +110,7 @@ impl Raster {
             last_scene_upload_bytes: 0,
             last_overlay_upload_bytes: 0,
             last_scene_repacked: 0,
+            last_scene_path_batches: 0,
         }
     }
     pub fn capture(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
@@ -144,6 +164,17 @@ impl Raster {
         }
         .unwrap();
         self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
+        self.last_scene_path_batches = prepared
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches)
+            .filter(|batch| {
+                matches!(
+                    batch.primitive,
+                    noon_render_wgpu::RenderPrimitive::Path { .. }
+                        | noon_render_wgpu::RenderPrimitive::MegaPath { .. }
+                )
+            })
+            .count();
         self.last_scene_upload_bytes = self
             .renderer
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)

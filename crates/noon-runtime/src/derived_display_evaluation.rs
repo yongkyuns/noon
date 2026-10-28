@@ -229,7 +229,8 @@ impl std::error::Error for DerivedDisplayEvaluationError {}
 
 fn row_from_derived(base: &DerivedDisplayObjectState) -> FrameRowState {
     FrameRowState {
-        glow: None,
+        fill_paint: base.fill_paint.clone(),
+        effects: None,
         z_index: base.z_index,
         transform: base.transform,
         spatial: None,
@@ -250,6 +251,7 @@ fn derived_from_row(
     row: FrameRowState,
 ) -> DerivedDisplayObjectState {
     DerivedDisplayObjectState {
+        fill_paint: row.fill_paint,
         z_index: row.z_index,
         content: row.content_override.unwrap_or(base_content),
         text_bounds,
@@ -314,9 +316,13 @@ fn apply_derived_track(
             );
             Ok(())
         }
-        Property::GlowColor
-        | Property::GlowRadius
-        | Property::GlowIntensity
+        Property::EffectColor
+        | Property::EffectRadius
+        | Property::EffectIntensity
+        | Property::EffectOffset
+        | Property::EffectProgress
+        | Property::EffectSoftness
+        | Property::EffectSeed
         | Property::Presence
         | Property::ZIndex
         | Property::Transform
@@ -338,6 +344,7 @@ mod tests {
 
     fn base(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
+            fill_paint: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,

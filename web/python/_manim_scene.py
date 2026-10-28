@@ -1901,16 +1901,40 @@ def _glow_pulse_parameters(animation: object, play_kwargs: dict[str, object]):
 
 def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Scene:
     """Declare a Rust action; Python callbacks do not participate in playback."""
-    if not isinstance(animation, _animate.Indicate):
-        raise NotImplementedError("Scene.on_click currently supports Indicate(target) only")
-    classified = _canonical_indicate_animation(self, animation)
-    animated, family = classified
-    if family or animated is not target:
-        raise ValueError("Scene.on_click requires Indicate on the same single target")
+    from _noon_effects import GlowPulse
+
+    if not isinstance(target, _base.Mobject):
+        raise TypeError("Scene.on_click requires a Mobject target")
+    if _semantic_handles._is_shared_family(target):
+        raise NotImplementedError("Scene.on_click requires a single leaf target")
+    if getattr(target, "_scene", None) is not self:
+        raise ValueError("Scene.on_click target must belong to this Scene")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("Scene.on_click requires a shared semantic handle")
+    if animation is None:
+        engine_call(
+            _context(self).liveClearClickAction,
+            target._semantic_handle,
+            operation="Scene.on_click",
+        )
+        return self
+    if isinstance(animation, GlowPulse):
+        if _canonical_glow_pulse_animation(self, animation) is not target:
+            raise ValueError("Scene.on_click requires GlowPulse on the same single target")
+        method = _context(self).liveBindClickGlowPulse
+        parameters = _glow_pulse_parameters(animation, {})
+    elif isinstance(animation, _animate.Indicate):
+        animated, family = _canonical_indicate_animation(self, animation)
+        if family or animated is not target:
+            raise ValueError("Scene.on_click requires Indicate on the same single target")
+        method = _context(self).liveBindClickIndicate
+        parameters = _indicate_parameters(animation, {})
+    else:
+        raise NotImplementedError("Scene.on_click supports Indicate(target), GlowPulse(target), or None")
     engine_call(
-        _context(self).liveBindClickIndicate,
+        method,
         target._semantic_handle,
-        *_indicate_parameters(animation, {}),
+        *parameters,
         operation="Scene.on_click",
     )
     return self
@@ -2683,6 +2707,42 @@ def _build_canonical_composition_candidate(
                         str(reservation.object.id), member._semantic_handle
                     )
             return
+        from _noon_effects import Dissolve
+        if isinstance(animation, Dissolve):
+            target = animation.mobject
+            family = _semantic_handles._is_shared_family(target)
+            leaves = _compat._leaf_mobjects(target) if family else [target]
+            if not leaves or any(getattr(member, "_semantic_handle", None) is None for member in leaves):
+                raise NotImplementedError("Dissolve requires shared semantic handles")
+            if any(member._scene not in (None, self) for member in leaves):
+                raise ValueError("Dissolve target belongs to another Scene")
+            child = _options.resolve_transform(
+                builder_args=_options.builder_args(animation), default_lag_ratio=0.0,
+                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
+                play_easing=child_kwargs.get("easing"), play_rate_func=child_kwargs.get("rate_func"),
+                play_lag_ratio=child_kwargs.get("lag_ratio"), play_path_arc=child_kwargs.get("path_arc"),
+            )
+            if child.path_arc != 0.0 or child.lag_ratio != 0.0:
+                raise NotImplementedError("Dissolve supports a single scope clock without path arcs or member lag")
+            parameters = (animation.direction, animation.seed, animation.softness,
+                animation.introducer, animation.remover, float(child.run_time), str(child.rate_func),
+                float(child.lag_ratio), bool(child.reverse_rate_function))
+            detached = [member for member in leaves if member._scene is None]
+            if family:
+                builder.appendDissolveFamily(target._semantic_family_handle, *parameters)
+                if detached:
+                    family_registrations.append(target)
+                for member in detached:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendDissolveFamilyEntering(str(reservation.object.id), member._semantic_handle)
+            else:
+                reservation = reserve(target) if detached else None
+                builder.appendDissolveMobject("" if reservation is None else str(reservation.object.id), target._semantic_handle, *parameters)
+            removes = animation.remover if animation.remover is not None else animation.direction == "out"
+            if removes:
+                removals.extend(leaves)
+            return
         pulse = _canonical_glow_pulse_animation(self, animation)
         if pulse is not None:
             builder.appendGlowPulseMobject(
@@ -2711,10 +2771,9 @@ def _build_canonical_composition_candidate(
             )
             if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
-            if child.rate_func not in ("linear", "smooth"):
-                raise NotImplementedError(
-                    "canonical family Transform requires linear or smooth easing"
-                )
+            # The shared Rust Transform policy resolves supported rate IDs and
+            # validates their trajectories; forward that result without a second
+            # Python easing profile.
             destination = builder
             if matching:
                 if any(child_kwargs.get(name) not in (None, 0.0)

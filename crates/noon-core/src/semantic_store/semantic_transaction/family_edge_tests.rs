@@ -5,6 +5,36 @@ fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
     store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
 }
 
+#[test]
+fn staged_parent_reads_share_final_edge_and_removal_state_without_committing() {
+    let mut store = SemanticStore::new();
+    let original = store.insert_family();
+    let removed = store.insert_family();
+    let member = object(&mut store, 0.4);
+    store.add_member(original, member).unwrap();
+    store.add_member(removed, member).unwrap();
+    let revision = store.scene_revision();
+    let mut tx = SemanticMutationTransaction::new();
+    let parent = tx.create_node(SemanticNodeCreation::family());
+    tx.remove_member(original, member)
+        .add_member(parent, member)
+        .remove_node(removed);
+    let prepared = tx.prepare(&mut store).unwrap();
+    assert_eq!(
+        prepared.family_parents(member).unwrap(),
+        vec![parent.into()]
+    );
+    assert_eq!(
+        prepared.family_members(parent).unwrap(),
+        vec![member.into()]
+    );
+    assert!(prepared.family_parents(removed).is_err());
+    assert_eq!(prepared.store().scene_revision(), revision);
+    drop(prepared);
+    assert_eq!(store.node(member).unwrap().parents(), &[original, removed]);
+    assert!(store.node(removed).is_some());
+}
+
 fn scalar_input(store: &SemanticStore, signal: SemanticNodeId) -> f64 {
     let SemanticSignalSource::Input(SemanticSignalValue::Scalar(value)) =
         store.semantic_signal_state(signal).unwrap().source()

@@ -18,7 +18,8 @@ fn initial() -> (Vec<u8>, RetainedExecutionDeltaEnvelope) {
         .unwrap();
     scene.add(&image).unwrap();
     let mut player =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 4.0, 17)
+            .unwrap();
     let bytes = player.resource_bundle_bytes();
     let frame = serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
     (bytes, frame)
@@ -360,6 +361,7 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
             family_plans: Vec::new(),
             resource_additions: Some(first_bundle),
             resource_retirements: RetainedResourceRetirements {
+                composed_sources: Vec::new(),
                 images: vec![initial_image],
                 texts: Vec::new(),
                 geometries: Vec::new(),
@@ -407,6 +409,7 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
             family_plans: Vec::new(),
             resource_additions: Some(second_bundle),
             resource_retirements: RetainedResourceRetirements {
+                composed_sources: Vec::new(),
                 images: Vec::new(),
                 texts: vec![first_transport],
                 geometries: Vec::new(),
@@ -452,6 +455,7 @@ fn mixed_resource_churn_reclaims_retired_entries_without_dropping_shared_text_de
                 family_plans: Vec::new(),
                 resource_additions: Some(bundle),
                 resource_retirements: RetainedResourceRetirements {
+                    composed_sources: Vec::new(),
                     images: previous_image.into_iter().collect(),
                     texts: (sequence == 3)
                         .then_some(second_transport)
@@ -490,6 +494,7 @@ fn live_image_retirement_is_rejected_before_mutating_the_mirror() {
         family_plans: Vec::new(),
         resource_additions: None,
         resource_retirements: RetainedResourceRetirements {
+            composed_sources: Vec::new(),
             images: vec![image],
             texts: Vec::new(),
             geometries: Vec::new(),
@@ -525,6 +530,7 @@ fn snapshot_retirement_replaces_the_root_index() {
             family_plans: Vec::new(),
             resource_additions: Some(bundle),
             resource_retirements: RetainedResourceRetirements {
+                composed_sources: Vec::new(),
                 images: vec![old],
                 texts: Vec::new(),
                 geometries: Vec::new(),
@@ -571,6 +577,7 @@ fn shared_image_survives_retirement_of_only_one_snapshot_row() {
             family_plans: Vec::new(),
             resource_additions: None,
             resource_retirements: RetainedResourceRetirements {
+                composed_sources: Vec::new(),
                 images: vec![image],
                 texts: Vec::new(),
                 geometries: Vec::new(),
@@ -596,6 +603,7 @@ fn stale_retirement_is_dropped_without_releasing_the_resource() {
         family_plans: Vec::new(),
         resource_additions: None,
         resource_retirements: RetainedResourceRetirements {
+            composed_sources: Vec::new(),
             images: vec![image],
             texts: Vec::new(),
             geometries: Vec::new(),

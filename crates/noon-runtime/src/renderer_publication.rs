@@ -8,6 +8,20 @@ use noon_core::{
 
 use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 
+/// Borrow the publisher's existing identity index. Derived captures resolve
+/// their local inputs without scanning the frame or retaining another index.
+pub trait ObjectIndexLookup {
+    fn object_index(&self, object: noon_core::ObjectId) -> Option<usize>;
+}
+
+impl ObjectIndexLookup for crate::SceneInstance {
+    fn object_index(&self, object: noon_core::ObjectId) -> Option<usize> {
+        self.compiled
+            .object_index(object)
+            .map(|index| index as usize)
+    }
+}
+
 /// One identity-free effective visual row for transient renderer presentation.
 ///
 /// Unlike [`crate::FrameObjectState`], this type deliberately has no `ObjectId` and
@@ -18,6 +32,7 @@ use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 /// second geometry/text world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayObjectState {
+    pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     pub z_index: f64,
     pub content: ObjectContentRef,
     pub text_bounds: Option<Rect>,
@@ -220,6 +235,7 @@ pub struct RendererPublication<'a> {
     planned_family_frame: RetainedPlannedFamilyFrame<'a>,
     painter_order: &'a [u32],
     derived_display_objects: &'a [DerivedDisplayObject],
+    object_indices: &'a dyn ObjectIndexLookup,
 }
 
 impl RendererPublication<'_> {
@@ -229,6 +245,15 @@ impl RendererPublication<'_> {
 
     pub const fn frame(&self) -> &FrameState {
         self.frame
+    }
+
+    pub fn object_index(&self, object: noon_core::ObjectId) -> Option<usize> {
+        self.object_indices.object_index(object).filter(|&index| {
+            self.frame
+                .objects
+                .get(index)
+                .is_some_and(|row| row.id == object)
+        })
     }
 
     pub const fn changes(&self) -> &FrameChanges {
@@ -330,6 +355,7 @@ impl<'a> RendererPublication<'a> {
         family_animation_plans: &'a [RetainedFamilyAnimationPlan],
         active_family_animation_indices: &'a BTreeSet<usize>,
         painter_order: &'a [u32],
+        object_indices: &'a dyn ObjectIndexLookup,
     ) -> Self {
         let mut publication = Self::new(
             context,
@@ -342,6 +368,7 @@ impl<'a> RendererPublication<'a> {
             family_animation_plans,
             active_family_animation_indices,
             painter_order,
+            object_indices,
         );
         publication.planned_family_frame = planned_family_frame;
         publication
@@ -359,6 +386,7 @@ impl<'a> RendererPublication<'a> {
         family_animation_plans: &'a [RetainedFamilyAnimationPlan],
         active_family_animation_indices: &'a BTreeSet<usize>,
         painter_order: &'a [u32],
+        object_indices: &'a dyn ObjectIndexLookup,
     ) -> Self {
         Self {
             context,
@@ -377,6 +405,7 @@ impl<'a> RendererPublication<'a> {
             },
             painter_order,
             derived_display_objects: &[],
+            object_indices,
         }
     }
 }
@@ -478,6 +507,7 @@ mod derived_display_tests {
 
     fn derived_state() -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
+            fill_paint: None,
             z_index: 2.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             text_bounds: None,
@@ -499,8 +529,9 @@ mod derived_display_tests {
         FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                fill_paint: None,
                 draw_enabled: true,
-                glow: None,
+                effects: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -592,6 +623,7 @@ mod derived_display_tests {
             ..Transform2D::IDENTITY
         };
         let state = DerivedDisplayObjectState {
+            fill_paint: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             text_bounds: None,

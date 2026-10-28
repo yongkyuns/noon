@@ -353,7 +353,7 @@ fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_
     assert!(!reader.interactions_active());
 }
 
-fn click(session: &mut ExecutionSession, sequence: u64) {
+fn click(store: &mut noon_core::SemanticStore, session: &mut ExecutionSession, sequence: u64) {
     let position =
         NativePointerPosition::new(Vec2::new(-1.0, 0.0), Vec2::new(100.0, 100.0)).unwrap();
     for (sequence, kind) in [
@@ -380,7 +380,9 @@ fn click(session: &mut ExecutionSession, sequence: u64) {
             NativeInputModifiers::default(),
             kind,
         );
-        session.submit_native_pointer_input(&token, input).unwrap();
+        session
+            .submit_native_pointer_input(store, &token, input)
+            .unwrap();
     }
 }
 
@@ -403,6 +405,7 @@ fn sealed_session_pointer_interest_and_dispatch_follow_displayed_binding_history
             1,
         )
         .unwrap();
+    let semantic_owner = std::rc::Rc::clone(scene.integration_store());
     drop(target);
     drop(scene);
 
@@ -420,18 +423,30 @@ fn sealed_session_pointer_interest_and_dispatch_follow_displayed_binding_history
         assert_eq!(source.has_native_pointer_subscribers(), binding.is_some());
         let frame = source.frame().clone();
         let history = source.replay_stats();
-        click(&mut source, 2 * index as u64);
+        click(
+            &mut semantic_owner.borrow_mut(),
+            &mut source,
+            2 * index as u64,
+        );
         if let Some(binding) = binding {
             assert!(source.interactions_active());
             let wall_time = 10.0 * index as f64;
-            source.advance_interactions(wall_time).unwrap();
             source
-                .advance_interactions(wall_time + binding.run_time() * 0.5)
+                .advance_interactions(&mut semantic_owner.borrow_mut(), wall_time)
+                .unwrap();
+            source
+                .advance_interactions(
+                    &mut semantic_owner.borrow_mut(),
+                    wall_time + binding.run_time() * 0.5,
+                )
                 .unwrap();
             midpoint(source.frame(), object, binding);
             assert_eq!(source.frame().time, time);
             source
-                .advance_interactions(wall_time + binding.run_time())
+                .advance_interactions(
+                    &mut semantic_owner.borrow_mut(),
+                    wall_time + binding.run_time(),
+                )
                 .unwrap();
         }
         assert!(!source.interactions_active());
@@ -579,4 +594,29 @@ fn historical_binding_pixels_differ_on_the_same_baseline_and_restore_after_sourc
             "PREFIX_BINDING_RASTER: distinct historical actions ({binding_difference} different midpoint pixels), identical first-pass baseline, source destruction, exact restoration, seek cancellation, fresh renderer"
         );
     });
+}
+
+#[test]
+fn prepared_history_rejects_live_glow_pulse_without_borrowing_a_semantic_owner() {
+    let mut scene = Scene::new();
+    let target = scene.circle(0.65).unwrap();
+    scene.add(&target).unwrap();
+    let pulse = scene
+        .declare_glow_pulse(&target, 2.0, AnimationOptions::new().run_time(1.0))
+        .unwrap();
+    scene.on_click(&target, Some(&pulse)).unwrap();
+    let source = scene.execution_session().unwrap();
+    assert!(
+        source.has_native_pointer_subscribers(),
+        "ordinary live GlowPulse stays interested in input"
+    );
+    assert!(
+        !source.has_playback_controls(),
+        "GlowPulse must not masquerade as a playback control"
+    );
+    assert!(source.validate_prepared_source_domain().is_err());
+    assert!(
+        target.get_effect("glow").is_err(),
+        "admission does not enroll a temporary attachment"
+    );
 }

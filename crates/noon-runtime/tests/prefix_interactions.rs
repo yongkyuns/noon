@@ -130,6 +130,7 @@ fn append_keeps_effect_and_frame_while_forward_playback_advances_disjoint_channe
                 fill: Some(Color::RED),
                 ..Style::default()
             },
+            fill_paint: None,
         })
         .unwrap();
     source.advance_to(2.0).unwrap();
@@ -387,7 +388,7 @@ fn unsupported_displayed_targets_preserve_the_active_effect_and_publication() {
             vector_items: Arc::from([]),
             render_items: Arc::from([]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
             baseline: 0.0,
             layout_artifact: None,
         })

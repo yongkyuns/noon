@@ -289,6 +289,9 @@ jobs:
               --lib gpu::tests:: -- --include-ignored --nocapture --test-threads=1
             env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
               --test capture -- --include-ignored --nocapture --test-threads=1
+            NOON_EFFECT_EXPORT_PROOF_DIR=capture-proof/effects \
+              env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --test effects -- --include-ignored --nocapture --test-threads=1
           } 2>&1 | tee capture-proof/tests.log
 
       - name: Qualify prefix identity, incremental lifecycle, interactions, and pixels

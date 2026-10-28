@@ -1,7 +1,7 @@
 use noon::ExecutionSession;
 use noon_web::{verify_example_replay, verify_execution_replay, ReplayVerificationError};
 
-type SessionFactory = fn() -> Result<ExecutionSession, String>;
+type SessionFactory = fn() -> Result<noon::SceneExecution, String>;
 
 fn sessions() -> [SessionFactory; 2] {
     [
@@ -27,15 +27,18 @@ fn typed_direct_seek_forward_playback_and_backward_scrub_have_identical_frames()
             direct.seek(target).unwrap();
             forward.seek(0.0).unwrap();
             for step in 0..37 {
-                forward.advance_to(target * f64::from(step) / 37.0).unwrap();
+                forward
+                    .session_mut()
+                    .advance_to(target * f64::from(step) / 37.0)
+                    .unwrap();
             }
-            forward.advance_to(target).unwrap();
-            assert_same_execution(&forward, &direct);
+            forward.session_mut().advance_to(target).unwrap();
+            assert_same_execution(forward.session(), direct.session());
 
             for time in [0.1, 1.3, 2.9, 0.7, 3.4, target] {
-                rewind.advance_to(time).unwrap();
+                rewind.session_mut().advance_to(time).unwrap();
             }
-            assert_same_execution(&rewind, &direct);
+            assert_same_execution(rewind.session(), direct.session());
         }
     }
 }
@@ -44,11 +47,11 @@ fn typed_direct_seek_forward_playback_and_backward_scrub_have_identical_frames()
 fn typed_replay_verifier_rejects_invalid_sampling() {
     let session = sessions()[0]().unwrap();
     assert!(matches!(
-        verify_execution_replay(&session, &[0.5], 1),
+        verify_execution_replay(session.session(), &[0.5], 1),
         Err(ReplayVerificationError::InvalidForwardSampleCount(1))
     ));
     assert!(matches!(
-        verify_execution_replay(&session, &[f64::NAN], 38),
+        verify_execution_replay(session.session(), &[f64::NAN], 38),
         Err(ReplayVerificationError::NonFiniteTarget { index: 0, .. })
     ));
 }
@@ -73,12 +76,12 @@ fn typed_repeated_evaluation_is_stable_at_boundaries_and_extreme_valid_times() {
             let mut repeated = build().unwrap();
             direct.seek(time).unwrap();
             for _ in 0..3 {
-                repeated.advance_to(time).unwrap();
-                assert_same_execution(&repeated, &direct);
+                repeated.session_mut().advance_to(time).unwrap();
+                assert_same_execution(repeated.session(), direct.session());
             }
-            repeated.take_frame_changes();
-            repeated.advance_to(time).unwrap();
-            assert!(repeated.take_frame_changes().is_empty());
+            repeated.session_mut().take_frame_changes();
+            repeated.session_mut().advance_to(time).unwrap();
+            assert!(repeated.session_mut().take_frame_changes().is_empty());
         }
     }
 }

@@ -112,6 +112,10 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
         assert.notEqual(this.status.preparedPlayback, true, "cannot reconcile a prepared reader");
         return { ...this.status, playing: false, time: 2 };
       },
+      async retireExecutionSource() {
+        calls.push(["retire-source", this]);
+        this.status.playing = false;
+      },
       async restart() { calls.push(["restart"]); throw new Error("unexpected receiver restart"); },
       terminate() {
         if (this.terminated) return;

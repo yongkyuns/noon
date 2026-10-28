@@ -7,8 +7,8 @@
 
 use crate::Mobject;
 use noon_core::{
-    AnimationOptions, SemanticAnimationIntent, SemanticAnimationState, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind, SemanticStore,
+    AnimationOptions, SemanticAnimationIntent, SemanticAnimationState, SemanticMutationTransaction,
+    SemanticNodeId, SemanticNodeKind, SemanticStore,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -31,6 +31,10 @@ impl DeclaredAnimation {
     /// The semantic identity of this replayable declaration.
     pub const fn node_id(&self) -> SemanticNodeId {
         self.node
+    }
+
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        &self.store
     }
 
     /// Read the current authored options from the authoritative semantic store.
@@ -67,16 +71,16 @@ impl crate::Scene {
         options: AnimationOptions,
     ) -> Result<DeclaredAnimation, String> {
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_animation(SemanticAnimationState::new(intent, options));
+        let token = transaction.create_animation(SemanticAnimationState::new(intent, options));
         let result = transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map_err(|error| error.to_string())?;
-        let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
+        let Some(animation) = result.resolve(token) else {
             return Err("animation declaration did not produce one animation identity".into());
         };
         Ok(DeclaredAnimation::new(
             Rc::clone(self.integration_store()),
-            *animation,
+            animation,
         ))
     }
 
@@ -137,6 +141,28 @@ impl crate::Scene {
             SemanticAnimationIntent::GlowPulse {
                 target: target.node_id(),
                 intensity,
+            },
+            options,
+        )
+    }
+
+    /// Declare a replayable visibility gesture without enrolling a mask yet.
+    pub fn declare_dissolve<'a>(
+        &self,
+        target: impl Into<crate::MobjectTarget<'a>>,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        let target = target.into();
+        target
+            .require_store(self.integration_store())
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::Dissolve {
+                target: target.node_id(),
+                direction,
+                style,
             },
             options,
         )

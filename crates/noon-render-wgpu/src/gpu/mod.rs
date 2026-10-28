@@ -6,12 +6,25 @@ use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
 mod derived_display;
+mod paint;
 mod source_capture;
-pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
+pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
+mod dissolve_filter;
+mod effect_stack;
+mod gaussian_blur;
 mod glow_filter;
+mod shadow_filter;
+pub use dissolve_filter::{DissolveFilter, DissolveParameters, DissolveScope};
+pub use effect_stack::{
+    EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,
+};
+pub use gaussian_blur::{
+    GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurPrepareError,
+    GaussianBlurScope, GaussianBlurStats,
+};
 pub use glow_filter::{
-    GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
-    GlowRasterStats, GlowScope,
+    EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
+    EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
 mod overlay;
 mod path_batching;
@@ -505,8 +518,9 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
-    analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
-    retained_glow: retained_text::glow_publication::RetainedGlowPublication,
+    fill_paints: Option<Box<paint::PaintGpu>>,
+    effect_captures: Option<Box<analytic_glow::EffectCaptureGpu>>,
+    retained_effects: retained_text::glow_publication::RetainedEffectPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
@@ -526,6 +540,7 @@ pub struct GpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_bind_group_layout: wgpu::BindGroupLayout,
+    image_texture_layout: wgpu::BindGroupLayout,
     inset_camera_buffers: Vec<wgpu::Buffer>,
     inset_camera_bind_groups: Vec<wgpu::BindGroup>,
     inset_views: Vec<Inset2DGpuView>,
@@ -633,7 +648,7 @@ impl GpuRenderer {
             label: Some("Noon camera bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -846,6 +861,7 @@ impl GpuRenderer {
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout: camera_layout,
+            image_texture_layout: raster_image_gpu::texture_layout(device),
             inset_camera_buffers: Vec::new(),
             inset_camera_bind_groups: Vec::new(),
             inset_views: Vec::new(),
@@ -870,8 +886,9 @@ impl GpuRenderer {
             mega_path_vertex_instance_buffer,
             derived_display,
             images: None,
-            analytic_glows: None,
-            retained_glow: Default::default(),
+            effect_captures: None,
+            fill_paints: None,
+            retained_effects: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
@@ -1319,9 +1336,10 @@ impl GpuRenderer {
             &mut trace,
         );
 
+        let paints = self.upload_fill_paints(device, queue, prepared);
         UploadStats {
-            bytes_uploaded,
-            buffer_reallocations,
+            bytes_uploaded: bytes_uploaded + paints.bytes_uploaded,
+            buffer_reallocations: buffer_reallocations + paints.buffer_reallocations,
         }
     }
 
@@ -1367,7 +1385,7 @@ impl GpuRenderer {
             query_set,
         } = composition;
 
-        if !secondary_viewports.is_empty() && self.has_analytic_glows() {
+        if !secondary_viewports.is_empty() && self.has_effect_captures() {
             return Err(SecondaryViewportError::GlowSecondaryViewUnsupported);
         }
         for secondary in secondary_viewports {
@@ -1726,10 +1744,47 @@ impl GpuRenderer {
     ) -> DrawStats {
         let mut stats = DrawStats::default();
         for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
+            let mut start = instance_range.start;
+            if let Some(indices) =
+                prepared.paint_indices(resolved.batch.primitive, instance_range.clone())
+            {
+                for &index in indices {
+                    if start < index {
+                        let solid = ResolvedOrderedBatch {
+                            batch: OrderedRenderBatch {
+                                primitive: resolved.batch.primitive,
+                                instance_range: start..index,
+                            },
+                            mega: resolved.mega.clone(),
+                        };
+                        stats += self.draw_contributing_ordered_batch(
+                            pass,
+                            prepared,
+                            &solid,
+                            single_sample_analytics,
+                            binding,
+                        );
+                    }
+                    if let Some(drawn) = self.draw_paint_instance(
+                        pass,
+                        prepared,
+                        resolved.batch.primitive,
+                        index,
+                        single_sample_analytics,
+                        binding,
+                    ) {
+                        stats += drawn;
+                    }
+                    start = index + 1;
+                }
+            }
+            if start == instance_range.end {
+                continue;
+            }
             let segment = ResolvedOrderedBatch {
                 batch: OrderedRenderBatch {
                     primitive: resolved.batch.primitive,
-                    instance_range,
+                    instance_range: start..instance_range.end,
                 },
                 mega: resolved.mega.clone(),
             };
@@ -2460,8 +2515,9 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
@@ -2472,8 +2528,9 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(3),
@@ -2487,8 +2544,9 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
@@ -2520,8 +2578,9 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
@@ -2539,8 +2598,9 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    fill_paint: None,
                     draw_enabled: true,
-                    glow: None,
+                    effects: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),

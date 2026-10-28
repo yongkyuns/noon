@@ -11,17 +11,17 @@ fn motion_and_effect_targets_remain_ordinary_nested_animation_declarations() {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08).unwrap();
     let title = scene.rectangle(2.0, 0.3).unwrap();
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     scene.add_effect(&title, Glow::default(), "accent").unwrap();
     let mut dot_target = dot.target_editor().unwrap();
     dot_target.shift(2.0, 0.0).unwrap();
     dot_target
-        .set_glow(GlowUpdate::default().intensity(1.2))
+        .set_glow(EffectUpdate::default().intensity(1.2))
         .unwrap();
     let mut title_target = title.target_editor().unwrap();
     title_target.shift(0.0, 1.0).unwrap();
     title_target
-        .set_effect("accent", GlowUpdate::default().intensity(1.4))
+        .set_effect("accent", EffectUpdate::default().intensity(1.4))
         .unwrap();
     let a = scene
         .declare_transform_to(
@@ -106,10 +106,10 @@ fn motion_and_effect_targets_remain_ordinary_nested_animation_declarations() {
 fn zero_duration_effect_target_declaration_uses_the_ordinary_timing_error() {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08).unwrap();
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let mut target = dot.target_editor().unwrap();
     target
-        .set_glow(GlowUpdate::default().intensity(1.2))
+        .set_glow(EffectUpdate::default().intensity(1.2))
         .unwrap();
     let before = scene.revision();
     let count = scene.integration_store().borrow().len();
@@ -141,7 +141,7 @@ fn pulse_contract_uses_shared_defaults_local_options_and_play_overrides() {
     .unwrap();
     assert_eq!(overridden.run_time, 1.2);
     assert_eq!(overridden.rate_func, RateFunction::Linear);
-    let prepared = GlowUpdate::default()
+    let prepared = EffectUpdate::default()
         .intensity(2.0)
         .prepare(Glow::default())
         .unwrap();
@@ -184,12 +184,12 @@ fn names_resolve_on_the_exact_receiver_not_a_related_source_or_target() {
     let mut target = source.target_editor().unwrap();
     let revision = scene.revision();
     assert!(matches!(
-        target.set_effect(&original, GlowUpdate::default().intensity(1.4)),
+        target.set_effect(&original, EffectUpdate::default().intensity(1.4)),
         Err(AuthoringError::EffectOwnerMismatch { .. })
     ));
     assert_eq!(scene.revision(), revision);
     target
-        .set_effect("accent", GlowUpdate::default().intensity(1.4))
+        .set_effect("accent", EffectUpdate::default().intensity(1.4))
         .unwrap();
     assert_eq!(value(&original).intensity(), 0.35);
     assert_eq!(
@@ -234,7 +234,7 @@ fn mixed_text_path_image_and_nested_alias_copy_preserve_leaf_effect_meaning() {
         scene
             .add_effect(
                 leaf,
-                Glow::new(GlowUpdate::default().radius(Pixels(12.0))).unwrap(),
+                Glow::new(EffectUpdate::default().radius(Pixels(12.0))).unwrap(),
                 "accent",
             )
             .unwrap();
@@ -263,7 +263,7 @@ fn mixed_text_path_image_and_nested_alias_copy_preserve_leaf_effect_meaning() {
         assert_ne!(a.node_id(), b.node_id());
         assert_eq!(value(&a), value(&b));
         copied
-            .set_effect("accent", GlowUpdate::default().intensity(1.4))
+            .set_effect("accent", EffectUpdate::default().intensity(1.4))
             .unwrap();
         assert_eq!(value(&a).intensity(), 0.35);
         assert_eq!(value(&b).intensity(), 1.4);
@@ -299,9 +299,9 @@ fn mixed_text_path_image_and_nested_alias_copy_preserve_leaf_effect_meaning() {
             .find(|row| row.id == id)
             .unwrap();
         let effect = leaf.get_effect("accent").unwrap();
-        let glow = row.glow.as_ref().unwrap();
-        assert_eq!(glow.attachment, effect.node_id());
-        assert_eq!(glow.definition, value(&effect));
+        let compiled_effect = row.effects.as_ref().unwrap().get(effect.node_id()).unwrap();
+        assert_eq!(compiled_effect.attachment, effect.node_id());
+        assert_eq!(compiled_effect.definition, (value(&effect)).into());
         let copied = copy.mobject(leaf).unwrap();
         assert!(session.execution_object_id(copied.node_id()).is_none());
     }

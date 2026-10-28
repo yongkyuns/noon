@@ -8,7 +8,7 @@ use noon_core::{
     NativeEventOccurrence, NativeEventSource, NativeInputRuntimeError, NativeInputValue,
     NativePointerContext, NativePointerId, NativePointerInput, NativePointerInputKind,
     NativeStateSource, NativeStateUpdate, PublicationContext, ReactiveError, ReactiveValue,
-    SemanticNodeId, SignalId,
+    SemanticNodeId, SemanticStore, SignalId,
 };
 use noon_runtime::{EffectivePropertyWrite, EvaluationError, FrameState, RuntimeIdentity};
 
@@ -25,6 +25,7 @@ pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 pub enum ExecutionSessionInputError {
     InvalidPointerClickTolerance,
     Interaction(String),
+    Publication(super::ExecutionSessionPublicationError),
     PointerNotConfigured,
     ForeignPointerRuntime,
     StalePointerBinding,
@@ -62,6 +63,7 @@ impl std::fmt::Display for ExecutionSessionInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Interaction(message) => formatter.write_str(message),
+            Self::Publication(error) => error.fmt(formatter),
             Self::InvalidPointerClickTolerance => formatter.write_str("click tolerance must be finite and nonnegative logical pixels"),
             Self::PointerNotConfigured => formatter.write_str("contextual pointer input is not configured"),
             Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
@@ -124,6 +126,12 @@ impl From<ReactiveError> for ExecutionSessionInputError {
 impl From<EvaluationError> for ExecutionSessionInputError {
     fn from(value: EvaluationError) -> Self {
         Self::Evaluation(value)
+    }
+}
+
+impl From<super::ExecutionSessionPublicationError> for ExecutionSessionInputError {
+    fn from(value: super::ExecutionSessionPublicationError) -> Self {
+        Self::Publication(value)
     }
 }
 
@@ -269,7 +277,7 @@ impl ExecutionSession {
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
         self.runtime.has_click_indicate_bindings()
-            || self.has_playback_controls()
+            || !self.interaction_bindings.is_empty()
             || self.translation_drag.has_targets()
             || self.pointer_selection.enabled()
             || !self
@@ -367,6 +375,7 @@ impl ExecutionSession {
     /// native effects succeed. Authored click actions use the same admitted occurrence.
     pub fn submit_native_pointer_input(
         &mut self,
+        store: &mut SemanticStore,
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
@@ -374,7 +383,40 @@ impl ExecutionSession {
             .runtime
             .prepare_effective_property_batch(&[])
             .expect("an empty effective-property batch is always valid");
-        self.submit_native_pointer_input_with_effective(token, input, effective, false)
+        self.submit_native_pointer_input_with_effective(store, token, input, effective, false)
+    }
+
+    /// The historical reader admits only presentation effects. Preparation and
+    /// metadata commit are the ordinary pointer lane; no producer arena is borrowed.
+    #[cfg(any(feature = "prepared-prefix", test))]
+    pub(super) fn submit_prepared_pointer_presentation(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let effective = self
+            .runtime
+            .prepare_effective_property_batch(&[])
+            .expect("an empty effective-property batch is always valid");
+        let prepared =
+            self.prepare_native_pointer_input_with_effective(token, input, effective, false)?;
+        let (frame, effective, timeline, metadata) = prepared.into_parts();
+        if frame.is_some()
+            || effective.is_some()
+            || timeline.is_some()
+            || matches!(
+                metadata.action,
+                Some(
+                    super::interactions::PreparedClickAction::GlowPulse { .. }
+                        | super::interactions::PreparedClickAction::Playback(_)
+                )
+            )
+        {
+            return Err(ExecutionSessionInputError::Interaction(
+                "prepared pointer input does not admit causal or semantic mutation".into(),
+            ));
+        }
+        self.commit_prepared_native_pointer_metadata(None, metadata)
     }
 
     /// Commit one typed native occurrence and a preflighted scoped effective
@@ -382,18 +424,20 @@ impl ExecutionSession {
     /// sibling session modules; this remains the sole pointer admission lane.
     pub(super) fn submit_native_pointer_input_with_effective(
         &mut self,
+        store: &mut SemanticStore,
         token: &NativePointerInputToken,
         input: NativePointerInput,
         effective: noon_runtime::PreparedEffectivePropertyBatch,
         suppress_click_action: bool,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        self.require_published_store(store)?;
         let prepared = self.prepare_native_pointer_input_with_effective(
             token,
             input,
             effective,
             suppress_click_action,
         )?;
-        self.commit_prepared_native_pointer_input(prepared)
+        self.commit_prepared_native_pointer_input(store, prepared)
     }
 
     pub(super) fn prepare_native_pointer_input_with_effective(
@@ -448,9 +492,116 @@ impl ExecutionSession {
 
     pub(super) fn commit_prepared_native_pointer_input(
         &mut self,
+        store: &mut SemanticStore,
         prepared: PreparedNativePointerPublication,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
-        let (frame, effective, timeline, metadata) = prepared.into_parts();
+        let (frame, effective, timeline, mut metadata) = prepared.into_parts();
+        match metadata.action.take() {
+            Some(super::interactions::PreparedClickAction::GlowPulse { target, binding }) => {
+                self.require_published_store(store)?;
+                let object = self.execution_object_id(target).ok_or_else(|| {
+                    ExecutionSessionInputError::Interaction(
+                        "click target retired before publication".into(),
+                    )
+                })?;
+                let attachment = store
+                    .effect_by_name(target, "glow")
+                    .map_err(|error| ExecutionSessionInputError::Interaction(error.to_string()))?;
+                let glow = self
+                    .runtime
+                    .effective_object(object)
+                    .and_then(|row| row.effects.as_ref())
+                    .and_then(|stack| attachment.and_then(|id| stack.get(id)));
+                if let Some(glow) = glow {
+                    if store.effect_by_name(target, "glow").ok().flatten() != Some(glow.attachment)
+                    {
+                        return Err(ExecutionSessionInputError::Interaction(
+                            "click glow does not match its semantic attachment".into(),
+                        ));
+                    }
+                    metadata.action = self
+                        .runtime
+                        .prepare_click_glow_pulse(
+                            object,
+                            binding,
+                            glow,
+                            false,
+                            self.publication_context(),
+                        )
+                        .map_err(ExecutionSessionInputError::Interaction)?
+                        .map(super::interactions::PreparedClickAction::Animation);
+                } else {
+                    if attachment.is_some() {
+                        return Err(ExecutionSessionInputError::Interaction(
+                            "click glow does not match its effective attachment".into(),
+                        ));
+                    }
+                    use super::publication::{
+                        PreparedRuntimePublication, SemanticPublicationPurpose,
+                    };
+                    self.require_publication_ready(
+                        SemanticPublicationPurpose::TransientGlowLifecycle,
+                    )?;
+                    let neutral =
+                        noon_core::Glow::new(noon_core::EffectUpdate::default().intensity(0.0))
+                            .expect("neutral glow is valid");
+                    let mut transaction = noon_core::SemanticMutationTransaction::new();
+                    let token = transaction.create_effect(target, "glow", neutral);
+                    let prepared = transaction
+                        .prepare(store)
+                        .map_err(super::ExecutionSessionPublicationError::Semantic)?;
+                    let attachment = prepared
+                        .planned_node_id(token)
+                        .expect("prepared glow has an identity");
+                    let current = self.publication_context();
+                    let proposed = PublicationContext::new(
+                        prepared.proposed_scene_revision(),
+                        current.execution_revision().checked_next().ok_or_else(|| {
+                            ExecutionSessionInputError::Interaction(
+                                "execution revision exhausted".into(),
+                            )
+                        })?,
+                        current.frame_epoch().checked_next().ok_or_else(|| {
+                            ExecutionSessionInputError::Interaction("frame epoch exhausted".into())
+                        })?,
+                    );
+                    let animation = self
+                        .runtime
+                        .prepare_click_glow_pulse(
+                            object,
+                            binding,
+                            noon_compile::CompiledEffect {
+                                attachment,
+                                definition: neutral.into(),
+                            },
+                            true,
+                            proposed,
+                        )
+                        .map_err(ExecutionSessionInputError::Interaction)?
+                        .ok_or_else(|| {
+                            ExecutionSessionInputError::Interaction(
+                                "click glow admission changed before publication".into(),
+                            )
+                        })?;
+                    self.apply_prepared_semantic_transaction_with_execution_contract(
+                        prepared,
+                        Vec::new(),
+                        PreparedRuntimePublication { effective, frame },
+                        SemanticPublicationPurpose::TransientGlowLifecycle,
+                        None,
+                        None,
+                    )?;
+                    if let Some(pending) = self.pending_segment_completion.as_mut() {
+                        pending.activation_scene_revision = store.scene_revision();
+                    }
+                    metadata.action = Some(super::interactions::PreparedClickAction::Animation(
+                        animation,
+                    ));
+                    return self.commit_prepared_native_pointer_metadata(timeline, metadata);
+                }
+            }
+            action => metadata.action = action,
+        }
         if let (Some(frame), Some(effective)) = (frame, effective) {
             self.runtime
                 .commit_prepared_frame(frame, effective)
@@ -484,6 +635,9 @@ impl ExecutionSession {
                 None
             }
             Some(super::interactions::PreparedClickAction::Playback(control)) => Some(control),
+            Some(super::interactions::PreparedClickAction::GlowPulse { .. }) => {
+                unreachable!("glow admission is prepared before input commit")
+            }
             None => None,
         };
         Ok(NativePointerInputPublication {

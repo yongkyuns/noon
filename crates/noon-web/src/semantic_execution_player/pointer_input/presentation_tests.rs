@@ -12,7 +12,8 @@ fn player() -> SemanticExecutionPlayer {
     circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut p =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
+            .unwrap();
     p.pause();
     p.set_pointer_fill_selection(Some(4.0)).unwrap();
     p
@@ -128,7 +129,7 @@ fn old_collected_receipt_is_not_retagged_after_newer_presentation() {
     assert!(input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
     // An unpresented execution round trip changes identity without changing pixels.
     p.session.advance_to(0.25).unwrap();
-    p.session.seek(0.0).unwrap();
+    p.seek_session(0.0).unwrap();
     let b = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, b));
     assert!(!input(&mut p, "release", 1, Some(a), 1, 400.0).unwrap());
@@ -147,7 +148,7 @@ fn old_collected_receipt_is_not_retagged_after_newer_presentation() {
 fn unchanged_geometry_does_not_make_an_unpresented_revision_current() {
     let (mut p, r) = ready();
     p.session.advance_to(0.25).unwrap();
-    p.session.seek(0.0).unwrap();
+    p.seek_session(0.0).unwrap();
     assert!(!input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert!(p.session.selected_pointer_target().is_none());
     assert!(p.drain_delta_json().unwrap().is_some());
@@ -184,7 +185,14 @@ fn surface_invalidation_still_cancels_when_newer_delta_is_in_flight() {
     let (mut p, a) = ready();
     assert!(input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
     // Issue a presentation-only delta without mutating the session gesture.
-    let snapshot = p.worker_pointer_presentation.capture(&p.session).unwrap();
+    let snapshot = {
+        let target = PlayerPointerTarget {
+            session: &mut p.session,
+            semantics: p.semantics.as_ref().unwrap(),
+            translation_drag_undo: &mut p.translation_drag_undo,
+        };
+        p.worker_pointer_presentation.capture(&target).unwrap()
+    };
     p.worker_pointer_presentation
         .issue(7, a.sequence + 1, snapshot);
     assert!(invalidate(&mut p, a));
@@ -430,7 +438,8 @@ fn dormant_callback_scene_rejects_pointer_sources_without_entering_callback_admi
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut p =
-        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
+            .unwrap();
     assert!(!p.session.has_native_pointer_subscribers());
     register(&mut p, 1);
     let r = receipt(&delta(&mut p), 1);
@@ -886,4 +895,43 @@ fn renderer_receipt_refreshes_stationary_hover_without_synthesizing_input() {
     assert_eq!(p.session.hovered_pointer_target(), Some(target));
     assert!(input(&mut p, "cancel", 1, None, 1, 0.0).unwrap());
     assert_eq!(p.session.hovered_pointer_target(), None);
+}
+
+#[test]
+fn pointer_receipt_lifecycle_requires_the_existing_semantic_owner() {
+    let mut p = player();
+    register(&mut p, 1);
+    let frame = p.session.frame().clone();
+    let publication = p.session.publication_context();
+    let sequence = p.next_native_event_sequence;
+    let owner = p.semantics.take().unwrap();
+    assert_eq!(
+        p.initial_delta_json().unwrap_err(),
+        "execution player lost its semantic store"
+    );
+    assert!(!p.snapshot_sent);
+    assert_eq!(p.session.frame(), &frame);
+    assert_eq!(p.session.publication_context(), publication);
+    assert_eq!(p.next_native_event_sequence, sequence);
+
+    // Restoring the same owner permits normal issuance, not forged feedback.
+    p.semantics = Some(owner);
+    let r = receipt(&delta(&mut p), 1);
+    let owner = p.semantics.take().unwrap();
+    assert_eq!(
+        p.note_pointer_presentation_json(&serde_json::to_string(&r).unwrap())
+            .unwrap_err(),
+        "execution player lost its semantic store"
+    );
+    assert_eq!(p.session.frame(), &frame);
+    assert_eq!(p.session.publication_context(), publication);
+    assert_eq!(p.next_native_event_sequence, sequence);
+    assert!(p.browser_pointer_binding.is_none());
+
+    // Rejected feedback did not consume the receipt or acknowledge an input.
+    p.semantics = Some(owner);
+    assert!(acknowledge(&mut p, r));
+    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
+    assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
+    assert!(p.session.selected_pointer_target().is_some());
 }

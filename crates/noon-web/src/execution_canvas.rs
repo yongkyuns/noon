@@ -22,6 +22,7 @@ mod wasm {
     };
     use noon::{
         ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
+        SceneExecution,
     };
     use noon_core::{
         Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativePointerId,
@@ -97,6 +98,7 @@ mod wasm {
             frame: &noon::integration::PointerFrameSnapshot,
         ) -> Result<(), JsValue>;
         fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue>;
+        fn retire_execution_source(&mut self) -> Result<(), JsValue>;
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue>;
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
         /// A pending authoring/publication barrier is not a user pause.
@@ -170,6 +172,10 @@ mod wasm {
         fn session(&self) -> &ExecutionSession {
             self.program.session()
         }
+        fn retire_execution_source(&mut self) -> Result<(), JsValue> {
+            self.program.retire_execution_source().map_err(js_error)
+        }
+
         fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue> {
             self.program
                 .advance_interactions(wall_time_seconds)
@@ -377,7 +383,7 @@ mod wasm {
 
     enum DirectSourceAuthority {
         Session {
-            session: ExecutionSession,
+            session: SceneExecution,
             callbacks: RustHostCallbackTable,
         },
         Program(Box<dyn DirectLiveProgram>),
@@ -392,7 +398,7 @@ mod wasm {
     }
 
     impl DirectExecutionSource {
-        fn from_session(session: ExecutionSession, callbacks: RustHostCallbackTable) -> Self {
+        fn from_scene_execution(session: SceneExecution, callbacks: RustHostCallbackTable) -> Self {
             Self {
                 authority: DirectSourceAuthority::Session { session, callbacks },
                 next_native_event_sequence: 0,
@@ -421,7 +427,7 @@ mod wasm {
         // never exposes or borrows the producer through canvas audio/control APIs.
         fn authored_session(&self) -> Result<&ExecutionSession, JsValue> {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => Ok(session),
+                DirectSourceAuthority::Session { session, .. } => Ok(session.session()),
                 DirectSourceAuthority::Program(program) => Ok(program.session()),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(_) => Err(js_message(
@@ -432,7 +438,7 @@ mod wasm {
 
         fn has_audio(&self) -> bool {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.has_audio(),
+                DirectSourceAuthority::Session { session, .. } => session.session().has_audio(),
                 DirectSourceAuthority::Program(program) => program.session().has_audio(),
                 // Prepared source admission rejects authored audio before a
                 // reader exists; observing that invariant does not allocate.
@@ -443,7 +449,9 @@ mod wasm {
 
         fn has_playback_controls(&self) -> bool {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.has_playback_controls(),
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().has_playback_controls()
+                }
                 DirectSourceAuthority::Program(program) => {
                     program.session().has_playback_controls()
                 }
@@ -456,7 +464,7 @@ mod wasm {
 
         fn paused_wake_plan(&self) -> BrowserExecutionWakePlan {
             let state = match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.wake_state(),
+                DirectSourceAuthority::Session { session, .. } => session.session().wake_state(),
                 DirectSourceAuthority::Program(program) => program.session().wake_state(),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => playback.wake_state(),
@@ -484,7 +492,7 @@ mod wasm {
         }
         fn frame(&self) -> &noon_runtime::FrameState {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.frame(),
+                DirectSourceAuthority::Session { session, .. } => session.session().frame(),
                 DirectSourceAuthority::Program(program) => program.session().frame(),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => playback.reader.frame(),
@@ -492,7 +500,9 @@ mod wasm {
         }
         fn publication_context(&self) -> noon_core::PublicationContext {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.publication_context(),
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().publication_context()
+                }
                 DirectSourceAuthority::Program(program) => program.session().publication_context(),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => playback.reader.publication_context(),
@@ -501,7 +511,7 @@ mod wasm {
         fn inspection_view_revision(&self) -> u64 {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    session.inspection_view_revision()
+                    session.session().inspection_view_revision()
                 }
                 DirectSourceAuthority::Program(program) => {
                     program.session().inspection_view_revision()
@@ -514,7 +524,9 @@ mod wasm {
         }
         fn interactions_active(&self) -> bool {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.interactions_active(),
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().interactions_active()
+                }
                 DirectSourceAuthority::Program(program) => program.session().interactions_active(),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => playback.reader.interactions_active(),
@@ -523,7 +535,7 @@ mod wasm {
         fn pointer_selection_presentation(&self) -> Option<PointerSelectionPresentation> {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    session.pointer_selection_presentation()
+                    session.session().pointer_selection_presentation()
                 }
                 DirectSourceAuthority::Program(program) => {
                     program.session().pointer_selection_presentation()
@@ -536,7 +548,7 @@ mod wasm {
         }
         fn painter_order(&self) -> &[u32] {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.painter_order(),
+                DirectSourceAuthority::Session { session, .. } => session.session().painter_order(),
                 DirectSourceAuthority::Program(program) => program.session().painter_order(),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => playback.reader.painter_order(),
@@ -545,7 +557,7 @@ mod wasm {
         fn inset_2d_views(&self) -> Result<Vec<noon_core::Inset2DViewState>, JsValue> {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    session.inset_2d_views().map_err(js_error)
+                    session.session().inset_2d_views().map_err(js_error)
                 }
                 DirectSourceAuthority::Program(program) => {
                     program.session().inset_2d_views().map_err(js_error)
@@ -558,7 +570,7 @@ mod wasm {
         fn bounded_realtime_target(&self, requested: f64) -> f64 {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    session.bounded_realtime_target(requested)
+                    session.session().bounded_realtime_target(requested)
                 }
                 DirectSourceAuthority::Program(program) => {
                     program.session().bounded_realtime_target(requested)
@@ -571,7 +583,7 @@ mod wasm {
         fn diagnostic_frame_value(&self) -> serde_json::Value {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    noon::diagnostics::execution_frame_value(session)
+                    noon::diagnostics::execution_frame_value(session.session())
                 }
                 DirectSourceAuthority::Program(program) => {
                     noon::diagnostics::execution_frame_value(program.session())
@@ -585,7 +597,7 @@ mod wasm {
         fn seek(&mut self, time: f64) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    if session.has_required_callbacks() {
+                    if session.session().has_required_callbacks() {
                         return Err(js_message(
                             "opaque host callback sessions do not support seek or replay",
                         ));
@@ -607,6 +619,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => session
+                    .session_mut()
                     .refresh_pointer_hover(frame, frame.view())
                     .map(|_| ())
                     .map_err(js_error),
@@ -622,6 +635,15 @@ mod wasm {
 
         fn session_mut(&mut self) -> Option<&mut ExecutionSession> {
             match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => Some(session.session_mut()),
+                DirectSourceAuthority::Program(_) => None,
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => None,
+            }
+        }
+
+        fn static_execution_mut(&mut self) -> Option<&mut SceneExecution> {
+            match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => Some(session),
                 DirectSourceAuthority::Program(_) => None,
                 #[cfg(feature = "prepared-prefix")]
@@ -632,7 +654,7 @@ mod wasm {
         fn wake_plan(&self) -> BrowserExecutionWakePlan {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    BrowserExecutionWakePlan::from_session(session)
+                    BrowserExecutionWakePlan::from_session(session.session())
                 }
                 DirectSourceAuthority::Program(program) => program.wake_plan(),
                 #[cfg(feature = "prepared-prefix")]
@@ -667,8 +689,9 @@ mod wasm {
         ) -> noon::integration::ExecutionViewportQuery {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    let query = session.query_viewports(bounds);
+                    let query = session.session_mut().query_viewports(bounds);
                     session
+                        .session()
                         .renderer_viewport_query(query)
                         .expect("fresh viewport query shares this publication")
                 }
@@ -697,11 +720,23 @@ mod wasm {
             }
         }
 
+        fn retire_execution_source(&mut self) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.retire_execution_source().map_err(js_error)
+                }
+                DirectSourceAuthority::Program(program) => program.retire_execution_source(),
+                // A reader has no mutable semantic arena or temporary GlowPulse attachment.
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => Ok(()),
+            }
+        }
+
         fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, callbacks } => {
                     callbacks
-                        .advance_to(session, requested_time)
+                        .advance_to(session.session_mut(), requested_time)
                         .map_err(js_error)?;
                     Ok(())
                 }
@@ -716,7 +751,7 @@ mod wasm {
         fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    session.take_renderer_publication()
+                    session.session_mut().take_renderer_publication()
                 }
                 DirectSourceAuthority::Program(program) => program.take_renderer_publication(),
                 #[cfg(feature = "prepared-prefix")]
@@ -747,6 +782,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => session
+                    .session_mut()
                     .set_native_state_input(source, value)
                     .map(|_| ())
                     .map_err(js_error),
@@ -768,6 +804,7 @@ mod wasm {
             let occurrence = NativeEventOccurrence::new(sequence, source);
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => session
+                    .session_mut()
                     .emit_native_event(occurrence)
                     .map(|_| ())
                     .map_err(js_error)?,
@@ -873,8 +910,8 @@ mod wasm {
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => match max_movement {
-                    Some(value) => session.enable_pointer_fill_selection(value),
-                    None => session.disable_pointer_fill_selection(),
+                    Some(value) => session.session_mut().enable_pointer_fill_selection(value),
+                    None => session.session_mut().disable_pointer_fill_selection(),
                 }
                 .map_err(js_error),
                 DirectSourceAuthority::Program(program) => {
@@ -951,6 +988,13 @@ mod wasm {
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
     impl WasmExecutionCanvasRenderer {
+        /// Release input-owned semantic state before disposing this source.
+        /// GPU recovery retains the source and must not call this boundary.
+        #[wasm_bindgen(js_name = retireExecutionSource)]
+        pub fn retire_execution_source(&mut self) -> Result<(), JsValue> {
+            self.source.retire_execution_source()
+        }
+
         /// Recreate the complete WebGL wgpu stack after context restoration:
         /// the old device and queue retain context-created GPU resources.
         #[wasm_bindgen(js_name = recoverWebGlContext)]
@@ -1866,6 +1910,27 @@ mod wasm {
             self.source.diagnostic_frame_value().to_string()
         }
 
+        /// Explicit raster fixture/readback boundary; never used in Scene playback.
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = qualifyGaussianBlurRaster)]
+        pub async fn qualify_gaussian_blur_raster(
+            &self,
+            pixels: Vec<u8>,
+            width: u32,
+            height: u32,
+            sigma: f64,
+        ) -> Result<JsValue, JsValue> {
+            crate::gaussian_blur_smoke::qualify(
+                &self.device,
+                &self.queue,
+                pixels,
+                width,
+                height,
+                sigma,
+            )
+            .await
+        }
+
         /// Read-only qualification evidence, never used to construct an input token.
         #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         #[wasm_bindgen(js_name = debugPointerPresentationJson)]
@@ -2107,15 +2172,15 @@ mod wasm {
             self.section_navigation = navigation;
         }
 
-        /// Build the browser canvas host directly from the typed in-process execution session.
+        /// Build the browser canvas host from one consumed Scene and its typed execution.
         ///
         /// This constructor is intentionally Rust-only: JavaScript may supply the canvas during
         /// WASM bootstrap, but no scene/execution document or transport mirror is introduced.
-        pub async fn create_from_execution_session(
+        pub async fn create_from_scene_execution(
             canvas: OffscreenCanvas,
-            session: ExecutionSession,
+            session: SceneExecution,
         ) -> Result<Self, JsValue> {
-            Self::create_from_execution_session_with_callbacks(
+            Self::create_from_scene_execution_with_callbacks(
                 canvas,
                 session,
                 RustHostCallbackTable::new(),
@@ -2123,28 +2188,28 @@ mod wasm {
             .await
         }
 
-        /// Build the browser canvas host from one typed session and its Rust callables.
+        /// Build the browser canvas host from one consumed Scene execution and its Rust callables.
         ///
         /// The callable table stays in the same WASM execution context. JavaScript
         /// receives neither callback requests nor effective-property overlays.
-        pub async fn create_from_execution_session_with_callbacks(
+        pub async fn create_from_scene_execution_with_callbacks(
             canvas: OffscreenCanvas,
-            mut session: ExecutionSession,
+            mut session: SceneExecution,
             mut callbacks: RustHostCallbackTable,
         ) -> Result<Self, JsValue> {
-            if session.has_audio() && session.has_required_callbacks() {
+            if session.session().has_audio() && session.session().has_required_callbacks() {
                 return Err(js_message(
                     "direct audio output currently requires a finite session without required callbacks",
                 ));
             }
-            let initial_time = session.frame().time;
+            let initial_time = session.session().frame().time;
             callbacks
-                .advance_to(&mut session, initial_time)
+                .advance_to(session.session_mut(), initial_time)
                 .map_err(js_error)?;
-            let camera = session.inspection_camera().map_err(js_error)?;
+            let camera = session.session().inspection_camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
-                DirectExecutionSource::from_session(session, callbacks),
+                DirectExecutionSource::from_scene_execution(session, callbacks),
                 camera.center,
                 camera.height,
             )
@@ -2197,15 +2262,20 @@ mod wasm {
         pub fn evaluate(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
             let (pending, camera) = {
-                let session = self.source.session_mut().ok_or_else(|| {
+                let execution = self.source.static_execution_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
-                if session.has_required_callbacks() {
+                if execution.session().has_required_callbacks() {
                     return Err(js_message(
                         "opaque host callback sessions require monotonic realtime advancement",
                     ));
                 }
-                session.evaluate(time).map_err(js_error)?;
+                if time < execution.session().frame().time {
+                    execution.seek(time).map_err(js_error)?;
+                } else {
+                    execution.session_mut().evaluate(time).map_err(js_error)?;
+                }
+                let session = execution.session();
                 let camera = session.inspection_camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
@@ -2631,7 +2701,7 @@ mod wasm {
             // the final presented frame, after all endpoint drains have settled.
             let glow_visible = self
                 .renderer
-                .glow_source_visibility(&publication, visibility.object_indices())
+                .effect_source_visibility(&publication, visibility.object_indices())
                 .map_err(js_error)?;
             let prepared = self
                 .direct_preparer
@@ -2772,7 +2842,7 @@ mod wasm {
                     .map_err(js_error)?;
                 let glow_visible = self
                     .renderer
-                    .glow_source_visibility(&publication, visibility.object_indices())
+                    .effect_source_visibility(&publication, visibility.object_indices())
                     .map_err(js_error)?;
                 let prepared = self
                     .direct_preparer
@@ -2811,14 +2881,14 @@ mod wasm {
                         });
                 let glow_work = self
                     .renderer
-                    .prepare_retained_analytic_glows(
+                    .prepare_retained_effects(
                         &self.device,
                         &self.queue,
                         &mut encoder,
                         &prepared,
                         &self.direct_text_gpu,
                         &publication,
-                        noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                        noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;
                 self.last_bytes_uploaded = self
@@ -2849,7 +2919,7 @@ mod wasm {
                 let draw = match draw {
                     Ok(draw) => draw,
                     Err(error) => {
-                        self.renderer.invalidate_analytic_glows();
+                        self.renderer.invalidate_effect_captures();
                         if let Some(slot) = timestamp_slot {
                             profiler.expect("reserved profiler").cancel_slot(slot);
                         }

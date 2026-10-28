@@ -1,12 +1,18 @@
 mod animation_payload;
 mod animation_schedule;
 mod compiled_scene;
+mod composed;
 mod entrypoint;
 #[cfg(test)]
 mod family_transform_schedule_tests;
 mod host_callbacks;
 mod initial_animation;
 mod membership;
+pub(crate) mod paint;
+pub use paint::{
+    lower_fill as lower_semantic_fill, project_hatch_mapping, project_image_mapping,
+    validate_hatch_bounds,
+};
 mod projection;
 mod publication;
 mod reachability;

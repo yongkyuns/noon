@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::btree_map::Entry;
 
 use noon_core::{
     ObjectId, PreparedSemanticMutationTransaction, Property, SemanticNodeId,
@@ -115,7 +115,7 @@ pub fn lower_prepared_matching_family_transform_channels(
     let matching = activation.matching();
     let mut stable_tracks = Vec::new();
     let mut derived_occurrences = Vec::new();
-    let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
+    let mut driven = super::affine::DriverMap::<SemanticTransactionNodeRef>::new();
     let mut occurrence_count = 0usize;
 
     for group in &matching.correspondence().matched_groups {
@@ -167,7 +167,7 @@ fn lower_matched_occurrence(
     source_padding: bool,
     target_padding: bool,
     occurrence_index: u32,
-    driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
+    driven: &mut super::affine::DriverMap<SemanticTransactionNodeRef>,
     stable_tracks: &mut Vec<PreparedFamilyTransformStableTrack>,
     derived_occurrences: &mut Vec<PreparedDerivedFamilyTransformOccurrence>,
 ) -> Result<(), PreparedMatchingFamilyTransformChannelError> {
@@ -210,7 +210,7 @@ fn lower_matched_occurrence(
         prepared.store(),
         &source,
         &target,
-        source_member.effective,
+        source_member.effective.clone(),
         noon_core::SemanticTransformInterpolation::Affine,
         activation.options.path_arc,
     )
@@ -257,7 +257,7 @@ fn lower_matched_occurrence(
             anchor_execution_object_id: source_member.execution_object_id,
             source: source_member.node,
             target_state: target_node,
-            effective_source: source_member.effective,
+            effective_source: source_member.effective.clone(),
             tracks,
         });
         return Ok(());
@@ -303,7 +303,7 @@ fn push_matching_stable_channel(
     execution_object_id: ObjectId,
     channel: LoweredAffineChannel,
     retain_effective: bool,
-    driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
+    driven: &mut super::affine::DriverMap<SemanticTransactionNodeRef>,
     tracks: &mut Vec<PreparedFamilyTransformStableTrack>,
 ) -> Result<(), PreparedMatchingFamilyTransformChannelError> {
     if let Some(first_animation) = transform_driver_conflict(

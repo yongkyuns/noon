@@ -18,7 +18,7 @@ function fixture(options = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0, time = 0, startup = false, terminated = 0, removed = 0, hooks;
-  const registration = { generation: 7, duration: 0.25, semanticExecution: { contextId: "source-1" } };
+  const registration = { generation: 7, duration: 0.25, semanticExecution: { contextId: "source-1", callbackSessionId: 9 } };
   const endpoint = options.endpoint ?? 1.5;
   const result = { duration: endpoint, semanticExecution: {
     contextId: "source-1", continuationGeneration: 7, callbackSessionId: 9,
@@ -237,3 +237,16 @@ test("renderer error between completion and final screenshot cannot be silently 
   assert.equal(f.harness.callbackProof, null);
   assert.equal(f.counts().terminated, 1);
 });
+
+// A different *valid* ID must fail too; an integer-type check is insufficient.
+for (const pacing of ["external_samples", "realtime"]) {
+  test(`${pacing} completion rejects replacement with a different valid callback session`, async () => {
+    const f = fixture({ autonomous: pacing === "realtime", resultFields: { callbackSessionId: 10 } });
+    await f.start({ pacing, sampleTime: pacing === "external_samples" ? 0.75 : null });
+    await assert.rejects(f.finish(), /callback completion changed/);
+    assert.equal(runCount(f), 1);
+    assert.equal(f.harness.callbackProof, null);
+    assert.equal(f.counts().terminated, 1);
+    assert.deepEqual(samples(f), pacing === "external_samples" ? [0, 0.75, 1.5] : []);
+  });
+}

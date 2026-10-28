@@ -27,20 +27,22 @@ function deferred() {
 
 // Exercise the actual Run/retirement functions with an already-completed source
 // that is replaying. No input/edit event occurs before this explicit Run.
-function fixture({ pause = () => Promise.resolve(), started = true, prepared = false,
+function fixture({ retire = () => Promise.resolve(), started = true, prepared = false,
   authoringRunOptions } = {}) {
   const events = [], errors = [], authorRequests = [];
-  const pauseEntered = deferred();
+  const retireEntered = deferred();
   const failure = new Error("second run fails");
   const oldCanvas = { style: {} };
   let playing = started, controllable = true, current = true, releases = 0, authorCalls = 0;
+  const temporaryAttachment = {};
+  let activeAttachment = started && !prepared ? temporaryAttachment : null;
   const oldPlayer = {
     canvas: oldCanvas, terminations: 0,
-    pause() {
-      events.push("pause");
-      pauseEntered.resolve();
-      assert.equal(oldCanvas.style.visibility, "hidden", "input must not reach stale canvas during pause");
-      return pause().then(() => { playing = false; });
+    retireExecutionSource() {
+      events.push("retire");
+      retireEntered.resolve();
+      assert.equal(oldCanvas.style.visibility, "hidden", "input must not reach stale canvas during retire");
+      return retire().then(() => { playing = false; activeAttachment = null; });
     },
     terminate() {
       events.push("terminate"); playing = false; this.terminations += 1;
@@ -48,6 +50,7 @@ function fixture({ pause = () => Promise.resolve(), started = true, prepared = f
     },
   };
   const client = { terminated: false, run(source, metadata, options) {
+    assert.equal(activeAttachment, null, "new source must not mutate the arena before input retirement");
     events.push("author"); authorCalls += 1;
     authorRequests.push({ source, metadata, options });
     return Promise.reject(failure);
@@ -76,9 +79,10 @@ function fixture({ pause = () => Promise.resolve(), started = true, prepared = f
   }
   vm.runInNewContext(production, context);
   return { context, events, errors, failure, oldPlayer, client, authorRequests,
-    pauseEntered: pauseEntered.promise,
+    retireEntered: retireEntered.promise,
     get playing() { return playing; }, get controllable() { return controllable; },
     get authorCalls() { return authorCalls; }, get releases() { return releases; },
+    get activeAttachment() { return activeAttachment; }, temporaryAttachment,
     supersede() { current = false; } };
 }
 
@@ -89,8 +93,8 @@ test("explicit Run failure stops old playback before authoring behind a frozen p
   assert.equal(result.stale, false);
   assert.equal(f.playing, false, "old replay must not run invisibly behind the frozen error preview");
   assert.equal(f.controllable, false);
-  assert.deepEqual(f.events, ["hold", "pause", "author", "hold"]);
-  assert.equal(f.context.player, f.oldPlayer, "successful pause keeps the warm execution owner");
+  assert.deepEqual(f.events, ["hold", "retire", "author", "hold"]);
+  assert.equal(f.context.player, f.oldPlayer, "successful retire keeps the warm execution owner");
   assert.equal(f.oldPlayer.terminations, 0);
   assert.equal(f.client.terminated, false);
   assert.deepEqual(f.errors, [f.failure], "the original authoring failure must stay intact");
@@ -107,32 +111,34 @@ test("a first Run still initializes normally without pausing an absent owner", a
 });
 
 for (const synchronous of [false, true]) {
-  test(`${synchronous ? "synchronous" : "asynchronous"} pause failure retires the old owner before replacement authoring`, async () => {
-    const f = fixture({ pause() {
-      if (synchronous) throw new Error("owner lost");
-      return Promise.reject(new Error("owner lost"));
+  test(`${synchronous ? "synchronous" : "asynchronous"} release rejection preserves the exact source and prevents authoring`, async () => {
+    const rejection = new Error("canonical retirement rejected");
+    const f = fixture({ retire() {
+      if (synchronous) throw rejection;
+      return Promise.reject(rejection);
     } });
-    assert.equal((await f.context.runScene()).error, f.failure);
-    assert.deepEqual(f.events, ["hold", "pause", "terminate", "prepare", "author", "hold"]);
-    assert.equal(f.oldPlayer.terminations, 1);
-    assert.equal(f.playing, false);
-    assert.equal(f.context.player, null);
-    assert.deepEqual(f.errors, [f.failure]);
+    await f.context.runScene();
+    assert.deepEqual(f.events, ["hold", "retire", "hold"]);
+    assert.equal(f.authorCalls, 0);
+    assert.equal(f.oldPlayer.terminations, 0);
+    assert.equal(f.context.player, f.oldPlayer);
+    assert.equal(f.activeAttachment, f.temporaryAttachment);
+    assert.deepEqual(f.errors, [rejection]);
   });
 }
 
 for (const reject of [false, true]) {
-  test(`superseded pause ${reject ? "failure" : "completion"} cannot author old source or retire its successor`, async () => {
+  test(`superseded retire ${reject ? "failure" : "completion"} cannot author old source or retire its successor`, async () => {
     const gate = deferred();
-    const f = fixture({ pause: () => gate.promise });
+    const f = fixture({ retire: () => gate.promise });
     const run = f.context.runScene();
-    // Startup now awaits run options before pausing. Supersede the actual pause,
+    // Startup now awaits run options before pausing. Supersede the actual retire,
     // not that earlier boundary, and attach its rejection handler first.
-    await f.pauseEntered;
-    assert.deepEqual(f.events, ["hold", "pause"]);
+    await f.retireEntered;
+    assert.deepEqual(f.events, ["hold", "retire"]);
     assert.equal(f.authorCalls, 0);
     f.supersede();
-    const successor = { terminate() { assert.fail("obsolete pause must not retire a newer owner"); } };
+    const successor = { terminate() { assert.fail("obsolete retire must not retire a newer owner"); } };
     f.context.player = successor;
     if (reject) gate.reject(new Error("retired")); else gate.resolve();
     assert.equal((await run).stale, true);
@@ -144,13 +150,13 @@ for (const reject of [false, true]) {
   });
 }
 
-test("Run waits for the pause acknowledgement and concurrent requests join the same startup", async () => {
+test("Run waits for the retire acknowledgement and concurrent requests join the same startup", async () => {
   const gate = deferred();
-  const f = fixture({ pause: () => gate.promise });
+  const f = fixture({ retire: () => gate.promise });
   const first = f.context.runScene();
   const second = f.context.runScene();
-  await f.pauseEntered;
-  assert.deepEqual(f.events, ["hold", "pause"]);
+  await f.retireEntered;
+  assert.deepEqual(f.events, ["hold", "retire"]);
   assert.equal(f.authorCalls, 0);
   assert.equal(f.controllable, false);
   gate.resolve();
@@ -171,10 +177,10 @@ test("ordinary Run without qualification hooks preserves worker defaults", async
   assert.deepEqual(f.errors, [f.failure]);
 });
 
-test("concurrent Runs await one options hook and one pause before authoring", async () => {
-  const options = deferred(), paused = deferred();
+test("concurrent Runs await one options hook and one retire before authoring", async () => {
+  const options = deferred(), retired = deferred();
   const calls = [];
-  const f = fixture({ pause: () => paused.promise, authoringRunOptions(payload) {
+  const f = fixture({ retire: () => retired.promise, authoringRunOptions(payload) {
     calls.push({ ...payload });
     return options.promise;
   } });
@@ -184,10 +190,10 @@ test("concurrent Runs await one options hook and one pause before authoring", as
   assert.deepEqual(f.events, []);
   assert.equal(f.authorCalls, 0);
   options.resolve({ preparedPlayback: false, preparationLookaheadSeconds: 2 });
-  await f.pauseEntered;
-  assert.deepEqual(f.events, ["hold", "pause"]);
+  await f.retireEntered;
+  assert.deepEqual(f.events, ["hold", "retire"]);
   assert.equal(f.authorCalls, 0);
-  paused.resolve();
+  retired.resolve();
   const results = await Promise.all([first, second]);
   for (const result of results) assert.equal(result.error, f.failure);
   assert.equal(f.authorCalls, 1);
@@ -205,14 +211,14 @@ for (const reject of [false, true]) {
     assert.deepEqual(f.events, []);
     f.supersede();
     const successor = {
-      pause() { f.events.push("successor-pause"); return Promise.resolve(); },
+      retireExecutionSource() { f.events.push("successor-retire"); return Promise.resolve(); },
       terminate() { f.events.push("successor-terminate"); },
     };
     f.context.player = successor;
     if (reject) gate.reject(new Error("retired options"));
     else gate.resolve({ preparedPlayback: true });
     assert.equal((await run).stale, true);
-    assert.deepEqual(f.events, [], "stale options must not hold, pause, retire or author");
+    assert.deepEqual(f.events, [], "stale options must not hold, retire, retire or author");
     assert.equal(f.authorCalls, 0);
     assert.equal(f.oldPlayer.terminations, 0);
     assert.equal(f.context.player, successor);
@@ -226,7 +232,7 @@ for (const prepared of [false, true]) {
   test(`${prepared ? "prepared reader" : "ordinary reader entering prepared execution"} is retired before new authoring`, async () => {
     const f = fixture({ prepared, authoringRunOptions: () => ({ preparedPlayback: true }) });
     assert.equal((await f.context.runScene()).error, f.failure);
-    assert.deepEqual(f.events, ["hold", "terminate", "prepare", "author", "hold"]);
+    assert.deepEqual(f.events, ["hold", "retire", "terminate", "prepare", "author", "hold"]);
     assert.equal(f.oldPlayer.terminations, 1);
     assert.equal(f.playing, false);
     assert.equal(f.context.player, null);
@@ -241,9 +247,26 @@ for (const prepared of [false, true]) {
 test("prepared reader is retired even when the new Run requests ordinary execution", async () => {
   const f = fixture({ prepared: true });
   assert.equal((await f.context.runScene()).error, f.failure);
-  assert.deepEqual(f.events, ["hold", "terminate", "prepare", "author", "hold"]);
+  assert.deepEqual(f.events, ["hold", "retire", "terminate", "prepare", "author", "hold"]);
   assert.equal(f.oldPlayer.terminations, 1);
   assert.equal(f.context.preparedPlaybackPlayer, null);
   assert.equal(f.authorRequests[0].options.preparedPlayback, false);
   assert.deepEqual(f.errors, [f.failure]);
 });
+
+for (const prepared of [false, true]) {
+  test(`${prepared ? "prepared" : "ordinary"} retirement failure prevents prepared replacement and retains its exact owner`, async () => {
+    const rejection = new Error("source cleanup rejected");
+    const f = fixture({ prepared, retire: () => Promise.reject(rejection),
+      authoringRunOptions: () => ({ preparedPlayback: true }) });
+    const result = await f.context.runScene();
+    assert.equal(result.error, rejection);
+    assert.deepEqual(f.events, ["hold", "retire", "hold"]);
+    assert.equal(f.authorCalls, 0);
+    assert.equal(f.oldPlayer.terminations, 0);
+    assert.equal(f.context.player, f.oldPlayer);
+    assert.equal(f.context.preparedPlaybackPlayer, prepared ? f.oldPlayer : null);
+    assert.equal(f.activeAttachment, prepared ? null : f.temporaryAttachment);
+    assert.deepEqual(f.errors, [rejection]);
+  });
+}

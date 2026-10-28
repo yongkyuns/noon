@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::btree_map::Entry;
 
 use noon_core::{
     ObjectId, PreparedSemanticMutationTransaction, Property, SemanticNodeId,
@@ -196,7 +196,7 @@ pub fn lower_prepared_family_transform_channels(
 ) -> Result<PreparedFamilyTransformChannelProjection, PreparedFamilyTransformChannelError> {
     let mut stable_tracks = Vec::new();
     let mut derived_occurrences = Vec::new();
-    let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
+    let mut driven = super::affine::DriverMap::<SemanticTransactionNodeRef>::new();
 
     for occurrence in activation.occurrences() {
         let source_ref: SemanticTransactionNodeRef = occurrence.source.into();
@@ -222,7 +222,7 @@ pub fn lower_prepared_family_transform_channels(
             prepared.store(),
             source,
             target,
-            occurrence.effective_source,
+            occurrence.effective_source.clone(),
             noon_core::SemanticTransformInterpolation::Affine,
             occurrence.options.path_arc,
         )
@@ -271,7 +271,7 @@ pub fn lower_prepared_family_transform_channels(
                 anchor_execution_object_id: occurrence.source_execution_object_id,
                 source: occurrence.source,
                 target_state: occurrence.target_state,
-                effective_source: occurrence.effective_source,
+                effective_source: occurrence.effective_source.clone(),
                 tracks,
             });
             continue;
@@ -359,7 +359,7 @@ fn push_stable_channel(
     occurrence: &PreparedFamilyTransformOccurrence,
     channel: LoweredAffineChannel,
     retain_effective: bool,
-    driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
+    driven: &mut super::affine::DriverMap<SemanticTransactionNodeRef>,
     tracks: &mut Vec<PreparedFamilyTransformStableTrack>,
 ) -> Result<(), PreparedFamilyTransformChannelError> {
     if let Some(first_animation) = transform_driver_conflict(

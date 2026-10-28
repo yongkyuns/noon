@@ -31,7 +31,7 @@ mod player_ownership;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) use player_ownership::PlayerReturnError;
 #[cfg(any(target_arch = "wasm32", test))]
-use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
+use player_ownership::{PlayerOwnership, RejectedPlayerDiscard, RejectedPlayerReturn};
 #[cfg(test)]
 mod completed_binding_tests;
 #[cfg(test)]
@@ -454,6 +454,20 @@ enum OrdinaryCompositionChild {
         intensity: f64,
         options: noon_core::AnimationOptions,
     },
+    Dissolve {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: noon_core::AnimationOptions,
+    },
+    FamilyDissolve {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: noon_core::AnimationOptions,
+    },
     FamilyIndicate {
         target: noon::MobjectFamily,
         indication: noon::IndicateOptions,
@@ -809,8 +823,8 @@ impl CanonicalAuthoringScene {
     /// error rather than silently replacing that session.
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_local_player_for_run(&mut self) -> Result<(), String> {
-        self.player_ownership
-            .prepare_for_run(self.scene.integration_store().borrow().scene_revision())
+        let authored = self.scene.integration_store().borrow().scene_revision();
+        self.player_ownership.prepare_for_run(authored)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -828,6 +842,21 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_execution_run(&mut self) -> Result<(), String> {
         self.prepare_local_player_for_run()
+    }
+
+    /// Retire input-owned state before a genuine source release. Recovery
+    /// returns and re-leases the same player without crossing this boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn retire_execution_source(&mut self) -> Result<(), String> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => Ok(()),
+            PlayerOwnership::Active(player) | PlayerOwnership::Returned(player) => {
+                player.retire_execution_source()
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("return the execution player before retiring its source".into())
+            }
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1648,6 +1677,39 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_click_glow_pulse(
+        &mut self,
+        target: &noon::Mobject,
+        intensity: f64,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.player_ownership.local_mut() {
+            Some(player) => player.live_bind_click_glow_pulse(target, intensity, options),
+            None => self
+                .scene
+                .on_click_glow_pulse(target, intensity, options)
+                .map_err(AuthoringFailure::from),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn clear_click_action(&mut self, target: &noon::Mobject) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.player_ownership.local_mut() {
+            Some(player) => player.live_clear_click_action(target),
+            None => self
+                .scene
+                .on_click(target, None)
+                .map_err(AuthoringFailure::from),
+        }
+    }
+
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
     fn create_value_tracker(
@@ -2296,6 +2358,30 @@ impl CanonicalAuthoringScene {
                     intensity: *intensity,
                     options: *options,
                 },
+                OrdinaryCompositionChild::Dissolve {
+                    target,
+                    direction,
+                    style,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Dissolve {
+                    target: target.into(),
+                    direction: *direction,
+                    style: *style,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::FamilyDissolve {
+                    target,
+                    direction,
+                    style,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Dissolve {
+                    target: target.into(),
+                    direction: *direction,
+                    style: *style,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyIndicate {
                     target,
                     indication,
@@ -2567,6 +2653,11 @@ impl CanonicalAuthoringScene {
                     entering_id,
                     target,
                     ..
+                }
+                | OrdinaryCompositionChild::Dissolve {
+                    entering_id,
+                    target,
+                    ..
                 } => {
                     if let Some(id) = entering_id {
                         output.push((*id, target));
@@ -2579,6 +2670,7 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilyFade { entering, .. }
+                | OrdinaryCompositionChild::FamilyDissolve { entering, .. }
                 | OrdinaryCompositionChild::FamilyArrowGrow { entering, .. }
                 | OrdinaryCompositionChild::FamilyTextWrite { entering, .. }
                 | OrdinaryCompositionChild::FamilyReveal { entering, .. } => {
@@ -2848,6 +2940,12 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 }
+                | OrdinaryCompositionChild::FamilyDissolve {
+                    target,
+                    entering,
+                    options,
+                    ..
+                }
                 | OrdinaryCompositionChild::FamilyArrowGrow {
                     target,
                     entering,
@@ -2906,7 +3004,13 @@ impl CanonicalAuthoringScene {
                             return Err("invalid shared Arrow growth target or lifecycle".into());
                         }
                     }
-                    noon_core::resolve_animation_options(
+                    let resolver =
+                        if matches!(child, OrdinaryCompositionChild::FamilyDissolve { .. }) {
+                            noon_core::resolve_transform_animation_options
+                        } else {
+                            noon_core::resolve_animation_options
+                        };
+                    resolver(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         if matches!(
@@ -3139,7 +3243,7 @@ impl CanonicalAuthoringScene {
                     intensity,
                     options,
                 } => {
-                    noon_core::GlowUpdate::default()
+                    noon_core::EffectUpdate::default()
                         .intensity(*intensity)
                         .prepare(noon_core::Glow::default())
                         .map_err(|error| error.to_string())?;
@@ -3152,6 +3256,12 @@ impl CanonicalAuthoringScene {
                     ..
                 }
                 | OrdinaryCompositionChild::PassingFlash {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                }
+                | OrdinaryCompositionChild::Dissolve {
                     entering_id,
                     target,
                     options,
@@ -3215,7 +3325,11 @@ impl CanonicalAuthoringScene {
                 );
             }
             target.validate().map_err(|error| error.to_string())?;
-            let resolved = if matches!(child, OrdinaryCompositionChild::TransformTo { .. }) {
+            let resolved = if matches!(
+                child,
+                OrdinaryCompositionChild::TransformTo { .. }
+                    | OrdinaryCompositionChild::Dissolve { .. }
+            ) {
                 noon_core::resolve_transform_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
@@ -4022,6 +4136,29 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
+    /// Abort an incomplete source using its exact outstanding player lease.
+    /// Failed validation or retirement returns ownership without replacing it.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn discard_execution_player(
+        &mut self,
+        mut player: crate::SemanticExecutionPlayer,
+    ) -> Result<(), RejectedPlayerDiscard> {
+        if let Err(reason) = self.validate_execution_player_return(&player) {
+            return Err(RejectedPlayerDiscard {
+                failure: reason.into(),
+                player: Box::new(player),
+            });
+        }
+        if let Err(error) = player.retire_execution_source() {
+            return Err(RejectedPlayerDiscard {
+                failure: error.into(),
+                player: Box::new(player),
+            });
+        }
+        self.player_ownership = PlayerOwnership::Unstarted;
+        Ok(())
+    }
+
     /// Validate by reference before consuming a player; a rejected return cannot
     /// replace the rightful lease or mutate its publication/continuation state.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4138,19 +4275,20 @@ mod wasm {
         }
     }
 
-    /// A rejected ownership return retains the consumed WASM player wrapper.
+    /// A rejected ownership exit retains the consumed WASM player wrapper.
     /// Its projected JS Error retains `takePlayer()` to recover that exact player;
     /// returning it to its rightful context requires no lowering or cloning.
     #[wasm_bindgen]
     pub struct WasmExecutionPlayerReturnError {
-        rejected: RejectedPlayerReturn,
+        player: Box<crate::SemanticExecutionPlayer>,
+        message: String,
     }
 
     #[wasm_bindgen]
     impl WasmExecutionPlayerReturnError {
         #[wasm_bindgen(getter)]
         pub fn message(&self) -> String {
-            self.rejected.to_string()
+            self.message.clone()
         }
 
         #[wasm_bindgen(js_name = toString)]
@@ -4161,17 +4299,21 @@ mod wasm {
         /// Consume this rejection and restore ownership of the original player.
         #[wasm_bindgen(js_name = takePlayer)]
         pub fn take_player(self) -> crate::SemanticExecutionPlayer {
-            *self.rejected.player
+            *self.player
         }
     }
 
     impl WasmExecutionPlayerReturnError {
-        fn into_js_error(self) -> JsValue {
+        fn into_js_error(
+            player: Box<crate::SemanticExecutionPlayer>,
+            failure: AuthoringFailure,
+        ) -> JsValue {
             // Pyodide requires a real Error, not an Error-like WASM class.
             // Binding the existing consuming method retains the rejected player
             // in exactly one Rust owner; no player clone or host lease is added.
-            let error = typed_js_error(AuthoringFailure::from(self.rejected.reason));
-            let rejection = JsValue::from(self);
+            let message = failure.message.clone();
+            let error = typed_js_error(failure);
+            let rejection = JsValue::from(Self { player, message });
             let take_player: js_sys::Function =
                 js_sys::Reflect::get(&rejection, &JsValue::from_str("takePlayer"))
                     .expect("WASM rejection exposes takePlayer")
@@ -5465,6 +5607,121 @@ mod wasm {
                 options: Self::family_options(child_run_time, rate_function, lag_ratio)?
                     .reverse_rate_function(reverse_rate_function),
             });
+            Ok(())
+        }
+
+        fn dissolve_parameters(
+            direction: &str,
+            seed: Option<f64>,
+            softness: Option<f64>,
+        ) -> Result<(noon_core::DissolveDirection, noon_core::DissolveStyle), JsValue> {
+            let direction = match parse_fade_direction(direction)? {
+                noon_core::SemanticFadeDirection::In => noon_core::DissolveDirection::In,
+                noon_core::SemanticFadeDirection::Out => noon_core::DissolveDirection::Out,
+            };
+            let update = crate::authoring_effects::mask_parameters(
+                noon_core::EffectUpdate::default(),
+                None,
+                softness,
+                seed,
+            )
+            .map_err(js_error)?;
+            let style = noon_core::DissolveStyle::new(update)
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)?;
+            Ok((direction, style))
+        }
+
+        #[wasm_bindgen(js_name = appendDissolveMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_dissolve_mobject(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            seed: Option<f64>,
+            softness: Option<f64>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let (direction, style) = Self::dissolve_parameters(direction, seed, softness)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .reverse_rate_function(reverse_rate_function);
+            options.introducer = introducer;
+            options.remover = remover;
+            self.children.push(OrdinaryCompositionChild::Dissolve {
+                entering_id: if object_id.is_empty() {
+                    None
+                } else {
+                    Some(parse_object_id("dissolve object ID", object_id)?)
+                },
+                target: target.semantic_mobject().clone(),
+                direction,
+                style,
+                options,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDissolveFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_dissolve_family(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            direction: &str,
+            seed: Option<f64>,
+            softness: Option<f64>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let (direction, style) = Self::dissolve_parameters(direction, seed, softness)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .reverse_rate_function(reverse_rate_function);
+            options.introducer = introducer;
+            options.remover = remover;
+            self.children
+                .push(OrdinaryCompositionChild::FamilyDissolve {
+                    target: target.semantic_family()?,
+                    entering: Vec::new(),
+                    direction,
+                    style,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDissolveFamilyEntering)]
+        pub fn append_dissolve_family_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyDissolve {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error("family entering member must follow Dissolve"));
+            };
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
+                return Err(js_error(
+                    "dissolve family member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("dissolve family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
             Ok(())
         }
 
@@ -9938,6 +10195,11 @@ mod wasm {
             self.inner.prepare_execution_run().map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = retireExecutionSource)]
+        pub fn retire_execution_source(&mut self) -> Result<(), JsValue> {
+            self.inner.retire_execution_source().map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = prepareFamilySubsetDisplay)]
         pub fn prepare_family_subset_display(
             &mut self,
@@ -9982,6 +10244,43 @@ mod wasm {
                         .rate_func(rate)
                         .lag_ratio(lag_ratio),
                 )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveBindClickGlowPulse)]
+        pub fn live_bind_click_glow_pulse(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            intensity: f64,
+            run_time: f64,
+            rate_function: &str,
+            lag_ratio: f64,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "click binding")?;
+            let rate = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| js_error("unsupported click glow pulse rate function"))?;
+            self.inner
+                .bind_click_glow_pulse(
+                    target.semantic_mobject(),
+                    intensity,
+                    noon_core::AnimationOptions::new()
+                        .run_time(run_time)
+                        .rate_func(rate)
+                        .lag_ratio(lag_ratio)
+                        .reverse_rate_function(reverse_rate_function),
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveClearClickAction)]
+        pub fn live_clear_click_action(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "click binding")?;
+            self.inner
+                .clear_click_action(target.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -10101,6 +10400,117 @@ mod wasm {
                     (edge_x, edge_y),
                     (mask_x, mask_y),
                 )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFillImage)]
+        pub fn live_set_fill_image(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            paint: &crate::WasmImagePaintOptions,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFillImageMapping)]
+        pub fn live_set_fill_image_mapping(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            mapping: &crate::WasmImageMapping,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFillHatch)]
+        pub fn live_set_fill_hatch(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            paint: &crate::WasmHatchPaint,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFillNoise)]
+        pub fn live_set_fill_noise(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            gradient: &crate::WasmNoisePaint,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFillRadialGradient)]
+        pub fn live_set_fill_radial_gradient(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            gradient: &crate::WasmRadialGradient,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_radial_gradient(
+                    handle.semantic_mobject(),
+                    gradient.value.clone(),
+                    opacity,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFillGradient)]
+        pub fn live_set_fill_gradient(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            gradient: &crate::WasmLinearGradient,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
                 .map_err(typed_js_error)
         }
 
@@ -11286,6 +11696,18 @@ mod wasm {
                 .live_set_family_own_opacity(&source.semantic_family()?, opacity)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyObjectOpacity)]
+        pub fn live_set_family_object_opacity(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_object_opacity(&source.semantic_family()?, opacity)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
         pub fn live_match_family_style(
             &mut self,
@@ -11758,7 +12180,24 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .return_execution_player(player)
-                .map_err(|rejected| WasmExecutionPlayerReturnError { rejected }.into_js_error())
+                .map_err(|rejected| {
+                    WasmExecutionPlayerReturnError::into_js_error(
+                        rejected.player,
+                        rejected.reason.into(),
+                    )
+                })
+        }
+
+        #[wasm_bindgen(js_name = discardExecutionPlayer)]
+        pub fn discard_execution_player(
+            &mut self,
+            player: crate::SemanticExecutionPlayer,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .discard_execution_player(player)
+                .map_err(|rejected| {
+                    WasmExecutionPlayerReturnError::into_js_error(rejected.player, rejected.failure)
+                })
         }
 
         #[wasm_bindgen(js_name = resumeExecutionPlayer)]
@@ -11883,6 +12322,70 @@ mod tests {
             .iter()
             .map(|(id, target, options)| create_request(Some(*id), target, *options))
             .collect()
+    }
+
+    #[test]
+    fn click_glow_pulse_binding_and_clear_share_cold_and_live_rust_publication() {
+        let mut context = CanonicalAuthoringScene::default();
+        let target = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &target).unwrap();
+        let nodes = context.scene.integration_store().borrow().len();
+        context
+            .bind_click_glow_pulse(&target, 2.0, AnimationOptions::new())
+            .unwrap();
+        assert_eq!(
+            target.state().unwrap().click_action(),
+            Some(noon_core::SemanticClickAction::GlowPulse(
+                noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false)
+            ))
+        );
+        assert_eq!(context.scene.integration_store().borrow().len(), nodes);
+        assert!(!context
+            .scene
+            .integration_store()
+            .borrow()
+            .has_effect_attachments());
+        context.live_player(1.0).unwrap();
+        context
+            .bind_click_glow_pulse(
+                &target,
+                3.0,
+                AnimationOptions::new()
+                    .run_time(0.4)
+                    .rate_func(RateFunction::Linear)
+                    .reverse_rate_function(true),
+            )
+            .unwrap();
+        let previous = target.state().unwrap().click_action();
+        assert_eq!(
+            previous,
+            Some(noon_core::SemanticClickAction::GlowPulse(
+                noon_core::SemanticClickGlowPulse::new(3.0, 0.4, RateFunction::Linear, true)
+            ))
+        );
+        for duration in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            let revision = context.scene.integration_store().borrow().scene_revision();
+            let error = context
+                .bind_click_glow_pulse(&target, 2.0, AnimationOptions::new().run_time(duration))
+                .unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("invalid_input", "click.invalid_options")
+            );
+            assert_eq!(target.state().unwrap().click_action(), previous);
+            assert_eq!(
+                context.scene.integration_store().borrow().scene_revision(),
+                revision
+            );
+        }
+        context.clear_click_action(&target).unwrap();
+        assert_eq!(target.state().unwrap().click_action(), None);
+        assert_eq!(context.scene.integration_store().borrow().len(), nodes);
+        assert!(!context
+            .scene
+            .integration_store()
+            .borrow()
+            .has_effect_attachments());
     }
 
     #[test]
@@ -14602,12 +15105,93 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_dissolve_admits_objects_and_families_through_shared_lifecycle() {
+        for composed in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let source = context.scene.circle(0.4).unwrap();
+            let family = composed.then(|| context.scene.family(&[(&source).into()]).unwrap());
+            let owner = family
+                .as_ref()
+                .map_or(source.node_id(), |family| family.node_id());
+            let style =
+                noon_core::DissolveStyle::new(noon_core::EffectUpdate::default().seed(u32::MAX))
+                    .unwrap();
+            for direction in [
+                noon_core::DissolveDirection::In,
+                noon_core::DissolveDirection::Out,
+            ] {
+                let introducing = direction == noon_core::DissolveDirection::In;
+                let options = AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear);
+                let child = if let Some(family) = &family {
+                    OrdinaryCompositionChild::FamilyDissolve {
+                        target: family.clone(),
+                        entering: if introducing {
+                            vec![(ObjectId::new(0), source.clone())]
+                        } else {
+                            Vec::new()
+                        },
+                        direction,
+                        style,
+                        options,
+                    }
+                } else {
+                    OrdinaryCompositionChild::Dissolve {
+                        target: source.clone(),
+                        entering_id: introducing.then_some(ObjectId::new(0)),
+                        direction,
+                        style,
+                        options,
+                    }
+                };
+                let end = context
+                    .begin_ordinary_mixed_composition(
+                        noon_core::SemanticAnimationCompositionKind::Parallel,
+                        &[child],
+                        AnimationOptions::new(),
+                        AnimationOptions::new(),
+                    )
+                    .unwrap();
+                context
+                    .active_live_player()
+                    .unwrap()
+                    .live_advance_segment_to(end)
+                    .unwrap();
+                context
+                    .active_live_player()
+                    .unwrap()
+                    .live_complete_segment()
+                    .unwrap();
+                assert!(context
+                    .scene
+                    .integration_store()
+                    .borrow()
+                    .visibility_effect(owner)
+                    .unwrap()
+                    .is_none());
+                assert_eq!(
+                    context
+                        .scene
+                        .integration_store()
+                        .borrow()
+                        .node(owner)
+                        .unwrap()
+                        .parents()
+                        .is_empty(),
+                    !introducing
+                );
+            }
+        }
+    }
+
+    #[test]
     fn ordinary_glow_pulse_preserves_atomic_options_and_restores_reversed_children() {
         let mut context = CanonicalAuthoringScene::default();
         let mut persistent = context.scene.circle(0.4).unwrap();
         persistent.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
         persistent
-            .set_glow(noon_core::GlowUpdate::default().intensity(1.2))
+            .set_glow(noon_core::EffectUpdate::default().intensity(1.2))
             .unwrap();
         let mut temporary = context.scene.circle(0.4).unwrap();
         temporary.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
@@ -14685,9 +15269,15 @@ mod tests {
                 .iter()
                 .find(|row| row.id == id)
                 .unwrap()
-                .glow
+                .effects
                 .as_ref()
-                .map(|glow| glow.definition.intensity())
+                .and_then(|stack| {
+                    object
+                        .get_effect("glow")
+                        .ok()
+                        .and_then(|effect| stack.get(effect.node_id()))
+                })
+                .map(|effect| effect.definition.as_glow().unwrap().intensity())
         };
         for (time, expected) in [(0.125, 1.5), (0.375, 0.5), (0.5, 0.0)] {
             context

@@ -2,13 +2,12 @@
 //! Generational IDs here are weak activation expectations, not owning graph
 //! edges: removing/replacing an attachment invalidates a declaration's capture
 //! rather than causing it to drive a new same-name attachment.
-use crate::{EffectDefinition, SemanticNodeId, SemanticStore};
-use std::sync::Arc;
+use crate::{EffectDefinition, SemanticEffectName, SemanticNodeId, SemanticStore};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticAnimationEffectSnapshot {
     pub attachment: SemanticNodeId,
-    pub name: Arc<str>,
+    pub name: SemanticEffectName,
     pub definition: EffectDefinition,
     pub copy_provenance: Option<crate::SemanticEffectCopyProvenance>,
 }
@@ -27,6 +26,17 @@ impl SemanticTransformEffectSnapshot {
         source: Vec<SemanticAnimationEffectSnapshot>,
         target: Vec<SemanticAnimationEffectSnapshot>,
     ) -> Option<Box<Self>> {
+        // Visibility is a lifecycle role owned by Dissolve, rather than an
+        // authored appearance target. Ordinary motion/Transform must neither
+        // capture its temporary generation nor copy its progress back later.
+        let source: Vec<_> = source
+            .into_iter()
+            .filter(|effect| !effect.name.is_visibility())
+            .collect();
+        let target: Vec<_> = target
+            .into_iter()
+            .filter(|effect| !effect.name.is_visibility())
+            .collect();
         if source.is_empty() && target.is_empty() {
             return None;
         }
@@ -52,7 +62,7 @@ impl SemanticStore {
                 let effect = self.semantic_effect_state(id)?;
                 Ok(SemanticAnimationEffectSnapshot {
                     attachment: id,
-                    name: Arc::clone(effect.shared_name()),
+                    name: effect.attachment_name().clone(),
                     definition: effect.definition(),
                     copy_provenance: effect.copy_provenance(),
                 })

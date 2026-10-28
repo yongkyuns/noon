@@ -471,6 +471,7 @@ fn project_mega_render_batches(
             .mega_path_segments
             .get(path_batch_index)
             .and_then(|segment| segment.as_ref())
+            .filter(|_| !preparer.path_range_has_paint(&ordered_batch.instance_range))
             .filter(|_| {
                 !preparer
                     .mega_path_detached
@@ -522,6 +523,9 @@ fn projected_frame<'a>(
     stats: RenderStats,
 ) -> PreparedFrame<'a> {
     PreparedFrame {
+        fill_paints: &preparer.fill_paints,
+        paint_changes: &preparer.paint_changes,
+        paint_indices: &preparer.paint_indices,
         time,
         circle_ids: &preparer.circle_ids,
         circles: &preparer.circles,
@@ -1121,8 +1125,9 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
@@ -1453,6 +1458,7 @@ pub enum DerivedDisplayRenderError {
     DerivedObjectNotPresent(u32),
     UnsupportedContent(u32),
     UnsupportedGeometry(u32),
+    UnsupportedPaint(u32),
 }
 
 impl std::fmt::Display for DerivedDisplayRenderError {
@@ -1477,6 +1483,9 @@ impl std::fmt::Display for DerivedDisplayRenderError {
             Self::UnsupportedGeometry(occurrence) => write!(
                 formatter,
                 "derived display occurrence {occurrence} could not be prepared as transient geometry"
+            ),
+            Self::UnsupportedPaint(occurrence) => write!(
+                formatter, "derived display occurrence {occurrence} requires continuous-paint packing"
             ),
         }
     }
@@ -1615,6 +1624,9 @@ fn pack_derived_display_object(
 ) -> Result<(), DerivedDisplayRenderError> {
     let state = object.state();
     let occurrence = object.occurrence_index();
+    if state.fill_paint.is_some() {
+        return Err(DerivedDisplayRenderError::UnsupportedPaint(occurrence));
+    }
     if !state.presence {
         return Err(DerivedDisplayRenderError::DerivedObjectNotPresent(
             occurrence,
@@ -1829,6 +1841,7 @@ mod derived_display_tests {
 
     fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
         DerivedDisplayObjectState {
+            fill_paint: None,
             z_index: 0.0,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,

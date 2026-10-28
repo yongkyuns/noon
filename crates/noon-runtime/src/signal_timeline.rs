@@ -510,6 +510,26 @@ fn value_at(entries: &[CompiledScalarSignalTimelineEntry], initial: f32, time: f
 }
 
 impl crate::SceneInstance {
+    /// Validate scalar values before a paired seek retires semantic input state.
+    /// Preparation owns no publication and may be discarded without acknowledgement.
+    pub fn preflight_scalar_interaction_seek(
+        &mut self,
+        preview: &SignalTimelinePreview,
+    ) -> Result<(), crate::EvaluationError> {
+        self.validate_scalar_preview(preview)?;
+        self.preflight_interaction_seek(preview.time)?;
+        if !preview.inputs().is_empty() {
+            self.reactive
+                .as_mut()
+                .ok_or(crate::EvaluationError::Reactive(
+                    noon_core::ReactiveError::UnknownSignal(preview.inputs()[0].0),
+                ))?
+                .prepare_input_batch(preview.inputs())
+                .map_err(crate::EvaluationError::Reactive)?;
+        }
+        Ok(())
+    }
+
     fn validate_scalar_preview(
         &self,
         preview: &SignalTimelinePreview,
@@ -561,6 +581,9 @@ impl crate::SceneInstance {
         seek: bool,
     ) -> Result<&crate::FrameState, crate::EvaluationError> {
         self.validate_scalar_preview(preview)?;
+        if seek || preview.time < self.frame.time {
+            self.preflight_raw_interaction_seek(preview.time)?;
+        }
         if preview.inputs().is_empty() {
             return if seek {
                 self.seek(preview.time)

@@ -49,8 +49,9 @@ fn circle_frame(object_count: usize) -> FrameState {
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {
+                fill_paint: None,
                 draw_enabled: true,
-                glow: None,
+                effects: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),

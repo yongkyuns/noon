@@ -1058,26 +1058,20 @@ async function runScene() {
         throw new TypeError("invalid prepared source run options");
       }
       previousPreview.hold(canvas, "Building edited source");
-      // A reader's resource stream cannot be reattached or reconciled into a
-      // different source. A genuine Run retires it; it never retries user code.
-      if (player !== null && (isPreparedPlayback() || preparedPlayback)) {
-        discardEarlyContinuationRuntime(player);
-      }
-      // Explicit Run need not pass through the edit-stop path. Do not leave a
-      // completed source's replay/callbacks running behind the frozen image.
-      if (player !== null && !playerNeedsRestart) {
+      // Explicit Run replaces the source in the same authoring arena. Retire
+      // input-owned semantic state before new Python can advance that arena.
+      // A failed release retains its exact owner and aborts this authoring run.
+      if (player !== null) {
         const retainedPlayer = player;
         canvas.style.visibility = "hidden";
         playbackControls?.setControllable(false);
         stopMetricsPolling();
-        try {
-          await retainedPlayer.pause();
-        } catch {
-          // Same retirement policy as edit-stop: an unpausable owner cannot
-          // remain live behind the preview. The replacement gets a fresh owner.
-          if (isCurrentRun(runToken)) discardEarlyContinuationRuntime(retainedPlayer);
+        await retainedPlayer.retireExecutionSource();
+        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-source-retirement");
+        if (isPreparedPlayback() || preparedPlayback) {
+          discardEarlyContinuationRuntime(retainedPlayer);
         }
-        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-preview-pause");
+        playerNeedsRestart = false;
         status.dataset.playbackPlaying = "false";
         status.dataset.playbackPhase = "stopped";
         status.dataset.playbackControls = "unavailable";

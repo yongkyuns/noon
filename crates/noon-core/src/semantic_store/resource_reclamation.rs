@@ -57,6 +57,9 @@ impl SemanticResourceReferences {
 }
 
 impl SemanticStore {
+    pub(super) fn has_semantic_image_owner(&self, handle: RasterImageResourceHandle) -> bool {
+        self.resource_references.images.contains_key(&handle)
+    }
     pub(super) fn retain_semantic_audio_resource(&mut self, handle: AudioResourceHandle) {
         debug_assert!(self.audio_resources.get(handle).is_some());
         SemanticResourceReferences::retain(&mut self.resource_references.audio, handle);
@@ -70,12 +73,76 @@ impl SemanticStore {
 
     pub(super) fn retain_semantic_object_resources(&mut self, state: &SemanticObjectState) {
         self.retain_semantic_content_resources(state.content);
+        self.retain_semantic_style_resources(&state.style);
         self.retain_semantic_numeric_text_resources(state);
     }
 
     pub(super) fn release_semantic_object_resources(&mut self, state: &SemanticObjectState) {
         self.release_semantic_content_resources(state.content);
+        self.release_semantic_style_resources(&state.style);
         self.release_semantic_numeric_text_resources(state);
+    }
+
+    pub(super) fn retain_semantic_style_resources(&mut self, style: &crate::SemanticStyle) {
+        for handle in style.image_resources() {
+            self.retain_semantic_image_resource(handle);
+        }
+    }
+
+    pub(super) fn release_semantic_style_resources(&mut self, style: &crate::SemanticStyle) {
+        for handle in style.image_resources() {
+            self.release_semantic_image_resource(handle);
+        }
+    }
+
+    pub(super) fn retain_semantic_image_resource(&mut self, handle: RasterImageResourceHandle) {
+        if self.raster_image_resources.get(handle).is_some() {
+            SemanticResourceReferences::retain(&mut self.resource_references.images, handle);
+        }
+    }
+
+    pub(super) fn release_semantic_image_resource(&mut self, handle: RasterImageResourceHandle) {
+        if self.resource_references.images.contains_key(&handle)
+            && SemanticResourceReferences::release(&mut self.resource_references.images, handle)
+        {
+            self.resource_retirement_candidates.images.push(handle);
+        }
+    }
+
+    /// One local style edit, including unrendered family-owned appearance.
+    /// Reclamation remains deferred through the enclosing complete transaction.
+    pub(super) fn mutate_semantic_style(
+        &mut self,
+        object: crate::SemanticNodeId,
+        edit: impl FnOnce(&mut super::SemanticNode),
+    ) {
+        let style = |node: &super::SemanticNode| {
+            node.semantic_object_state()
+                .map(|state| &state.style)
+                .or_else(|| node.family_style())
+                .expect("preflighted style owner")
+                .clone()
+        };
+        let previous = style(self.node(object).expect("preflighted style owner"));
+        let previous_isolated = self.node(object).unwrap().has_partial_family_opacity();
+        let previous_target = self
+            .node(object)
+            .unwrap()
+            .has_explicit_family_opacity_target();
+        edit(self.node_mut(object).expect("preflighted style owner"));
+        let next = style(self.node(object).expect("preflighted style owner"));
+        let next_isolated = self.node(object).unwrap().has_partial_family_opacity();
+        let next_target = self
+            .node(object)
+            .unwrap()
+            .has_explicit_family_opacity_target();
+        self.partial_opacity_families = self.partial_opacity_families + usize::from(next_isolated)
+            - usize::from(previous_isolated);
+        self.explicit_family_opacity_targets = self.explicit_family_opacity_targets
+            + usize::from(next_target)
+            - usize::from(previous_target);
+        self.retain_semantic_style_resources(&next);
+        self.release_semantic_style_resources(&previous);
     }
 
     pub(super) fn replace_semantic_object_content(
@@ -91,6 +158,16 @@ impl SemanticStore {
             return;
         }
         self.retain_semantic_content_resources(content);
+        self.explicit_family_opacity_targets -= usize::from(
+            self.node(object)
+                .expect("preflighted content owner")
+                .has_explicit_family_opacity_target(),
+        );
+        self.partial_opacity_families -= usize::from(
+            self.node(object)
+                .expect("preflighted content owner")
+                .has_partial_family_opacity(),
+        );
         let node = self.node_mut(object).expect("preflighted content owner");
         if let Some(state) = node.semantic_object_state_mut() {
             state.content = content;
@@ -431,6 +508,29 @@ impl SemanticStore {
             .collect::<Vec<_>>();
         for state in &states {
             self.retain_semantic_object_resources(state);
+        }
+        let family_styles = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter(|node| node.semantic_object_state().is_none())
+            .filter_map(|node| node.family_style().cloned())
+            .collect::<Vec<_>>();
+        for style in &family_styles {
+            self.retain_semantic_style_resources(style);
+        }
+        let track_images = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.node.as_ref())
+            .filter_map(|node| match node.kind() {
+                super::SemanticNodeKind::Animation(state) => Some(state),
+                _ => None,
+            })
+            .flat_map(crate::SemanticAnimationState::image_resources)
+            .collect::<Vec<_>>();
+        for handle in track_images {
+            self.retain_semantic_image_resource(handle);
         }
         let audio_handles = self
             .slots

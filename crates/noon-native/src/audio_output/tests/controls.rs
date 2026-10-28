@@ -105,9 +105,15 @@ fn viewer_volume_retargets_continuously_without_restarting_or_mutating_source() 
             ..Default::default()
         },
     )]);
-    let publication = source.publication_context();
+    let publication = source.session().publication_context();
     let epoch = Instant::now();
-    let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 73);
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.0,
+        AudioMixFormat::STEREO_48_KHZ,
+        73,
+    );
     output.state.admitted.store(true, Ordering::Release);
     render_frames(&mut output, 2_400);
     let anchor = output.state.clock().unwrap();
@@ -116,29 +122,29 @@ fn viewer_volume_retargets_continuously_without_restarting_or_mutating_source() 
     set_gain(&output, 0.0);
     assert_eq!(
         render_frames(&mut output, 480),
-        expected_segment(&source, 2_400, 480, 1.0, 0.0, 960)
+        expected_segment(source.session(), 2_400, 480, 1.0, 0.0, 960)
     );
     // Halfway through muting, reverse from the instantaneous 0.5 value.
     set_gain(&output, 0.8);
     assert_eq!(
         render_frames(&mut output, 960),
-        expected_segment(&source, 2_880, 960, 0.5, 0.8, 960)
+        expected_segment(source.session(), 2_880, 960, 0.5, 0.8, 960)
     );
     set_gain(&output, 0.0);
     assert_eq!(
         render_frames(&mut output, 960),
-        expected_segment(&source, 3_840, 960, 0.8, 0.0, 960)
+        expected_segment(source.session(), 3_840, 960, 0.8, 0.0, 960)
     );
     assert_eq!(render_frames(&mut output, 480), vec![0.0; 960]);
     // Unmuting continues at source frame5,280; it never replays frame zero.
     set_gain(&output, 0.6);
     assert_eq!(
         render_frames(&mut output, 960),
-        expected_segment(&source, 5_280, 960, 0.0, 0.6, 960)
+        expected_segment(source.session(), 5_280, 960, 0.0, 0.6, 960)
     );
     assert_eq!(
         render_frames(&mut output, 17),
-        expected_segment(&source, 6_240, 17, 0.6, 0.6, 0)
+        expected_segment(source.session(), 6_240, 17, 0.6, 0.6, 0)
     );
     assert_eq!(output.next_frame, 6_257);
     assert_eq!(
@@ -153,8 +159,8 @@ fn viewer_volume_retargets_continuously_without_restarting_or_mutating_source() 
         (output.samples.as_ptr(), output.samples.capacity()),
         storage
     );
-    assert_eq!(source.publication_context(), publication);
-    assert_eq!(source.frame().time, 0.0);
+    assert_eq!(source.session().publication_context(), publication);
+    assert_eq!(source.session().frame().time, 0.0);
 }
 
 #[test]
@@ -165,6 +171,7 @@ fn initial_mute_preserves_anchor_and_contiguous_source_phase() {
     let mut output = OutputCallback::new(
         state.clone(),
         source
+            .session()
             .prepare_audio_mix(AudioMixFormat::STEREO_48_KHZ, 64)
             .unwrap(),
     );
@@ -187,7 +194,13 @@ fn a_viewer_change_during_silent_preparation_applies_before_any_audio() {
     for gain in [0.0, 0.25] {
         let source = constant_session();
         let epoch = Instant::now();
-        let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 64);
+        let mut output = callback(
+            source.session(),
+            epoch,
+            0.0,
+            AudioMixFormat::STEREO_48_KHZ,
+            64,
+        );
         assert_eq!(render_frames(&mut output, 480), vec![0.0; 960]);
         set_gain(&output, gain);
         output.state.admitted.store(true, Ordering::Release);
@@ -202,7 +215,13 @@ fn a_viewer_change_during_silent_preparation_applies_before_any_audio() {
 fn release_during_attack_keeps_continuity_and_original_drain_deadline() {
     let source = constant_session();
     let epoch = Instant::now();
-    let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 79);
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.0,
+        AudioMixFormat::STEREO_48_KHZ,
+        79,
+    );
     output.state.admitted.store(true, Ordering::Release);
     render_frames(&mut output, 480);
     output.state.release();
@@ -240,7 +259,13 @@ fn release_during_attack_keeps_continuity_and_original_drain_deadline() {
 fn release_before_admission_cannot_be_revived_by_a_late_admission() {
     let source = constant_session();
     let epoch = Instant::now();
-    let mut output = callback(&source, epoch, 0.0, AudioMixFormat::STEREO_48_KHZ, 32);
+    let mut output = callback(
+        source.session(),
+        epoch,
+        0.0,
+        AudioMixFormat::STEREO_48_KHZ,
+        32,
+    );
     output.state.release();
     assert!(output.state.released(epoch));
     // Simulate a picture admission that was already in flight on the host.
@@ -256,7 +281,7 @@ fn release_duration_never_exceeds_sixty_milliseconds_at_fractional_grid_rates() 
     for rate in [8_192, 44_100, 47_999, 48_000, 192_000] {
         let epoch = Instant::now();
         let mut output = callback(
-            &source,
+            source.session(),
             epoch,
             0.0,
             AudioMixFormat::new(rate, 2).unwrap(),
@@ -311,9 +336,9 @@ fn identical_control_offsets_produce_identical_pcm_for_different_callback_sizes(
         samples
     }
     let source = constant_session();
-    let expected = run(&source, 4_096, 1_024);
+    let expected = run(source.session(), 4_096, 1_024);
     for (callback, scratch) in [(1, 1), (17, 7), (511, 113), (2_048, 1_024)] {
-        assert_eq!(run(&source, callback, scratch), expected);
+        assert_eq!(run(source.session(), callback, scratch), expected);
     }
 }
 

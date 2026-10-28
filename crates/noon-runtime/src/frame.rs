@@ -10,10 +10,12 @@ use crate::release_render_transform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
+    /// Effective continuous fill from the same publication as the compact style.
+    pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     /// Effective root drawing eligibility, independent from paint and presence.
     pub draw_enabled: bool,
-    /// Current persistent leaf effect, published with this row and its frame epoch.
-    pub glow: Option<Arc<noon_compile::CompiledGlow>>,
+    /// Ordered effective leaf bindings from the same coherent frame publication.
+    pub effects: Option<Arc<noon_compile::CompiledEffectStack>>,
     pub z_index: f64,
     pub id: ObjectId,
     pub content: ObjectContentRef,
@@ -86,8 +88,9 @@ mod spatial_render_routing_tests {
 
     fn row(domain: Domain, draw_kind: CompiledSpatialDrawKind) -> FrameObjectState {
         FrameObjectState {
+            fill_paint: None,
             draw_enabled: true,
-            glow: None,
+            effects: None,
             z_index: 0.0,
             id: ObjectId::new(1),
             content: GeometryRef::circle(1.0).into(),
@@ -412,7 +415,8 @@ impl EffectiveBoundsBasis {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FrameRowState {
-    pub(super) glow: Option<Arc<noon_compile::CompiledGlow>>,
+    pub(super) fill_paint: Option<Arc<noon_core::SemanticPaint>>,
+    pub(super) effects: Option<Arc<noon_compile::CompiledEffectStack>>,
     pub(super) z_index: f64,
     pub(super) transform: Transform2D,
     pub(super) spatial: Option<noon_compile::CompiledSpatialState>,
@@ -429,7 +433,8 @@ pub(crate) struct FrameRowState {
 impl FrameRowState {
     pub(crate) fn from_frame(frame: &FrameState, object_index: usize) -> Self {
         Self {
-            glow: frame.objects[object_index].glow.clone(),
+            effects: frame.objects[object_index].effects.clone(),
+            fill_paint: frame.objects[object_index].fill_paint.clone(),
             z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
             spatial: frame.objects[object_index].spatial.as_deref().cloned(),
@@ -446,7 +451,8 @@ impl FrameRowState {
 
     pub(super) fn write_to_frame(self, frame: &mut FrameState, object_index: usize) {
         let object = &mut frame.objects[object_index];
-        object.glow = self.glow;
+        object.fill_paint = self.fill_paint;
+        object.effects = self.effects;
         object.z_index = self.z_index;
         object.transform = self.transform;
         match (&mut object.spatial, self.spatial) {
@@ -467,7 +473,8 @@ impl FrameRowState {
 
     pub(crate) fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
         let object = &frame.objects[object_index];
-        self.glow != object.glow
+        self.fill_paint != object.fill_paint
+            || self.effects != object.effects
             || self.z_index != object.z_index
             || self.transform != object.transform
             || self.spatial.as_ref() != object.spatial.as_deref()
@@ -519,7 +526,8 @@ impl FrameRowState {
 
     pub(super) fn as_mut<'a>(&'a mut self, base_content: &'a ObjectContentRef) -> FrameRowMut<'a> {
         FrameRowMut {
-            glow: &mut self.glow,
+            fill_paint: &mut self.fill_paint,
+            effects: &mut self.effects,
             content: FrameContentMut::Staged {
                 base: base_content,
                 content_override: &mut self.content_override,
@@ -563,7 +571,8 @@ impl FrameContentMut<'_> {
 }
 
 pub(super) struct FrameRowMut<'a> {
-    pub(super) glow: &'a mut Option<Arc<noon_compile::CompiledGlow>>,
+    pub(super) fill_paint: &'a mut Option<Arc<noon_core::SemanticPaint>>,
+    pub(super) effects: &'a mut Option<Arc<noon_compile::CompiledEffectStack>>,
     pub(super) z_index: &'a mut f64,
     pub(super) content: FrameContentMut<'a>,
     pub(super) transform: &'a mut Transform2D,
@@ -580,7 +589,8 @@ pub(super) struct FrameRowMut<'a> {
 pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> FrameRowMut<'_> {
     let object = &mut frame.objects[object_index];
     FrameRowMut {
-        glow: &mut object.glow,
+        fill_paint: &mut object.fill_paint,
+        effects: &mut object.effects,
         content: FrameContentMut::Direct(&mut object.content),
         z_index: &mut object.z_index,
         transform: &mut object.transform,

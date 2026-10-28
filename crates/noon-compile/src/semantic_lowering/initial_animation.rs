@@ -179,6 +179,7 @@ pub(super) fn install_initial_animation_root(
     }
 
     let mut definitions = Vec::new();
+    let mut resource_additions = crate::CompiledResources::default();
     let mut family_animations = Vec::new();
     let mut family_drivers = Vec::new();
     for &animation in children {
@@ -251,6 +252,11 @@ pub(super) fn install_initial_animation_root(
                 target: *target,
             })?;
         let (property, values) = lower_object_track_values(store, animation, *property, values)?;
+        resource_additions
+            .capture_paint_track_from_arena(store.raster_image_resources(), &values)
+            .map_err(|error| {
+                SemanticInitialAnimationError::Compiled(CompilePatchError::Resource(error))
+            })?;
         let id = TrackId::new(
             u64::try_from(definitions.len())
                 .map_err(|_| SemanticInitialAnimationError::TooManyTracks(definitions.len()))?,
@@ -275,8 +281,9 @@ pub(super) fn install_initial_animation_root(
         ),
     );
     compiled
-        .preflight_execution_transaction(&transaction)
+        .preflight_execution_transaction_with_resources(&transaction, &resource_additions)
         .map_err(SemanticInitialAnimationError::Compiled)?;
+    compiled.merge_prepared_resources(resource_additions);
     for mutation in transaction.mutations() {
         compiled
             .apply_execution_patch(mutation)
@@ -292,6 +299,12 @@ fn lower_object_track_values(
     values: &SemanticObjectTrackValues,
 ) -> Result<(Property, TrackValues), SemanticInitialAnimationError> {
     let direct = match (property, values) {
+        (SemanticObjectTrackProperty::Fill, SemanticObjectTrackValues::Paint { transition }) => (
+            Property::Fill,
+            TrackValues::Paint {
+                transition: transition.clone(),
+            },
+        ),
         (SemanticObjectTrackProperty::ZIndex, SemanticObjectTrackValues::Scalar { from, to }) => (
             Property::ZIndex,
             TrackValues::ZIndex {

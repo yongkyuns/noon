@@ -37,6 +37,10 @@ pub use authoring_composite::WasmCompositeRows;
 mod authoring_effects;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_effects::*;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_paints;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_paints::*;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
@@ -83,6 +87,12 @@ mod background_audio_example;
 #[cfg(any(target_arch = "wasm32", test))]
 mod browser_pointer_input;
 mod canonical_authoring_scene;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod click_glow_pulse_smoke;
 mod clock;
 #[cfg(any(target_arch = "wasm32", test))]
 mod worker_audio;
@@ -103,6 +113,12 @@ mod direct_pointer_presentation;
 mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod gaussian_blur_smoke;
 #[cfg(any(target_arch = "wasm32", test))]
 mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]

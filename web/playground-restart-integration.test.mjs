@@ -157,6 +157,7 @@ function navigationFixture() {
       const candidate = {
         canvas: context.canvas, terminations: 0,
         pause: () => Promise.resolve(),
+        retireExecutionSource: () => Promise.resolve(),
         terminate() { this.terminations += 1; this.canvas = { id: `replacement-${owners.length}`, style: {} }; },
       };
       owners.push(candidate);
@@ -384,27 +385,27 @@ for (const persisted of [false, true]) {
       assert.deepEqual(f.errors, []);
     });
 
-    test(`navigation during replay pause ignores late ${outcome} (cached=${persisted})`, async () => {
+    test(`navigation during source retirement ignores late ${outcome} (cached=${persisted})`, async () => {
       const f = navigationFixture(), entered = deferred(), pause = deferred();
       const owner = f.context.ensureRuntimePreparation().candidate;
       f.context.player = owner; f.context.runtimePreparation = null;
-      owner.pause = () => { entered.resolve(); return pause.promise; };
+      owner.retireExecutionSource = () => { entered.resolve(); return pause.promise; };
       const run = f.context.runScene();
       try {
         await entered.promise;
-        assert.equal(f.clients.length, 0, "authoring waits for the actual pause acknowledgement");
+        assert.equal(f.clients.length, 0, "authoring waits for the actual retirement acknowledgement");
         f.dispatch("pagehide", persisted);
         if (persisted) f.dispatch("pageshow", true);
         const canvas = f.context.canvas;
         const status = JSON.stringify([f.context.status, f.context.patchStatus, f.context.runtimeStatus]);
         assert.equal(owner.terminations, 1);
-        pause[outcome](outcome === "resolve" ? undefined : new Error("obsolete replay pause"));
+        pause[outcome](outcome === "resolve" ? undefined : new Error("obsolete source retirement"));
         await flush();
         assert.equal(f.clients.length, 0);
         const result = await run;
         assert.equal(result.stale, true);
-        assert.equal(result.stage, "after-preview-pause");
-        assert.equal(owner.terminations, 1, "late pause rejection must not retire its owner twice");
+        assert.equal(result.stage, outcome === "resolve" ? "after-source-retirement" : "error");
+        assert.equal(owner.terminations, 1, "late retirement rejection must not retire its owner twice");
         assert.equal(f.context.canvas, canvas);
         assert.equal(f.context.player, null);
         assert.equal(f.context.activeRunRequest, null);

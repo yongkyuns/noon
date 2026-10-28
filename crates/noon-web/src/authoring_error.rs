@@ -172,8 +172,11 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::AudioClip(_) => {
                 Self::new("invalid_input", "authoring.audio_clip", message)
             }
-            AuthoringError::GlowParameter(_) => {
+            AuthoringError::EffectParameter(_) => {
                 Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
+            AuthoringError::PaintTransition(_) => {
+                Self::new("invalid_input", "paint.invalid_transition", message)
             }
             AuthoringError::EffectNotFound { .. } => {
                 Self::new("invalid_input", "effect.not_found", message)
@@ -336,6 +339,12 @@ impl From<AuthoringError> for AuthoringFailure {
             }
             AuthoringError::InvalidGridOption(_) => {
                 Self::new("invalid_input", "authoring.invalid_grid_option", message)
+            }
+            AuthoringError::InvalidClickActionDeclaration { .. } => {
+                Self::new("invalid_input", "click.invalid_declaration", message)
+            }
+            AuthoringError::InvalidClickActionOptions => {
+                Self::new("invalid_input", "click.invalid_options", message)
             }
             AuthoringError::InvalidPolygonOptions(_) => Self::new(
                 "invalid_input",
@@ -807,6 +816,7 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::Interaction(_) => Self::unclassified("publication.interaction", &error),
             E::AudioExecutionImmutable => Self::new(
                 "unsupported",
                 "publication.audio_execution_immutable",
@@ -870,7 +880,7 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
-            E::Value(noon_compile::SemanticLoweringError::UnsupportedGlowProfile { .. }) => {
+            E::Value(noon_compile::SemanticLoweringError::UnsupportedEffectProfile { .. }) => {
                 "effect.unsupported_source_profile"
             }
             // Other lowering producer domains are consumed by later R2 slices.
@@ -1006,6 +1016,10 @@ impl From<LiveSessionError> for AuthoringFailure {
         use LiveSessionError as E;
         let message = error.to_string();
         match error {
+            E::Authoring(
+                cause @ (AuthoringError::InvalidClickActionOptions
+                | AuthoringError::InvalidClickActionDeclaration { .. }),
+            ) => cause.into(),
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
             E::Callback(cause) => Self::caused_by("live.callback", message, cause.into()),
             E::Text(cause) => Self::caused_by("live.text", message, cause.into()),
@@ -1219,7 +1233,7 @@ mod tests {
             AuthoringFailure::from(SemanticMutationTransactionError::DuplicateEffectParameter {
                 index: 2,
                 effect,
-                parameter: noon_core::GlowParameter::Intensity,
+                parameter: noon_core::EffectParameter::Intensity,
             });
         assert_eq!(error.category, "invalid_input");
         assert_eq!(error.code, "transaction.duplicate_effect_parameter");
@@ -1256,6 +1270,30 @@ mod tests {
         );
         assert!(failure.source().is_some());
         assert!(!failure.message.is_empty());
+    }
+
+    #[test]
+    fn live_click_registration_preserves_shared_validation_codes() {
+        for (cause, code) in [
+            (
+                AuthoringError::InvalidClickActionOptions,
+                "click.invalid_options",
+            ),
+            (
+                AuthoringError::InvalidClickActionDeclaration {
+                    target: SemanticNodeId::new(7, 3),
+                    animation: SemanticNodeId::new(8, 2),
+                },
+                "click.invalid_declaration",
+            ),
+        ] {
+            let message = cause.to_string();
+            let failure = AuthoringFailure::from(LiveSessionError::Authoring(cause));
+            assert_eq!(failure.category, "invalid_input");
+            assert_eq!(failure.code, code);
+            assert_eq!(failure.message, message);
+            assert!(failure.cause.is_none());
+        }
     }
 
     #[test]
@@ -1491,12 +1529,12 @@ mod tests {
     }
     #[test]
     fn effect_errors_project_shared_causes_without_text_matching() {
-        use noon::effects::{Glow, GlowUpdate};
+        use noon::effects::{EffectUpdate, Glow};
         let mut scene = noon::Scene::new();
         let object = scene.circle(0.08).unwrap();
-        scene.set_glow(&object, GlowUpdate::default()).unwrap();
+        scene.set_glow(&object, EffectUpdate::default()).unwrap();
         let invalid = scene
-            .set_glow(&object, GlowUpdate::default().intensity(-1.0))
+            .set_glow(&object, EffectUpdate::default().intensity(-1.0))
             .unwrap_err();
         let projected = AuthoringFailure::from(invalid);
         assert_eq!(projected.category, "invalid_input");

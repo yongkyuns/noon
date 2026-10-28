@@ -190,6 +190,7 @@ jobs:
             browser-smoke-artifacts/pointer-dom
             browser-smoke-artifacts/pointer-selection
             browser-smoke-artifacts/pointer-selection-direct
+            browser-smoke-artifacts/platform-interaction-parity
             browser-smoke-artifacts/direct-pointer-presentation
             browser-smoke-artifacts/direct-inspection
             browser-smoke-artifacts/worker-inspection

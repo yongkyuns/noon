@@ -266,6 +266,60 @@ impl ExecutionSession {
         for &(root, target) in lifecycle_removals {
             membership_removals.entry(root).or_default().insert(target);
         }
+        let visibility_endpoints = entries
+            .iter()
+            .filter_map(|entry| match entry.completion {
+                SemanticAnimationCompletion::Visibility {
+                    attachment,
+                    remover,
+                    ..
+                } => Some((
+                    attachment,
+                    (entry.semantic_object, entry.execution_object, remover),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut removed_visibility = BTreeSet::new();
+        for (&attachment, &(owner, object, remover)) in &visibility_endpoints {
+            // The enclosing composition can reverse or return through a child.
+            // Release the value evaluated by the common runtime at this barrier,
+            // rather than assuming the child's forward authored endpoint.
+            let index = self
+                .runtime
+                .frame_index_for_object(object)
+                .expect("pending visibility source has a resident row");
+            let endpoint = self.frame().objects[index]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(attachment))
+                .and_then(|effect| effect.definition.as_noise_dissolve())
+                .expect("pending visibility keeps its exact mask generation");
+            if remover {
+                let parents = store
+                    .node(owner)
+                    .expect("pending visibility owner remains live")
+                    .parents();
+                let [parent] = parents else {
+                    return Err(ExecutionSegmentCompletionError::MissingLifecycleRoot(owner));
+                };
+                membership_removals
+                    .entry(*parent)
+                    .or_default()
+                    .insert(owner);
+            }
+            if remover || endpoint.is_neutral() {
+                removed_visibility.insert(attachment);
+            } else {
+                semantic.update_effect(
+                    attachment,
+                    noon_core::EffectUpdate::default()
+                        .progress(endpoint.progress())
+                        .softness(endpoint.softness())
+                        .seed(endpoint.seed()),
+                );
+            }
+        }
         if let Some(replacement) = segment.family_replacement() {
             super::family_transform::validate_matching_family_completion_swap(
                 store,
@@ -336,7 +390,25 @@ impl ExecutionSession {
         // current authored style once per affected object, merge every completed
         // style domain, then emit one replacement so parallel paint channels cannot
         // overwrite each other or unrelated style fields.
-        let mut completed_styles = BTreeMap::new();
+        let mut completed_styles = family_styles
+            .iter()
+            .cloned()
+            .map(|(family, mut style)| {
+                // Rendered appearance belongs to the ordinary opacity channel.
+                // A metadata handoff must not turn an omitted or returning channel
+                // into an endpoint write on an unrendered family root.
+                if let Some(node) = store
+                    .node(family)
+                    .filter(|node| node.semantic_object_state().is_none())
+                {
+                    style.object_opacity = node
+                        .family_style()
+                        .expect("family metadata owner")
+                        .object_opacity;
+                }
+                (family, style)
+            })
+            .collect::<BTreeMap<_, _>>();
         for entry in entries {
             let is_style_domain = matches!(
                 &entry.completion,
@@ -354,10 +426,13 @@ impl ExecutionSession {
             let style = completed_styles
                 .entry(entry.semantic_object)
                 .or_insert_with(|| {
-                    store
-                        .semantic_object_state_checked(entry.semantic_object)
-                        .expect("pending completion object remains live at the same scene revision")
-                        .style
+                    let node = store
+                        .node(entry.semantic_object)
+                        .expect("pending completion owner remains live at the same scene revision");
+                    node.semantic_object_state()
+                        .map(|state| &state.style)
+                        .or_else(|| node.family_style())
+                        .expect("pending style completion has an object or family owner")
                         .clone()
                 });
             match &entry.completion {
@@ -391,11 +466,15 @@ impl ExecutionSession {
         for (family, color) in family_colors {
             semantic.set_family_color(*family, *color);
         }
-        for (family, style) in family_styles {
-            semantic.set_family_style(*family, style.clone());
-        }
         for (object, style) in &completed_styles {
-            semantic.replace_style(*object, style.clone());
+            if store
+                .node(*object)
+                .is_some_and(|node| node.semantic_object_state().is_some())
+            {
+                semantic.replace_style(*object, style.clone());
+            } else {
+                semantic.set_family_style(*object, style.clone());
+            }
         }
 
         // A sequential composition may release several tracks for one domain.
@@ -501,7 +580,8 @@ impl ExecutionSession {
                         semantic.set_camera_profile(entry.semantic_object, *profile, *near, *far);
                     }
                 }
-                SemanticAnimationCompletion::Glow { .. }
+                SemanticAnimationCompletion::Effect { .. }
+                | SemanticAnimationCompletion::Visibility { .. }
                 | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
@@ -624,6 +704,9 @@ impl ExecutionSession {
         // Node removals form the transaction's suffix. Property completion for
         // this or another source must be staged before retiring temporary IDs.
         for attachment in removed_glow {
+            semantic.remove_node(attachment);
+        }
+        for attachment in removed_visibility {
             semantic.remove_node(attachment);
         }
         let prepared = semantic.prepare(store).map_err(|error| {
@@ -822,7 +905,7 @@ fn stage_glow_completions(
         .iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+            if let SemanticAnimationCompletion::Effect { attachment, value } = &entry.completion {
                 Some(((*attachment, value.property()), index))
             } else {
                 None
@@ -830,7 +913,7 @@ fn stage_glow_completions(
         })
         .collect::<HashMap<_, _>>();
     for (index, entry) in entries.iter().enumerate() {
-        if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+        if let SemanticAnimationCompletion::Effect { attachment, value } = &entry.completion {
             if !removed.contains(attachment)
                 && final_entries.get(&(*attachment, value.property())) == Some(&index)
             {
@@ -1920,7 +2003,7 @@ mod glow_completion_tests {
     use super::*;
     use crate::execution_segment::SegmentCompletionEntry;
     use crate::{Mobject, Scene};
-    use noon_core::{Color, Glow, GlowTrackValue, GlowUpdate, ObjectId, TrackId};
+    use noon_core::{Color, EffectTrackValue, EffectUpdate, Glow, ObjectId, TrackId};
 
     fn fixture() -> (Scene, Mobject, SemanticNodeId) {
         let mut scene = Scene::new();
@@ -1928,7 +2011,7 @@ mod glow_completion_tests {
         scene
             .set_glow(
                 &source,
-                GlowUpdate::default().intensity(0.4).color(Color::RED),
+                EffectUpdate::default().intensity(0.4).color(Color::RED),
             )
             .unwrap();
         let id = source.get_effect("glow").unwrap().node_id();
@@ -1937,12 +2020,12 @@ mod glow_completion_tests {
     fn entry(
         source: &Mobject,
         attachment: SemanticNodeId,
-        value: GlowTrackValue,
+        value: EffectTrackValue,
         sequence: u64,
     ) -> SegmentCompletionEntry {
         SegmentCompletionEntry {
             semantic_object: source.node_id(),
-            completion: SemanticAnimationCompletion::Glow { attachment, value },
+            completion: SemanticAnimationCompletion::Effect { attachment, value },
             execution_object: ObjectId::new(1),
             property: value.property(),
             track: TrackId::new(sequence),
@@ -1951,22 +2034,24 @@ mod glow_completion_tests {
         }
     }
     fn definition(store: &SemanticStore, attachment: SemanticNodeId) -> Glow {
-        let noon_core::EffectDefinition::Glow(glow) = store
+        let effect = (store
             .semantic_effect_state(attachment)
             .unwrap()
-            .definition();
-        glow
+            .definition())
+        .as_glow()
+        .unwrap();
+        effect
     }
     #[test]
     fn final_glow_completion_owns_only_its_parameter_and_coalesces_sequential_endpoints() {
         let (mut scene, source, attachment) = fixture();
         // Later persistent color edit must survive intensity completion.
         scene
-            .set_glow(&source, GlowUpdate::default().color(Color::BLUE))
+            .set_glow(&source, EffectUpdate::default().color(Color::BLUE))
             .unwrap();
         let entries = [
-            entry(&source, attachment, GlowTrackValue::Intensity(1.4), 1),
-            entry(&source, attachment, GlowTrackValue::Intensity(0.7), 2),
+            entry(&source, attachment, EffectTrackValue::Intensity(1.4), 1),
+            entry(&source, attachment, EffectTrackValue::Intensity(0.7), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
         stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);
@@ -1992,13 +2077,13 @@ mod glow_completion_tests {
         let (mut scene, source, old) = fixture();
         scene.remove_glow(&source).unwrap();
         scene
-            .set_glow(&source, GlowUpdate::default().intensity(0.6))
+            .set_glow(&source, EffectUpdate::default().intensity(0.6))
             .unwrap();
         let new = source.get_effect("glow").unwrap().node_id();
         assert_ne!(old, new);
         let entries = [
-            entry(&source, new, GlowTrackValue::Color(Color::BLUE), 1),
-            entry(&source, old, GlowTrackValue::Intensity(7.0), 2),
+            entry(&source, new, EffectTrackValue::Color(Color::BLUE), 1),
+            entry(&source, old, EffectTrackValue::Intensity(7.0), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
         stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);

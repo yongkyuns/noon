@@ -21,7 +21,7 @@ use crate::CompiledGraphArrowPolicy;
 /// key is a one-to-one encoding of the semantic node's generational identity, while
 /// the existing compiler/runtime remains responsible for dense/stable execution
 /// slots.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemanticExecutionIndex {
     object_ids: HashMap<SemanticNodeId, ObjectId>,
     /// Reverse family dependencies for composed spatial appearance groups. These
@@ -120,6 +120,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::FamilyColor { .. }
                 | SemanticMutationImpact::FamilyStyle { .. }
+                | SemanticMutationImpact::FamilyAppearanceScope { .. }
                 | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::DrawEnabled { .. }
@@ -337,7 +338,7 @@ impl SemanticExecutionIndex {
                 // not the shared value-lowering helper. Prepared transactions also
                 // lower provisional IDs which intentionally do not exist in the
                 // committed store yet.
-                lowered.glow = lower_glow_attachment(semantic_id, state, store)?;
+                lowered.effects = lower_effect_stack(semantic_id, state, store)?;
                 pending.push((semantic_id, lowered));
             }
         }
@@ -348,18 +349,26 @@ impl SemanticExecutionIndex {
         let graph_roots = reachable_graph_roots(store, &roots)?;
         let pending_graph_edges = lower_graph_dependencies(store, &graph_roots, &seen)?;
 
+        let composed = super::composed::prepare_initial(
+            store,
+            &roots,
+            pending
+                .iter()
+                .map(|(id, state)| (*id, state.presentation.z_index)),
+        )?;
         for (semantic_id, _) in &pending {
             self.update_spatial_anchor_owner(store, *semantic_id);
         }
 
-        let objects = pending
+        let mut objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
+                fill_paint: state.fill_paint,
                 semantic_id,
-                glow: state.glow,
+                effects: state.effects,
                 click_indicate: state.click_indicate,
                 execution_id: self.ensure_object(semantic_id),
-                content: state.content,
+                content: SemanticExecutionContent::Object(state.content),
                 base_transform: state.base_transform,
                 base_style: state.base_style,
                 spatial: state.spatial,
@@ -368,6 +377,10 @@ impl SemanticExecutionIndex {
                 decimal_number: state.decimal_number,
             })
             .collect::<Vec<_>>();
+        for source in composed {
+            let execution_id = self.ensure_object(source.owner);
+            objects.push(source.into_execution_object(execution_id));
+        }
         let execution_ids = objects
             .iter()
             .map(|object| (object.semantic_id, object.execution_id))
@@ -455,8 +468,9 @@ pub struct SemanticExecutionGraphEdgeDependency {
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
-    pub glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     /// Authored native action lowered with the object's time-qualified values.
     pub click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     /// Authoritative scene-global semantic identity.
@@ -464,7 +478,7 @@ pub struct SemanticExecutionObject {
     /// Temporary key accepted by the existing compiled/runtime object domain.
     pub execution_id: ObjectId,
     /// Target mixed content/resource handle, without a retained compatibility copy.
-    pub content: SemanticObjectContent,
+    pub content: SemanticExecutionContent,
     /// Current compact 2D/f32 execution transform.
     pub base_transform: Transform2D,
     /// Current compact solid-paint execution style.
@@ -478,6 +492,30 @@ pub struct SemanticExecutionObject {
     pub signal_bindings: Vec<SemanticSignalBinding>,
     /// Optional numeric source/format declaration used to lower effective text drivers.
     pub decimal_number: Option<noon_core::SemanticDecimalNumber>,
+}
+
+/// Renderer-independent execution content; a scope has no fabricated geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticExecutionContent {
+    Object(SemanticObjectContent),
+    Composed(std::sync::Arc<noon_core::ComposedSource>),
+}
+
+impl SemanticExecutionContent {
+    pub fn geometry(&self) -> Option<noon_core::StoredGeometry> {
+        if let Self::Object(content) = self {
+            content.geometry()
+        } else {
+            None
+        }
+    }
+    pub fn image(&self) -> Option<noon_core::SemanticImageContent> {
+        if let Self::Object(content) = self {
+            content.image()
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -531,8 +569,16 @@ pub enum SemanticLoweringError {
     AudioOutputUnavailable {
         clip: SemanticNodeId,
     },
-    UnsupportedGlowProfile {
+    UnsupportedEffectProfile {
         owner: SemanticNodeId,
+    },
+    InvalidEffectIsolation {
+        owner: SemanticNodeId,
+        reason: &'static str,
+    },
+    UnsupportedPaintProfile {
+        node: SemanticNodeId,
+        field: SemanticExecutionField,
     },
     Store(SemanticStoreError),
     SceneOperation(noon_core::SemanticSceneOperationError),
@@ -546,11 +592,6 @@ pub enum SemanticLoweringError {
     ValueOutOfRange {
         node: SemanticNodeId,
         field: SemanticExecutionField,
-    },
-    UnsupportedPaintResource {
-        node: SemanticNodeId,
-        field: SemanticExecutionField,
-        resource: u64,
     },
     UnsupportedSpatialOrientation {
         node: SemanticNodeId,
@@ -601,11 +642,17 @@ impl std::fmt::Display for SemanticLoweringError {
                 clip.slot(),
                 clip.generation()
             ),
-            Self::UnsupportedGlowProfile { owner } => write!(
+            Self::UnsupportedEffectProfile { owner } => write!(
                 formatter,
-                "glow on {}:{} requires one attachment on ordinary planar 2D content",
+                "effect on {}:{} requires the finite effect stack profile on ordinary planar 2D content",
                 owner.slot(),
                 owner.generation()
+            ),
+            Self::InvalidEffectIsolation { owner, reason } => write!(formatter,"composed effect scope {}:{} cannot be isolated: {reason}",owner.slot(),owner.generation()),
+            Self::UnsupportedPaintProfile { node, field } => write!(
+                formatter,
+                "semantic object {}:{} has unsupported {field}; linear paint requires a finite planar geometry fill with at most 16 GPU-representable stops",
+                node.slot(), node.generation(),
             ),
             Self::Store(error) => error.fmt(formatter),
             Self::SceneOperation(error) => error.fmt(formatter),
@@ -624,16 +671,6 @@ impl std::fmt::Display for SemanticLoweringError {
             Self::ValueOutOfRange { node, field } => write!(
                 formatter,
                 "semantic object {}:{} {field} cannot lower to the current f32 execution domain",
-                node.slot(),
-                node.generation()
-            ),
-            Self::UnsupportedPaintResource {
-                node,
-                field,
-                resource,
-            } => write!(
-                formatter,
-                "semantic object {}:{} {field} resource {resource} is not supported by the current solid-paint execution backend",
                 node.slot(),
                 node.generation()
             ),
@@ -880,7 +917,8 @@ fn lower_graph_dependencies(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
-    pub(super) glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
+    pub(super) effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     pub(super) click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
@@ -918,11 +956,11 @@ pub(super) fn object_requires_spatial_lowering(
         )
 }
 
-fn lower_glow_attachment(
+fn lower_effect_stack(
     owner: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,
-) -> Result<Option<std::sync::Arc<crate::CompiledGlow>>, SemanticLoweringError> {
+) -> Result<Option<std::sync::Arc<crate::CompiledEffectStack>>, SemanticLoweringError> {
     let effects = store
         .node(owner)
         .ok_or(SemanticStoreError::UnknownNode(owner))?
@@ -930,28 +968,37 @@ fn lower_glow_attachment(
     if effects.is_empty() {
         return Ok(None);
     }
-    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
-    let [attachment] = effects else {
-        return Err(unsupported());
-    };
-    validate_glow_source_profile(owner, state, store)?;
-    let effect = store.semantic_effect_state(*attachment)?;
-    if effect.owner() != owner {
+    let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner };
+    if effects.len() > noon_core::MAX_EFFECT_STACK_LEN {
         return Err(unsupported());
     }
-    let noon_core::EffectDefinition::Glow(definition) = effect.definition();
-    Ok(Some(std::sync::Arc::new(crate::CompiledGlow {
-        attachment: *attachment,
-        definition,
-    })))
+    validate_effect_source_profile(owner, state, store)?;
+    let mut lowered = Vec::with_capacity(effects.len());
+    let mut visibility = None;
+    for &attachment in effects {
+        let effect = store.semantic_effect_state(attachment)?;
+        if effect.owner() != owner {
+            return Err(unsupported());
+        }
+        if effect.attachment_name().is_visibility() {
+            visibility = Some(attachment);
+        }
+        lowered.push(crate::CompiledEffect {
+            attachment,
+            definition: effect.definition(),
+        });
+    }
+    let stack = crate::CompiledEffectStack::new_with_visibility(lowered, visibility)
+        .map_err(|_| unsupported())?;
+    Ok(Some(std::sync::Arc::new(stack)))
 }
 
-pub(super) fn validate_glow_source_profile(
+pub(super) fn validate_effect_source_profile(
     owner: SemanticNodeId,
     state: &SemanticObjectState,
     store: &SemanticStore,
 ) -> Result<(), SemanticLoweringError> {
-    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner };
     let geometry_supported = match state.content {
         SemanticObjectContent::Geometry(noon_core::StoredGeometry::Circle { radius }) => {
             radius.is_finite() && radius > 0.0
@@ -1005,6 +1052,7 @@ pub(super) fn validate_glow_source_profile(
     {
         return Err(unsupported());
     }
+    super::paint::lower_fill(owner, state, store)?;
     Ok(())
 }
 
@@ -1094,7 +1142,8 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     };
     Ok(LoweredObjectState {
-        glow: None,
+        fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
+        effects: None,
         click_indicate: click_indicate_binding(state).map(std::sync::Arc::new),
         content: state.content,
         base_transform,
@@ -1125,31 +1174,24 @@ pub(super) fn lower_semantic_transform(
 /// Value-lowering failure before a transaction-local node has a permanent semantic ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticExecutionValueError {
-    NonFiniteValue {
-        field: SemanticExecutionField,
-    },
-    ValueOutOfRange {
-        field: SemanticExecutionField,
-    },
-    UnsupportedPaintResource {
-        field: SemanticExecutionField,
-        resource: u64,
-    },
+    UnsupportedPaintProfile { field: SemanticExecutionField },
+    NonFiniteValue { field: SemanticExecutionField },
+    ValueOutOfRange { field: SemanticExecutionField },
     SpatialOrientationUnsupported,
 }
 
 impl std::fmt::Display for SemanticExecutionValueError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedPaintProfile { field } => {
+                write!(formatter, "unsupported {field} paint profile")
+            }
             Self::NonFiniteValue { field } => write!(formatter, "non-finite {field} state"),
             Self::ValueOutOfRange { field } => {
                 write!(
                     formatter,
                     "{field} state is outside the f32 execution domain"
                 )
-            }
-            Self::UnsupportedPaintResource { field, resource } => {
-                write!(formatter, "unsupported {field} paint resource {resource}")
             }
             Self::SpatialOrientationUnsupported => {
                 formatter.write_str("spatial orientation cannot be lowered to a 2D transform")
@@ -1163,16 +1205,12 @@ impl std::error::Error for SemanticExecutionValueError {}
 impl SemanticExecutionValueError {
     pub(super) fn with_node(self, node: SemanticNodeId) -> SemanticLoweringError {
         match self {
+            Self::UnsupportedPaintProfile { field } => {
+                SemanticLoweringError::UnsupportedPaintProfile { node, field }
+            }
             Self::NonFiniteValue { field } => SemanticLoweringError::NonFiniteValue { node, field },
             Self::ValueOutOfRange { field } => {
                 SemanticLoweringError::ValueOutOfRange { node, field }
-            }
-            Self::UnsupportedPaintResource { field, resource } => {
-                SemanticLoweringError::UnsupportedPaintResource {
-                    node,
-                    field,
-                    resource,
-                }
             }
             Self::SpatialOrientationUnsupported => {
                 SemanticLoweringError::UnsupportedSpatialOrientation { node }
@@ -1304,6 +1342,19 @@ fn lower_paint(
     };
 
     match paint {
+        SemanticPaint::LinearGradient(_)
+        | SemanticPaint::RadialGradient(_)
+        | SemanticPaint::Noise(_)
+        | SemanticPaint::Hatch(_)
+        | SemanticPaint::Image(_) => {
+            if paint_field != SemanticExecutionField::FillPaint {
+                return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
+                    field: paint_field,
+                });
+            }
+            super::paint::validate_definition(paint)?;
+            Ok(Some(Color::rgba(1.0, 1.0, 1.0, opacity as f32)))
+        }
         SemanticPaint::Solid(color) => {
             if !color.red.is_finite()
                 || !color.green.is_finite()
@@ -1315,12 +1366,6 @@ fn lower_paint(
             let mut color = *color;
             color.alpha = lower_scalar_f32(opacity_field, f64::from(color.alpha) * opacity)?;
             Ok(Some(color))
-        }
-        SemanticPaint::Resource(resource) => {
-            Err(SemanticExecutionValueError::UnsupportedPaintResource {
-                field: paint_field,
-                resource: *resource,
-            })
         }
     }
 }
@@ -1410,7 +1455,7 @@ mod tests {
         ));
         assert!(matches!(
             lowered.objects()[1].content,
-            SemanticObjectContent::Text(_)
+            SemanticExecutionContent::Object(SemanticObjectContent::Text(_))
         ));
         assert_eq!(index.len(), 2);
     }
@@ -1479,7 +1524,7 @@ mod tests {
         path_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
         path_state.style.fill = None;
         let path_id = store.insert_semantic_object(path_state.clone());
-        validate_glow_source_profile(path_id, &path_state, &store).unwrap();
+        validate_effect_source_profile(path_id, &path_state, &store).unwrap();
 
         // Grid membership is retained metadata; these same ordinary lines
         // supported glow before the membership marker was introduced.
@@ -1491,7 +1536,7 @@ mod tests {
             grid.style = path_state.style.clone();
             grid.set_role(SemanticObjectRole::NumberPlaneGridLine { horizontal });
             let id = store.insert_semantic_object(grid.clone());
-            validate_glow_source_profile(id, &grid, &store).unwrap();
+            validate_effect_source_profile(id, &grid, &store).unwrap();
         }
 
         let text = store
@@ -1515,13 +1560,13 @@ mod tests {
         text_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
         text_state.style.fill = None;
         let text_id = store.insert_semantic_object(text_state.clone());
-        validate_glow_source_profile(text_id, &text_state, &store).unwrap();
+        validate_effect_source_profile(text_id, &text_state, &store).unwrap();
     }
 
     #[test]
     fn image_glow_lowers_shared_resource_and_preserves_source_and_sampling() {
         use noon_core::{
-            Glow, GlowSource, GlowUpdate, RasterImageResourceError, RasterImageSampling,
+            EffectUpdate, Glow, GlowSource, RasterImageResourceError, RasterImageSampling,
             SemanticImageContent, SemanticMutationTransaction,
         };
 
@@ -1549,7 +1594,7 @@ mod tests {
                             transaction.create_effect(
                                 owner,
                                 "glow",
-                                Glow::new(GlowUpdate::default().source(source)).unwrap(),
+                                Glow::new(EffectUpdate::default().source(source)).unwrap(),
                             );
                             transaction.apply(store).unwrap();
                             Ok::<_, RasterImageResourceError>(owner)
@@ -1568,7 +1613,13 @@ mod tests {
                     .raster_image_resources()
                     .get(image.resource())
                     .is_some());
-                assert_eq!(row.glow.as_ref().unwrap().definition.source(), source);
+                assert_eq!(
+                    row.effects.as_ref().unwrap().definitions()[0]
+                        .as_glow()
+                        .unwrap()
+                        .source(),
+                    source
+                );
                 assert!((row.base_style.fill.unwrap().alpha - 0.4).abs() < 1e-6);
                 assert!((row.base_style.opacity - 0.7).abs() < 1e-6);
                 assert_eq!(store.raster_image_resources().len(), 1);
@@ -1589,7 +1640,7 @@ mod tests {
             })
             .unwrap();
         let original = store.semantic_object_state_checked(owner).unwrap().clone();
-        validate_glow_source_profile(owner, &original, &store).unwrap();
+        validate_effect_source_profile(owner, &original, &store).unwrap();
         let mut missing = original.clone();
         let mut handle = missing.content.image().unwrap().resource();
         handle.version += 1;
@@ -1602,8 +1653,8 @@ mod tests {
         spatial.transform = noon_core::SemanticWorldTransform3D::IDENTITY.into();
         for unsupported in [missing, recolored, stroked, spatial] {
             assert!(matches!(
-                validate_glow_source_profile(owner, &unsupported, &store),
-                Err(SemanticLoweringError::UnsupportedGlowProfile { owner: rejected })
+                validate_effect_source_profile(owner, &unsupported, &store),
+                Err(SemanticLoweringError::UnsupportedEffectProfile { owner: rejected })
                     if rejected == owner
             ));
         }
@@ -1905,20 +1956,29 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_paint_fails_without_partial_identity_update() {
+    fn missing_image_paint_fails_without_partial_identity_update() {
         let mut store = SemanticStore::new();
         attach(&mut store, circle(1.0));
         let mut invalid = circle(2.0);
-        invalid.style.fill = Some(SemanticPaint::Resource(42));
+        invalid.style.fill = Some(SemanticPaint::Image(std::sync::Arc::new(
+            noon_core::ImagePaint::new(
+                noon_core::RasterImageResourceHandle {
+                    arena: u64::MAX,
+                    id: noon_core::RasterImageResourceId::new(42),
+                    version: 0,
+                },
+                noon_core::ImageMapping::default(),
+                noon_core::RasterImageSampling::Linear,
+            ),
+        )));
         let invalid = attach(&mut store, invalid);
 
         let mut index = SemanticExecutionIndex::new();
         assert_eq!(
             index.lower_scene(&store).unwrap_err(),
-            SemanticLoweringError::UnsupportedPaintResource {
+            SemanticLoweringError::UnsupportedPaintProfile {
                 node: invalid,
                 field: SemanticExecutionField::FillPaint,
-                resource: 42,
             }
         );
         assert!(index.is_empty());

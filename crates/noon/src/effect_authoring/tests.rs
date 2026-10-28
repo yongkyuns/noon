@@ -2,8 +2,7 @@ use super::*;
 use crate::{effects::*, AnimationOptions, MobjectTarget, Vec2};
 
 fn value(handle: &EffectHandle) -> Glow {
-    let EffectDefinition::Glow(glow) = handle.authored_definition().unwrap();
-    glow
+    (handle.authored_definition().unwrap()).as_glow().unwrap()
 }
 
 #[test]
@@ -13,22 +12,22 @@ fn generic_and_canonical_methods_update_the_same_binding() {
     scene
         .add_effect(
             &dot,
-            Glow::new(GlowUpdate::default().radius(Pixels(12.0))).unwrap(),
+            Glow::new(EffectUpdate::default().radius(Pixels(12.0))).unwrap(),
             "glow",
         )
         .unwrap();
     let handle = scene.get_effect(&dot, "glow").unwrap();
     scene
-        .set_glow(&dot, GlowUpdate::default().intensity(1.4))
+        .set_glow(&dot, EffectUpdate::default().intensity(1.4))
         .unwrap();
     assert_eq!(
         scene.get_effect(&dot, "glow").unwrap().node_id(),
         handle.node_id()
     );
     assert_eq!(value(&handle).intensity(), 1.4);
-    assert_eq!(value(&handle).radius(), GlowRadius::Pixels(12.0));
+    assert_eq!(value(&handle).radius(), EffectRadius::Pixels(12.0));
     scene
-        .set_effect(&dot, &handle, GlowUpdate::default().intensity(0.0))
+        .set_effect(&dot, &handle, EffectUpdate::default().intensity(0.0))
         .unwrap();
     assert!(value(&handle).is_neutral());
     assert_eq!(dot.get_effect("glow").unwrap().node_id(), handle.node_id());
@@ -38,13 +37,14 @@ fn generic_and_canonical_methods_update_the_same_binding() {
 fn ordinary_target_copy_retains_independent_effects_and_motion_editing() {
     let mut scene = Scene::new();
     let mut dot = scene.circle(0.08).unwrap();
-    dot.set_glow(GlowUpdate::default().intensity(0.25)).unwrap();
+    dot.set_glow(EffectUpdate::default().intensity(0.25))
+        .unwrap();
     scene.add(&dot).unwrap();
     let original = dot.get_effect("glow").unwrap();
     let mut target = dot.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
     target
-        .set_effect("glow", GlowUpdate::default().intensity(1.4))
+        .set_effect("glow", EffectUpdate::default().intensity(1.4))
         .unwrap();
     assert_eq!(value(&original).intensity(), 0.25);
     assert_eq!(value(&target.get_effect("glow").unwrap()).intensity(), 1.4);
@@ -66,12 +66,12 @@ fn ordinary_target_copy_retains_independent_effects_and_motion_editing() {
 fn invalid_and_duplicate_calls_preserve_revision_and_prior_values() {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08).unwrap();
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let before = scene.revision();
     assert!(scene
         .set_glow(
             &dot,
-            GlowUpdate::default()
+            EffectUpdate::default()
                 .color(crate::Color::RED)
                 .intensity(-1.0)
         )
@@ -79,7 +79,7 @@ fn invalid_and_duplicate_calls_preserve_revision_and_prior_values() {
     assert!(scene.add_effect(&dot, Glow::default(), "glow").is_err());
     assert_eq!(scene.revision(), before);
     assert_eq!(value(&dot.get_effect("glow").unwrap()), Glow::default());
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     assert_eq!(scene.revision(), before);
 }
 
@@ -88,27 +88,27 @@ fn stale_and_foreign_handles_do_not_select_a_replacement() {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08).unwrap();
     let other = scene.circle(0.08).unwrap();
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let old = dot.get_effect("glow").unwrap();
     assert!(scene
-        .set_effect(&other, &old, GlowUpdate::default())
+        .set_effect(&other, &old, EffectUpdate::default())
         .is_err());
     scene.remove_glow(&dot).unwrap();
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     assert!(scene.remove_effect(&dot, &old).is_err());
     assert!(old.authored_definition().is_err());
     let mut foreign = Scene::new();
     let foreign_dot = foreign.circle(0.08).unwrap();
     foreign
-        .set_glow(&foreign_dot, GlowUpdate::default())
+        .set_glow(&foreign_dot, EffectUpdate::default())
         .unwrap();
     let handle = foreign_dot.get_effect("glow").unwrap();
     assert!(matches!(
-        scene.set_effect(&dot, &handle, GlowUpdate::default()),
+        scene.set_effect(&dot, &handle, EffectUpdate::default()),
         Err(AuthoringError::ForeignStore)
     ));
     assert!(matches!(
-        scene.set_glow(&foreign_dot, GlowUpdate::default()),
+        scene.set_glow(&foreign_dot, EffectUpdate::default()),
         Err(AuthoringError::ForeignStore)
     ));
 }
@@ -118,7 +118,7 @@ fn detach_readd_and_wrapper_drop_preserve_authored_attachment() {
     let mut scene = Scene::new();
     let dot = scene.circle(0.08).unwrap();
     scene.add(&dot).unwrap();
-    scene.set_glow(&dot, GlowUpdate::default()).unwrap();
+    scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let id = dot.get_effect("glow").unwrap().node_id();
     scene.remove(&dot).unwrap();
     scene.add(&dot).unwrap();
@@ -142,7 +142,7 @@ fn unsupported_source_profile_fails_without_blocking_detached_copies() {
     // Neutral attachments still require a supported source profile. This
     // singularly transformed circle must not silently lose its declaration.
     scene
-        .set_glow(&dot, GlowUpdate::default().intensity(0.0))
+        .set_glow(&dot, EffectUpdate::default().intensity(0.0))
         .unwrap();
     assert!(scene.execution_session().is_err());
     let mut target = dot.target_editor().unwrap();
@@ -167,7 +167,7 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
     let publication = session.publication_context();
     {
         let mut live = scene.live(&mut session);
-        assert!(live.set_glow(&dot, GlowUpdate::default()).is_err());
+        assert!(live.set_glow(&dot, EffectUpdate::default()).is_err());
         assert_eq!(
             live.effective(&dot).unwrap().transform.translation,
             Vec2::ZERO
@@ -193,7 +193,7 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
 fn aliased_family_copy_keeps_independent_leaf_attachments() {
     let mut scene = Scene::new();
     let mut dot = scene.circle(0.08).unwrap();
-    dot.set_glow(GlowUpdate::default()).unwrap();
+    dot.set_glow(EffectUpdate::default()).unwrap();
     let family = scene
         .family(&[MobjectTarget::Object(&dot), MobjectTarget::Object(&dot)])
         .unwrap();
@@ -224,7 +224,7 @@ fn state_only_replacement_fails_before_losing_attachment_correspondence() {
     let mut scene = Scene::new();
     let mut source = scene.circle(0.08).unwrap();
     let target = scene.circle(1.0).unwrap();
-    source.set_glow(GlowUpdate::default()).unwrap();
+    source.set_glow(EffectUpdate::default()).unwrap();
     let before = source.state().unwrap();
     let revision = scene.revision();
     let result = source.become_handle(&target, crate::ManimBecomeOptions::default());

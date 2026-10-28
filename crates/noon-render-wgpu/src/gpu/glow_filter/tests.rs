@@ -1,14 +1,60 @@
 use super::*;
-use noon_core::{Color, GlowUpdate, Pixels};
+use noon_core::{Color, EffectUpdate, Pixels};
+
+fn only_effect(stack: &noon_compile::CompiledEffectStack) -> noon_compile::CompiledEffect {
+    assert_eq!(stack.len(), 1, "single-effect reference fixture");
+    stack.iter().next().unwrap()
+}
 
 fn parameters(sigma: f64) -> GlowParameters {
     GlowParameters {
-        definition: Glow::new(GlowUpdate::default().radius(Pixels(sigma))).unwrap(),
+        definition: Glow::new(EffectUpdate::default().radius(Pixels(sigma))).unwrap(),
         output_height: 1080,
         world_view_height: 9.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 32 * 1024 * 1024,
     }
+}
+
+#[test]
+fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
+    let bounds = EffectPixelBounds {
+        min: [17.0, 25.0],
+        max: [25.0, 33.0],
+    };
+    let parameters = super::super::EffectStackParameters {
+        output_height: 64,
+        world_view_height: 6.4,
+        scope_opacity: 1.0,
+        scratch_budget_bytes: 800,
+        source_bounds: None,
+    };
+    let prepare = |demand, budget| {
+        EffectCaptureTile::prepare_stack_input(
+            bounds,
+            [64; 2],
+            &[],
+            parameters,
+            1024,
+            budget,
+            demand,
+        )
+    };
+    assert_eq!(prepare(CaptureDemand::default(), 800), Ok(None));
+    let demand = CaptureDemand {
+        required_by_parent: true,
+        original_by_parent: true,
+        isolate: false,
+    };
+    // Eight by eight pixels plus a one-pixel coverage fringe, with one painted
+    // and one original RGBA8 image. No filter scratch or invented attachment.
+    let tile = prepare(demand, 800).unwrap().unwrap();
+    assert_eq!(tile.size, [10; 2]);
+    assert_eq!(tile.capture_and_scratch_bytes, 800);
+    assert_eq!(
+        prepare(demand, 799),
+        Err(EffectPrepareError::ScratchBudgetExceeded)
+    );
 }
 
 #[test]
@@ -37,7 +83,7 @@ fn uniform_layout_and_complete_finite_kernel_are_normalized() {
 #[test]
 fn world_sigma_uses_full_output_not_crop_and_pixels_remain_fixed() {
     let mut params = parameters(12.0);
-    params.definition = Glow::new(GlowUpdate::default().radius(0.5)).unwrap();
+    params.definition = Glow::new(EffectUpdate::default().radius(0.5)).unwrap();
     let (sigma, _) = GlowUniform::prepare(params, [17, 13], None).unwrap();
     assert_eq!(sigma, 60.0);
     let mut pixels = parameters(12.0);
@@ -53,21 +99,23 @@ fn world_sigma_uses_full_output_not_crop_and_pixels_remain_fixed() {
 fn bad_view_radius_and_opacity_are_rejected() {
     assert_eq!(
         GlowUniform::prepare(parameters(64.001), [17, 13], None),
-        Err(GlowPrepareError::RadiusExceedsProfile)
+        Err(EffectPrepareError::RadiusExceedsProfile)
     );
     for opacity in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
         let mut params = parameters(3.0);
         params.scope_opacity = opacity;
         assert_eq!(
             GlowUniform::prepare(params, [17, 13], None),
-            Err(GlowPrepareError::InvalidScopeOpacity)
+            Err(EffectPrepareError::InvalidScopeOpacity)
         );
     }
     let mut params = parameters(3.0);
     params.output_height = 0;
     assert_eq!(
         GlowUniform::prepare(params, [17, 13], None),
-        Err(GlowPrepareError::Parameter(GlowParameterError::InvalidView))
+        Err(EffectPrepareError::Parameter(
+            EffectParameterError::InvalidView
+        ))
     );
 }
 
@@ -80,7 +128,7 @@ fn encode_submit(
     scope: &mut GlowScope,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-) -> GlowRasterStats {
+) -> EffectRasterStats {
     let mut encoder = device.create_command_encoder(&Default::default());
     let stats = filter.encode(&mut encoder, scope);
     queue.submit([encoder.finish()]);
@@ -101,9 +149,9 @@ fn neutral_is_lazy_and_clean_or_intensity_edits_reuse_resources() {
     let mut filter = GlowFilter::default();
     let mut scope = GlowScope::default();
     for update in [
-        GlowUpdate::default().intensity(0.0),
-        GlowUpdate::default().radius(0.0),
-        GlowUpdate::default().color(Color::rgba(1.0, 1.0, 1.0, 0.0)),
+        EffectUpdate::default().intensity(0.0),
+        EffectUpdate::default().radius(0.0),
+        EffectUpdate::default().color(Color::rgba(1.0, 1.0, 1.0, 0.0)),
     ] {
         let mut params = parameters(3.0);
         params.definition = update.apply_to(params.definition).unwrap();
@@ -111,7 +159,7 @@ fn neutral_is_lazy_and_clean_or_intensity_edits_reuse_resources() {
             filter
                 .prepare(&device, &queue, &mut scope, capture, params)
                 .unwrap(),
-            GlowRasterStats::default()
+            EffectRasterStats::default()
         );
         assert!(scope.output().is_none());
         assert!(filter.programs.is_none());
@@ -136,7 +184,7 @@ fn neutral_is_lazy_and_clean_or_intensity_edits_reuse_resources() {
     assert!(scope.output_view().is_some());
     let first = encode_submit(&filter, &mut scope, &device, &queue);
     assert_eq!((first.blur_passes, first.composite_passes), (2, 1));
-    let clean = GlowRasterStats {
+    let clean = EffectRasterStats {
         scratch_bytes: scope.scratch_bytes(),
         ..Default::default()
     };
@@ -149,7 +197,7 @@ fn neutral_is_lazy_and_clean_or_intensity_edits_reuse_resources() {
     assert_eq!(encode_submit(&filter, &mut scope, &device, &queue), clean);
     for intensity in [0.1, 1.5, 8.0, 0.25] {
         let mut params = params;
-        params.definition = GlowUpdate::default()
+        params.definition = EffectUpdate::default()
             .intensity(intensity)
             .apply_to(params.definition)
             .unwrap();
@@ -158,7 +206,7 @@ fn neutral_is_lazy_and_clean_or_intensity_edits_reuse_resources() {
             .unwrap();
         assert_eq!(
             edit,
-            GlowRasterStats {
+            EffectRasterStats {
                 bytes_uploaded: 32,
                 ..clean
             }
@@ -166,7 +214,7 @@ fn neutral_is_lazy_and_clean_or_intensity_edits_reuse_resources() {
         let draw = encode_submit(&filter, &mut scope, &device, &queue);
         assert_eq!(
             draw,
-            GlowRasterStats {
+            EffectRasterStats {
                 composite_passes: 1,
                 ..clean
             }
@@ -199,22 +247,22 @@ fn failure_preserves_previous_scope_and_radius_revision_resize_invalidate_locall
     bad.scratch_budget_bytes = 17 * 13 * 12 - 1;
     assert_eq!(
         filter.prepare(&device, &queue, &mut scope, capture, bad),
-        Err(GlowPrepareError::ScratchBudgetExceeded)
+        Err(EffectPrepareError::ScratchBudgetExceeded)
     );
     bad = params;
-    bad.definition = GlowUpdate::default()
+    bad.definition = EffectUpdate::default()
         .source(GlowSource::Silhouette)
         .apply_to(params.definition)
         .unwrap();
     assert_eq!(
         filter.prepare(&device, &queue, &mut scope, capture, bad),
-        Err(GlowPrepareError::MissingSilhouette)
+        Err(EffectPrepareError::MissingSilhouette)
     );
     assert_eq!(scope.output(), Some(&output));
     assert_eq!(scope.uniform, old_uniform);
     assert!(!scope.blur_dirty && !scope.output_dirty);
     let mut changed = params;
-    changed.definition = GlowUpdate::default()
+    changed.definition = EffectUpdate::default()
         .radius(Pixels(5.0))
         .apply_to(params.definition)
         .unwrap();
@@ -317,11 +365,11 @@ mod pixels;
 
 #[test]
 fn padded_capture_preserves_offscreen_halo_and_skips_truly_invisible_source() {
-    let bounds = GlowPixelBounds {
+    let bounds = EffectPixelBounds {
         min: [-8.0, 20.0],
         max: [-4.0, 24.0],
     };
-    let tile = GlowCaptureTile::prepare(bounds, [100, 80], parameters(2.0), 4096, 1_000_000)
+    let tile = EffectCaptureTile::prepare(bounds, [100, 80], parameters(2.0), 4096, 1_000_000)
         .unwrap()
         .expect("offscreen geometry contributes visible halo");
     assert_eq!(tile.support_radius, 6);
@@ -331,49 +379,181 @@ fn padded_capture_preserves_offscreen_halo_and_skips_truly_invisible_source() {
     assert_eq!(tile.local_origin, [16, 0]);
     assert_eq!(tile.visible_size, [3, 19]);
     assert_eq!(tile.capture_and_scratch_bytes, 19 * 19 * 16);
-    let far = GlowPixelBounds {
+    let far = EffectPixelBounds {
         min: [-80.0, 20.0],
         max: [-70.0, 24.0],
     };
     assert_eq!(
-        GlowCaptureTile::prepare(far, [100, 80], parameters(2.0), 4096, 1_000_000),
+        EffectCaptureTile::prepare(far, [100, 80], parameters(2.0), 4096, 1_000_000),
         Ok(None)
     );
 }
 
 #[test]
+fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
+    let definitions = [
+        noon_core::Blur::new(EffectUpdate::default().radius(Pixels(2.0)))
+            .unwrap()
+            .into(),
+        noon_core::Blur::new(EffectUpdate::default().radius(Pixels(3.0)))
+            .unwrap()
+            .into(),
+    ];
+    let values = super::super::EffectStackParameters {
+        output_height: 100,
+        world_view_height: 10.0,
+        scope_opacity: 0.5,
+        scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
+    };
+    let bounds = EffectPixelBounds {
+        min: [-16.0, 50.0],
+        max: [-14.0, 52.0],
+    };
+    assert!(EffectCaptureTile::prepare_stack(
+        bounds,
+        [100, 100],
+        &definitions[..1],
+        values,
+        4096,
+        1_000_000
+    )
+    .unwrap()
+    .is_none());
+    let tile =
+        EffectCaptureTile::prepare_stack(bounds, [100, 100], &definitions, values, 4096, 1_000_000)
+            .unwrap()
+            .unwrap();
+    assert_eq!(tile.origin, [-32, 34]);
+    assert_eq!(tile.size, [34, 34]);
+    assert_eq!(tile.support_radius, 15);
+    assert_eq!(tile.capture_and_scratch_bytes, 34 * 34 * (4 + 28 + 28));
+    assert_eq!(tile.visible_size, [2, 34]);
+    assert_eq!(
+        EffectCaptureTile::prepare_stack(
+            bounds,
+            [100, 100],
+            &definitions,
+            values,
+            4096,
+            tile.capture_and_scratch_bytes - 1
+        ),
+        Err(EffectPrepareError::ScratchBudgetExceeded)
+    );
+    let invalid_suffix = [
+        definitions[0],
+        noon_core::Blur::new(EffectUpdate::default().radius(Pixels(65.0)))
+            .unwrap()
+            .into(),
+    ];
+    assert_eq!(
+        EffectCaptureTile::prepare_stack(
+            bounds,
+            [100, 100],
+            &invalid_suffix,
+            values,
+            4096,
+            1_000_000
+        ),
+        Err(EffectPrepareError::RadiusExceedsProfile)
+    );
+    assert_eq!(
+        EffectCaptureTile::prepare_stack(
+            bounds,
+            [100, 100],
+            &[definitions[0]; noon_core::MAX_EFFECT_STACK_LEN + 1],
+            values,
+            4096,
+            1_000_000
+        ),
+        Err(EffectPrepareError::StackExceedsProfile)
+    );
+}
+
+#[test]
+fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
+    let a: noon_core::EffectDefinition = Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
+        .unwrap()
+        .into();
+    let b = EffectUpdate::default()
+        .radius(Pixels(1.0))
+        .source(GlowSource::Silhouette)
+        .apply_to(a)
+        .unwrap();
+    let bounds = EffectPixelBounds {
+        min: [20.0, 20.0],
+        max: [24.0, 24.0],
+    };
+    let values = super::super::EffectStackParameters {
+        output_height: 100,
+        world_view_height: 10.0,
+        scope_opacity: 1.0,
+        scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
+    };
+    let silhouette =
+        EffectCaptureTile::prepare_stack(bounds, [100, 100], &[a, b], values, 4096, 1_000_000)
+            .unwrap()
+            .unwrap();
+    assert_eq!(silhouette.origin, [10, 10]);
+    assert_eq!(silhouette.size, [24, 24]);
+    assert_eq!(
+        silhouette.capture_and_scratch_bytes,
+        24 * 24 * (4 + 4 + 12 + 12)
+    );
+    let painted = EffectUpdate::default()
+        .source(GlowSource::Painted)
+        .apply_to(b)
+        .unwrap();
+    let painted = EffectCaptureTile::prepare_stack(
+        bounds,
+        [100, 100],
+        &[a, painted],
+        values,
+        4096,
+        1_000_000,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(painted.origin, [6, 6]);
+    assert_eq!(painted.size, [31, 31]);
+}
+
+#[test]
 fn capture_tile_rejects_invalid_bounds_projection_and_memory() {
-    let bounds = GlowPixelBounds {
+    let bounds = EffectPixelBounds {
         min: [5.0, 5.0],
         max: [10.0, 10.0],
     };
     let params = parameters(2.0);
     assert_eq!(
-        GlowCaptureTile::prepare(bounds, [0, 80], params, 4096, 1_000_000),
-        Err(GlowPrepareError::Parameter(GlowParameterError::InvalidView))
+        EffectCaptureTile::prepare(bounds, [0, 80], params, 4096, 1_000_000),
+        Err(EffectPrepareError::Parameter(
+            EffectParameterError::InvalidView
+        ))
     );
     for invalid in [
-        GlowPixelBounds {
+        EffectPixelBounds {
             min: [f64::NAN, 0.0],
             max: [10.0, 10.0],
         },
-        GlowPixelBounds {
+        EffectPixelBounds {
             min: [10.0, 0.0],
             max: [10.0, 10.0],
         },
-        GlowPixelBounds {
+        EffectPixelBounds {
             min: [0.0, 0.0],
             max: [f64::INFINITY, 10.0],
         },
     ] {
         assert_eq!(
-            GlowCaptureTile::prepare(invalid, [100, 80], params, 4096, 1_000_000),
-            Err(GlowPrepareError::InvalidSourceBounds)
+            EffectCaptureTile::prepare(invalid, [100, 80], params, 4096, 1_000_000),
+            Err(EffectPrepareError::InvalidSourceBounds)
         );
     }
     assert_eq!(
-        GlowCaptureTile::prepare(
-            GlowPixelBounds {
+        EffectCaptureTile::prepare(
+            EffectPixelBounds {
                 min: [3.0e15, 5.0],
                 max: [3.0e15 + 2.0, 10.0]
             },
@@ -382,33 +562,33 @@ fn capture_tile_rejects_invalid_bounds_projection_and_memory() {
             4096,
             1_000_000,
         ),
-        Err(GlowPrepareError::CaptureCoordinatesOutOfRange)
+        Err(EffectPrepareError::CaptureCoordinatesOutOfRange)
     );
     assert_eq!(
-        GlowCaptureTile::prepare(bounds, [100, 80], params, 4, 1_000_000),
-        Err(GlowPrepareError::ExtentExceedsDevice)
+        EffectCaptureTile::prepare(bounds, [100, 80], params, 4, 1_000_000),
+        Err(EffectPrepareError::ExtentExceedsDevice)
     );
     assert_eq!(
-        GlowCaptureTile::prepare(bounds, [100, 80], params, 4096, 1),
-        Err(GlowPrepareError::ScratchBudgetExceeded)
+        EffectCaptureTile::prepare(bounds, [100, 80], params, 4096, 1),
+        Err(EffectPrepareError::ScratchBudgetExceeded)
     );
 }
 
 #[test]
 fn capture_tile_accounts_for_silhouette_and_neutral_allocates_nothing() {
-    let bounds = GlowPixelBounds {
+    let bounds = EffectPixelBounds {
         min: [1.0, 1.0],
         max: [3.0, 3.0],
     };
-    let painted = GlowCaptureTile::prepare(bounds, [100, 80], parameters(2.0), 4096, 1_000_000)
+    let painted = EffectCaptureTile::prepare(bounds, [100, 80], parameters(2.0), 4096, 1_000_000)
         .unwrap()
         .unwrap();
     let mut silhouette = parameters(2.0);
-    silhouette.definition = GlowUpdate::default()
+    silhouette.definition = EffectUpdate::default()
         .source(GlowSource::Silhouette)
         .apply_to(silhouette.definition)
         .unwrap();
-    let other = GlowCaptureTile::prepare(bounds, [100, 80], silhouette, 4096, 1_000_000)
+    let other = EffectCaptureTile::prepare(bounds, [100, 80], silhouette, 4096, 1_000_000)
         .unwrap()
         .unwrap();
     assert_eq!(other.size, painted.size);
@@ -416,12 +596,12 @@ fn capture_tile_accounts_for_silhouette_and_neutral_allocates_nothing() {
         other.capture_and_scratch_bytes * 4,
         painted.capture_and_scratch_bytes * 5
     );
-    silhouette.definition = GlowUpdate::default()
+    silhouette.definition = EffectUpdate::default()
         .intensity(0.0)
         .apply_to(silhouette.definition)
         .unwrap();
     assert_eq!(
-        GlowCaptureTile::prepare(bounds, [100, 80], silhouette, 4096, 0),
+        EffectCaptureTile::prepare(bounds, [100, 80], silhouette, 4096, 0),
         Ok(None)
     );
 }
@@ -430,7 +610,7 @@ fn capture_tile_accounts_for_silhouette_and_neutral_allocates_nothing() {
 fn analytic_projection_uses_output_pixels_for_rotated_scaled_shapes() {
     use noon_core::{GeometryRef, Transform2D, Vec2};
     let camera = super::super::Camera2D::new(Vec2::ZERO, Vec2::new(20.0, 10.0)).unwrap();
-    let circle = GlowPixelBounds::projected_analytic(
+    let circle = EffectPixelBounds::projected_analytic(
         &GeometryRef::circle(1.0),
         Transform2D::IDENTITY,
         camera,
@@ -444,12 +624,16 @@ fn analytic_projection_uses_output_pixels_for_rotated_scaled_shapes() {
         rotation: std::f32::consts::FRAC_PI_2,
         ..Transform2D::IDENTITY
     };
-    let ellipse =
-        GlowPixelBounds::projected_analytic(&GeometryRef::circle(1.0), rotated, camera, [200, 100])
-            .unwrap();
+    let ellipse = EffectPixelBounds::projected_analytic(
+        &GeometryRef::circle(1.0),
+        rotated,
+        camera,
+        [200, 100],
+    )
+    .unwrap();
     assert!((ellipse.min[0] - 95.0).abs() < 1e-5);
     assert!((ellipse.min[1] - 30.0).abs() < 1e-5);
-    let rectangle = GlowPixelBounds::projected_analytic(
+    let rectangle = EffectPixelBounds::projected_analytic(
         &GeometryRef::rectangle(2.0, 4.0),
         Transform2D {
             rotation: std::f32::consts::FRAC_PI_4,
@@ -469,16 +653,16 @@ fn analytic_projection_rejects_nonuniform_camera_and_bad_geometry() {
     use noon_core::{GeometryRef, Transform2D, Vec2};
     let camera = super::super::Camera2D::new(Vec2::ZERO, Vec2::new(20.0, 10.0)).unwrap();
     assert_eq!(
-        GlowPixelBounds::projected_analytic(
+        EffectPixelBounds::projected_analytic(
             &GeometryRef::circle(1.0),
             Transform2D::IDENTITY,
             camera,
             [100, 100],
         ),
-        Err(GlowPrepareError::InvalidProjection)
+        Err(EffectPrepareError::InvalidProjection)
     );
     assert_eq!(
-        GlowPixelBounds::projected_analytic(
+        EffectPixelBounds::projected_analytic(
             &GeometryRef::circle(1.0),
             Transform2D {
                 scale: Vec2::ZERO,
@@ -487,16 +671,16 @@ fn analytic_projection_rejects_nonuniform_camera_and_bad_geometry() {
             camera,
             [200, 100],
         ),
-        Err(GlowPrepareError::InvalidProjection)
+        Err(EffectPrepareError::InvalidProjection)
     );
     assert_eq!(
-        GlowPixelBounds::projected_analytic(
+        EffectPixelBounds::projected_analytic(
             &GeometryRef::circle(0.0),
             Transform2D::IDENTITY,
             camera,
             [200, 100],
         ),
-        Err(GlowPrepareError::InvalidSourceBounds)
+        Err(EffectPrepareError::InvalidSourceBounds)
     );
 }
 
@@ -510,12 +694,12 @@ mod animated_scene;
 fn capture_origins_preserve_derivative_quads_across_fractional_motion_and_radius_changes() {
     for left in [-21.3, -20.0, -19.7, -1.2, 0.0, 0.3, 7.8, 8.0, 9.1] {
         for sigma in [0.25, 1.1, 3.25, 4.45, 6.0] {
-            let bounds = GlowPixelBounds {
+            let bounds = EffectPixelBounds {
                 min: [left, 11.3],
                 max: [left + 3.0, 14.4],
             };
             let Some(tile) =
-                GlowCaptureTile::prepare(bounds, [100, 80], parameters(sigma), 4096, 1_000_000)
+                EffectCaptureTile::prepare(bounds, [100, 80], parameters(sigma), 4096, 1_000_000)
                     .unwrap()
             else {
                 continue;
@@ -558,7 +742,7 @@ fn logical_projection_preserves_fractional_and_decorated_backing_pixels() {
         let camera =
             super::super::Camera2D::new(Vec2::ZERO, Vec2::new(8.0 * logical.x / logical.y, 8.0))
                 .unwrap();
-        let bounds = GlowPixelBounds::projected_analytic_in_view(
+        let bounds = EffectPixelBounds::projected_analytic_in_view(
             &GeometryRef::circle(1.0),
             Transform2D::IDENTITY,
             camera,
@@ -587,13 +771,13 @@ fn logical_projection_preserves_fractional_and_decorated_backing_pixels() {
         // The old public physical-only contract remains strict: no arbitrary
         // nonuniform logical camera has been admitted by loosening a tolerance.
         assert_eq!(
-            GlowPixelBounds::projected_analytic(
+            EffectPixelBounds::projected_analytic(
                 &GeometryRef::circle(1.0),
                 Transform2D::IDENTITY,
                 camera,
                 viewport,
             ),
-            Err(GlowPrepareError::InvalidProjection)
+            Err(EffectPrepareError::InvalidProjection)
         );
     }
 }
@@ -609,14 +793,14 @@ fn logical_projection_rejects_invalid_or_nonuniform_logical_views() {
         Vec2::new(200.0, f32::INFINITY),
     ] {
         assert_eq!(
-            GlowPixelBounds::projected_analytic_in_view(
+            EffectPixelBounds::projected_analytic_in_view(
                 &GeometryRef::circle(1.0),
                 Transform2D::IDENTITY,
                 camera,
                 [200, 100],
                 logical,
             ),
-            Err(GlowPrepareError::InvalidProjection)
+            Err(EffectPrepareError::InvalidProjection)
         );
     }
 }

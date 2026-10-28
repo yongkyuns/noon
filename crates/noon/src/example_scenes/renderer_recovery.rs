@@ -1,15 +1,15 @@
 //! Typed scenes for platform recovery and camera-density qualification.
-use crate::{AnimationOptions, ExecutionSession, RateFunction, Scene};
+use crate::{AnimationOptions, RateFunction, Scene};
 
-pub fn circle() -> Result<ExecutionSession, String> {
+pub fn circle() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let circle = scene.circle(0.75).map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
     scene.wait(4.0)?;
-    scene.execution_session().map_err(|e| e.to_string())
+    scene.into_execution().map_err(|e| e.to_string())
 }
 
-pub fn four_animated() -> Result<ExecutionSession, String> {
+pub fn four_animated() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.65).map_err(|error| error.to_string())?;
     circle.shift(-2.0, 0.6).map_err(|error| error.to_string())?;
@@ -47,10 +47,12 @@ pub fn four_animated() -> Result<ExecutionSession, String> {
         .live(&mut session)
         .play_animation(&animation)
         .map_err(|e| e.to_string())?;
-    Ok(session)
+    scene
+        .into_execution_with_session(session)
+        .map_err(|error| error.to_string())
 }
 
-pub fn camera_density() -> Result<ExecutionSession, String> {
+pub fn camera_density() -> Result<crate::SceneExecution, String> {
     let mut scene = Scene::new();
     let mut rectangle = scene
         .rectangle(2.0, 1.0)
@@ -69,5 +71,5 @@ pub fn camera_density() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     scene.add(&rectangle).map_err(|error| error.to_string())?;
     scene.wait(4.0)?;
-    scene.execution_session().map_err(|e| e.to_string())
+    scene.into_execution().map_err(|e| e.to_string())
 }

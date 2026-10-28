@@ -50,6 +50,9 @@ use std::{cell::RefCell, rc::Rc};
 /// it is an observation, not another runtime authority.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveMobjectState {
+    /// Continuous fill definition, when present. `style.fill` then carries only
+    /// the independent fill-opacity multiplier in its alpha component.
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -271,6 +274,13 @@ pub enum AnimationCompositionRequest<'a> {
     GlowPulse {
         target: &'a Mobject,
         intensity: f64,
+        options: AnimationOptions,
+    },
+    /// Mask one object or composed family after its authored effect stack.
+    Dissolve {
+        target: MobjectTarget<'a>,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
         options: AnimationOptions,
     },
     FamilyIndicate {
@@ -978,6 +988,10 @@ impl<'a> LiveSession<'a> {
                 )
                 .map_err(LiveSessionError::from)
             },
+            |store, source, style| {
+                crate::effective_capture::capture_family_style(store, self.session, source, style)
+                    .map_err(LiveSessionError::from)
+            },
             |store, source, target, transaction| {
                 crate::effective_capture::stage_effect_copy(
                     store,
@@ -1478,6 +1492,7 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         Ok(EffectiveMobjectState {
+            fill_paint: object.fill_paint.clone(),
             z_index: object.z_index,
             transform: object.transform,
             style: object.style,
@@ -1624,9 +1639,19 @@ impl<'a> LiveSession<'a> {
         &self,
         mobject: &Mobject,
     ) -> Result<Option<Color>, LiveSessionError> {
-        mobject.fill_color().map_err(LiveSessionError::from)?;
-        Ok(self
-            .effective(mobject)?
+        let effective = self.effective(mobject)?;
+        if effective.fill_paint.is_some()
+            || matches!(
+                mobject.state()?.style.fill,
+                Some(noon_core::SemanticPaint::Image(_))
+            )
+        {
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+            )
+            .into());
+        }
+        Ok(effective
             .style
             .fill
             .map(crate::semantic_mobject::opaque_paint_color))
@@ -1659,8 +1684,27 @@ impl<'a> LiveSession<'a> {
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
-        mobject.manim_color().map_err(LiveSessionError::from)?;
         let effective = self.effective(mobject)?;
+        if effective.fill_paint.is_some()
+            && effective.style.fill.is_some_and(|color| color.alpha > 0.0)
+        {
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+            )
+            .into());
+        }
+        if !matches!(
+            mobject.state()?.style.fill,
+            Some(
+                noon_core::SemanticPaint::LinearGradient(_)
+                    | noon_core::SemanticPaint::RadialGradient(_)
+                    | noon_core::SemanticPaint::Noise(_)
+                    | noon_core::SemanticPaint::Hatch(_)
+                    | noon_core::SemanticPaint::Image(_)
+            )
+        ) {
+            mobject.manim_color().map_err(LiveSessionError::from)?;
+        }
         Ok(crate::semantic_mobject::manim_color_from_effective(
             &effective.style,
         ))
@@ -1705,7 +1749,7 @@ impl<'a> LiveSession<'a> {
             .map_err(|error| LiveSessionError::Animation(error.to_string()))?
             .options();
         self.session
-            .activate_animation_segment(&mut store, animation.node_id(), options)
+            .activate_animation_in_scene(&mut store, self.root, animation.node_id(), options)
             .map_err(Into::into)
     }
 
@@ -2417,6 +2461,20 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
+            AnimationCompositionRequest::Dissolve {
+                target,
+                direction,
+                style,
+                options,
+            } => {
+                self.require_membership_root(*target)?;
+                Request::Dissolve {
+                    target: target.node_id(),
+                    direction: *direction,
+                    style: *style,
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::Indicate {
                 target,
                 indication,
@@ -3098,6 +3156,73 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
+    /// Set immutable stripes or crosshatching through the shared style publication.
+    pub fn set_fill_hatch(
+        &mut self,
+        mobject: &Mobject,
+        paint: impl Into<std::sync::Arc<noon_core::HatchPaint>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state = crate::semantic_mobject::prepare_fill_paint_value(
+            &self.store.borrow(),
+            mobject.node_id(),
+            mobject.state()?,
+            noon_core::SemanticPaint::Hatch(paint.into()),
+            opacity,
+        )?;
+        self.replace_style(mobject, state.style)
+    }
+
+    /// Set a seeded local noise fill through the shared style publication.
+    pub fn set_fill_noise(
+        &mut self,
+        mobject: &Mobject,
+        paint: impl Into<std::sync::Arc<noon_core::NoisePaint>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state = crate::semantic_mobject::prepare_fill_paint_value(
+            &self.store.borrow(),
+            mobject.node_id(),
+            mobject.state()?,
+            noon_core::SemanticPaint::Noise(paint.into()),
+            opacity,
+        )?;
+        self.replace_style(mobject, state.style)
+    }
+
+    /// Set an elliptical radial fill through the ordinary shared style operation.
+    pub fn set_fill_radial_gradient(
+        &mut self,
+        mobject: &Mobject,
+        gradient: impl Into<std::sync::Arc<noon_core::RadialGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state = crate::semantic_mobject::prepare_fill_paint_value(
+            &self.store.borrow(),
+            mobject.node_id(),
+            mobject.state()?,
+            noon_core::SemanticPaint::RadialGradient(gradient.into()),
+            opacity,
+        )?;
+        self.replace_style(mobject, state.style)
+    }
+
+    /// Set an immutable linear gradient and optional fill opacity in one publication.
+    pub fn set_fill_gradient(
+        &mut self,
+        mobject: &Mobject,
+        gradient: impl Into<std::sync::Arc<noon_core::LinearGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let state =
+            crate::semantic_mobject::prepare_fill_gradient(mobject, gradient.into(), opacity)?;
+        self.replace_style(mobject, state.style)
+    }
+
     /// Set fill color and fill opacity through one authoritative style publication.
     pub fn set_fill(
         &mut self,
@@ -3325,6 +3450,18 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(family.own_style_transaction(update)?)
+    }
+
+    /// Publish one final family-composite multiplier through the shared source
+    /// plan and ordinary style publication, without rewriting child styles.
+    pub fn set_family_object_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.object_opacity_transaction(opacity)?)
     }
 
     /// Interpolate only a VGroup root's authored style and background stroke.
@@ -3821,12 +3958,26 @@ mod tests {
     }
 
     #[test]
-    fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
-        let authored = SemanticStyle {
-            fill: Some(SemanticPaint::Resource(7)),
-            ..SemanticStyle::default()
-        };
-        assert!(target_style_from_effective(&authored, Style::default()).is_err());
+    fn target_style_capture_preserves_image_mapping_and_authored_opacity_precision() {
+        let mut scene = Scene::new();
+        let mut object = scene.circle(1.0).unwrap();
+        object
+            .set_fill_image(
+                crate::ImagePaintOptions::rgba8(1, 1, vec![255, 0, 0, 255]).unwrap(),
+                Some(0.12345678912345678),
+            )
+            .unwrap();
+        object.set_object_opacity(0.8765432123456789).unwrap();
+        scene.add(&object).unwrap();
+        let authored = object.state().unwrap().style;
+        let mut session = scene.execution_session().unwrap();
+        let live = scene.live(&mut session);
+        let observed = live.effective(&object).unwrap();
+        assert_eq!(
+            target_style_from_effective(&authored, observed.style, observed.fill_paint.as_ref())
+                .unwrap(),
+            authored
+        );
     }
 
     #[test]
@@ -6184,7 +6335,7 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn reveal_and_effect_edit_share_one_admission_in_either_order() {
-        use crate::effects::{EffectDefinition, GlowUpdate};
+        use crate::effects::EffectUpdate;
         for mode in 0..3 {
             for reverse in [false, true] {
                 for attached in [false, true] {
@@ -6198,12 +6349,12 @@ mod recursive_composition_tests {
                     };
                     if attached {
                         source
-                            .set_glow(GlowUpdate::default().intensity(initial))
+                            .set_glow(EffectUpdate::default().intensity(initial))
                             .unwrap();
                     }
                     let mut target = source.target_editor().unwrap();
                     target
-                        .set_glow(GlowUpdate::default().intensity(1.5))
+                        .set_glow(EffectUpdate::default().intensity(1.5))
                         .unwrap();
                     let mut session = scene.execution_session().unwrap();
                     let reveal = match mode {
@@ -6244,31 +6395,35 @@ mod recursive_composition_tests {
                     live.advance_segment_to(segment, 0.5).unwrap();
                     assert_eq!(live.session.frame().objects.len(), 1);
                     assert_eq!(
-                        live.session.frame().objects[0]
-                            .glow
-                            .as_ref()
-                            .unwrap()
-                            .definition
-                            .intensity(),
+                        crate::effect_authoring::only_effect(
+                            live.session.frame().objects[0].effects.as_ref().unwrap()
+                        )
+                        .definition
+                        .as_glow()
+                        .unwrap()
+                        .intensity(),
                         midpoint
                     );
                     live.advance_segment_to(segment, 1.0).unwrap();
                     live.complete_segment(segment).unwrap();
-                    let EffectDefinition::Glow(glow) = source
+                    let effect = (source
                         .get_effect("glow")
                         .unwrap()
                         .authored_definition()
-                        .unwrap();
-                    assert_eq!(glow.intensity(), 1.5);
+                        .unwrap())
+                    .as_glow()
+                    .unwrap();
+                    assert_eq!(effect.intensity(), 1.5);
                     let rewind = live.session.seek(0.5).unwrap();
                     assert_eq!(rewind.objects.len(), 1);
                     assert_eq!(
-                        rewind.objects[0]
-                            .glow
-                            .as_ref()
-                            .unwrap()
-                            .definition
-                            .intensity(),
+                        crate::effect_authoring::only_effect(
+                            rewind.objects[0].effects.as_ref().unwrap()
+                        )
+                        .definition
+                        .as_glow()
+                        .unwrap()
+                        .intensity(),
                         midpoint
                     );
                 }
@@ -6322,16 +6477,16 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn reveal_with_competing_introductions_or_combined_pose_edit_is_atomic() {
-        use crate::effects::GlowUpdate;
+        use crate::effects::EffectUpdate;
         for duplicate in [false, true] {
             let mut scene = Scene::new();
             let mut source = scene.text(crate::Text::new("Write")).unwrap();
             source
-                .set_glow(GlowUpdate::default().intensity(0.5))
+                .set_glow(EffectUpdate::default().intensity(0.5))
                 .unwrap();
             let mut target = source.target_editor().unwrap();
             target
-                .set_glow(GlowUpdate::default().intensity(1.5))
+                .set_glow(EffectUpdate::default().intensity(1.5))
                 .unwrap();
             if !duplicate {
                 target.shift(1.0, 0.0).unwrap();

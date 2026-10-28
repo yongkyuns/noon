@@ -8,8 +8,6 @@ use crate::browser_pointer_input::{
 use noon::integration::{
     NativePointerInputPublication, PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
-#[cfg(test)]
-use noon::ExecutionSession;
 use noon_core::{Camera2DState, Vec2};
 
 #[derive(Default)]
