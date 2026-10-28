@@ -610,6 +610,7 @@ fn prefix_consumes_prior_leaf_and_whole_group_filters_without_double_opacity() {
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 64 * 1024 * 1024,
             )
             .unwrap();

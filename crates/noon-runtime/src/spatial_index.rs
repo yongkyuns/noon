@@ -136,6 +136,10 @@ impl ExecutionSpatialIndex {
         self.entries.get(&slot).map(|entry| entry.object)
     }
 
+    pub fn bounds_for_object(&self, object: ObjectId) -> Option<Rect> {
+        self.bounds_for_slot(*self.object_slots.get(&object)?)
+    }
+
     pub fn bounds_for_slot(&self, slot: ExecutionSlotId) -> Option<Rect> {
         self.entries.get(&slot).map(|entry| entry.bounds)
     }

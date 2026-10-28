@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::{EffectCaptureRequest, EffectCaptureStats, EffectPrepareError};
 
+mod backdrop_inputs;
 mod composed;
+use backdrop_inputs::BackdropInputs;
 use composed::ComposedCaptures;
 
 /// Current renderer-owned capture/filter texture budget. In-flight resources and
@@ -22,6 +24,10 @@ pub const DEFAULT_EFFECT_TEXTURE_BUDGET: u64 = 64 * 1024 * 1024;
 pub struct RetainedEffectStats {
     /// Runtime rows examined while updating the sparse source index.
     pub rows_examined: usize,
+    pub prefix_queries: usize,
+    pub prefix_candidates: usize,
+    pub prefix_footprints: usize,
+    pub prefix_links: usize,
     /// Source-to-packed mappings checked during this preparation.
     pub sources_prepared: usize,
     pub source_passes: usize,
@@ -34,6 +40,9 @@ pub struct RetainedEffectStats {
 impl RetainedEffectStats {
     fn accumulate(&mut self, value: EffectCaptureStats) {
         self.sources_prepared += 1;
+        self.accumulate_work(value);
+    }
+    fn accumulate_work(&mut self, value: EffectCaptureStats) {
         self.source_passes += value.source_passes;
         self.blur_passes += value.filter.blur_passes;
         self.composite_passes += value.filter.composite_passes;
@@ -54,12 +63,15 @@ pub(crate) struct RetainedEffectPublication {
     dirty: BTreeSet<usize>,
     capture_dirty: BTreeSet<usize>,
     composed: ComposedCaptures,
+    prefix_owners: BTreeSet<usize>,
+    backdrops: BackdropInputs,
     visible: Vec<usize>,
     painter_ranks: Vec<usize>,
     view: Option<(Camera2D, [u32; 2])>,
     rows_examined: usize,
     invalidated: bool,
     sync_failed: bool,
+    clear: Option<wgpu::Color>,
 }
 impl RetainedEffectPublication {
     fn active_source(
@@ -131,6 +143,9 @@ impl RetainedEffectPublication {
         index: usize,
         view: (Camera2D, [u32; 2]),
     ) -> Result<bool, EffectPrepareError> {
+        if self.backdrops.required(index) {
+            return Ok(true);
+        }
         for parent in self
             .composed
             .dependents(index)
@@ -214,6 +229,7 @@ impl RetainedEffectPublication {
         if full {
             self.dirty.extend(self.packed.keys().copied());
             self.sources.clear();
+            self.prefix_owners.clear();
             for (index, row) in frame.objects.iter().enumerate() {
                 self.rows_examined += 1;
                 if row.content.composed_source().is_some() {
@@ -226,6 +242,11 @@ impl RetainedEffectPublication {
                         || (row.content.composed_source().is_some() && frame.is_present(index)))
                 {
                     self.sources.insert(index, row.id);
+                    if row.effects.as_ref().is_some_and(|stack| {
+                        stack.input_role() == noon_core::EffectInputRole::PainterPrefix
+                    }) {
+                        self.prefix_owners.insert(index);
+                    }
                     self.dirty.insert(index);
                     self.capture_dirty.insert(index);
                 }
@@ -270,6 +291,15 @@ impl RetainedEffectPublication {
                                     && frame.is_present(index)))
                     })
                     .map(|row| row.id);
+                if next.is_some()
+                    && frame.objects[index].effects.as_ref().is_some_and(|stack| {
+                        stack.input_role() == noon_core::EffectInputRole::PainterPrefix
+                    })
+                {
+                    self.prefix_owners.insert(index);
+                } else {
+                    self.prefix_owners.remove(&index);
+                }
                 if let Some(object) = next {
                     if self.composed.scopes.contains_key(&index)
                         && !self.sources.contains_key(&index)
@@ -354,7 +384,21 @@ impl GpuRenderer {
             return Err(error);
         }
         if self.retained_effects.sources.is_empty() {
+            self.retained_effects.backdrops = BackdropInputs::default();
             return Ok(visible);
+        }
+        let mut backdrops = std::mem::take(&mut self.retained_effects.backdrops);
+        let result = backdrops.refresh(
+            publication,
+            &mut self.retained_effects,
+            self.camera,
+            self.viewport_size,
+        );
+        self.retained_effects.backdrops = backdrops;
+        if let Err(error) = result {
+            self.retained_effects.sync_failed = true;
+            self.invalidate_effect_captures();
+            return Err(error);
         }
         if !self.inset_views.is_empty() {
             return Err(EffectPrepareError::UnsupportedCapture);
@@ -374,6 +418,7 @@ impl GpuRenderer {
                         .composed
                         .visibility(&self.retained_effects.sources),
                 )
+                .chain(self.retained_effects.backdrops.visible_members())
         };
         if required().all(|index| {
             let rank = self.retained_effects.painter_ranks[index];
@@ -425,6 +470,7 @@ impl GpuRenderer {
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &RetainedTextGpuState,
         publication: &RendererPublication<'_>,
+        clear_color: wgpu::Color,
         texture_budget_bytes: u64,
     ) -> Result<RetainedEffectStats, EffectPrepareError> {
         let result = self.prepare_retained_effects_inner(
@@ -434,6 +480,7 @@ impl GpuRenderer {
             prepared,
             text_state,
             publication,
+            clear_color,
             texture_budget_bytes,
         );
         if result.is_err() {
@@ -451,6 +498,7 @@ impl GpuRenderer {
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &RetainedTextGpuState,
         publication: &RendererPublication<'_>,
+        clear_color: wgpu::Color,
         texture_budget_bytes: u64,
     ) -> Result<RetainedEffectStats, EffectPrepareError> {
         let context = publication.context();
@@ -474,6 +522,11 @@ impl GpuRenderer {
         }
         if !self.retained_effects.sources.is_empty() && !self.inset_views.is_empty() {
             return Err(EffectPrepareError::UnsupportedCapture);
+        }
+        if self.retained_effects.clear != Some(clear_color) {
+            self.retained_effects
+                .dirty
+                .extend(self.retained_effects.prefix_owners.iter().copied());
         }
         let frame = publication.frame();
         // Prove all source mappings before recording GPU work. Scratch identities
@@ -505,6 +558,11 @@ impl GpuRenderer {
                         .candidates(index, member)
                         .map(|(child, _)| child),
                 );
+            }
+        }
+        for &owner in &self.retained_effects.dirty {
+            if let Some(input) = self.retained_effects.backdrops.entries.get(&owner) {
+                demanded.extend(input.dependencies());
             }
         }
         for index in demanded {
@@ -562,6 +620,7 @@ impl GpuRenderer {
                 ) && row.style.fill.is_some()
                     && row.fill_paint.is_none()
                     && row.style.stroke.is_none()
+                    && effect.backdrop_blur().is_none()
                     && frame.reveal(index) == 1.0
                     && publication.active_family_animation_indices().is_empty();
                 if !analytic {
@@ -672,15 +731,26 @@ impl GpuRenderer {
             // successful ordinary encode so abandoned encoders remain retryable.
             prepared.text.atlas.encode_pending_uploads(encoder);
         }
-        // Physical sources precede scopes; deeper scopes precede their parents,
-        // including equal intervals whose identities were allocated in any order.
+        // Strict painter dependencies precede a backdrop; child intervals
+        // precede their containing scope even for coincident terminal ranks.
         sources.sort_by_key(|(index, _)| {
-            self.retained_effects
+            let last = self
+                .retained_effects
                 .composed
-                .depth(*index)
-                .map_or((false, std::cmp::Reverse(0)), |depth| {
-                    (true, std::cmp::Reverse(depth))
-                })
+                .scopes
+                .get(index)
+                .and_then(|scope| scope.source.members().last())
+                .and_then(|object| publication.object_index(*object))
+                .unwrap_or(*index);
+            (
+                self.retained_effects.painter_ranks[last],
+                self.retained_effects
+                    .composed
+                    .depth(*index)
+                    .map_or((false, std::cmp::Reverse(0)), |depth| {
+                        (true, std::cmp::Reverse(depth))
+                    }),
+            )
         });
         for (index, mapped) in sources {
             if let Some((object, scratch, definitions, observation)) = mapped {
@@ -692,14 +762,48 @@ impl GpuRenderer {
                         .retained_effects
                         .original_by_parent(frame, index, view)?,
                     isolate: false,
+                    padding_pixels: 0,
                 };
                 let packed = observation
                     .as_ref()
                     .map_or(object, |observation| observation.object);
+                let prefix = self.retained_effects.backdrops.entries.get(&index).cloned();
+                let backdrop = definitions
+                    .iter()
+                    .copied()
+                    .find(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix);
+                let painted = backdrop.map(|_| {
+                    definitions
+                        .iter()
+                        .copied()
+                        .filter(|d| d.input_role() == noon_core::EffectInputRole::Painted)
+                        .collect::<Vec<_>>()
+                });
+                let definitions = painted.as_deref().unwrap_or(definitions);
+                let extra_bytes = self.backdrop_texture_bytes();
                 let request = EffectCaptureRequest {
                     object_index: scratch,
                     definitions,
-                    texture_budget_bytes,
+                    texture_budget_bytes: texture_budget_bytes
+                        .checked_sub(extra_bytes)
+                        .ok_or(EffectPrepareError::ScratchBudgetExceeded)?,
+                };
+                let demand = if let Some(definition) = backdrop.filter(|_| prefix.is_some()) {
+                    let sigma = crate::EffectCaptureParameters {
+                        definition,
+                        output_height: self.viewport_size[1],
+                        world_view_height: f64::from(self.camera.world_size.y),
+                        scope_opacity: crate::pack_style(&frame.objects[index]).opacity,
+                    }
+                    .sigma_pixels()?;
+                    super::super::glow_filter::CaptureDemand {
+                        isolate: true,
+                        original_by_parent: true,
+                        padding_pixels: (3.0 * sigma).ceil() as u32,
+                        ..demand
+                    }
+                } else {
+                    demand
                 };
                 let value = if let Some(observation) = observation {
                     self.prepare_observed_effect_capture_input(
@@ -741,6 +845,31 @@ impl GpuRenderer {
                     )?
                 };
                 stats.accumulate(value);
+                if let (Some(prefix), Some(definition)) = (prefix, backdrop) {
+                    let value = self.prepare_backdrop_output(
+                        device,
+                        queue,
+                        encoder,
+                        prepared,
+                        text_state,
+                        index,
+                        object,
+                        definition,
+                        super::super::source_capture::PainterPrefixCaptureRequest {
+                            anchor: prefix.anchor,
+                            candidates: prefix.candidates,
+                            source_revision: prefix.source_epoch.get(),
+                            origin: prefix.window.origin,
+                            size: prefix.window.size,
+                            clear_color,
+                            scratch_budget_bytes: texture_budget_bytes,
+                        },
+                        texture_budget_bytes,
+                    )?;
+                    stats.accumulate_work(value);
+                } else if backdrop.is_some() {
+                    self.retire_backdrop_output(object);
+                }
                 self.retained_effects.packed.insert(index, (object, packed));
             }
         }
@@ -749,11 +878,17 @@ impl GpuRenderer {
         if self.effect_capture_texture_bytes() > texture_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
+        let queries = std::mem::take(&mut self.retained_effects.backdrops.stats);
+        stats.prefix_queries = queries.queries;
+        stats.prefix_candidates = queries.candidates;
+        stats.prefix_footprints = queries.footprints;
+        stats.prefix_links = queries.links;
         stats.rows_examined = std::mem::take(&mut self.retained_effects.rows_examined);
         stats.retained_texture_bytes = self.effect_capture_texture_bytes();
         self.retained_effects.dirty.clear();
         self.retained_effects.capture_dirty.clear();
         self.retained_effects.view = Some(view);
+        self.retained_effects.clear = Some(clear_color);
         self.retained_effects.invalidated = false;
         Ok(stats)
     }

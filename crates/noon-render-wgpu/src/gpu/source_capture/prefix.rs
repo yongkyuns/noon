@@ -251,11 +251,14 @@ impl PainterPrefixCaptureFilter {
                 self.placement = Some((key.format, PlacementPrograms::new(device, key.format)));
                 stats.pipeline_compiles += 2;
             }
-            let programs = &self
+            let programs = &mut self
                 .placement
-                .as_ref()
+                .as_mut()
                 .expect("prefix placement programs")
                 .1;
+            if source.has_replacements() {
+                stats.pipeline_compiles += programs.ensure_replacement(device, key.format);
+            }
             let old_keys = resources
                 .filtered
                 .iter()
@@ -274,7 +277,7 @@ impl PainterPrefixCaptureFilter {
                 .enumerate()
                 .filter(|(i, b)| old_keys.get(*i) != Some(&(b.texture.clone(), b.offset)))
                 .count();
-            Some((&programs.multisampled, resources.filtered.as_slice()))
+            Some((&*programs, resources.filtered.as_slice()))
         } else {
             resources.filtered.clear();
             None

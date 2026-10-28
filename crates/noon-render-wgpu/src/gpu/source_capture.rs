@@ -29,6 +29,8 @@ pub use prefix::{
 pub(super) struct FilteredCapture {
     pub object: noon_core::ObjectId,
     pub texture: wgpu::Texture,
+    /// Replacement erasure precedes additive contribution on the same grid.
+    pub erase: Option<wgpu::Texture>,
     pub revision: u64,
     pub opacity: f32,
     pub origin: [i32; 2],
@@ -46,6 +48,8 @@ pub(super) struct FilteredBinding {
     texture: wgpu::Texture,
     offset: u64,
     binding: wgpu::BindGroup,
+    erase_texture: Option<wgpu::Texture>,
+    erase_binding: Option<wgpu::BindGroup>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -397,6 +401,12 @@ impl PreparedSource {
         }));
     }
 
+    pub(super) fn has_replacements(&self) -> bool {
+        self.draws.iter().any(
+            |draw| matches!(draw, SourceDraw::Filtered { capture, .. } if capture.erase.is_some()),
+        )
+    }
+
     pub(super) fn needs_capture_region(&self, origin: [i32; 2], size: [u32; 2]) -> bool {
         self.capture_origin != origin || (self.has_filtered && self.capture_viewport != size)
     }
@@ -487,7 +497,7 @@ impl PreparedSource {
         text_camera: &wgpu::BindGroup,
         instances: &wgpu::Buffer,
         images: &[CapturedImageBinding],
-        filtered: Option<(&wgpu::RenderPipeline, &[FilteredBinding])>,
+        filtered: Option<(&super::analytic_glow::PlacementPrograms, &[FilteredBinding])>,
         viewport: [u32; 2],
     ) -> Result<(), RetainedDrawError> {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -514,15 +524,13 @@ impl PreparedSource {
         for draw in &self.draws {
             match draw {
                 SourceDraw::Filtered { .. } => {
-                    let (pipeline, filtered) =
+                    let (programs, filtered) =
                         filtered.ok_or(RetainedDrawError::EffectNotPrepared)?;
                     let tile = filtered
                         .get(filtered_index)
                         .ok_or(RetainedDrawError::EffectNotPrepared)?;
                     filtered_index += 1;
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(0, &tile.binding, &[]);
-                    pass.draw(0..6, 0..1);
+                    programs.draw(&mut pass, &tile.binding, tile.erase_binding.as_ref(), false);
                     binding = None;
                 }
                 SourceDraw::Geometry {

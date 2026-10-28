@@ -169,6 +169,7 @@ impl Fixture {
                 &prepared,
                 &self.text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -649,6 +650,7 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
                 &prepared,
                 &fixture.text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -740,6 +742,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
             &prepared,
             &fixture.text,
             &publication,
+            wgpu::Color::TRANSPARENT,
             1_000_000
         ),
         Err(EffectPrepareError::PublicationMismatch)
@@ -805,6 +808,7 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
             &prepared,
             &fixture.text,
             &publication,
+            wgpu::Color::TRANSPARENT,
             first.retained_texture_bytes - 1
         ),
         Err(EffectPrepareError::ScratchBudgetExceeded)

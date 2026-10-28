@@ -2676,13 +2676,17 @@ fn validate_visible_object_indices(
 
 fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
     object.effects.is_some()
-        && !(matches!(
-            object.geometry(),
-            Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
-        ) && object.style.fill.is_some()
-            && object.fill_paint.is_none()
-            && object.style.stroke.is_none()
-            && reveal == 1.0)
+        && (object
+            .effects
+            .as_ref()
+            .is_some_and(|stack| stack.backdrop_blur().is_some())
+            || !(matches!(
+                object.geometry(),
+                Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+            ) && object.style.fill.is_some()
+                && object.fill_paint.is_none()
+                && object.style.stroke.is_none()
+                && reveal == 1.0))
 }
 
 impl RetainedFramePreparer {

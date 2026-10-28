@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{CircleInstance, PackedStyle, PreparedFrame, RectangleInstance, RenderPrimitive};
 
+mod backdrop;
 mod inputs;
 
 /// One effective renderer request. Object identity/attachment values and animation
@@ -209,6 +210,9 @@ struct ResidentEffect {
     placement_buffer: wgpu::Buffer,
     placement_binding: Option<wgpu::BindGroup>,
     placement_output: Option<wgpu::Texture>,
+    original_opacity: f32,
+    placement_erase: Option<wgpu::Texture>,
+    placement_erase_binding: Option<wgpu::BindGroup>,
     filter: EffectStackScope,
     revision: u64,
     output_revision: u64,
@@ -221,6 +225,7 @@ pub(super) struct PlacementPrograms {
     pub(super) layout: wgpu::BindGroupLayout,
     single: wgpu::RenderPipeline,
     pub(super) multisampled: wgpu::RenderPipeline,
+    replacement: Option<[wgpu::RenderPipeline; 4]>,
 }
 
 #[derive(Debug, Default)]
@@ -232,6 +237,7 @@ pub(super) struct EffectCaptureGpu {
     filter: EffectStackFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
+    backdrops: backdrop::BackdropGpu,
 }
 
 /// Sparse request for one runtime-owned row, never a host copy of effect values.
@@ -479,7 +485,7 @@ impl GpuRenderer {
         ) {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
-        let mut own_capture = composed.is_some() && opacity != 1.0;
+        let mut own_capture = demand.isolate || (composed.is_some() && opacity != 1.0);
         for &definition in request.definitions {
             let parameters = crate::EffectCaptureParameters {
                 definition,
@@ -595,20 +601,7 @@ impl GpuRenderer {
                 ..Default::default()
             });
         };
-        let px = f64::from(self.viewport_size[0]) / f64::from(self.camera.world_size.x);
-        let py = f64::from(self.viewport_size[1]) / f64::from(self.camera.world_size.y);
-        let x = |world: f32| {
-            (f64::from(world) - f64::from(self.camera.center.x)) * px
-                + f64::from(self.viewport_size[0]) * 0.5
-        };
-        let y = |world: f32| {
-            f64::from(self.viewport_size[1]) * 0.5
-                - (f64::from(world) - f64::from(self.camera.center.y)) * py
-        };
-        let bounds = EffectPixelBounds {
-            min: [x(b.min.x), y(b.max.y)],
-            max: [x(b.max.x), y(b.min.y)],
-        };
+        let bounds = EffectPixelBounds::from_world_rect(b, self.camera, self.viewport_size);
         self.prepare_source_effect(
             device,
             queue,
@@ -622,7 +615,7 @@ impl GpuRenderer {
             opacity,
             Some(text),
             super::glow_filter::CaptureDemand {
-                isolate: composed.is_some() && opacity != 1.0,
+                isolate: demand.isolate || (composed.is_some() && opacity != 1.0),
                 ..demand
             },
             visibility,
@@ -822,7 +815,9 @@ impl GpuRenderer {
             })
             .map_or(0, |s| s.tile.capture_and_scratch_bytes);
         let total = self
-            .effect_capture_texture_bytes()
+            .effect_captures
+            .as_deref()
+            .map_or(0, |cache| cache.bytes)
             .checked_sub(old_bytes)
             .and_then(|v| v.checked_sub(relocated_bytes))
             .and_then(|v| v.checked_add(tile.capture_and_scratch_bytes))
@@ -942,6 +937,9 @@ impl GpuRenderer {
                         placement_buffer,
                         placement_binding: None,
                         placement_output: None,
+                        original_opacity: opacity,
+                        placement_erase: None,
+                        placement_erase_binding: None,
                         filter: EffectStackScope::default(),
                         revision: 0,
                         output_revision: 0,
@@ -961,7 +959,18 @@ impl GpuRenderer {
             {
                 glows.scopes.remove(&previous_key);
             }
+            if let SourceInstance::Draws { source, silhouette } = &source_instance {
+                if source.has_replacements()
+                    || silhouette.as_ref().is_some_and(|s| s.has_replacements())
+                {
+                    stats.filter.pipeline_compiles +=
+                        programs.ensure_replacement(device, self.target_format);
+                }
+            }
             let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
+            scope.original_opacity = opacity;
+            scope.placement_erase = None;
+            scope.placement_erase_binding = None;
             if !retain_original_mask {
                 scope.original_mask.clear();
             }
@@ -1009,7 +1018,7 @@ impl GpuRenderer {
                                     .expect("isolated text camera"),
                                 &scope.source_buffer,
                                 &scope.source_image_bindings,
-                                Some((&programs.multisampled, &scope.source_filtered_bindings)),
+                                Some((programs, &scope.source_filtered_bindings)),
                                 source_tile.size,
                             )
                             .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
@@ -1047,10 +1056,7 @@ impl GpuRenderer {
                                         .expect("isolated text camera"),
                                     buffer,
                                     &scope.silhouette_image_bindings,
-                                    Some((
-                                        &programs.multisampled,
-                                        &scope.silhouette_filtered_bindings,
-                                    )),
+                                    Some((programs, &scope.silhouette_filtered_bindings)),
                                     source_tile.size,
                                 )
                                 .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
@@ -1158,7 +1164,9 @@ impl GpuRenderer {
             } else {
                 EffectRasterStats::default()
             };
+            let pipeline_compiles = stats.filter.pipeline_compiles;
             stats.filter = upload;
+            stats.filter.pipeline_compiles += pipeline_compiles;
             stats.filter.composite_passes += original_work.composite_passes;
             stats.filter.bytes_uploaded += original_work.bytes_uploaded;
             stats.filter.texture_allocations += original_work.texture_allocations;
@@ -1223,6 +1231,7 @@ impl GpuRenderer {
     /// Existing scene identity/lifecycle owners decide when this is called.
     pub fn remove_effect_capture(&mut self, object: ObjectId) {
         if let Some(glows) = self.effect_captures.as_deref_mut() {
+            glows.backdrops.remove(object);
             if let Some(key) = glows.owners.remove(&object) {
                 if let Some(scope) = glows.scopes.remove(&key) {
                     glows.bytes -= scope.tile.capture_and_scratch_bytes;
@@ -1232,7 +1241,9 @@ impl GpuRenderer {
     }
 
     pub fn effect_capture_texture_bytes(&self) -> u64 {
-        self.effect_captures.as_deref().map_or(0, |g| g.bytes)
+        self.effect_captures
+            .as_deref()
+            .map_or(0, |g| g.bytes + g.backdrops.bytes())
     }
 
     /// Call when recorded capture/filter commands were abandoned rather than
@@ -1240,6 +1251,7 @@ impl GpuRenderer {
     pub fn invalidate_effect_captures(&mut self) {
         self.retained_effects.invalidate();
         if let Some(glows) = self.effect_captures.as_deref_mut() {
+            glows.backdrops.invalidate();
             for scope in glows.scopes.values_mut() {
                 scope.invalidated = true;
                 scope.filter.invalidate();
@@ -1312,20 +1324,16 @@ impl GpuRenderer {
             "source capture must follow resize"
         );
         let programs = glows.placement.as_ref().expect("prepared placement");
-        pass.set_pipeline(if single_sample {
-            &programs.single
-        } else {
-            &programs.multisampled
-        });
-        pass.set_bind_group(
-            0,
+        programs.draw(
+            pass,
             scope
                 .placement_binding
                 .as_ref()
                 .expect("prepared source output"),
-            &[],
+            scope.placement_erase_binding.as_ref(),
+            single_sample,
         );
-        pass.draw(0..6, 0..1);
+
         true
     }
 
@@ -1499,6 +1507,104 @@ fn capture_source(
 }
 
 impl PlacementPrograms {
+    /// Ordinary scenes compile only their existing source-over programs.
+    pub(super) fn ensure_replacement(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> usize {
+        if self.replacement.is_some() {
+            return 0;
+        }
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Noon replacement tile placement"),
+            bind_group_layouts: &[Some(&self.layout)],
+            immediate_size: 0,
+        });
+        let shader = device.create_shader_module(wgpu::include_wgsl!("analytic_glow.wgsl"));
+        let pipeline = |count, erase| {
+            let blend = wgpu::BlendComponent {
+                src_factor: if erase {
+                    wgpu::BlendFactor::Zero
+                } else {
+                    wgpu::BlendFactor::One
+                },
+                dst_factor: if erase {
+                    wgpu::BlendFactor::OneMinusSrcAlpha
+                } else {
+                    wgpu::BlendFactor::One
+                },
+                operation: wgpu::BlendOperation::Add,
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Noon replacement tile pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_tile"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_tile"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState {
+                            color: blend,
+                            alpha: blend,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        self.replacement = Some([
+            pipeline(1, true),
+            pipeline(1, false),
+            pipeline(PATH_SAMPLE_COUNT, true),
+            pipeline(PATH_SAMPLE_COUNT, false),
+        ]);
+        4
+    }
+
+    pub(super) fn draw<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        contribution: &'a wgpu::BindGroup,
+        erase: Option<&'a wgpu::BindGroup>,
+        single_sample: bool,
+    ) {
+        if let Some(erase) = erase {
+            let programs = self
+                .replacement
+                .as_ref()
+                .expect("prepared replacement programs");
+            let at = if single_sample { 0 } else { 2 };
+            pass.set_pipeline(&programs[at]);
+            pass.set_bind_group(0, erase, &[]);
+            pass.draw(0..6, 0..1);
+            pass.set_pipeline(&programs[at + 1]);
+        } else {
+            pass.set_pipeline(if single_sample {
+                &self.single
+            } else {
+                &self.multisampled
+            });
+        }
+        pass.set_bind_group(0, contribution, &[]);
+        pass.draw(0..6, 0..1);
+    }
+
     pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon glow tile placement layout"),
@@ -1565,6 +1671,7 @@ impl PlacementPrograms {
             single: pipeline(1),
             multisampled: pipeline(PATH_SAMPLE_COUNT),
             layout,
+            replacement: None,
         }
     }
 }

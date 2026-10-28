@@ -276,6 +276,7 @@ impl NativeCapture {
                 &prepared,
                 &self.text,
                 publication,
+                self.clear,
                 noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
             )
             .map_err(CaptureError::gpu)?;

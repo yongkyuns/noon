@@ -327,6 +327,7 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 4_000_000,
             )
             .unwrap();

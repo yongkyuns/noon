@@ -159,6 +159,7 @@ fn qualify_nested(device: &wgpu::Device, queue: &wgpu::Queue, raster: bool) {
                     &prepared,
                     &text,
                     &publication,
+                    wgpu::Color::TRANSPARENT,
                     4_000_000,
                 )
                 .unwrap();

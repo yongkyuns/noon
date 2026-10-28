@@ -40,6 +40,41 @@ pub struct EffectPixelBounds {
 }
 
 impl EffectPixelBounds {
+    pub(super) fn from_world_rect(
+        bounds: noon_core::Rect,
+        camera: super::Camera2D,
+        viewport: [u32; 2],
+    ) -> Self {
+        let px = f64::from(viewport[0]) / f64::from(camera.world_size.x);
+        let py = f64::from(viewport[1]) / f64::from(camera.world_size.y);
+        let x = |world: f32| {
+            (f64::from(world) - f64::from(camera.center.x)) * px + f64::from(viewport[0]) * 0.5
+        };
+        let y = |world: f32| {
+            f64::from(viewport[1]) * 0.5 - (f64::from(world) - f64::from(camera.center.y)) * py
+        };
+        Self {
+            min: [x(bounds.min.x), y(bounds.max.y)],
+            max: [x(bounds.max.x), y(bounds.min.y)],
+        }
+    }
+    pub(super) fn world_rect(self, camera: super::Camera2D, viewport: [u32; 2]) -> noon_core::Rect {
+        let x = |pixel: f64| {
+            (f64::from(camera.center.x)
+                + (pixel - f64::from(viewport[0]) * 0.5) * f64::from(camera.world_size.x)
+                    / f64::from(viewport[0])) as f32
+        };
+        let y = |pixel: f64| {
+            (f64::from(camera.center.y)
+                - (pixel - f64::from(viewport[1]) * 0.5) * f64::from(camera.world_size.y)
+                    / f64::from(viewport[1])) as f32
+        };
+        noon_core::Rect::new(
+            noon_core::Vec2::new(x(self.min[0]), y(self.max[1])),
+            noon_core::Vec2::new(x(self.max[0]), y(self.min[1])),
+        )
+    }
+
     /// Project one filled, unstroked M1 circle/rectangle through the existing
     /// effective 2D camera. Object nonuniform scale deforms the source, NOT
     /// the Gaussian radius; that radius stays in output/world units.
@@ -172,6 +207,8 @@ pub struct EffectCaptureTile {
 pub(super) struct CaptureDemand {
     pub required_by_parent: bool,
     pub isolate: bool,
+    /// Extra input support; does not apply a paint filter to the target.
+    pub padding_pixels: u32,
     /// A composed ancestor needs this scope's original coverage before its
     /// authored paint filters, with the scope opacity applied by placement.
     pub original_by_parent: bool,
@@ -241,6 +278,7 @@ impl EffectCaptureTile {
             required_by_parent,
             isolate,
             original_by_parent,
+            padding_pixels,
         } = demand;
         if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
@@ -266,7 +304,10 @@ impl EffectCaptureTile {
             min: bounds.min.map(|v| v - 1.0),
             max: bounds.max.map(|v| v + 1.0),
         };
-        let mut extent = original;
+        let mut extent = EffectPixelBounds {
+            min: original.min.map(|v| v - f64::from(padding_pixels)),
+            max: original.max.map(|v| v + f64::from(padding_pixels)),
+        };
         let mut support_radius = 0_u32;
         let mut active = false;
         let mut cost_per_pixel = 4_u64; // one RGBA8 source

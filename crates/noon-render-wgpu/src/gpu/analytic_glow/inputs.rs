@@ -94,8 +94,13 @@ impl GpuRenderer {
         Ok(Some(FilteredCapture {
             object,
             texture,
+            erase: (!original).then(|| scope.placement_erase.clone()).flatten(),
             revision: scope.output_revision,
-            opacity: scope.placement.opacity,
+            opacity: if original {
+                scope.original_opacity
+            } else {
+                scope.placement.opacity
+            },
             origin,
             size,
             bounds,
