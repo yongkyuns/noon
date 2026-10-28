@@ -455,6 +455,7 @@ pub enum Property {
     EffectColor,
     EffectRadius,
     EffectIntensity,
+    EffectThreshold,
     EffectOffset,
     EffectProgress,
     EffectSoftness,
@@ -484,6 +485,7 @@ impl Property {
         match self {
             Self::EffectColor
             | Self::EffectRadius
+            | Self::EffectThreshold
             | Self::EffectIntensity
             | Self::EffectOffset
             | Self::EffectProgress
@@ -521,6 +523,7 @@ pub enum EffectTrackValue {
     Color(crate::Color),
     Radius(crate::EffectRadius),
     Intensity(f64),
+    Threshold(f64),
     Offset(crate::EffectOffset),
     Progress(f64),
     Softness(f64),
@@ -548,9 +551,8 @@ impl EffectTrackValue {
                 .map(|v| Self::Softness(v.softness())),
             Property::EffectSize => definition.as_pixelate().map(|v| Self::Size(v.size())),
             Property::EffectSeed => definition.as_noise_dissolve().map(|v| Self::Seed(v.seed())),
-            Property::EffectIntensity => definition
-                .as_glow()
-                .map(|effect| Self::Intensity(effect.intensity())),
+            Property::EffectIntensity => definition.intensity().map(Self::Intensity),
+            Property::EffectThreshold => definition.threshold().map(Self::Threshold),
             _ => None,
         }
     }
@@ -560,6 +562,7 @@ impl EffectTrackValue {
             Self::Color(_) => Property::EffectColor,
             Self::Radius(_) => Property::EffectRadius,
             Self::Intensity(_) => Property::EffectIntensity,
+            Self::Threshold(_) => Property::EffectThreshold,
             Self::Offset(_) => Property::EffectOffset,
             Self::Progress(_) => Property::EffectProgress,
             Self::Softness(_) => Property::EffectSoftness,
@@ -573,6 +576,7 @@ impl EffectTrackValue {
             Self::Color(value) => crate::EffectUpdate::default().color(value),
             Self::Radius(value) => crate::EffectUpdate::default().radius(value),
             Self::Intensity(value) => crate::EffectUpdate::default().intensity(value),
+            Self::Threshold(value) => crate::EffectUpdate::default().threshold(value),
             Self::Offset(value) => crate::EffectUpdate::default().offset(value),
             Self::Progress(value) => crate::EffectUpdate::default().progress(value),
             Self::Softness(value) => crate::EffectUpdate::default().softness(value),
@@ -606,6 +610,7 @@ impl EffectTrackValue {
             }
             (Self::Size(a), Self::Size(b)) if a.same_unit(b) => Self::Size(a.interpolate(b, alpha)),
             (Self::Intensity(a), Self::Intensity(b)) => Self::Intensity(mix(a, b, alpha)),
+            (Self::Threshold(a), Self::Threshold(b)) => Self::Threshold(mix(a, b, alpha)),
             (Self::Progress(a), Self::Progress(b)) => Self::Progress(mix(a, b, alpha)),
             (Self::Softness(a), Self::Softness(b)) => Self::Softness(mix(a, b, alpha)),
             (Self::Seed(a), Self::Seed(b)) if a == b => Self::Seed(a),

@@ -77,6 +77,15 @@ impl CompiledEffectStack {
         {
             return Err(CompiledEffectStackError::MixedInputRoles);
         }
+        if definitions
+            .iter()
+            .any(|definition| definition.input_role() == noon_core::EffectInputRole::AuthoredView)
+            && (definitions.len() != 1
+                || definitions[0].as_bloom().is_none()
+                || visibility.is_some())
+        {
+            return Err(CompiledEffectStackError::MixedInputRoles);
+        }
         Ok(Self {
             visibility: visibility.is_some(),
             attachments: attachments.into_boxed_slice(),

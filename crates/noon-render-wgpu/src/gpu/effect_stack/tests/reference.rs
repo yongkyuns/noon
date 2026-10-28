@@ -81,6 +81,9 @@ fn alpha_sample(image: &[[f64; 4]], size: [u32; 2], point: [f64; 2]) -> f64 {
 }
 fn neutral(effect: EffectDefinition, height: u32, world: f64) -> bool {
     match effect {
+        EffectDefinition::Bloom(_) => {
+            panic!("view Bloom is outside the compatibility capture oracle")
+        }
         EffectDefinition::Blur(v) => scalar(v.radius(), height, world) == 0.0,
         EffectDefinition::BackdropBlur(v) => scalar(v.radius(), height, world) == 0.0,
         EffectDefinition::Glow(v) => {
@@ -155,6 +158,9 @@ pub(super) fn evaluate(
             .flat_map(|(at, pixel)| {
                 let source: [f64; 4] = std::array::from_fn(|c| f64::from(pixel[c]) / 255.0);
                 let value: [f64; 4] = match effect {
+                    EffectDefinition::Bloom(_) => {
+                        unreachable!("view Bloom rejected before compatibility evaluation")
+                    }
                     EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_) => blurred[at],
                     EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_) => {
                         unreachable!("mask stage was evaluated above")

@@ -205,9 +205,17 @@ fn attachment_channels(
             update.color = Some(b);
         }
     }
-    if let (Some(a), Some(b)) = (baseline.as_glow(), destination.as_glow()) {
-        if writes_intensity || a.intensity() != b.intensity() {
-            update.intensity = Some(b.intensity());
+    if let (Some(a), Some(b)) = (baseline.intensity(), destination.intensity()) {
+        if writes_intensity || a != b {
+            update.intensity = Some(b);
+        }
+    }
+    if let (Some(a), Some(b)) = (baseline.threshold(), destination.threshold()) {
+        if a != b
+            || copy_intent
+                .is_some_and(|copy| copy.writes_parameter(noon_core::EffectParameter::Threshold))
+        {
+            update.threshold = Some(b);
         }
     }
     if let (Some(a), Some(b)) = (baseline.as_shadow(), destination.as_shadow()) {
@@ -318,8 +326,16 @@ pub(super) fn validate_sources(
     target: &noon_core::SemanticObjectState,
 ) -> Result<(), EffectTargetLoweringError> {
     for (id, state) in [(source_id, source), (target_id, target)] {
-        super::super::projection::validate_effect_source_profile(id, state, store)
-            .map_err(EffectTargetLoweringError::Profile)?;
+        if state.role() == noon_core::SemanticObjectRole::Camera2D {
+            if state.view_color_profile() != noon_core::ViewColorProfile::LinearHdr {
+                return Err(EffectTargetLoweringError::Profile(
+                    crate::SemanticLoweringError::UnsupportedEffectProfile { owner: id },
+                ));
+            }
+        } else {
+            super::super::projection::validate_effect_source_profile(id, state, store)
+                .map_err(EffectTargetLoweringError::Profile)?;
+        }
     }
     if source.content != target.content {
         return Err(EffectTargetLoweringError::UnsupportedContentChange);

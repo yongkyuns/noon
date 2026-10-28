@@ -308,6 +308,7 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn kind(&self) -> String {
             match self.value {
+                EffectDefinition::Bloom(_) => "bloom",
                 EffectDefinition::Pixelate(_) => "pixelate",
                 EffectDefinition::Glow(_) => "glow",
                 EffectDefinition::Blur(_) => "blur",

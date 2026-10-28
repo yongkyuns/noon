@@ -931,6 +931,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectColor
                             | Property::EffectRadius
                             | Property::EffectIntensity
+                            | Property::EffectThreshold
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
