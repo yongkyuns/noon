@@ -28,6 +28,7 @@ on:
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
       - "scripts/direct-view-output-qualification.mjs"
+      - "scripts/worker-view-output-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
@@ -59,6 +60,7 @@ on:
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
       - "scripts/direct-view-output-qualification.mjs"
+      - "scripts/worker-view-output-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
@@ -144,6 +146,7 @@ jobs:
           node scripts/direct-pointer-presentation-qualification.mjs
           node scripts/direct-inspection-qualification.mjs
           node scripts/direct-view-output-qualification.mjs
+          node scripts/worker-view-output-qualification.mjs
           node scripts/worker-inspection-qualification.mjs
       - name: Qualify public gallery pointer selection
         env:

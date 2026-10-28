@@ -2039,7 +2039,13 @@ Held frames may sleep rather than republish time; active animation and explicit
 seek still sample canonical authored time. These software-GPU checks do not
 qualify physical-device performance.
 
-Python HDR host/bindings and executable parity, broader composed/cross-host and
-recovery/performance gates, and Bloom/emission gallery examples remain required
-before promotion. Python wrapper dispatch and WASM compilation alone do not
-qualify a Python rendering path.
+The Python `camera_bloom.py` example pairs the same ordinary camera profile,
+material emission and Bloom tracks with Rust. The genuine worker channel carries
+the selected camera's profile; effects retain their ordinary row and attachment
+identity. `node scripts/worker-view-output-qualification.mjs` compares both hosts
+byte-for-byte on WebGPU/WebGL2 and checks an independent f64 interior reference.
+The gallery's `showcase_bloom_emission.py` demonstrates radiance first, camera
+spread second, and restoration. Neither path adds a shader clock or host engine.
+Broader composed/input/recovery/performance gates, full local validation and
+required CI remain necessary before promotion; software-GPU parity does not
+qualify physical-device performance.
