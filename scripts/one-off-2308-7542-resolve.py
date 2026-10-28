@@ -96,6 +96,13 @@ def apply_clean_merge_repairs():
             "                    // dependencies through the existing closure.\n"
             "                    ObjectContentRef::Geometry(_) | ObjectContentRef::Composed(_) => {}",
         ),
+        "crates/noon-web/src/retained_resource_transport.rs": (
+            "            protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,\n"
+            "            images: Vec::new(),",
+            "            protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,\n"
+            "            composed_sources: Vec::new(),\n"
+            "            images: Vec::new(),",
+        ),
     }
     for filename, (original, replacement) in repairs.items():
         path = ROOT / filename
