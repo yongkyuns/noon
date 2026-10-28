@@ -4,7 +4,7 @@ Paired with noon::example_scenes::glass_lens. The shared Rust timeline owns
 motion, radius interpolation and seeded visibility; pixels are prepared once.
 """
 from noon import (
-    BackdropBlur, Dissolve, ImageMobject, Pixels, Rectangle, Scene, Text, VGroup,
+    BackdropBlur, Dissolve, ImageMobject, Pixels, Rectangle, MovingCameraScene, Text, VGroup,
     linear, smooth,
 )
 def diamond_pixels():
@@ -21,7 +21,7 @@ def diamond_pixels():
 
 
 
-class GlassLens(Scene):
+class GlassLens(MovingCameraScene):
     def construct(self):
         self.camera.frame.scale(1.125)
         background = Rectangle(width=16, height=9, fill="#08101f", fill_opacity=1, stroke=None)
@@ -33,7 +33,7 @@ class GlassLens(Scene):
         panel = Rectangle(width=3, height=2, fill="#ffffff", fill_opacity=0.12, stroke=None).shift((-2, 0, 0))
         emblem = ImageMobject(diamond_pixels(), height=0.6, resampling_algorithm="bilinear").shift((-2.95, 0.55, 0))
         label = Text("GLASS", font_size=24).shift((-2, -0.35, 0))
-        card = VGroup(panel, emblem, label).set_opacity(0.85)
+        card = VGroup(panel, emblem, label).set_object_opacity(0.85)
         card.add_effect(BackdropBlur(radius=Pixels(6)), name="glass")
         self.add(background, texture, card)
         self.wait(0.5)
