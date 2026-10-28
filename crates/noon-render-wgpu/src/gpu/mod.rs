@@ -19,6 +19,11 @@ pub use source_capture::{
 };
 mod effect_stack;
 mod gaussian_blur;
+mod hdr_bloom;
+pub use hdr_bloom::{
+    HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomPrepareError, HdrBloomScope,
+    HdrBloomStats,
+};
 mod glow_filter;
 mod sample_filter;
 mod shadow_filter;
