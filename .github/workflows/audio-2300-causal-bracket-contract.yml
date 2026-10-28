@@ -1,0 +1,107 @@
+name: Audio 2300 causal bracket contract prototype
+
+# Research helper only. Never merge this workflow or prototype into product.
+on:
+  push:
+    branches: [codex/audio-2300-causal-bracket-contract]
+    paths:
+      - .github/workflows/audio-2300-causal-bracket-contract.yml
+      - .github/diagnostics/audio-2300/causal_bracket.rs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-2300-causal-bracket-contract
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Isolated native Rust contract, wasm32 compile, negative control
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MODEL: .github/diagnostics/audio-2300/causal_bracket.rs
+      BASE: 0cb1b7dabaed0df82567794c09fff17327256d05
+    steps:
+      - name: Checkout exact helper with ancestry
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Attest model and unchanged product source
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/audio-clock-contract"
+          echo "EVIDENCE=$RUNNER_TEMP/audio-clock-contract" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(git rev-parse HEAD:$MODEL)" = cfe12d82b3f1a5576b15729c3f55c346b66214e2
+          echo "1df026197e23d2f92546769f54f3b6d79785488457bf67ef4cb2c413760f0b29  $MODEL" | sha256sum -c -
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          paths = git('diff', '--name-only', os.environ['BASE'], 'HEAD').splitlines()
+          assert sorted(paths) == sorted([
+              '.github/diagnostics/audio-2300/causal_bracket.rs',
+              '.github/workflows/audio-2300-causal-bracket-contract.yml',
+          ]), paths
+          data = {'helper': git('rev-parse','HEAD'), 'tree': git('rev-parse','HEAD^{tree}'),
+                  'baseline': os.environ['BASE'], 'changed_paths': paths,
+                  'scope': 'isolated mathematical/ownership model; no production integration, browser or audio device'}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'audio-clock-contract', 'source.json').write_text(json.dumps(data, indent=2)+'\n')
+          PY
+          cp "$MODEL" "$RUNNER_TEMP/audio-clock-contract/causal_bracket.rs"
+          git diff "$BASE" HEAD > "$RUNNER_TEMP/audio-clock-contract/helper.patch"
+      - name: Install repository-pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$EVIDENCE/rustc.txt"
+          test "$(rustc --version | awk '{print $2}')" = 1.98.1
+      - name: Execute standalone Rust contract tests
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings --test "$MODEL" -o "$RUNNER_TEMP/causal-bracket-tests"
+          "$RUNNER_TEMP/causal-bracket-tests" --nocapture 2>&1 | tee "$EVIDENCE/native-tests.log"
+          grep -F '18 passed; 0 failed' "$EVIDENCE/native-tests.log"
+          grep -F 'causal_sample_cases=14889' "$EVIDENCE/native-tests.log"
+          grep -F 'coarsened_sample_cases=31644' "$EVIDENCE/native-tests.log"
+          printf 'passed\n' > "$EVIDENCE/native-tests.result"
+      - name: Compile same dependency-free contract for native and wasm32
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings --crate-type=lib "$MODEL" -o "$RUNNER_TEMP/libcausal_bracket.rlib"
+          rustc --edition=2021 -D warnings --crate-type=lib --target wasm32-unknown-unknown "$MODEL" -o "$RUNNER_TEMP/libcausal_bracket_wasm.rlib"
+          printf 'passed (compile only; no WASM/browser execution)\n' > "$EVIDENCE/target-compilation.result"
+      - name: Prove unknown-clock false-certification negative control fails
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib
+          source = pathlib.Path(os.environ['MODEL']).read_text()
+          before = 'ReadErrorEvidence::Unknown => None,'
+          assert source.count(before) == 1
+          mutant = source.replace(before, 'ReadErrorEvidence::Unknown => Some(observable_age),')
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'causal_bracket_mutant.rs').write_text(mutant)
+          PY
+          rustc --edition=2021 -D warnings --test "$RUNNER_TEMP/causal_bracket_mutant.rs" -o "$RUNNER_TEMP/causal-bracket-mutant"
+          set +e
+          "$RUNNER_TEMP/causal-bracket-mutant" --exact tests::unknown_error_is_not_an_exact_physical_bound --nocapture > "$EVIDENCE/expected-negative-control.log" 2>&1
+          status=$?
+          set -e
+          cat "$EVIDENCE/expected-negative-control.log"
+          test "$status" = 101
+          grep -F '0 passed; 1 failed' "$EVIDENCE/expected-negative-control.log"
+          echo "1df026197e23d2f92546769f54f3b6d79785488457bf67ef4cb2c413760f0b29  $MODEL" | sha256sum -c -
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'passed: deliberate mutation failed the required assertion; original source unchanged\n' > "$EVIDENCE/negative-control.result"
+      - name: Retain standalone contract evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2300-causal-bracket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/audio-clock-contract/
+          if-no-files-found: error
+          retention-days: 7
