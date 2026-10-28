@@ -48,7 +48,7 @@ jobs:
           from pathlib import Path
           root = Path(os.environ['SOURCE_ROOT'])
           evidence = Path(os.environ['EVIDENCE'])
-          incoming = evidence/'incoming'
+          incoming = evidence/'incoming'/'noon2308-latest-evidence'
           manifest = json.loads((incoming/'manifest.json').read_text())
           source = (incoming/'combined-source.tar.gz').read_bytes()
           digest = hashlib.sha256(source).hexdigest()
