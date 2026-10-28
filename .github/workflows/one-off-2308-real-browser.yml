@@ -15,9 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      PIN_RUN: "40571552550"
-      PIN_SOURCE_SHA256: "2139a31eeab3da11296fe1373c32f2593a9e7c65795e2f58d0493c35d9422df7"
-      PIN_SOURCE_TREE: "1ef901ef0d649bd04e4054211f1e715ca87fac03"
+      PIN_RUN: "40594768816"
+      PIN_SOURCE_SHA256: "8a14e43e1d60ec82587d586080724a48939d03b9036557d2b0b4fa6b114c8f1f"
+      PIN_SOURCE_TREE: "e25761096604fbae14fb4479a67476f0844f1f03"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -40,7 +40,7 @@ jobs:
           mkdir -p "$SOURCE_ROOT" "$EVIDENCE/incoming"
           printf 'SOURCE_ROOT=%s\nEVIDENCE=%s\n' "$SOURCE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
           gh run download "$PIN_RUN" --repo "$GITHUB_REPOSITORY" \
-            -n noon2308-combined-memory-source-qualification -D "$EVIDENCE/incoming"
+            -n noon2308-ordered-effects-combined-qualification -D "$EVIDENCE/incoming"
           python3 - <<'PY'
           import hashlib,io,json,os,subprocess,tarfile
           from pathlib import Path
@@ -67,8 +67,8 @@ jobs:
           git('commit','-q','-m','Freeze pinned combined source for browser qualification')
           assert git('rev-parse','HEAD^{tree}')==tree
           report={'source_run':int(os.environ['PIN_RUN']),'source_tree':tree,'source_archive_sha256':digest,
-                  'scope':'isolated actual browser qualification of combined #2308/#2317 on master 0351da5',
-                  'limitations':'not current ordered-effects master; headless Chromium not physical GPU',
+                  'scope':'isolated actual browser qualification of combined #2308/#2317 on ordered-effects master bc25e92',
+                  'limitations':'headless Chromium not physical GPU; live master may have newer commits',
                   'source_ref_modified':False,'default_playback_changed':False}
           (evidence/'browser-source.json').write_text(json.dumps(report,indent=2)+'\n')
           print(json.dumps(report,indent=2))
