@@ -87,6 +87,12 @@ export class WorkerAudioDevice {
       authoredTime: anchor.time, sampledEpochMs: anchor.sampledEpochMs,
       receivedEpochMs, reconstructedEpochAgeMs: receivedEpochMs - anchor.sampledEpochMs,
     });
+    // The unchanged smoke fixture wraps the native Start and appends its
+    // retained record only AFTER the original Start method returns. Reserve
+    // that exact index now, then annotate it after the wrapper has returned.
+    // Multiple starts in a turn still retain one-to-one attribution.
+    const qualification = globalThis.audioQualification?.anchors;
+    const evidenceIndex = Array.isArray(qualification) ? qualification.length : null;
     try {
       this.#output.start(session, anchor.time, anchor.sampledEpochMs, receivedEpochMs);
     } catch (error) {
@@ -96,17 +102,19 @@ export class WorkerAudioDevice {
       catch { /* Diagnostic collection may not replace the native rejection. */ }
       throw error;
     }
-    // The existing unchanged smoke fixture records each successful Start in
-    // audioQualification. Attach optional diagnostic data only when that
-    // fixture is present; no production scheduling state is retained.
-    try {
-      const last = globalThis.audioQualification?.anchors?.at(-1);
-      if (last && last.session === session && last.time === anchor.time &&
-          last.sampledEpochMs === anchor.sampledEpochMs &&
-          last.receivedEpochMs === receivedEpochMs) {
-        last.windowClockBracket = trace();
-      }
-    } catch { /* Instrumentation must not affect successful playback. */ }
+    // The injected original fixture appends after the native Start returns.
+    // One microtask tags that exact record after its wrapper runs. No extra
+    // clock reads, output starts, or asynchronous audio actions are scheduled.
+    if (evidenceIndex !== null) queueMicrotask(() => {
+      try {
+        const saved = qualification[evidenceIndex];
+        if (saved && saved.session === session && saved.time === anchor.time &&
+            saved.sampledEpochMs === anchor.sampledEpochMs &&
+            saved.receivedEpochMs === receivedEpochMs) {
+          saved.windowClockBracket = trace();
+        }
+      } catch { /* Observation must never affect accepted playback. */ }
+    });
     this.#started = true;
   }
 
