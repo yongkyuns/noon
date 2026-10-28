@@ -1,0 +1,113 @@
+diff --git a/scripts/callback-continuation-proof.mjs b/scripts/callback-continuation-proof.mjs
+index 544b65b..1c4a98f 100644
+--- a/scripts/callback-continuation-proof.mjs
++++ b/scripts/callback-continuation-proof.mjs
+@@ -111,7 +111,8 @@ export async function finishCallbackProof(endpoint) {
+     if (authored.duration !== endpoint ||
+         authored.semanticExecution.contextId !== proof.registration.semanticExecution.contextId ||
+         authored.semanticExecution.continuationGeneration !== proof.registration.generation ||
+-        !Number.isSafeInteger(authored.semanticExecution.callbackSessionId)) {
++        !Number.isSafeInteger(authored.semanticExecution.callbackSessionId) ||
++        authored.semanticExecution.callbackSessionId !== proof.registration.semanticExecution.callbackSessionId) {
+       throw new Error("callback completion changed duration, context, generation, or callback identity");
+     }
+     const metrics = (await proof.wait(proof.execution.metrics(), "final renderer observation")).metrics;
+diff --git a/scripts/callback-continuation-proof.test.mjs b/scripts/callback-continuation-proof.test.mjs
+index 3a785a8..fc062f8 100644
+--- a/scripts/callback-continuation-proof.test.mjs
++++ b/scripts/callback-continuation-proof.test.mjs
+@@ -18,7 +18,7 @@ function fixture(options = {}) {
+   const calls = [];
+   const timers = new Map();
+   let timerId = 0, time = 0, startup = false, terminated = 0, removed = 0, hooks;
+-  const registration = { generation: 7, duration: 0.25, semanticExecution: { contextId: "source-1" } };
++  const registration = { generation: 7, duration: 0.25, semanticExecution: { contextId: "source-1", callbackSessionId: 9 } };
+   const endpoint = options.endpoint ?? 1.5;
+   const result = { duration: endpoint, semanticExecution: {
+     contextId: "source-1", continuationGeneration: 7, callbackSessionId: 9,
+@@ -237,3 +237,16 @@ test("renderer error between completion and final screenshot cannot be silently
+   assert.equal(f.harness.callbackProof, null);
+   assert.equal(f.counts().terminated, 1);
+ });
++
++// A different *valid* ID must fail too; an integer-type check is insufficient.
++for (const pacing of ["external_samples", "realtime"]) {
++  test(`${pacing} completion rejects replacement with a different valid callback session`, async () => {
++    const f = fixture({ autonomous: pacing === "realtime", resultFields: { callbackSessionId: 10 } });
++    await f.start({ pacing, sampleTime: pacing === "external_samples" ? 0.75 : null });
++    await assert.rejects(f.finish(), /callback completion changed/);
++    assert.equal(runCount(f), 1);
++    assert.equal(f.harness.callbackProof, null);
++    assert.equal(f.counts().terminated, 1);
++    assert.deepEqual(samples(f), pacing === "external_samples" ? [0, 0.75, 1.5] : []);
++  });
++}
+diff --git a/scripts/shared-authoring-smoke.mjs b/scripts/shared-authoring-smoke.mjs
+index f604264..050e072 100644
+--- a/scripts/shared-authoring-smoke.mjs
++++ b/scripts/shared-authoring-smoke.mjs
+@@ -391,6 +391,9 @@ async function startSampledSource(page, source, canvasId, width = 640, height =
+     document.body.append(canvas);
+     let resolveAttached;
+     let rejectAttached;
++    let registration = null;
++    let settled = false;
++    let authoringFailure = null;
+     const execution = new harness.AuthoringExecutionClient(canvas, {
+       onError(error, owner) {
+         const failure = new Error(`${canvasId} ${owner}: ${error}`);
+@@ -404,22 +407,37 @@ async function startSampledSource(page, source, canvasId, width = 640, height =
+       rejectAttached = reject;
+     });
+     const authored = harness.authoring.run(source, {}, {
+-      async onSemanticContinuation(registration) {
+-        await execution.startSemanticExecution(registration.semanticExecution, {
++      async onSemanticContinuation(next) {
++        if (registration !== null) {
++          throw new Error(`${canvasId} registered more than one semantic context`);
++        }
++        registration = next;
++        await execution.startSemanticExecution(next.semanticExecution, {
+           authoringClient: harness.authoring,
+-          loopDurationSeconds: Math.max(1, registration.duration),
++          loopDurationSeconds: Math.max(1, next.duration),
+           transportMode: "transferable",
+           pacing: "external_samples",
+         });
+         resolveAttached();
+       },
+     });
+-    authored.then(() => rejectAttached(new Error(`${canvasId} did not register a continuation`)), (error) => {
++    authored.then(() => {
++      settled = true;
++      rejectAttached(new Error(`${canvasId} did not register a continuation`));
++    }, (error) => {
++      settled = true;
++      authoringFailure = String(error?.message ?? error);
+       console.error(`${canvasId} authoring: ${error}`);
+       rejectAttached(error);
+       execution.terminate();
+     });
+-    harness.sampledProof = { execution, authored };
++    harness.sampledProof = {
++      execution,
++      authored,
++      get registration() { return registration; },
++      get settled() { return settled; },
++      get authoringFailure() { return authoringFailure; },
++    };
+     await attached;
+   }, { source, canvasId, width, height });
+   console.log(`Attached sampled source ${canvasId}`);
+@@ -2765,8 +2783,9 @@ class GlowPulseEndpoint(Scene):
+     }
+   }
+ 
+-  // The scalar track follows the .25s wait; at .75s its value is exactly 1.
+-  // Source assertions still prove once-per-phase invocation and sparse reads.
++  // Sparse reads retain one exact callback phase and canonical source context.
++  // External samples hold .75s (after the .25s wait) while pixels are observed;
++  // the same fixture also completes through the autonomous realtime driver.
+   const callbackSparseReadsSource = await readFile(
+     path.join(repoRoot, "web/python/examples/ordinary_callback_sparse_reads.py"),
+     "utf8",

@@ -1,0 +1,251 @@
+name: One-off 2308 latest-master integration qualification
+
+on:
+  push:
+    branches: [agent/2308-real-browser-qualify-20261027]
+    paths:
+      - .github/workflows/one-off-2308-latest-master.yml
+      - .github/ci/one-off-2308-latest-master.patch
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SOURCE_RUN: "40594768816"
+      SOURCE_TREE: e25761096604fbae14fb4479a67476f0844f1f03
+      SOURCE_SHA256: 8a14e43e1d60ec82587d586080724a48939d03b9036557d2b0b4fa6b114c8f1f
+      OLD_MASTER: bc25e92bb741607f678f6adea528c9e894c6335c
+      LATEST_MASTER: 5b38eab85a86f4cc9019e8179e263c7b29771827
+      FEATURE: b3a4b7f484e607a4b14bc57e70f4947f8520ca42
+      MEMORY: 472a61fadfdabba44756b75caaa184cee8c4be57
+      CANDIDATE_TREE: 87cb42b53885c192e539fdddf3ddcf970e67bee4
+      PATCH_SHA256: 9e93c3e424375d26a1f75a77cf4576de14e96902792c0792334bacefb72b102e
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Checkout isolated helper without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Authenticate and reconcile exact latest-master source
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export SOURCE_ROOT="$RUNNER_TEMP/noon2308-latest-source"
+          export EVIDENCE="$RUNNER_TEMP/noon2308-latest-evidence"
+          mkdir -p "$SOURCE_ROOT" "$EVIDENCE/incoming"
+          printf 'SOURCE_ROOT=%s\nEVIDENCE=%s\n' "$SOURCE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" -n noon2308-ordered-effects-combined-qualification -D "$EVIDENCE/incoming"
+          python3 - <<'PY'
+          import hashlib,io,json,os,subprocess,tarfile
+          from pathlib import Path
+          root=Path(os.environ['SOURCE_ROOT']); out=Path(os.environ['EVIDENCE'])
+          prior=json.loads((out/'incoming/manifest.json').read_text())
+          payload=(out/'incoming/combined-source.tar.gz').read_bytes()
+          assert hashlib.sha256(payload).hexdigest()==os.environ['SOURCE_SHA256']==prior['source_archive_sha256']
+          assert prior['tested_tree']==os.environ['SOURCE_TREE'] and prior['tracked_source_unchanged'] is True
+          assert all(prior['command_exit_codes'][k]==0 for k in ('fast','prepared','controls','wasm','web'))
+          with tarfile.open(fileobj=io.BytesIO(payload),mode='r:gz') as tar: tar.extractall(root,filter='data')
+          def git(*args,check=True):
+              return subprocess.run(['git',*args],cwd=root,check=check,capture_output=True,text=True)
+          git('init','-q','--initial-branch=qualification')
+          git('config','user.name','Noon latest-master qualification')
+          git('config','user.email','qualification@example.invalid')
+          git('add','--all')
+          assert git('write-tree').stdout.strip()==os.environ['SOURCE_TREE']
+          pins={key:os.environ[key] for key in ('OLD_MASTER','LATEST_MASTER','FEATURE','MEMORY')}
+          fetched=git('fetch','--no-tags','--depth=256','https://github.com/'+os.environ['GITHUB_REPOSITORY']+'.git',*pins.values())
+          (out/'fetch.log').write_text(fetched.stdout+fetched.stderr)
+          for sha in pins.values(): assert git('rev-parse',sha+'^{commit}').stdout.strip()==sha
+          path='scripts/shared-authoring-smoke.mjs'
+          assert git('diff','--name-only',pins['OLD_MASTER'],pins['LATEST_MASTER']).stdout.splitlines()==[path]
+          baseline=git('commit-tree',os.environ['SOURCE_TREE'],'-p',pins['OLD_MASTER'],'-p',pins['FEATURE'],'-p',pins['MEMORY'],'-m','Authenticate isolated combined source').stdout.strip()
+          git('update-ref','refs/heads/qualification',baseline); git('reset','--hard',baseline)
+          assert git('merge-base','HEAD',pins['LATEST_MASTER']).stdout.strip()==pins['OLD_MASTER']
+          merged=git('merge','--no-commit','--no-ff',pins['LATEST_MASTER'],check=False)
+          (out/'merge.log').write_text(merged.stdout+merged.stderr)
+          assert merged.returncode==1
+          assert git('diff','--name-only','--diff-filter=U').stdout.splitlines()==[path]
+          stages=git('ls-files','-u').stdout; (out/'unmerged-index.txt').write_text(stages)
+          assert len(stages.splitlines())==3
+          (out/'conflicts.diff').write_text(git('diff','--cc').stdout)
+          patch=Path(os.environ['GITHUB_WORKSPACE'])/'.github/ci/one-off-2308-latest-master.patch'
+          assert hashlib.sha256(patch.read_bytes()).hexdigest()==os.environ['PATCH_SHA256']
+          # Restore only this verified conflict to its authenticated candidate
+          # before applying the reviewed union of upstream and candidate tests.
+          git('checkout','HEAD','--',path)
+          git('apply','--check','--index',str(patch)); git('apply','--index',str(patch))
+          assert not git('ls-files','-u').stdout
+          assert git('write-tree').stdout.strip()==os.environ['CANDIDATE_TREE']
+          git('diff','--cached','--check',pins['LATEST_MASTER'])
+          git('commit','-qm','Reconcile latest master callback tests without dropping realtime coverage')
+          for sha in pins.values(): git('merge-base','--is-ancestor',sha,'HEAD')
+          commit=git('rev-parse','HEAD').stdout.strip()
+          git('archive','--format=tar.gz','--output='+str(out/'combined-source.tar.gz'),'HEAD')
+          (out/'resolution.patch').write_bytes(patch.read_bytes())
+          report={'scope':'isolated latest-master combined source; no remote feature or master writes',
+                  'pins':pins,'previous_source_run':int(os.environ['SOURCE_RUN']),
+                  'previous_tree':os.environ['SOURCE_TREE'],'tested_tree':os.environ['CANDIDATE_TREE'],
+                  'tested_commit_local_only':commit,'patch_sha256':os.environ['PATCH_SHA256'],
+                  'source_archive_sha256':hashlib.sha256((out/'combined-source.tar.gz').read_bytes()).hexdigest()}
+          (out/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Require exact callback identity and verify negative controls
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/callback.exit"; exit "$code"' EXIT
+          python3 - <<'PY'
+          import os,subprocess
+          from pathlib import Path
+          out=Path(os.environ['EVIDENCE']); path=Path('scripts/callback-continuation-proof.mjs')
+          original=path.read_bytes()
+          command=['node','--test','scripts/callback-continuation-proof.test.mjs']
+          def run(label,args):
+              cp=subprocess.run(args,capture_output=True,text=True)
+              (out/(label+'.log')).write_text(cp.stdout+cp.stderr)
+              print(cp.stdout,cp.stderr,flush=True)
+              return cp
+          try:
+              cp=run('callback-positive',command)
+              assert cp.returncode==0 and '# pass 24' in cp.stdout and '# fail 0' in cp.stdout
+              needle=b' ||\n        authored.semanticExecution.callbackSessionId !== proof.registration.semanticExecution.callbackSessionId'
+              assert original.count(needle)==1
+              path.write_bytes(original.replace(needle,b'',1))
+              cp=run('callback-negative',['node','--test','--test-name-pattern=different valid callback session',command[-1]])
+              assert cp.returncode!=0 and '# fail 2' in cp.stdout and 'Missing expected rejection' in cp.stdout
+          finally: path.write_bytes(original)
+          cp=run('callback-restored',command)
+          assert cp.returncode==0 and '# pass 24' in cp.stdout and '# fail 0' in cp.stdout
+          subprocess.run(['git','diff','--exit-code'],check=True)
+          PY
+      - name: Install pinned Rust and native build dependencies
+        id: native
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$EVIDENCE/rust-version.log"
+          bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Restore Cargo sources
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-2308-latest
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Read-only compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Canonical Fast Gate on latest-master candidate
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/fast.exit"; exit "$code"' EXIT
+          bash scripts/check.sh fast "$LATEST_MASTER" 2>&1 | tee "$EVIDENCE/fast.log"
+      - name: Install pinned wasm-pack
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build opt-in prepared browser package
+        id: build
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/build.exit"; exit "$code"' EXIT
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked 2>&1 | tee "$EVIDENCE/build.log"
+          node scripts/build-python-worker.mjs
+          node scripts/build-runtime-identity.mjs
+          node scripts/check-web-package.mjs
+      - name: Install pinned Chromium
+        id: chromium
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Execute ordinary callback and all eight prepared browser entrypoints
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        run: |
+          set -euo pipefail
+          trap 'code=$?; echo "$code" > "$EVIDENCE/browser.exit"; exit "$code"' EXIT
+          python3 - <<'PY'
+          import json,os,subprocess,sys,time
+          from pathlib import Path
+          out=Path(os.environ['EVIDENCE'])
+          cases=[('shared-authoring','scripts/shared-authoring-smoke.mjs',{},900),
+            ('prepared-canvas','scripts/prepared-canvas-qualification.mjs',{},360),
+            ('prepared-source','scripts/prepared-source-qualification.mjs',{},360),
+            ('prepared-python','scripts/prepared-python-qualification.mjs',{},360),
+            ('prepared-construct','scripts/prepared-construct-qualification.mjs',{},360),
+            ('prepared-worker-rust','scripts/prepared-worker-qualification.mjs',{},360),
+            ('prepared-worker-python','scripts/prepared-worker-qualification.mjs',{'NOON_PREPARED_WORKER_SOURCE':'python'},360),
+            ('prepared-authoring-worker','scripts/prepared-authoring-worker-qualification.mjs',{},360),
+            ('prepared-gallery-lifecycle','scripts/playground-prepared-lifecycle-qualification.mjs',{},360)]
+          outcomes=[]
+          for name,script,extra,limit in cases:
+              env=os.environ.copy(); env.update(extra); start=time.monotonic()
+              with (out/(name+'.log')).open('wb') as log:
+                  try: code=subprocess.run(['node',script],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=limit).returncode
+                  except subprocess.TimeoutExpired: code=124
+              record={'case':name,'script':script,'exit':code,'seconds':round(time.monotonic()-start,1)}
+              outcomes.append(record); (out/'browser-results.json').write_text(json.dumps(outcomes,indent=2)+'\n')
+              print(json.dumps(record),flush=True)
+          if any(row['exit'] for row in outcomes): sys.exit('Browser qualification failed; inspect independent logs')
+          PY
+      - name: Verify final source and record independent outcomes
+        if: ${{ always() && steps.source.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/noon2308-latest-source
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+          git status --porcelain=v1 > "$EVIDENCE/source-status.txt"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          out=Path(os.environ['EVIDENCE']); report=json.loads((out/'manifest.json').read_text())
+          report['command_exit_codes']={k:int((out/(k+'.exit')).read_text()) if (out/(k+'.exit')).exists() else None for k in ('callback','fast','build','browser')}
+          report['tracked_source_unchanged']=True
+          (out/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          assert all(code==0 for code in report['command_exit_codes'].values()),'A required gate failed or did not execute'
+          PY
+      - name: Preserve source-bound qualification and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-latest-master-integration-qualification
+          path: |
+            ${{ runner.temp }}/noon2308-latest-evidence
+            ${{ runner.temp }}/noon2308-latest-source/browser-smoke-artifacts
+          if-no-files-found: error
+          retention-days: 3
