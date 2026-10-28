@@ -15,7 +15,7 @@ impl LiveContinuation for CameraBloom {
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let segment = match self.stage {
-            0 | 2 | 4 => live.wait_segment(0.5).map_err(message)?,
+            0 | 2 => live.wait_segment(0.5).map_err(message)?,
             1 | 3 => {
                 let bright = self.stage == 1;
                 let panel = live.target_editor(&self.panel).map_err(message)?;
@@ -48,7 +48,7 @@ impl LiveContinuation for CameraBloom {
                 )
                 .map_err(message)?
             }
-            5 => return Ok(ContinuationStep::Finished),
+            4 => return Ok(ContinuationStep::Finished),
             _ => return Err("camera Bloom resumed after completion".into()),
         };
         self.stage += 1;
