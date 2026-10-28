@@ -363,6 +363,7 @@ impl SemanticExecutionIndex {
         let mut objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
+                view_color_profile: state.view_color_profile,
                 fill_paint: state.fill_paint,
                 semantic_id,
                 effects: state.effects,
@@ -467,6 +468,7 @@ pub struct SemanticExecutionGraphEdgeDependency {
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
+    pub view_color_profile: Option<noon_core::ViewColorProfile>,
     pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
@@ -914,6 +916,7 @@ fn lower_graph_dependencies(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
+    pub view_color_profile: Option<noon_core::ViewColorProfile>,
     pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub(super) effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     content: SemanticObjectContent,
@@ -1138,6 +1141,8 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     };
     Ok(LoweredObjectState {
+        view_color_profile: (state.role() == SemanticObjectRole::Camera2D)
+            .then_some(state.view_color_profile()),
         fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
         effects: None,
         content: state.content,

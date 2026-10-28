@@ -89,6 +89,7 @@ mod host_callbacks;
 pub use host_callbacks::*;
 
 mod camera;
+pub use camera::ViewColorProfile;
 
 mod semantic_references;
 mod semantic_text_resources;

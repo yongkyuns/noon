@@ -22,6 +22,7 @@ pub(super) struct PreparedComposedSource {
 impl PreparedComposedSource {
     pub(super) fn into_execution_object(self, execution_id: ObjectId) -> SemanticExecutionObject {
         SemanticExecutionObject {
+            view_color_profile: None,
             semantic_id: self.owner,
             execution_id,
             content: SemanticExecutionContent::Composed(self.source),

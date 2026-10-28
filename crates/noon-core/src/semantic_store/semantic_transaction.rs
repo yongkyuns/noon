@@ -111,6 +111,11 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         binding: Option<SemanticClickAction>,
     },
+    /// Select color/energy processing on the existing semantic 2D camera.
+    SetViewColorProfile {
+        object: SemanticTransactionNodeRef,
+        profile: crate::ViewColorProfile,
+    },
     SetInset2DView {
         object: SemanticTransactionNodeRef,
         camera_frame: Option<SemanticTransactionNodeRef>,
@@ -288,6 +293,7 @@ impl SemanticMutation {
             | Self::SetCameraProfile { object, .. }
             | Self::SetCameraMotions { object, .. }
             | Self::SetClickAction { object, .. }
+            | Self::SetViewColorProfile { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -384,6 +390,7 @@ impl SemanticMutation {
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetClickAction { object, .. }
+            | Self::SetViewColorProfile { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -433,6 +440,9 @@ impl SemanticMutation {
             }
             Self::SetBarMetadata { object, .. } => {
                 Some(SemanticMutationKey::ObjectBarMetadata(*object))
+            }
+            Self::SetViewColorProfile { object, .. } => {
+                Some(SemanticMutationKey::ViewColorProfile(*object))
             }
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::SetAngleValue { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
@@ -513,6 +523,7 @@ pub(super) enum SemanticMutationKey {
     ClickAction(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
+    ViewColorProfile(SemanticTransactionNodeRef),
     SpatialCompositionDomain(SemanticTransactionNodeRef),
     DecimalNumber(SemanticTransactionNodeRef),
     TextPresentationBaseline(SemanticTransactionNodeRef),
@@ -980,6 +991,18 @@ impl SemanticMutationTransaction {
         binding: Option<SemanticClickIndicate>,
     ) -> &mut Self {
         self.set_click_action(object, binding.map(SemanticClickAction::Indicate))
+    }
+
+    pub fn set_view_color_profile(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        profile: crate::ViewColorProfile,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetViewColorProfile {
+            object: object.into(),
+            profile,
+        });
+        self
     }
 
     /// Bind ordinary rectangles as an inset display and camera in one publication.
@@ -2972,6 +2995,21 @@ impl SemanticMutationTransaction {
                         state.set_bar_metadata(metadata.clone());
                     }
                     changed.push(did_change);
+                }
+                SemanticMutation::SetViewColorProfile { object, profile } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if state.role() != SemanticObjectRole::Camera2D {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    changed.push(state.view_color_profile() != *profile);
+                    state.set_view_color_profile(*profile);
                 }
                 SemanticMutation::SetInset2DView {
                     object,

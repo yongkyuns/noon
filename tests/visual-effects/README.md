@@ -1715,3 +1715,28 @@ clamping shader is compiled into an otherwise identical float render pipeline
 and must fail the linear oracle. A clean same-frame upload must remain zero.
 This numerical raster-input proof does not substitute for the required paired
 public Rust/Python authoring, authored-time/seek/export or browser HDR gates.
+
+The in-progress authored view contract uses `ViewColorProfile` on the existing
+semantic 2D camera. Compatibility is the default; LinearHdr declares the shared
+linear-radiance/display contract. The ordinary semantic transaction validates the
+camera role and supports transaction-local creation, staged reads and atomic
+rollback. Profile selection lowers to the camera's existing compiled execution
+slot. A static live edit uses the ordinary execution transaction, changes only
+that slot's metadata/publication and leaves effective object rows untouched.
+The Runtime publication borrows this metadata from its current compiled revision;
+it introduces no second state map, scene, identity allocator or clock. Retained
+replay exchanges the same compiled revisions, so profile queries follow authored
+time without a renderer-owned history. Repeating an identical edit is a no-op.
+Ordinary object creation allocates no view-profile shadow entries. Visual become
+preserves the receiver's camera/view meaning; explicitly removing its camera role
+clears the profile to compatibility.
+
+Native Rust tests exercise initial/live lowering, pending camera creation,
+compiled transaction staging, mixed valid/invalid rollback, receiver ownership,
+clean no-op publications, unchanged unrelated frame rows and repeated replay.
+This metadata path is not yet connected to rendered authored colors or a public
+HDR creator surface. Required work still includes renderer selection/input color
+decoding, checked emission, Bloom attachment/animation, explicit view-ambiguity
+and capability admission, paired Python/direct-WASM/export evidence and the full
+M4/M5 gates. A successful profile metadata update alone is not an HDR rendering
+qualification.

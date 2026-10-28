@@ -97,6 +97,11 @@ pub enum ExecutionPatch {
         object: ObjectId,
         enabled: bool,
     },
+    /// Static authored view processing on an existing compiled camera row.
+    SetViewColorProfile {
+        object: ObjectId,
+        profile: noon_core::ViewColorProfile,
+    },
     SetStyle {
         object: ObjectId,
         style: Style,

@@ -135,6 +135,8 @@ impl DynamicProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
+    /// Derived authored 2D camera color contract; ordinary rows carry None.
+    pub view_color_profile: Option<noon_core::ViewColorProfile>,
     /// Derived continuous fill definition; solid fills retain the compact style.
     pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     /// Whether this object can draw; its query geometry remains available.
@@ -275,6 +277,7 @@ impl CompiledObject {
         base_style: Style,
     ) -> Self {
         Self {
+            view_color_profile: None,
             fill_paint: None,
             draw_enabled: true,
             id,
@@ -2142,6 +2145,11 @@ impl CompiledScene {
             ExecutionPatch::SetDrawEnabled { object, enabled } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].draw_enabled != *enabled),
+            ExecutionPatch::SetViewColorProfile { object, profile } => {
+                self.object_index(*object).is_none_or(|index| {
+                    self.objects[index as usize].view_color_profile != Some(*profile)
+                })
+            }
             ExecutionPatch::SetStyle {
                 object,
                 style,
@@ -2564,6 +2572,18 @@ impl CompiledScene {
                     None => compiled.spatial = None,
                 }
                 self.refresh_cairo_path_control_points(index);
+            }
+            ExecutionPatch::SetViewColorProfile { object, profile } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                if self.objects[index as usize].view_color_profile.is_none() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Style,
+                    });
+                }
+                self.objects[index as usize].view_color_profile = Some(*profile);
             }
             ExecutionPatch::SetStyle {
                 object,
