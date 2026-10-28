@@ -33,6 +33,8 @@ mod effect_stack;
 mod gaussian_blur;
 mod hdr_bloom;
 #[cfg(test)]
+pub(crate) use hdr_bloom::tests::{decode as test_decode_hdr, read as test_read_hdr};
+#[cfg(test)]
 mod hdr_scene_raster_tests;
 pub use hdr_bloom::{
     HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomPrepareError, HdrBloomScope,
@@ -653,9 +655,12 @@ impl<'a> FramePassOptions<'a> {
 }
 
 impl GpuRenderer {
-    /// Planar draws to a `Rgba16Float` target consume unassociated linear radiance in packed
-    /// source colors and blends in linear light without compatibility clipping.
-    /// The producer owns color decoding/emission; final HDR display resolution
+    /// Planar geometry draws to `Rgba16Float` consume unassociated linear radiance
+    /// in packed source colors and blend without compatibility clipping. The
+    /// publication-aware preparer decodes authored geometry colors for that view.
+    /// Image assets and glyph tints retain authored sRGB input contracts; float
+    /// pipelines decode them before association/filtering, respecting the color
+    /// atlas's existing hardware decode. The producer owns emission; HDR display resolution
     /// must happen once after scene composition. Other targets retain the
     /// established encoded-premultiplied compatibility contract.
     pub fn new(

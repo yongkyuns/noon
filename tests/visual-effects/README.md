@@ -1758,9 +1758,62 @@ mathematical expectations and a manifest can be retained with
 `NOON_AUTHORED_VIEW_ARTIFACT_DIR` and are collected by native CI.
 
 This is a finite planar color-preparation proof, not a public HDR creator surface.
-The canonical mixed-content retained preparer, image/text color inputs, composed
-filter captures and native/browser/export hosts still need profile integration.
+Composed filter captures and native/browser/export hosts still need profile
+integration; finite ordinary retained input qualification follows below.
 Checked emission, Bloom view attachment/animation, explicit view-ambiguity and
 capability admission, paired Python/direct-WASM/export evidence and the remaining
 M4/M5 gates are open. The authored test does not yet claim radiance above one,
 physical-device performance, or browser HDR execution.
+
+
+The canonical `RetainedFramePreparer` now propagates that same publication profile
+through ordinary geometry, mixed scratch geometry, outlines and the candidate
+visibility projection. Prepared geometry/retained views expose the derived color
+profile. Raw/transport entry points explicitly retain compatibility packing; a
+prior direct publication does not turn them into another profile authority.
+
+For a float working target, straight sRGB bitmap texels are decoded before each
+reconstruction tap is associated. Nearest, bilinear and Keys cubic (`a=-1`) sample
+the resulting linear premultiplied values with their existing addressing rules.
+Intrinsic reconstruction/clamping precedes final object opacity, applied once.
+This matters for cubic overshoot: scaling taps before the intrinsic clamp changes
+output and made bitmap objects disagree with image fills. Compatibility keeps its
+existing reconstruction and opacity order. The HDR repair has an actual failing
+old-order pixel witness; the 0.002 bound was unchanged.
+
+Mask glyph coverage remains linear alpha; authored tint RGB is decoded at the
+vertex. Color glyph atlas pages already use `Rgba8UnormSrgb`, so texture loads
+perform the one input decode. HDR color texels are associated before bilinear
+interpolation, then multiplied by linear tint and final alpha. Decoding the atlas
+again or associating only after interpolation is incorrect. Compatibility shader
+branches preserve their existing operations. The asset conversion needs no
+additional retained texture images or per-frame pixel upload.
+
+The authored-view integration test now runs the same 16-case independent planar
+source/Bloom oracle through direct, canonical retained, and retained-visible
+preparation. Its `retained_color_assets` module adds 24 real Rust Scene bitmap/
+image-fill cases: three reconstruction modes, painter reversal, transparent/
+nonblack clears, 24 exact opacity restorations, immutable texture reuse and clean
+zero uploads. Every float channel uses the frozen 0.002 bound; display uses 2
+bytes. A real omitted-asset-decoder shader must fail; the old opacity-order
+shader also fails the independent reconstruction contract.
+
+`glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_negatives`
+runs eight float mask/color-atlas cases against independent f64 tap reconstruction
+and tint/source-over arithmetic, including transparent colored texels and nonblack
+clears. Actual compiled shaders for encoded tint/unassociated filtering and double
+atlas decoding must fail. Empty dirty ranges upload zero glyph instance bytes.
+The real Rust-authored `HDR` text scene adds three live tint/restoration phases
+composited over ordinary geometry, with clean zero uploads and no geometry upload
+for the text-color edits. The ordinary white-text compatibility render supplies
+qualified glyph **coverage only**; the independent color/composition reference does
+not claim to replace the font rasterization oracle. Native CI preserves the raw
+float images, expectations, coverage source and manifests alongside the existing
+linear-scene proof.
+
+These input proofs do not yet qualify HDR composed/filter/backdrop/inset/spatial
+captures, host format selection/final presentation, explicit view capabilities,
+checked authored emission, Bloom attachment/animation or the public creator
+surface. Rust/WASM compilation is distinct from browser execution evidence.
+The complete M4/M5 host, time/seek/export, extension and performance gates remain
+owned by #1897.

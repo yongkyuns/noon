@@ -8,7 +8,7 @@ use noon_core::{
 };
 use noon_render_wgpu::{
     Camera2D, FramePreparer, GpuRenderer, HdrBloomCapture, HdrBloomFilter, HdrBloomParameters,
-    HdrBloomScope,
+    HdrBloomScope, RetainedFramePreparer,
 };
 
 const SIZE: u32 = 16;
@@ -243,9 +243,7 @@ fn reference(
     }
     (linear, bytes)
 }
-#[test]
-#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
-fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
+fn qualify_authored_scene(retained: bool, visible: bool) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
@@ -280,8 +278,14 @@ fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_p
         intensity: 1.5,
         scratch_budget_bytes: 1024 * 1024,
     };
-    let artifact =
-        std::env::var_os("NOON_AUTHORED_VIEW_ARTIFACT_DIR").map(std::path::PathBuf::from);
+    let artifact = std::env::var_os(if visible {
+        "NOON_VISIBLE_VIEW_ARTIFACT_DIR"
+    } else if retained {
+        "NOON_RETAINED_VIEW_ARTIFACT_DIR"
+    } else {
+        "NOON_AUTHORED_VIEW_ARTIFACT_DIR"
+    })
+    .map(std::path::PathBuf::from);
     if let Some(dir) = &artifact {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("adapter.txt"), format!("{:?}", adapter.get_info())).unwrap();
@@ -313,21 +317,47 @@ fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_p
                         &queue,
                         Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 8.0)).unwrap(),
                     );
+                    let candidates = (0..publication.frame().objects.len()).collect::<Vec<_>>();
                     let mut preparer = FramePreparer::new();
-                    let prepared = preparer.prepare_publication(&publication);
-                    renderer.upload(&device, &queue, &prepared);
+                    let mut retained_preparer = RetainedFramePreparer::new();
+                    let mut text = renderer.create_retained_text_state(&device, &queue);
+                    let metrics = noon_render_wgpu::text::TextDeviceMetrics::uniform(2.0).unwrap();
+                    let clear_color = wgpu::Color {
+                        r: clear[0],
+                        g: clear[1],
+                        b: clear[2],
+                        a: clear[3],
+                    };
                     let mut encoder = device.create_command_encoder(&Default::default());
-                    renderer.encode(
-                        &mut encoder,
-                        &view,
-                        &prepared,
-                        wgpu::Color {
-                            r: clear[0],
-                            g: clear[1],
-                            b: clear[2],
-                            a: clear[3],
-                        },
-                    );
+                    if retained {
+                        let prepared = if visible {
+                            retained_preparer.prepare_publication_visible(
+                                &device,
+                                &publication,
+                                &candidates,
+                                metrics,
+                            )
+                        } else {
+                            retained_preparer.prepare_publication(&device, &publication, metrics)
+                        }
+                        .unwrap();
+                        assert_eq!(prepared.color_profile(), ViewColorProfile::LinearHdr);
+                        renderer.upload_retained(&device, &queue, &prepared, &mut text);
+                        renderer
+                            .encode_retained(
+                                &mut encoder,
+                                &view,
+                                &prepared,
+                                &text,
+                                clear_color,
+                                None,
+                            )
+                            .unwrap();
+                    } else {
+                        let prepared = preparer.prepare_publication(&publication);
+                        renderer.upload(&device, &queue, &prepared);
+                        renderer.encode(&mut encoder, &view, &prepared, clear_color);
+                    }
                     queue.submit([encoder.finish()]);
                     let pixels = read(&device, &queue, &target);
                     let expected = expected(paint, reverse, clear);
@@ -370,12 +400,33 @@ fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_p
                     assert!(error <= 2, "profile {profiles} display error {error}");
                     drop(publication);
                     let clean = session.take_renderer_publication();
-                    let prepared = preparer.prepare_publication(&clean);
-                    assert_eq!(prepared.stats.instances_repacked, 0);
-                    assert_eq!(
-                        renderer.upload(&device, &queue, &prepared).bytes_uploaded,
-                        0
-                    );
+                    if retained {
+                        let prepared = if visible {
+                            retained_preparer.prepare_publication_visible(
+                                &device,
+                                &clean,
+                                &candidates,
+                                metrics,
+                            )
+                        } else {
+                            retained_preparer.prepare_publication(&device, &clean, metrics)
+                        }
+                        .unwrap();
+                        assert_eq!(prepared.geometry_stats().instances_repacked, 0);
+                        assert_eq!(
+                            renderer
+                                .upload_retained(&device, &queue, &prepared, &mut text)
+                                .bytes_uploaded(),
+                            0
+                        );
+                    } else {
+                        let prepared = preparer.prepare_publication(&clean);
+                        assert_eq!(prepared.stats.instances_repacked, 0);
+                        assert_eq!(
+                            renderer.upload(&device, &queue, &prepared).bytes_uploaded,
+                            0
+                        );
+                    }
                     if profiles == 0 {
                         // Actual draw with the ordinary raw packing, deliberately omitting
                         // the profile consumer. This must disagree with the independent
@@ -427,4 +478,24 @@ fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_p
         std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
     }
     eprintln!("authored view: {manifest}");
+}
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
+    qualify_authored_scene(false, false);
+}
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn retained_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
+    qualify_authored_scene(true, false);
+}
+
+mod retained_color_assets;
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn visible_retained_view_profile_matches_independent_bloom_pixels() {
+    qualify_authored_scene(true, true);
 }

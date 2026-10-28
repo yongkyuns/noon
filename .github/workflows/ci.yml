@@ -109,6 +109,7 @@ on:
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
       - "crates/noon/tests/authored_view_color_raster.rs"
+      - "crates/noon/tests/retained_color_assets/**"
       - "crates/noon/tests/pixelate.rs"
       - "crates/noon/tests/composed/**"
       - "crates/noon/tests/composed_effects.rs"
@@ -261,9 +262,15 @@ jobs:
         env:
           NOON_HDR_SCENE_ARTIFACT_DIR: ${{ github.workspace }}/hdr-scene-linear-raster-artifacts
           NOON_AUTHORED_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/authored-view-color-raster-artifacts
+          NOON_RETAINED_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/retained-view-color-raster-artifacts
+          NOON_VISIBLE_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/visible-view-color-raster-artifacts
+          NOON_RETAINED_ASSET_ARTIFACT_DIR: ${{ github.workspace }}/retained-asset-color-raster-artifacts
+          NOON_RETAINED_TEXT_ARTIFACT_DIR: ${{ github.workspace }}/retained-text-color-raster-artifacts
+          NOON_GLYPH_WORKING_COLOR_ARTIFACT_DIR: ${{ github.workspace }}/glyph-working-color-raster-artifacts
         run: |
           cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture
           cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture
+          cargo test -p noon-render-wgpu --lib glyph_working_color_matches -- --ignored --nocapture
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify grouped glyph original coverage and paint alpha
@@ -347,6 +354,11 @@ jobs:
           path: |
             hdr-scene-linear-raster-artifacts
             authored-view-color-raster-artifacts
+            retained-view-color-raster-artifacts
+            visible-view-color-raster-artifacts
+            retained-asset-color-raster-artifacts
+            retained-text-color-raster-artifacts
+            glyph-working-color-raster-artifacts
           if-no-files-found: error
           retention-days: 3
       - name: Preserve native glyph coverage evidence

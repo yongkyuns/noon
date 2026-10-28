@@ -263,7 +263,17 @@ impl TextGlyphGpuRenderer {
             }],
         });
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("glyph.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon working-color glyph shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    crate::color_profile::working_color_shader(target_format),
+                    include_str!("glyph.wgsl")
+                )
+                .into(),
+            ),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon text glyph pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout), Some(&atlas_layout)],
@@ -1333,3 +1343,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod working_color_tests;
