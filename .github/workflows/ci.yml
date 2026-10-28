@@ -111,6 +111,7 @@ on:
       - "crates/noon/tests/glow_scene_raster.rs"
       - "crates/noon/tests/authored_view_color_raster.rs"
       - "crates/noon/tests/retained_color_assets/**"
+      - "crates/noon/tests/hdr_captures/**"
       - "crates/noon/tests/pixelate.rs"
       - "crates/noon/tests/composed/**"
       - "crates/noon/tests/composed_effects.rs"
@@ -256,6 +257,10 @@ jobs:
           cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
       - name: Qualify RGBA Gaussian pixels and retained raster resources
         run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
+      - name: Qualify float Gaussian radiance and retained resource contracts
+        env:
+          NOON_HDR_GAUSSIAN_ARTIFACTS: ${{ github.workspace }}/hdr-gaussian-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::gaussian_blur::tests::hdr -- --include-ignored --nocapture
       - name: Qualify linear HDR bloom against independent float and display references
         env:
           NOON_HDR_BLOOM_ARTIFACT_DIR: ${{ github.workspace }}/hdr-bloom-raster-artifacts
@@ -268,6 +273,7 @@ jobs:
           NOON_VISIBLE_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/visible-view-color-raster-artifacts
           NOON_RETAINED_ASSET_ARTIFACT_DIR: ${{ github.workspace }}/retained-asset-color-raster-artifacts
           NOON_RETAINED_TEXT_ARTIFACT_DIR: ${{ github.workspace }}/retained-text-color-raster-artifacts
+          NOON_HDR_COMPOSED_ARTIFACTS: ${{ github.workspace }}/hdr-composed-raster-artifacts
           NOON_GLYPH_WORKING_COLOR_ARTIFACT_DIR: ${{ github.workspace }}/glyph-working-color-raster-artifacts
         run: |
           cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture
@@ -361,6 +367,8 @@ jobs:
             retained-asset-color-raster-artifacts
             retained-text-color-raster-artifacts
             glyph-working-color-raster-artifacts
+            hdr-gaussian-raster-artifacts
+            hdr-composed-raster-artifacts
           if-no-files-found: error
           retention-days: 3
       - name: Preserve native glyph coverage evidence
