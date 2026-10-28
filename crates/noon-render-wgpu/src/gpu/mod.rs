@@ -32,8 +32,10 @@ pub use source_capture::{
 mod effect_stack;
 mod gaussian_blur;
 mod hdr_bloom;
+mod view_output;
 #[cfg(test)]
 pub(crate) use hdr_bloom::tests::{decode as test_decode_hdr, read as test_read_hdr};
+pub use view_output::{AuthoredViewOutput, ViewOutputError};
 #[cfg(test)]
 mod hdr_scene_raster_tests;
 pub use hdr_bloom::{

@@ -1660,3 +1660,12 @@ pub async fn create_direct_lingering_renderer(
     let session = noon::example_scenes::polynomial_rates::lingering_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
+
+/// Same ordinary Rust material/view program as the native camera_bloom example.
+#[wasm_bindgen(js_name = createDirectCameraBloomRenderer)]
+pub async fn create_direct_camera_bloom_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::camera_bloom::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}

@@ -14,6 +14,7 @@ pub mod bar_chart;
 pub mod blur;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
+pub mod camera_bloom;
 pub mod circle_surround;
 pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
