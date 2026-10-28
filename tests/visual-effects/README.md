@@ -1613,3 +1613,71 @@ source progression contract; this test does not add backward live-source seek.
 These finite correctness/recovery profiles do not close #1897. Remaining host,
 physical-device performance and failure/capability qualification, scene HDR/bloom,
 public typed WGSL extensions and creator support documentation remain required.
+
+### Linear HDR bloom renderer prerequisite (#1897 M4, not scene completion)
+
+`gpu::HdrBloomFilter` processes an actual linear alpha-associated
+`Rgba16Float` image. Its caller must provide finite nonnegative radiance,
+alpha in [0,1], RGB <= 64*alpha and transparent black when alpha is zero.
+It cannot reconstruct emission from an already clamped compatibility frame.
+No scene property, Python placeholder, second scene/clock or browser transport
+is introduced by this prerequisite. Scene-owned emission, complete linear
+compositing, view attachment/animation, paired public authoring, seek/export and
+browser capability/recovery evidence remain required before HDR/bloom is a
+supported creator feature. The ordinary encoded-premultiplied LDR path does not
+call this operator and retains its existing color contract.
+
+The finite operator is deliberately specified independently of its WGSL:
+
+1. For premultiplied linear source `S`, use Rec.709 luminance
+   `L=.2126*S.r+.7152*S.g+.0722*S.b`. Bright extraction is zero for
+   `L<=threshold`; otherwise `E=S*(L-threshold)/L`. Threshold is [0,64]
+   in alpha-associated linear luminance, rather than unassociated brightness.
+2. Blur all four extracted channels with a normalized Gaussian of standard
+   deviation `sigma` [0,64] in final physical pixels and support
+   `ceil(3*sigma)` in each direction. Outside the supplied image is transparent
+   black. The full kernel remains normalized at edges. At sigma zero the kernel
+   is an exact point sample. The caller owns the padded view extent.
+3. With intensity `i` [0,8] and blurred extraction `G`, retain linear HDR
+   `C.rgb=S.rgb+i*G.rgb` and
+   `C.a=S.a+(1-S.a)*clamp(i*G.a,0,1)`. RGB is not clamped to one or alpha.
+   Intensity zero keeps the actual HDR base and skips extraction/blur work.
+4. Resolve once: transparent output is exact zero; otherwise unassociate by
+   `C.a`, apply componentwise Reinhard `x/(1+x)`, then the piecewise sRGB
+   transfer (12.92*x below/equal .0031308, otherwise 1.055*x^(1/2.4)-.055),
+   and associate once by `C.a`. The final `Rgba8Unorm` bytes are explicitly
+   encoded-premultiplied SDR. They require a presentation path without an
+   additional sRGB transfer. The separate float output remains linear HDR.
+
+Extraction, horizontal/vertical blur and combination each use a float image;
+resolution uses one unorm image: exactly 36 retained image bytes per pixel,
+excluding source, the 1056-byte uniform, program/binding objects and in-flight
+host frames. The filter queries actual adapter format support, checks device
+limits and validates all parameters/extent/budget before changing coherent
+state. An unsupported float target is a typed rejection, with no silent LDR
+substitute. Each scope belongs to its creating filter/device until cleared.
+A clean scope uploads/allocates/encodes nothing. Intensity edits upload 16 bytes
+and encode only combination/resolution; radius edits reuse extraction; source
+or threshold changes invalidate their real dependency closure. Disabled bloom
+defers unused extraction/blur work. Source replacement rebinds two consumers;
+resize replaces five images without recompiling pipelines. Clearing retires
+all scope images/bindings; an abandoned encoder requires explicit invalidation
+before retry. Submission and device recovery remain host responsibilities.
+
+The native GPU qualification uses independent f64 full two-dimensional
+convolution, not the production separable kernel or GPU intermediate readback
+as expected data. It covers 84 profiles: impulse, asymmetric varying alpha,
+edge energy, nonblack constant, black/translucent, near-black and transparent;
+sigma 0/.65/2.25/64 and intensity 0/1.5/8. All source values are exactly
+representable as float16. Per-channel linear acceptance is
+`abs(actual-reference) <= .006 + .004*abs(reference)`; final display acceptance
+is two bytes. This combined absolute/relative bound accounts for float16 pass
+rounding and is not an absolute .006 bound. Readback must actually retain RGB
+above one and exactly preserve an empty input. Real GPU source replacement,
+encoder abandonment/retry, resize, retirement/recreation and cross-device
+rejection supplement structural resource/locality tests. Actual mutated WGSL
+programs that clamp HDR early, apply output transfer twice, or premultiply twice
+must fail the same display oracle. CI retains actual float16 bytes, independent
+f64 expectations, actual/reference display bytes, profile metadata, adapter
+capabilities and negative-control captures. Native evidence does not establish
+WebGPU/WebGL2 support or physical-device performance.
