@@ -35,7 +35,8 @@ test("causally bracketed Start permits the historical backwards cross-realm epoc
 
 test("same-Window request and response cannot reverse even by one ULP", () => {
   const altered = report();
-  altered.cases[0].running.anchors[0].windowClockBracket.receivedMs = 100 - Number.EPSILON;
+  altered.cases[0].running.anchors[0].windowClockBracket.receivedMs = 99.99999999999999;
+  assert.ok(altered.cases[0].running.anchors[0].windowClockBracket.receivedMs < 100);
   altered.cases[0].running.anchors[0].windowClockBracket.observableAgeLowerMs =
     110 - altered.cases[0].running.anchors[0].windowClockBracket.receivedMs;
   assert.throws(() => validateWindowBracketReport(altered));
