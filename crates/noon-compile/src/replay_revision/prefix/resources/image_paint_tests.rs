@@ -3,8 +3,8 @@ use crate::replay_revision::SavedRow;
 use crate::{CompiledObject, CompiledTrack};
 use noon_core::{
     CompositionTimeMap, ImageMapping, ImagePaint, ObjectId, PaintTransition, Property,
-    RasterImageResourceArena, RasterImageResourceLookup, RasterImageSampling, RateFunction,
-    Style, TrackId, TrackTiming, Transform2D,
+    RasterImageResourceArena, RasterImageResourceLookup, RasterImageSampling, RateFunction, Style,
+    TrackId, TrackTiming, Transform2D,
 };
 use std::sync::Arc;
 
@@ -73,7 +73,9 @@ fn image_fill_and_historical_track_endpoints_are_pinned_once_per_handle() {
         Err(CompiledResourceError::MissingImage(row_handle))
     );
     let mut row_only = CompiledResources::default();
-    row_only.capture_paint_from_arena(&arena, &row_paint).unwrap();
+    row_only
+        .capture_paint_from_arena(&arena, &row_paint)
+        .unwrap();
     scene.merge_prepared_resources(row_only);
     assert_eq!(
         scene.prefix_resource_delta(revisions, &CompiledResources::default()),

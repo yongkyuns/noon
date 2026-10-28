@@ -45,8 +45,7 @@ fn replacing_fill_track_requires_pixels_before_admitting_the_transaction() {
     let replacement = TrackDefinition {
         values: TrackValues::Paint {
             transition: Arc::new(
-                PaintTransition::new(Some(paint.clone()), 1.0, Some(paint.clone()), 0.25)
-                    .unwrap(),
+                PaintTransition::new(Some(paint.clone()), 1.0, Some(paint.clone()), 0.25).unwrap(),
             ),
         },
         ..original
@@ -65,9 +64,9 @@ fn replacing_fill_track_requires_pixels_before_admitting_the_transaction() {
     for _ in 0..2 {
         assert_eq!(
             scene.preflight_execution_transaction(&transaction),
-            Err(CompilePatchError::Resource(CompiledResourceError::MissingImage(
-                handle,
-            )))
+            Err(CompilePatchError::Resource(
+                CompiledResourceError::MissingImage(handle,)
+            ))
         );
         assert_eq!(scene, before);
     }
@@ -82,7 +81,10 @@ fn replacing_fill_track_requires_pixels_before_admitting_the_transaction() {
     for patch in transaction.mutations() {
         scene.apply_execution_patch(patch).unwrap();
     }
-    assert_eq!(scene.track(replacement.id).unwrap().values, replacement.values);
+    assert_eq!(
+        scene.track(replacement.id).unwrap().values,
+        replacement.values
+    );
     assert_eq!(scene.objects()[0].base_style.fill, Some(Color::GREEN));
     assert_eq!(
         scene.raster_image_resources().get(handle).unwrap().rgba8(),

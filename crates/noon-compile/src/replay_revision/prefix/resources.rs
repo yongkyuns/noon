@@ -46,12 +46,7 @@ impl CompiledScene {
                     .as_deref()
                     .and_then(SemanticPaint::as_image)
                 {
-                    capture_image_dependency(
-                        &self.resources,
-                        known,
-                        &mut delta,
-                        image.resource(),
-                    )?;
+                    capture_image_dependency(&self.resources, known, &mut delta, image.resource())?;
                 }
                 match &object.content {
                     ObjectContentRef::Text(handle) => {
@@ -218,9 +213,9 @@ impl CompiledResources {
 }
 
 #[cfg(test)]
-mod resource_bytes_tests;
-#[cfg(test)]
 mod image_paint_tests;
+#[cfg(test)]
+mod resource_bytes_tests;
 
 #[cfg(test)]
 mod tests {
