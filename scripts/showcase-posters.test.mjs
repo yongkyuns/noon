@@ -15,20 +15,22 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  const existingEntries = manifest.entries.filter(entry =>
-    !["showcase-cuda-transpose", "showcase-background-music"].includes(entry.id));
-  assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
-    existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
-  assert.ok(evidence.posters.length === existingEntries.length ||
-    evidence.posters.length === existingEntries.length + 1,
-    "capture evidence must be the original batch or a fully refreshed batch");
-  for (const [index, entry] of existingEntries.entries()) {
-    assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
-  }
-  if (evidence.posters.length > existingEntries.length) {
-    const cuda = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
-    assertPoster(cuda, evidence.posters[existingEntries.length],
-      await read(cuda.path), await read(cuda.thumbnail));
+  for (const entry of manifest.entries) {
+    // CUDA has a separate fidelity contract, checked below.
+    if (entry.id === "showcase-cuda-transpose") continue;
+    let capture;
+    try {
+      capture = JSON.parse(await read(`thumbnails/showcase/${entry.id}-evidence.json`));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      capture = evidence;
+    }
+    assert.equal(capture.schema, 1);
+    assert.equal(capture.publication, "captured-preview");
+    assert.equal(capture.captureRevision, capture.runtimeBuildIdentity.sourceRevision);
+    const record = capture.posters.find(record => record.id === entry.id);
+    assert.ok(record, `${entry.id}: missing source-bound capture`);
+    assertRetainedPoster(entry, record, await read(entry.path), await read(entry.thumbnail), capture.runtimeBuildIdentity);
   }
 });
 
