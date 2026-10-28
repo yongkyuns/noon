@@ -74,6 +74,39 @@ def resolve(filename, source):
     return result, count
 
 
+
+def apply_clean_merge_repairs():
+    """Address independently proven compiler mismatches from cleanly merged files.
+
+    These edits apply only to the local integration candidate, never the remote
+    feature or master ref. Fail on any changed source, rather than guessing.
+    """
+    repairs = {
+        "crates/noon-compile/src/semantic_lowering/composed.rs": (
+            "            effects: self.effects,\n"
+            "            base_transform: Transform2D::IDENTITY,",
+            "            effects: self.effects,\n"
+            "            click_indicate: None,\n"
+            "            base_transform: Transform2D::IDENTITY,",
+        ),
+        "crates/noon-compile/src/replay_revision/prefix/resources.rs": (
+            "                    ObjectContentRef::Geometry(_) => {}",
+            "                    // A composed scope refers to member object IDs, not\n"
+            "                    // another raw resource. Member rows carry resource\n"
+            "                    // dependencies through the existing closure.\n"
+            "                    ObjectContentRef::Geometry(_) | ObjectContentRef::Composed(_) => {}",
+        ),
+    }
+    for filename, (original, replacement) in repairs.items():
+        path = ROOT / filename
+        source = path.read_text()
+        assert source.count(original) == 1, (
+            "unexpected clean-merge compiler source; refusing to amend", filename
+        )
+        path.write_text(source.replace(original, replacement, 1))
+        git("add", "--", filename)
+    return sorted(repairs)
+
 def main():
     unmerged = git("diff", "--name-only", "--diff-filter=U").splitlines()
     assert set(unmerged) == set(CONFLICTS), ("unexpected merge conflicts", unmerged)
@@ -88,6 +121,7 @@ def main():
         report["resolved_blocks"][filename] = count
     assert not git("diff", "--name-only", "--diff-filter=U"), "unresolved Git paths"
     assert not git("ls-files", "-u"), "leftover unmerged Git index"
+    report["clean_merge_repairs"] = apply_clean_merge_repairs()
     report["staged_tree"] = git("write-tree")
     Path(os.environ.get("REPORT_PATH", "read-only-resolution.json")).write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
