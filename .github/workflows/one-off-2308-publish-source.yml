@@ -1,0 +1,162 @@
+name: One-off publish qualified Noon 2308 source
+
+on:
+  push:
+    branches:
+      - agent/2308-real-browser-qualify-20261027
+    paths:
+      - .github/workflows/one-off-2308-publish-source.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: Authenticate and publish exact opt-in source to existing draft PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PIN_RUN: "40617408583"
+      PIN_HELPER: "9cf039cf9d3d7b01a7088c2c5d02c6fb7c7f81d2"
+      PIN_TREE: "87cb42b53885c192e539fdddf3ddcf970e67bee4"
+      PIN_ARCHIVE_SHA256: "42d70d6fcba3566c29e51a5f9b3a6495955ab9d05eace8ab1a74f44ccc3043e3"
+      PIN_PR: "b3a4b7f484e607a4b14bc57e70f4947f8520ca42"
+      PIN_MASTER: "5b38eab85a86f4cc9019e8179e263c7b29771827"
+      PIN_MEMORY: "472a61fadfdabba44756b75caaa184cee8c4be57"
+      PR_BRANCH: "codex/prepared-playback-integration-review-2211"
+    steps:
+      - name: Checkout only isolated publisher without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Authenticate exact completed source archive and complete gate receipts
+        id: stage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_ROOT="$RUNNER_TEMP/noon2308-verified-publish-source"
+          export EVIDENCE="$RUNNER_TEMP/noon2308-publish-evidence"
+          mkdir -p "$SOURCE_ROOT" "$EVIDENCE/incoming"
+          printf 'SOURCE_ROOT=%s\nEVIDENCE=%s\n' "$SOURCE_ROOT" "$EVIDENCE" >> "$GITHUB_ENV"
+          gh run download "$PIN_RUN" --repo "$GITHUB_REPOSITORY" -n noon2308-latest-master-integration-qualification -D "$EVIDENCE/incoming"
+          python3 - <<'PY'
+          import hashlib, io, json, os, subprocess, tarfile
+          from pathlib import Path
+          root = Path(os.environ['SOURCE_ROOT'])
+          evidence = Path(os.environ['EVIDENCE'])
+          incoming = evidence/'incoming'
+          manifest = json.loads((incoming/'manifest.json').read_text())
+          source = (incoming/'combined-source.tar.gz').read_bytes()
+          digest = hashlib.sha256(source).hexdigest()
+          assert digest == os.environ['PIN_ARCHIVE_SHA256'] == manifest['source_archive_sha256'], digest
+          assert manifest['tested_tree'] == os.environ['PIN_TREE'], manifest.get('tested_tree')
+          assert manifest['tracked_source_unchanged'] is True
+          pins = manifest['pins']
+          for source_key,env_key in [('LATEST_MASTER','PIN_MASTER'),('FEATURE','PIN_PR'),('MEMORY','PIN_MEMORY')]:
+              assert pins[source_key] == os.environ[env_key], (source_key, pins[source_key])
+          receipts=manifest['command_exit_codes']
+          assert set(receipts) == {'callback','fast','build','browser'} and all(v==0 for v in receipts.values()),receipts
+          cases=json.loads((incoming/'browser-results.json').read_text())
+          expected={'shared-authoring','prepared-canvas','prepared-source','prepared-python',
+                    'prepared-construct','prepared-worker-rust','prepared-worker-python',
+                    'prepared-authoring-worker','prepared-gallery-lifecycle'}
+          assert {c['case'] for c in cases}==expected and len(cases)==len(expected)
+          assert all(c['exit']==0 for c in cases), cases
+          assert all((incoming/(name+'.exit')).read_text().strip()=='0' for name in receipts)
+          with tarfile.open(fileobj=io.BytesIO(source),mode='r:gz') as archive:
+              archive.extractall(root,filter='data')
+          assert not (root/'.git').exists()
+          assert not any((root/'.github/ci').glob('one-off-2308*'))
+          assert not any((root/'.github/workflows').glob('one-off-2308*'))
+          assert 'default = ["renderer"]' in (root/'crates/noon-web/Cargo.toml').read_text()
+          report={'source_workflow_run':int(os.environ['PIN_RUN']),'source_tree':os.environ['PIN_TREE'],
+                  'source_archive_sha256':digest,'all_gates':receipts,
+                  'browser_entrypoints':cases,'source_worktree_verified':False,
+                  'published':False,'no_default_cutover':True}
+          (evidence/'publish-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps({k:v for k,v in report.items() if k!='browser_entrypoints'},indent=2))
+          PY
+      - name: Build exact source commit with feature master and memory parents
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ runner.temp }}/noon2308-verified-publish-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q --initial-branch=qualified
+          git config user.name "Noon source qualification publisher"
+          git config user.email "qualification@example.invalid"
+          git add --all
+          tree="$(git write-tree)"
+          test "$tree" = "$PIN_TREE"
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --depth=256 origin "$PIN_PR" "$PIN_MASTER" "$PIN_MEMORY"
+          test "$(git rev-parse "$PIN_PR^{commit}")" = "$PIN_PR"
+          test "$(git rev-parse "$PIN_MASTER^{commit}")" = "$PIN_MASTER"
+          test "$(git rev-parse "$PIN_MEMORY^{commit}")" = "$PIN_MEMORY"
+          commit="$(printf '%s\n' 'Integrate opt-in prepared playback with master and bounded seek storage' '' 'Preserve ordered effects, historical Indicate, live GlowPulse ownership and shared Rust seek buffers.' '' 'Source tree independently qualified by hosted Rust Fast Gate, WASM and real Chromium.' '' 'Refs #2211' | git commit-tree "$tree" -p "$PIN_PR" -p "$PIN_MASTER" -p "$PIN_MEMORY")"
+          test "$(git rev-parse "$commit^{tree}")" = "$PIN_TREE"
+          test "$(git show -s --format=%P "$commit")" = "$PIN_PR $PIN_MASTER $PIN_MEMORY"
+          test -z "$(git ls-files -u)"
+          git diff --check "$PIN_MASTER" "$commit"
+          git diff --name-only "$PIN_MASTER" "$commit" > "$EVIDENCE/source-changed-paths.txt"
+          if grep -E '^\.github/(workflows|ci)/one-off-2308' "$EVIDENCE/source-changed-paths.txt"; then
+            echo 'ERROR: temporary qualification helper entered feature source' >&2
+            exit 1
+          fi
+          echo "CANDIDATE_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "$commit" > "$EVIDENCE/candidate-commit.txt"
+          echo "$tree" > "$EVIDENCE/candidate-tree.txt"
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha' > "$EVIDENCE/live-master-before.txt"
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$PR_BRANCH" --jq '.object.sha' > "$EVIDENCE/live-pr-before.txt"
+          test "$(cat "$EVIDENCE/live-master-before.txt")" = "$PIN_MASTER"
+          test "$(cat "$EVIDENCE/live-pr-before.txt")" = "$PIN_PR"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/2308" --jq '[.state,.draft,.merged,.head.ref,.head.sha,.base.ref] | @tsv' > "$EVIDENCE/live-pr-metadata-before.txt"
+          expected="$(printf 'open\ttrue\tfalse\t%s\t%s\tmaster' "$PR_BRANCH" "$PIN_PR")"
+          test "$(cat "$EVIDENCE/live-pr-metadata-before.txt")" = "$expected"
+          printf 'Verified candidate commit %s, tree %s and immutable published-ref lease\n' "$commit" "$tree"
+      - name: Publish with strictly non-forced feature-branch fast-forward
+        id: publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ runner.temp }}/noon2308-verified-publish-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_COMMIT" = "$(cat "$EVIDENCE/candidate-commit.txt")"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^{tree}")" = "$PIN_TREE"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha')" = "$PIN_MASTER"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$PR_BRANCH" --jq '.object.sha')" = "$PIN_PR"
+          cat > "$RUNNER_TEMP/noon2308-askpass.sh" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$GH_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$RUNNER_TEMP/noon2308-askpass.sh"
+          export GIT_ASKPASS="$RUNNER_TEMP/noon2308-askpass.sh" GIT_TERMINAL_PROMPT=0
+          # The ref must advance from the original feature head without force.
+          # A racing writer or write-policy denial must fail closed.
+          git -c credential.helper= push --porcelain origin "$CANDIDATE_COMMIT:refs/heads/$PR_BRANCH" | tee "$EVIDENCE/push.log"
+          after="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$PR_BRANCH" --jq '.object.sha')"
+          test "$after" = "$CANDIDATE_COMMIT"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha')" = "$PIN_MASTER"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/2308" --jq '[.state,.draft,.merged,.head.sha] | @tsv' > "$EVIDENCE/live-pr-metadata-after.txt"
+          test "$(cat "$EVIDENCE/live-pr-metadata-after.txt")" = "$(printf 'open\ttrue\tfalse\t%s' "$CANDIDATE_COMMIT")"
+          echo "$after" > "$EVIDENCE/verified-published-head.txt"
+          echo "Published only existing draft PR #2308 at verified tree $PIN_TREE"
+      - name: Preserve publication evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-qualified-source-publish-evidence
+          path: ${{ runner.temp }}/noon2308-publish-evidence
+          retention-days: 7
+          if-no-files-found: warn
