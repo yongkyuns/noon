@@ -3,10 +3,7 @@
 The shared Rust paths are also exercised by example_scenes::{image_fill,
 radial_gradient, noise_paint, hatch_paint}; no per-frame Python callback is used.
 """
-from noon import (
-    Color, HatchPaint, ImageMapping, ImagePaint, NoisePaint, RadialGradient,
-    Rectangle, Scene, Text, smooth,
-)
+from noon import *
 
 
 class PaintedSurfaces(Scene):

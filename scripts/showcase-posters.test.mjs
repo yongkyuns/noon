@@ -27,6 +27,7 @@ test("every showcase card has a retained, source-bound real capture", async () =
     }
     assert.equal(capture.schema, 1);
     assert.equal(capture.publication, "captured-preview");
+    assert.match(capture.captureRevision, /^[a-f0-9]{40}$/);
     assert.equal(capture.captureRevision, capture.runtimeBuildIdentity.sourceRevision);
     const record = capture.posters.find(record => record.id === entry.id);
     assert.ok(record, `${entry.id}: missing source-bound capture`);
