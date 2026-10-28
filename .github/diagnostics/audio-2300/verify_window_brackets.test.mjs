@@ -90,3 +90,74 @@ test("a missing native Start trace is a failure, not an empty pass", () => {
   delete altered.cases[1].snapshot;
   assert.throws(() => validateWindowBracketReport(altered), /no native Start/);
 });
+
+test("the unchanged native Start wrapper receives its bracket after the wrapper returns", async t => {
+  const { copyFile, mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
+  const dir = await mkdtemp(join(tmpdir(), "noon-audio-window-bracket-"));
+  const previousQualification = globalThis.audioQualification;
+  t.after(async () => {
+    globalThis.audioQualification = previousQualification;
+    await rm(dir, { recursive: true, force: true });
+  });
+  await mkdir(join(dir, "pkg"));
+  await writeFile(join(dir, "package.json"), '{"type":"module"}\n');
+  await copyFile(new URL("../../../web/worker-audio-device.js", import.meta.url),
+    join(dir, "worker-audio-device.js"));
+  await writeFile(join(dir, "pkg/noon_web.js"), [
+    "export const state = { starts: [] };",
+    "export default async function init() {}",
+    "export class WasmWorkerAudioOutput {",
+    "  constructor() { this.context = new EventTarget(); }",
+    "  setVolume() {} setMuted() {}",
+    "  audioContext() { return this.context; }",
+    "  ready() { return true; }",
+    "  unlock() { return Promise.resolve(); }",
+    "  start(...args) { state.starts.push(args); }",
+    "  pause() {} stop() {} free() {}",
+    "}",
+  ].join("\n"));
+  const fixture = await import(pathToFileURL(join(dir, "pkg/noon_web.js")).href);
+  const { WorkerAudioDevice } = await import(pathToFileURL(join(dir, "worker-audio-device.js")).href);
+  const qualification = { anchors: [] };
+  globalThis.audioQualification = qualification;
+  const original = fixture.WasmWorkerAudioOutput.prototype.start;
+  fixture.WasmWorkerAudioOutput.prototype.start = function (...args) {
+    const result = original.call(this, ...args);
+    qualification.anchors.push({
+      session: args[0], time: args[1], sampledEpochMs: args[2],
+      receivedEpochMs: args[3], sources: [fixture.state.starts.length],
+    });
+    return result;
+  };
+  const device = new WorkerAudioDevice(() => assert.fail("unexpected interruption"));
+  t.after(() => device.dispose());
+  await device.install(new Uint8Array([1, 2]));
+  const anchor = { session: 7, time: 10, playing: true, sampledEpochMs: 1_793_152_307_172.3 };
+  const tick = performance.now();
+  const first = { session: 7, lifecycle: 3, requestId: 41, type: "resume",
+    sentMs: tick - 8, receivedMs: tick - 2 };
+  const second = { ...first, requestId: 42 };
+  device.applyAnchor(anchor, 7, first);
+  device.applyAnchor(anchor, 7, second);
+  assert.equal(qualification.anchors.length, 2, "the unchanged fixture wraps both native Starts");
+  assert.equal(qualification.anchors[0].windowClockBracket, undefined,
+    "the fixture only appends after the native call returns");
+  await Promise.resolve();
+  assert.equal(qualification.anchors[0].windowClockBracket.requestId, 41);
+  assert.equal(qualification.anchors[1].windowClockBracket.requestId, 42);
+  for (let i = 0; i < 2; i++) {
+    const saved = qualification.anchors[i], bracket = saved.windowClockBracket;
+    assert.equal(bracket.session, 7);
+    assert.equal(bracket.sampledEpochMs, anchor.sampledEpochMs);
+    assert.equal(bracket.receivedEpochMs, saved.receivedEpochMs);
+    assert.equal(bracket.reconstructedEpochAgeMs, saved.receivedEpochMs - anchor.sampledEpochMs);
+    assert.equal(bracket.observableAgeLowerMs, bracket.appliedMs - bracket.receivedMs);
+    assert.equal(bracket.observableAgeUpperMs, bracket.appliedMs - bracket.sentMs);
+    assert.equal(fixture.state.starts[i].length, 4, "original Rust Start ABI unchanged");
+  }
+  assert.equal(qualification.anchors[0].windowClockBracket.type, undefined);
+  assert.equal(qualification.anchors[0].windowClockBracket.requestType, "resume");
+});
