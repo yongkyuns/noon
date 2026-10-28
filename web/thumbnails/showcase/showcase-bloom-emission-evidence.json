@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "968ea3f631500dd9d2ba61adc0dce6dd975858b7",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "968ea3f631500dd9d2ba61adc0dce6dd975858b7",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "54333b07aa41683c12af3d790dab815b7cc523474cf73e4b6f8bfb3bfdd31a40"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "37e25abb09a6a7bd631a9e3df78788a8f842da8caaded243099589e07c0ed1eb"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "1d6c0117a8a4e40b70398cd460102d9eac46280b493104abab7177eed01e9d38"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "de88b3b6fef9a303f7c26ffba22ac227e4dcaa92789de01c574a5f580b46f29e"
+  },
+  "posters": [
+    {
+      "id": "showcase-bloom-emission",
+      "captureBuildId": "de88b3b6fef9a303f7c26ffba22ac227e4dcaa92789de01c574a5f580b46f29e",
+      "sourceSha256": "4ba79033cb5c857cff45f0e737b646ba83343cb9deea8a2b61c38c2d7acdf473",
+      "thumbnailTime": 4.75,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 42410,
+        "pngSha256": "b8a66192729e994619b8a9f9d9564be22a83a00353576c7dc2d954258c686566",
+        "pixelSha256": "2244e6142dd7c3e9912369c28905c139e2891879a6e97eb7c3784abd180ba729"
+      },
+      "sample": {
+        "requestedTime": 4.75,
+        "publishedTime": 4.75,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
