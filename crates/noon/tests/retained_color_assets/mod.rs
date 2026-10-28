@@ -339,4 +339,5 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
     eprintln!("retained assets: {manifest}");
 }
 
+#[cfg(feature = "native-text")]
 mod text_scene;
