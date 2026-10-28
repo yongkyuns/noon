@@ -140,6 +140,21 @@ impl FramePreparer {
         changes: &FrameChanges,
         visible_object_indices: &[usize],
     ) -> Result<PreparedFrame<'a>, VisibleRenderError> {
+        self.prepare_incremental_visible_with_color_profile(
+            frame,
+            changes,
+            visible_object_indices,
+            noon_core::ViewColorProfile::Compatibility,
+        )
+    }
+
+    pub(crate) fn prepare_incremental_visible_with_color_profile<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        visible_object_indices: &[usize],
+        profile: noon_core::ViewColorProfile,
+    ) -> Result<PreparedFrame<'a>, VisibleRenderError> {
         let mut seen = HashSet::with_capacity(visible_object_indices.len());
         for &object_index in visible_object_indices {
             if object_index >= frame.objects.len() {
@@ -154,7 +169,9 @@ impl FramePreparer {
         }
 
         self.visible_submission_slots = seen;
-        let mut stats = self.prepare_incremental(frame, changes).stats;
+        let mut stats = self
+            .prepare_with_color_profile(frame, changes, profile)
+            .stats;
 
         if !self.visible_projection_matches(visible_object_indices) {
             self.visible_projection_key.clear();
@@ -523,6 +540,7 @@ fn projected_frame<'a>(
     stats: RenderStats,
 ) -> PreparedFrame<'a> {
     PreparedFrame {
+        color_profile: preparer.color_profile,
         fill_paints: &preparer.fill_paints,
         paint_changes: &preparer.paint_changes,
         paint_indices: &preparer.paint_indices,

@@ -203,10 +203,11 @@ impl PaintGpu {
             immediate_size: 0,
         });
         let source = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../analytic.wgsl"),
             super::source_color_shader(format),
             include_str!("../polygon_coverage.wgsl"),
+            crate::color_profile::working_color_shader(format),
             include_str!("raster_sampling.wgsl"),
             include_str!("../paint.wgsl"),
             include_str!("../paint_analytic.wgsl")
@@ -236,10 +237,11 @@ impl PaintGpu {
             )
         });
         let path_source = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../path.wgsl"),
             super::source_color_shader(format),
             include_str!("../polygon_coverage.wgsl"),
+            crate::color_profile::working_color_shader(format),
             include_str!("raster_sampling.wgsl"),
             include_str!("../paint.wgsl"),
             include_str!("../paint_path.wgsl")

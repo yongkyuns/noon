@@ -184,7 +184,14 @@ fn render_offsets(source: &str, color: bool) -> Option<Vec<Vec<u8>>> {
 }
 
 fn assert_sampling_independent_of_atlas_origin(color: bool) {
-    let Some(outputs) = render_offsets(include_str!("../src/text/glyph.wgsl"), color) else {
+    // This fixture renders compatibility RGBA8, using the same specialization
+    // header as the ordinary glyph pipeline rather than an unassembled module.
+    let source = format!(
+        "const LINEAR_WORKING_COLOR: bool = false;\n{}\n{}",
+        include_str!("../src/working_color.wgsl"),
+        include_str!("../src/text/glyph.wgsl"),
+    );
+    let Some(outputs) = render_offsets(&source, color) else {
         eprintln!("skipping glyph atlas sampling regression: no native GPU adapter");
         return;
     };

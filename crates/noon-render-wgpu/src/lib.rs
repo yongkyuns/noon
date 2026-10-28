@@ -285,6 +285,8 @@ pub struct RenderStats {
 
 #[derive(Debug)]
 pub struct PreparedFrame<'a> {
+    /// Derived working profile used to pack this geometry generation.
+    pub color_profile: noon_core::ViewColorProfile,
     pub(crate) fill_paints: &'a HashMap<ObjectId, paint::PreparedPaint>,
     pub(crate) paint_changes: &'a [ObjectId],
     pub(crate) paint_indices: &'a [std::collections::BTreeSet<u32>; 3],
@@ -1984,6 +1986,7 @@ impl FramePreparer {
             + dirty_len(&self.line_dirty_ranges);
         let dirty_instance_count = dirty_instance_count + dirty_len(&self.path_dirty_ranges);
         PreparedFrame {
+            color_profile: self.color_profile,
             fill_paints: &self.fill_paints,
             paint_changes: &self.paint_changes,
             paint_indices: &self.paint_indices,

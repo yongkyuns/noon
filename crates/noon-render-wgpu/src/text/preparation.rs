@@ -100,8 +100,9 @@ pub struct GlyphQuadInstance {
     pub axis_y: [f32; 2],
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
-    /// Alpha-mask glyphs use this as their tint. Color glyphs use RGB=1 and the
-    /// alpha component as the owning object's opacity multiplier.
+    /// Alpha-mask glyphs use authored sRGB RGB as their tint; a linear working
+    /// target decodes it once. Alpha remains linear. Color glyphs use RGB=1 and
+    /// the alpha component as the owning object's opacity multiplier.
     pub color: [f32; 4],
 }
 

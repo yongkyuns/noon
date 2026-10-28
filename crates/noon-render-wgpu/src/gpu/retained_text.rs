@@ -280,6 +280,11 @@ pub enum RetainedPreparedObjectOutcome {
 }
 
 impl PreparedRetainedGpuFrame<'_> {
+    /// Working color profile borrowed from the authored view's publication.
+    pub const fn color_profile(&self) -> noon_core::ViewColorProfile {
+        self.geometry.color_profile
+    }
+
     pub(super) fn capture_index(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
@@ -1078,6 +1083,7 @@ struct ImageDrawEligibilityPreparation {
 /// outline-required glyphs are materialized as renderer-local paths, and every
 /// emitted painter item keeps the owning retained `ObjectId`.
 pub struct RetainedFramePreparer {
+    color_profile: noon_core::ViewColorProfile,
     images: RasterImageFramePreparer,
     geometry: FramePreparer,
     text: RetainedTextQuadPreparer,
@@ -1133,6 +1139,7 @@ pub struct RetainedFramePreparer {
 impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
+            color_profile: noon_core::ViewColorProfile::Compatibility,
             images: RasterImageFramePreparer::default(),
             geometry: FramePreparer::for_individual_path_draws(),
             text: RetainedTextQuadPreparer::default(),
@@ -1413,6 +1420,7 @@ impl RetainedFramePreparer {
             }
         }
 
+        self.color_profile = publication.color_profile();
         if previous.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1451,6 +1459,7 @@ impl RetainedFramePreparer {
             }
         }
         validate_visible_object_indices(publication.frame(), visible_object_indices)?;
+        self.color_profile = publication.color_profile();
         if self.last_applied_publication.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1497,6 +1506,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.color_profile = noon_core::ViewColorProfile::Compatibility;
         self.prepare_with_changes_inner(
             device, frame, changes, texts, fonts, geometries, metrics, None, None,
         )
@@ -1516,6 +1526,7 @@ impl RetainedFramePreparer {
         images: &dyn RasterImageResourceLookup,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.color_profile = noon_core::ViewColorProfile::Compatibility;
         self.prepare_with_changes_inner(
             device,
             frame,
@@ -1860,9 +1871,11 @@ impl RetainedFramePreparer {
 
             self.project_mixed_visibility(frame, visible_object_indices);
             let no_changes = FrameChanges::default();
-            let geometry = self
-                .geometry
-                .prepare_incremental(&self.scratch, &no_changes);
+            let geometry = self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &no_changes,
+                self.color_profile,
+            );
             self.prepared_generation_reuses = self.prepared_generation_reuses.saturating_add(1);
             self.prepared_generation_ready = true;
             let text = PreparedRetainedTextSnapshot {
@@ -1920,9 +1933,13 @@ impl RetainedFramePreparer {
         let geometry = if scratch_reused {
             let no_changes = FrameChanges::default();
             self.geometry
-                .prepare_incremental(&self.scratch, &no_changes)
+                .prepare_with_color_profile(&self.scratch, &no_changes, self.color_profile)
         } else {
-            self.geometry.prepare(&self.scratch)
+            self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &FrameChanges::all(),
+                self.color_profile,
+            )
         };
         self.render_items.clear();
         rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
@@ -2159,8 +2176,15 @@ impl RetainedFramePreparer {
         let geometry = match visible_object_indices {
             Some(indices) => self
                 .geometry
-                .prepare_incremental_visible(frame, changes, indices)?,
-            None => self.geometry.prepare_incremental(frame, changes),
+                .prepare_incremental_visible_with_color_profile(
+                    frame,
+                    changes,
+                    indices,
+                    self.color_profile,
+                )?,
+            None => self
+                .geometry
+                .prepare_with_color_profile(frame, changes, self.color_profile),
         };
         self.geometry_uses_source_indices = true;
         self.scratch_ready = false;
@@ -2387,11 +2411,17 @@ impl RetainedFramePreparer {
         self.incremental_stats.scratch_reuses =
             self.incremental_stats.scratch_reuses.saturating_add(1);
         let geometry = if scratch_changes.is_empty() {
-            self.geometry
-                .prepare_incremental(&self.scratch, &FrameChanges::default())
+            self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &FrameChanges::default(),
+                self.color_profile,
+            )
         } else {
-            self.geometry
-                .prepare_incremental(&self.scratch, &FrameChanges::objects(scratch_changes))
+            self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &FrameChanges::objects(scratch_changes),
+                self.color_profile,
+            )
         };
         if geometry.stats.full_rebuilds > 0 || text_layout_rebuilt {
             self.render_items.clear();
