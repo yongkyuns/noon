@@ -1,0 +1,157 @@
+name: Audio 2300 same-Window request bracket observation
+
+# Disposable diagnostic branch only; never merge this workflow or observer.
+on:
+  push:
+    branches: [codex/audio-2300-window-bracket-observation]
+    paths: [.github/workflows/audio-2300-window-bracket-observation.yml]
+permissions:
+  contents: read
+concurrency:
+  group: audio-2300-window-bracket-observation
+  cancel-in-progress: false
+jobs:
+  chromium:
+    name: Correlated Window requests and unchanged Chromium audio fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      BASE: 0cb1b7dabaed0df82567794c09fff17327256d05
+      EVIDENCE: ${{ runner.temp }}/audio-2300-window-bracket
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout exact isolated observer
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Attest original fixture, unchanged Rust guard, and exact diagnostic file set
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git merge-base --is-ancestor "$BASE" HEAD
+          test "$(git rev-parse HEAD:scripts/python-background-audio-smoke.mjs)" = 7a422f88420bd64e68526e3680da49d457ff4108
+          test "$(git rev-parse HEAD:crates/noon-web/src/worker_audio.rs)" = "$(git rev-parse "$BASE:crates/noon-web/src/worker_audio.rs")"
+          test "$(git rev-parse HEAD:web/execution-worker-client.js)" = 310f33b779d6dbe5665887e7d4be5edca924b6f1
+          test "$(git rev-parse HEAD:web/worker-audio-device.js)" = a182f7d645aa790311ed8db165d82e27589fc963
+          test "$(git rev-parse HEAD:.github/diagnostics/audio-2300/verify_window_brackets.mjs)" = ddc212f47ec134d91e9d3b4565f5fdc0840ef1b0
+          test "$(git rev-parse HEAD:.github/diagnostics/audio-2300/verify_window_brackets.test.mjs)" = 2f3a2b95f263f37cbda142a0e52d7c1a23352d0b
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args): return subprocess.check_output(['git', *args], text=True).strip()
+          actual = sorted(git('diff','--name-only',os.environ['BASE'],'HEAD').splitlines())
+          expected = sorted([
+            'web/execution-worker-client.js', 'web/worker-audio-device.js',
+            '.github/diagnostics/audio-2300/verify_window_brackets.mjs',
+            '.github/diagnostics/audio-2300/verify_window_brackets.test.mjs',
+            '.github/workflows/audio-2300-window-bracket-observation.yml',
+          ])
+          assert actual == expected, (actual,expected)
+          data = {'helper': git('rev-parse','HEAD'), 'tree':git('rev-parse','HEAD^{tree}'),
+            'base':os.environ['BASE'], 'changed_paths':actual,
+            'original_fixture_sha256':'7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a',
+            'scope':'Window bracket observation; Rust audio Start policy and fixture unchanged'}
+          pathlib.Path(os.environ['EVIDENCE'],'source.json').write_text(json.dumps(data,indent=2)+'\n')
+          PY
+      - name: Existing endpoint, client, device, and diagnostic verifier tests
+        run: |
+          set -euo pipefail
+          node --version | tee "$EVIDENCE/node.txt"
+          node --check web/execution-worker-client.js
+          node --check web/worker-audio-device.js
+          node --check .github/diagnostics/audio-2300/verify_window_brackets.mjs
+          node --check .github/diagnostics/audio-2300/verify_window_brackets.test.mjs
+          node --test web/execution-worker-client.test.mjs \
+            web/semantic-engine-endpoint.test.mjs web/worker-audio-device.test.mjs \
+            .github/diagnostics/audio-2300/verify_window_brackets.test.mjs \
+            2>&1 | tee "$EVIDENCE/js-tests.tap"
+          printf 'passed\n' > "$EVIDENCE/js-tests.result"
+      - name: Install repository Rust and WASM toolchain
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install audio build dependencies
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Complete original web preflight and build diagnostic-source WASM
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/web-build.log"
+          printf 'passed\n' > "$EVIDENCE/web-build.result"
+      - name: Verify clean-source runtime identity and actual asset hashes before npm
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile, writeFile } from "node:fs/promises";
+          import { createRuntimeBuildIdentity } from "./scripts/build-runtime-identity.mjs";
+          const declared = JSON.parse(await readFile("web/runtime-build-identity.json","utf8"));
+          const actual = await createRuntimeBuildIdentity();
+          assert.equal(declared.sourceRevision,process.env.GITHUB_SHA);
+          assert.deepEqual(declared,actual);
+          await writeFile(process.env.EVIDENCE+"/runtime-identity.json",JSON.stringify(actual,null,2)+"\n");
+          NODE
+      - name: Cache pinned Chromium browser
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install original pinned browser dependencies
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install original Chromium and native audio output
+        run: |
+          set -euo pipefail
+          bash scripts/ci-install-playwright-browser.sh chromium
+          bash scripts/ci-install-reference-deps.sh pulseaudio pulseaudio-utils libasound2-plugins
+      - name: Run original 15-case Chromium WebGPU worker Python audio fixture, unmodified
+        timeout-minutes: 5
+        env:
+          NOON_PYTHON_AUDIO_BROWSER: chromium
+          NOON_PYTHON_AUDIO_BACKEND: webgpu
+          NOON_PLAYGROUND_RENDER_HOST: auto
+          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/audio-2300-window-bracket/chromium
+        run: bash scripts/ci-python-audio-smoke.sh xvfb-run -a
+      - name: Verify genuine native Starts have same-Window causal brackets
+        run: |
+          set -euo pipefail
+          node .github/diagnostics/audio-2300/verify_window_brackets.mjs \
+            browser-smoke-artifacts/audio-2300-window-bracket/chromium/report.json \
+            | tee "$EVIDENCE/window-brackets.json"
+          printf 'passed\n' > "$EVIDENCE/window-brackets.result"
+      - name: Retain exact source, full tests, and original browser evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2300-window-bracket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/audio-2300-window-bracket/
+            browser-smoke-artifacts/audio-2300-window-bracket/chromium/
+          if-no-files-found: warn
+          retention-days: 7
