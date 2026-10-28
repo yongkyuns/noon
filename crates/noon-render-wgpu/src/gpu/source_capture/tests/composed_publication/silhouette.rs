@@ -58,10 +58,12 @@ fn reference(
 ) -> Vec<u8> {
     let apply_mask = |pixels: Vec<u8>, original: bool| {
         if let Some((definition, _)) = child_mask.filter(|(_, private)| !original || *private) {
-            crate::gpu::dissolve_filter::tests::reference(
+            crate::gpu::sample_filter::tests::reference(
                 &pixels,
-                crate::DissolveParameters {
-                    definition,
+                crate::SampleParameters {
+                    definition: definition.into(),
+                    output_height: SIZE[1],
+                    world_view_height: f64::from(SIZE[1]),
                     // Quarter-scale image: [15,15]..[55,45]. Six pixels of
                     // Blur support plus one coverage fringe give this exact,
                     // even-aligned source domain; no GPU tile data is an input.
@@ -325,6 +327,7 @@ fn nested_glow_mask_uses_original_coverage_and_painted_uses_filtered_children() 
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 4_000_000,
             )
             .unwrap();

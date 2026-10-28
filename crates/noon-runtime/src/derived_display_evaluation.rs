@@ -322,6 +322,7 @@ fn apply_derived_track(
         | Property::EffectOffset
         | Property::EffectProgress
         | Property::EffectSoftness
+        | Property::EffectSize
         | Property::EffectSeed
         | Property::Presence
         | Property::ZIndex

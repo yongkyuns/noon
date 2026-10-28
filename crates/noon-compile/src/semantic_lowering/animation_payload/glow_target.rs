@@ -220,6 +220,13 @@ fn attachment_channels(
             update.radius = Some(b);
         }
     }
+    if let (Some(a), Some(b)) = (baseline.as_pixelate(), destination.as_pixelate()) {
+        if a.size() != b.size()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Size))
+        {
+            update.size = Some(b.size());
+        }
+    }
     if let (Some(a), Some(b)) = (
         baseline.as_noise_dissolve(),
         destination.as_noise_dissolve(),

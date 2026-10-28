@@ -8,8 +8,10 @@ use std::mem::size_of;
 pub(super) mod tests;
 
 #[derive(Clone, Copy, Debug)]
-pub struct DissolveParameters {
-    pub definition: noon_core::NoiseDissolve,
+pub struct SampleParameters {
+    pub definition: noon_core::EffectDefinition,
+    pub output_height: u32,
+    pub world_view_height: f64,
     pub source_bounds: EffectPixelBounds,
     pub scope_opacity: f32,
     /// Retained output only; input and in-flight host images are separate.
@@ -31,13 +33,13 @@ struct Resources {
     source: wgpu::Texture,
 }
 #[derive(Debug, Default)]
-pub struct DissolveScope {
+pub struct SampleScope {
     resources: Option<Resources>,
     uniform: Option<Uniform>,
     revision: Option<u64>,
     invalidated: bool,
 }
-impl DissolveScope {
+impl SampleScope {
     pub fn output(&self) -> Option<&wgpu::Texture> {
         self.resources.as_ref().map(|r| &r.output)
     }
@@ -61,7 +63,7 @@ struct Program {
     pipeline: wgpu::RenderPipeline,
 }
 #[derive(Debug, Default)]
-pub struct DissolveFilter {
+pub struct SampleFilter {
     program: Option<Program>,
 }
 pub(super) fn checked_domain(
@@ -104,15 +106,39 @@ pub(super) fn checked_domain(
 
 fn checked_uniform(
     capture: GaussianBlurCapture<'_>,
-    parameters: DissolveParameters,
+    parameters: SampleParameters,
 ) -> Result<Uniform, EffectPrepareError> {
     if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity) {
         return Err(EffectPrepareError::InvalidScopeOpacity);
     }
-    let domain = checked_domain(
-        [capture.source.width(), capture.source.height()],
-        parameters.source_bounds,
-    )?;
+    let size = [capture.source.width(), capture.source.height()];
+    if parameters.definition.as_pixelate().is_some() && size.into_iter().any(|v| v > 65536) {
+        return Err(EffectPrepareError::ExtentExceedsDevice);
+    }
+    let (control, domain, seed) = match parameters.definition {
+        noon_core::EffectDefinition::NoiseDissolve(v) => (
+            [
+                v.progress() as f32,
+                v.softness() as f32,
+                parameters.scope_opacity,
+                0.0,
+            ],
+            checked_domain(size, parameters.source_bounds)?,
+            [v.seed(), 0, 0, 0],
+        ),
+        noon_core::EffectDefinition::Pixelate(v) => {
+            let cell =
+                checked_cell_size(v, parameters.output_height, parameters.world_view_height)?;
+            let bounds = parameters.source_bounds;
+            let origin = checked_sample_origin(bounds)?;
+            (
+                [cell as f32, 0.0, parameters.scope_opacity, 1.0],
+                [0.0; 4],
+                [(cell * 256.0) as u32, origin[0] as u32, origin[1] as u32, 0],
+            )
+        }
+        _ => return Err(EffectPrepareError::UnsupportedCapture),
+    };
     if !matches!(
         capture.source.format(),
         wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
@@ -131,36 +157,63 @@ fn checked_uniform(
     if bytes > parameters.scratch_budget_bytes {
         return Err(EffectPrepareError::ScratchBudgetExceeded);
     }
-    let definition = parameters.definition;
     Ok(Uniform {
-        control: [
-            definition.progress() as f32,
-            definition.softness() as f32,
-            parameters.scope_opacity,
-            0.0,
-        ],
+        control,
         domain,
-        seed: [definition.seed(), 0, 0, 0],
+        seed,
     })
+}
+
+// Fixed 1/256-pixel domains keep ties independent of f32 division and backend.
+pub(super) fn checked_sample_origin(
+    bounds: EffectPixelBounds,
+) -> Result<[i32; 2], EffectPrepareError> {
+    if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite)
+        || (0..2).any(|a| bounds.min[a] >= bounds.max[a])
+    {
+        return Err(EffectPrepareError::InvalidSourceBounds);
+    }
+    // This bound plus the backend texture limit keeps all signed grid
+    // differences, products and doubled cell centres within i32.
+    if bounds.min.into_iter().any(|v| v.abs() > 1_048_576.0) {
+        return Err(EffectPrepareError::CaptureCoordinatesOutOfRange);
+    }
+    Ok(bounds.min.map(|v| (v * 256.0).round() as i32))
+}
+
+/// A bounded nearest-centre sampling profile, resolved before any GPU writes.
+pub(super) fn checked_cell_size(
+    definition: noon_core::Pixelate,
+    height: u32,
+    world: f64,
+) -> Result<f64, EffectPrepareError> {
+    let cell = definition
+        .size()
+        .to_output_pixels(height, world)
+        .map_err(EffectPrepareError::Parameter)?;
+    if cell > 128.0 {
+        return Err(EffectPrepareError::CellSizeExceedsProfile);
+    }
+    Ok(((cell * 256.0).round() / 256.0).max(1.0))
 }
 
 pub(super) fn validate_input(
     capture: GaussianBlurCapture<'_>,
-    parameters: DissolveParameters,
+    parameters: SampleParameters,
 ) -> Result<(), EffectPrepareError> {
     checked_uniform(capture, parameters).map(|_| ())
 }
 
-impl DissolveFilter {
+impl SampleFilter {
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_encode(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        scope: &mut DissolveScope,
+        scope: &mut SampleScope,
         capture: GaussianBlurCapture<'_>,
-        parameters: DissolveParameters,
+        parameters: SampleParameters,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         if scope
             .output()
@@ -184,7 +237,7 @@ impl DissolveFilter {
             .is_none_or(|r| r.output.size() != capture.source.size());
         if replace {
             let output = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Noon dissolve result"),
+                label: Some("Noon sampled image result"),
                 size: capture.source.size(),
                 mip_level_count: 1,
                 sample_count: 1,
@@ -197,7 +250,7 @@ impl DissolveFilter {
             });
             let view = output.create_view(&Default::default());
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Noon dissolve uniform"),
+                label: Some("Noon sampled image uniform"),
                 size: size_of::<Uniform>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -217,7 +270,7 @@ impl DissolveFilter {
         let r = scope
             .resources
             .as_mut()
-            .expect("prepared dissolve resources");
+            .expect("prepared sampled image resources");
         let rebind = r.source != *capture.source;
         if rebind {
             r.binding = program.bind(device, &r.buffer, capture.source);
@@ -244,7 +297,7 @@ impl DissolveFilter {
                 },
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Noon dissolve mask"),
+                label: Some("Noon sampled image mask"),
                 color_attachments: &[attachment],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -265,7 +318,7 @@ impl DissolveFilter {
 impl Program {
     fn new(device: &wgpu::Device) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon dissolve bindings"),
+            label: Some("Noon sampled image bindings"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -290,13 +343,13 @@ impl Program {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Noon dissolve layout"),
+            label: Some("Noon sampled image layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("dissolve_filter.wgsl"));
+        let shader = device.create_shader_module(wgpu::include_wgsl!("sample_filter.wgsl"));
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Noon dissolve mask"),
+            label: Some("Noon sampled image mask"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -306,7 +359,7 @@ impl Program {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_dissolve"),
+                entry_point: Some("fs_sample"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
@@ -330,7 +383,7 @@ impl Program {
     ) -> wgpu::BindGroup {
         let view = source.create_view(&Default::default());
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon dissolve binding"),
+            label: Some("Noon sampled image binding"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry {

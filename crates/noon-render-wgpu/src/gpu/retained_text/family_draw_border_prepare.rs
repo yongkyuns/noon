@@ -502,7 +502,7 @@ impl RetainedFramePreparer {
             }
             let scratch_slot = self.push_geometry(
                 object_id,
-                GeometryRef::VectorPath(path),
+                GeometryRef::path(path),
                 object.transform,
                 draw_border_glyph_style(run, object.style, member.phase),
                 object.appearance,

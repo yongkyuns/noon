@@ -373,3 +373,174 @@ fn source_generation_churn_retires_reverse_edges_and_compacts_without_rebinding(
         .unwrap();
     assert_eq!(scene.composed_dependencies, ComposedDependencies::default());
 }
+
+fn backdrop(attachment: u32, radius: f64) -> Arc<crate::CompiledEffectStack> {
+    Arc::new(
+        crate::CompiledEffectStack::new([crate::CompiledEffect {
+            attachment: noon_core::SemanticNodeId::new(attachment, 4),
+            definition: noon_core::BackdropBlur::new(
+                noon_core::EffectUpdate::default().radius(noon_core::Pixels(radius)),
+            )
+            .unwrap()
+            .into(),
+        }])
+        .unwrap(),
+    )
+}
+
+#[test]
+fn backdrop_root_sources_use_existing_identity_and_reject_nested_or_spatial_inputs() {
+    let mut panel = leaf(1, 0.0);
+    panel.effects = Some(backdrop(31, 3.5));
+    let scene = CompiledScene::compile_objects(vec![panel.clone()], &[]).unwrap();
+    assert_eq!(
+        scene
+            .composed_dependencies
+            .prefix_owners()
+            .collect::<Vec<_>>(),
+        [id(1)]
+    );
+
+    let mut spatial = panel.clone();
+    spatial.spatial = Some(Box::new(crate::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: crate::CompiledSpatialDrawKind::Planar,
+        spatial_anchor_family: None,
+        fixed_orientation_center: None,
+        cairo_path_appearance: None,
+    }));
+    assert!(matches!(
+        CompiledScene::compile_objects(vec![spatial], &[]),
+        Err(CompileError::InvalidComposedSource(
+            CompiledComposedSourceError {
+                kind: CompiledComposedSourceErrorKind::InvalidBackdropSource,
+                ..
+            }
+        ))
+    ));
+    // Neutrality does not change source topology or make nesting valid.
+    panel.effects = Some(backdrop(31, 0.0));
+    assert!(matches!(
+        CompiledScene::compile_objects(vec![panel, scope(9, &[1], None)], &[]),
+        Err(CompileError::InvalidComposedSource(
+            CompiledComposedSourceError {
+                kind: CompiledComposedSourceErrorKind::NestedBackdrop(_),
+                ..
+            }
+        ))
+    ));
+    let mut glass = scope(9, &[1], None);
+    glass.effects = Some(backdrop(31, 2.0));
+    let scene = CompiledScene::compile_objects(vec![leaf(1, 0.0), glass.clone()], &[]).unwrap();
+    assert_eq!(
+        scene
+            .composed_dependencies
+            .validation_owners()
+            .collect::<Vec<_>>(),
+        [id(9)]
+    );
+    glass.content = content(&[1], Some(10));
+    assert!(matches!(
+        CompiledScene::compile_objects(vec![leaf(1, 0.0), glass, scope(10, &[1], None)], &[]),
+        Err(CompileError::InvalidComposedSource(
+            CompiledComposedSourceError {
+                kind: CompiledComposedSourceErrorKind::NestedBackdrop(_),
+                ..
+            }
+        ))
+    ));
+}
+
+#[test]
+fn backdrop_input_role_edits_validate_the_final_transaction_before_any_write() {
+    let mut scene = fixture();
+    let before = scene.clone();
+    let add = ExecutionPatch::SetEffectStack {
+        object: id(1),
+        expected: vec![].into(),
+        effects: Some(backdrop(31, 3.5)),
+    };
+    assert!(matches!(
+        scene.apply_execution_patch(&add),
+        Err(CompilePatchError::InvalidComposedSource(_))
+    ));
+    assert_eq!(scene, before);
+    // Removing the surrounding isolation and adding the backdrop are coherent
+    // in either mutation order; no intermediate invalid state is published.
+    for reverse in [false, true] {
+        let mut next = before.clone();
+        let mut edits = vec![add.clone(), ExecutionPatch::RemoveObject(id(9))];
+        if reverse {
+            edits.reverse();
+        }
+        commit(&mut next, edits);
+        assert_eq!(
+            next.composed_dependencies
+                .prefix_owners()
+                .collect::<Vec<_>>(),
+            [id(1)]
+        );
+        assert_eq!(next.composed_dependencies.dependents(id(1)).count(), 0);
+        assert_eq!(
+            next.objects()[next.object_index(id(1)).unwrap() as usize].effects,
+            Some(backdrop(31, 3.5))
+        );
+        // Creating a new isolation around an unchanged backdrop is rejected too.
+        let snapshot = next.clone();
+        assert!(next
+            .apply_execution_patch(&ExecutionPatch::CreateObject(scope(10, &[1], None)))
+            .is_err());
+        assert_eq!(next, snapshot);
+    }
+}
+
+#[test]
+fn backdrop_parameter_edits_replay_and_retirement_keep_the_sparse_role_index_coherent() {
+    let mut rows = (1..=2048).map(|i| leaf(i, 0.0)).collect::<Vec<_>>();
+    rows[0].effects = Some(backdrop(31, 3.5));
+    let mut scene = CompiledScene::compile_objects(rows, &[]).unwrap();
+    let update = ExecutionPatch::SetEffects {
+        object: id(1),
+        effects: backdrop(31, 4.5),
+    };
+    let stats = scene
+        .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
+            update.clone()
+        ]))
+        .unwrap();
+    assert_eq!(stats.composed, ComposedValidationStats::default());
+    assert_eq!(stats.staged_compiled_scene_clones, 0);
+    assert_eq!(stats.objects_indexed, 1);
+    scene.apply_execution_patch(&update).unwrap();
+    let remove = ExecutionPatch::SetEffectStack {
+        object: id(1),
+        expected: vec![noon_core::SemanticNodeId::new(31, 4)].into(),
+        effects: None,
+    };
+    let mut revision = scene.prepare_replay_revision(&remove).unwrap();
+    scene.apply_execution_patch(&remove).unwrap();
+    assert!(scene.composed_dependencies.is_empty());
+    scene.exchange_replay_revision(&mut revision);
+    assert_eq!(
+        scene
+            .composed_dependencies
+            .prefix_owners()
+            .collect::<Vec<_>>(),
+        [id(1)]
+    );
+    scene.exchange_replay_revision(&mut revision);
+    assert!(scene.composed_dependencies.is_empty());
+    scene
+        .apply_execution_patch(&ExecutionPatch::RemoveObject(id(1)))
+        .unwrap();
+    scene.compact_retired_object_slots().unwrap();
+    assert!(scene.composed_dependencies.is_empty());
+}
+
+mod prefix_admission;

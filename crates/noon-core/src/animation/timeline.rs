@@ -459,6 +459,7 @@ pub enum Property {
     EffectProgress,
     EffectSoftness,
     EffectSeed,
+    EffectSize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -487,7 +488,8 @@ impl Property {
             | Self::EffectOffset
             | Self::EffectProgress
             | Self::EffectSoftness
-            | Self::EffectSeed => ValueKind::Effect,
+            | Self::EffectSeed
+            | Self::EffectSize => ValueKind::Effect,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -525,6 +527,7 @@ pub enum EffectTrackValue {
     /// A constant discrete value for one scheduled interval. Different endpoint
     /// seeds cannot interpolate; successive intervals may choose another seed.
     Seed(u32),
+    Size(crate::EffectRadius),
 }
 
 impl EffectTrackValue {
@@ -543,6 +546,7 @@ impl EffectTrackValue {
             Property::EffectSoftness => definition
                 .as_noise_dissolve()
                 .map(|v| Self::Softness(v.softness())),
+            Property::EffectSize => definition.as_pixelate().map(|v| Self::Size(v.size())),
             Property::EffectSeed => definition.as_noise_dissolve().map(|v| Self::Seed(v.seed())),
             Property::EffectIntensity => definition
                 .as_glow()
@@ -560,6 +564,7 @@ impl EffectTrackValue {
             Self::Progress(_) => Property::EffectProgress,
             Self::Softness(_) => Property::EffectSoftness,
             Self::Seed(_) => Property::EffectSeed,
+            Self::Size(_) => Property::EffectSize,
         }
     }
 
@@ -572,6 +577,7 @@ impl EffectTrackValue {
             Self::Progress(value) => crate::EffectUpdate::default().progress(value),
             Self::Softness(value) => crate::EffectUpdate::default().softness(value),
             Self::Seed(value) => crate::EffectUpdate::default().seed(value),
+            Self::Size(value) => crate::EffectUpdate::default().size(value),
         }
     }
 
@@ -598,6 +604,7 @@ impl EffectTrackValue {
             (Self::Radius(a), Self::Radius(b)) if a.same_unit(b) => {
                 Self::Radius(a.interpolate(b, alpha))
             }
+            (Self::Size(a), Self::Size(b)) if a.same_unit(b) => Self::Size(a.interpolate(b, alpha)),
             (Self::Intensity(a), Self::Intensity(b)) => Self::Intensity(mix(a, b, alpha)),
             (Self::Progress(a), Self::Progress(b)) => Self::Progress(mix(a, b, alpha)),
             (Self::Softness(a), Self::Softness(b)) => Self::Softness(mix(a, b, alpha)),

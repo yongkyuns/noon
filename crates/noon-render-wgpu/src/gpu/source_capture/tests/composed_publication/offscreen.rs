@@ -136,6 +136,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, raster: bool) {
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 2_000_000,
             )
             .unwrap();

@@ -720,3 +720,330 @@ fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_pa
     assert_eq!(plan(&mirror, inner_id).parent_scope(), Some(outer_id));
     assert_coherent(&mut session, &mirror);
 }
+
+#[test]
+fn forged_backdrop_input_roles_reject_before_worker_frame_or_sequence_publication() {
+    use crate::retained_execution_transport::TransportEffectDefinition;
+    let mut f = Fixture::new();
+    let good = f.parameter();
+    let before = f.mirror.frame().unwrap().clone();
+    let context = f.mirror.publication_context();
+    for owner in [
+        f.inner_id,
+        f.session
+            .execution_object_id(f.leaves[0].node_id())
+            .unwrap(),
+    ] {
+        let mut bad = good.clone();
+        let index = bad
+            .retained
+            .objects
+            .iter()
+            .position(|row| row.object == owner);
+        let row = if let Some(index) = index {
+            &mut bad.retained.objects[index]
+        } else {
+            let row = f
+                .snapshot
+                .retained
+                .objects
+                .iter()
+                .find(|row| row.object == owner)
+                .unwrap()
+                .clone();
+            bad.retained.objects.push(row);
+            bad.retained.objects.last_mut().unwrap()
+        };
+        row.effects = vec![crate::retained_execution_transport::TransportEffectState {
+            attachment: SemanticNodeId::new(981, 3),
+            definition: TransportEffectDefinition::BackdropBlur {
+                radius: noon_core::EffectRadius::Pixels(3.500000000000123),
+            },
+        }];
+        assert!(matches!(
+            apply(&mut f.mirror, &bad),
+            Err(InstalledExecutionError::Transport(
+                RetainedExecutionTransportError::InvalidComposedSource(_)
+            ))
+        ));
+        assert_eq!(f.mirror.frame().unwrap(), &before);
+        assert_eq!(f.mirror.publication_context(), context);
+        assert_eq!(f.mirror.wire.applied_sequence(), Some(0));
+        assert_eq!(f.mirror.resources().composed_source_count(), 2);
+    }
+    apply(&mut f.mirror, &good).unwrap();
+    assert_coherent(&mut f.session, &f.mirror);
+}
+
+#[test]
+fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows() {
+    use noon::{effects::BackdropBlur, Rect, Vec2};
+    let window = Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0));
+    let mut scene = Scene::new();
+    let earlier = scene.circle(0.3).unwrap();
+    let panel = scene.square(1.0).unwrap();
+    let later = scene.circle(0.3).unwrap();
+    scene
+        .add_many(&[(&earlier).into(), (&panel).into(), (&later).into()])
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let anchor = session.execution_object_id(panel.node_id()).unwrap();
+    let earlier_id = session.execution_object_id(earlier.node_id()).unwrap();
+    let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(123);
+    let mut mirror =
+        InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
+            .unwrap();
+    let snapshot = encode(&mut encoder, &mut session, true);
+    apply(&mut mirror, &snapshot).unwrap();
+    assert!(mirror
+        .renderer_publication(&FrameChanges::default())
+        .unwrap()
+        .spatial_index()
+        .is_none());
+    scene
+        .live(&mut session)
+        .add_effect(&panel, BackdropBlur::default(), "glass")
+        .unwrap();
+    let added = encode(&mut encoder, &mut session, false);
+    let (_, changes) = apply(&mut mirror, &added).unwrap();
+    assert_eq!(mirror.last_spatial_query_update_stats().full_rebuilds, 1);
+    let query = mirror
+        .renderer_publication(&changes)
+        .unwrap()
+        .query_painter_prefix_geometry(window, anchor)
+        .unwrap();
+    assert_eq!(query.objects, [earlier_id]);
+    assert_eq!(query.stats.full_scan_fallbacks, 0);
+    scene.live(&mut session).shift(&earlier, 20.0, 0.0).unwrap();
+    let moved = encode(&mut encoder, &mut session, false);
+    let (_, changes) = apply(&mut mirror, &moved).unwrap();
+    let stats = mirror.last_spatial_query_update_stats();
+    assert_eq!(stats.full_rebuilds, 0);
+    assert_eq!(stats.leaves_upserted, 1);
+    assert!(mirror
+        .renderer_publication(&changes)
+        .unwrap()
+        .query_painter_prefix_geometry(window, anchor)
+        .unwrap()
+        .objects
+        .is_empty());
+    // A bad suffix must preserve the previously committed query, not just the
+    // frame and protocol sequence. Retry the exact same sequence afterward.
+    scene
+        .live(&mut session)
+        .shift(&earlier, -20.0, 0.0)
+        .unwrap();
+    let good = encode(&mut encoder, &mut session, false);
+    let mut bad = good.clone();
+    let mut suffix = added.retained.objects[0].clone();
+    suffix.effects[0].definition = crate::TransportEffectDefinition::BackdropBlur {
+        radius: noon_core::EffectRadius::Pixels(-1.0),
+    };
+    bad.retained.objects.push(suffix);
+    let sequence = mirror.wire.applied_sequence();
+    assert!(apply(&mut mirror, &bad).is_err());
+    assert_eq!(mirror.wire.applied_sequence(), sequence);
+    assert!(mirror
+        .renderer_publication(&FrameChanges::default())
+        .unwrap()
+        .query_painter_prefix_geometry(window, anchor)
+        .unwrap()
+        .objects
+        .is_empty());
+    apply(&mut mirror, &good).unwrap();
+    assert_eq!(
+        mirror
+            .renderer_publication(&FrameChanges::default())
+            .unwrap()
+            .query_painter_prefix_geometry(window, anchor)
+            .unwrap()
+            .objects,
+        [earlier_id]
+    );
+    scene
+        .live(&mut session)
+        .remove_effect(&panel, "glass")
+        .unwrap();
+    let removed = encode(&mut encoder, &mut session, false);
+    apply(&mut mirror, &removed).unwrap();
+    assert!(mirror
+        .renderer_publication(&FrameChanges::default())
+        .unwrap()
+        .spatial_index()
+        .is_none());
+}
+
+#[test]
+fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
+    use noon::{effects::BackdropBlur, Rect, Vec2};
+    let mut scene = Scene::new();
+    let path = noon::VectorPath::new()
+        .move_to(Vec2::new(-0.5, -0.5))
+        .line_to(Vec2::new(0.5, -0.5))
+        .line_to(Vec2::new(0.5, 0.5))
+        .line_to(Vec2::new(-0.5, 0.5))
+        .close();
+    let source = scene.path(path.clone(), Default::default()).unwrap();
+    let second_path = noon::VectorPath::new()
+        .move_to(Vec2::new(10.0, 10.0))
+        .line_to(Vec2::new(14.0, 10.0))
+        .line_to(Vec2::new(14.0, 14.0))
+        .close();
+    let second = scene.path(second_path.clone(), Default::default()).unwrap();
+    second.set_z_index(-1.0).unwrap();
+    let panel = scene.square(1.5).unwrap();
+    scene
+        .add_effect(&panel, BackdropBlur::default(), "glass")
+        .unwrap();
+    scene
+        .add_many(&[(&source).into(), (&panel).into()])
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let source_id = session.execution_object_id(source.node_id()).unwrap();
+    let anchor = session.execution_object_id(panel.node_id()).unwrap();
+    let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(124);
+    let mut mirror =
+        InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
+            .unwrap();
+    let mut snapshot = encode(&mut encoder, &mut session, true);
+    // The ordinary authoring path inlines this small path. Exercise the same
+    // supported geometry as a versioned worker resource, which requires the
+    // installed lookup rather than the inline-geometry shortcut.
+    let mut geometries = noon_core::GeometryResourceArena::new();
+    let handle = geometries.insert_path(path);
+    snapshot.resource_additions = Some(
+        RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [handle],
+            &noon_core::TextResourceArena::new(),
+            &geometries,
+            &noon_core::FontResourceArena::new(),
+            &crate::RetainedResourceInventory::default(),
+        )
+        .unwrap(),
+    );
+    snapshot
+        .retained
+        .objects
+        .iter_mut()
+        .find(|row| row.object == source_id)
+        .unwrap()
+        .content = TransportObjectContent::Geometry {
+        geometry: noon_core::GeometryRef::External(handle.id),
+        resource: Some(handle.into()),
+    };
+    let mut bad = snapshot.clone();
+    bad.retained
+        .objects
+        .iter_mut()
+        .find(|row| row.object == anchor)
+        .unwrap()
+        .effects[0]
+        .definition = crate::TransportEffectDefinition::BackdropBlur {
+        radius: noon_core::EffectRadius::Pixels(-1.0),
+    };
+    assert!(apply(&mut mirror, &bad).is_err());
+    assert!(mirror.frame().is_none());
+    assert!(mirror.spatial_index.is_none());
+    // The rejected first publication must not install query bounds from staged
+    // resources. The same snapshot key can then install its coherent resources.
+    let (_, changes) = apply(&mut mirror, &snapshot).unwrap();
+    assert_eq!(mirror.last_spatial_query_update_stats().full_rebuilds, 1);
+    let publication = mirror.renderer_publication(&changes).unwrap();
+    let query = publication
+        .query_painter_prefix_geometry(
+            Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)),
+            anchor,
+        )
+        .unwrap();
+    assert_eq!(query.objects, [source_id]);
+    scene.live(&mut session).add(&second).unwrap();
+    let second_id = session.execution_object_id(second.node_id()).unwrap();
+    let mut next = encode(&mut encoder, &mut session, false);
+    let mut second_geometries = noon_core::GeometryResourceArena::new();
+    let second_handle = second_geometries.insert_path(second_path);
+    assert_eq!(
+        handle.id, second_handle.id,
+        "control uses colliding arena-local slots"
+    );
+    assert_ne!(handle.arena, second_handle.arena);
+    next.resource_additions = Some(
+        RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [second_handle],
+            &noon_core::TextResourceArena::new(),
+            &second_geometries,
+            &noon_core::FontResourceArena::new(),
+            &crate::RetainedResourceInventory::default(),
+        )
+        .unwrap(),
+    );
+    next.retained
+        .objects
+        .iter_mut()
+        .find(|row| row.object == second_id)
+        .unwrap()
+        .content = TransportObjectContent::Geometry {
+        geometry: noon_core::GeometryRef::External(second_handle.id),
+        resource: Some(second_handle.into()),
+    };
+    apply(&mut mirror, &next).unwrap();
+    let second_lease = {
+        let local = mirror.resources().geometry_handle_remap()[&second_handle.into()];
+        let Some(noon_core::GeometryResource::VectorPath(owned)) =
+            mirror.resources().geometries().get(local)
+        else {
+            panic!("installed second path");
+        };
+        let row = mirror.wire.frame_index_for_object(second_id).unwrap();
+        let Some(noon_core::GeometryRef::VectorPath(borrowed)) =
+            mirror.frame().unwrap().objects[row].content.geometry()
+        else {
+            panic!("qualified vector lease");
+        };
+        assert!(
+            std::sync::Arc::ptr_eq(owned, borrowed),
+            "receiver does not copy vector payloads"
+        );
+        std::sync::Arc::downgrade(owned)
+    };
+    let publication = mirror
+        .renderer_publication(&FrameChanges::default())
+        .unwrap();
+    let near = Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0));
+    let far = Rect::new(Vec2::new(9.0, 9.0), Vec2::new(15.0, 15.0));
+    assert_eq!(
+        publication
+            .query_painter_prefix_geometry(near, anchor)
+            .unwrap()
+            .objects,
+        [source_id]
+    );
+    assert_eq!(
+        publication
+            .query_painter_prefix_geometry(far, anchor)
+            .unwrap()
+            .objects,
+        [second_id]
+    );
+    scene.live(&mut session).remove(&second).unwrap();
+    let mut removed = encode(&mut encoder, &mut session, false);
+    removed
+        .resource_retirements
+        .geometries
+        .push(second_handle.into());
+    apply(&mut mirror, &removed).unwrap();
+    assert!(
+        second_lease.upgrade().is_none(),
+        "retired frame tombstones must release immutable vector leases"
+    );
+    assert_eq!(
+        mirror
+            .renderer_publication(&FrameChanges::default())
+            .unwrap()
+            .query_painter_prefix_geometry(near, anchor)
+            .unwrap()
+            .objects,
+        [source_id]
+    );
+}

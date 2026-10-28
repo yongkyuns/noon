@@ -495,7 +495,7 @@ impl RetainedFramePreparer {
                         .unwrap_or(Color::WHITE);
                     let scratch_slot = self.push_geometry(
                         object_id,
-                        GeometryRef::VectorPath(path),
+                        GeometryRef::path(path),
                         object.transform,
                         Style {
                             fill: Some(fill),

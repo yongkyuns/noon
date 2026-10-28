@@ -24,11 +24,11 @@ fn observation(width: f32, angle: f32) -> Value {
             else {
                 panic!("expected Elbow vector path resource")
             };
-            (**path).clone()
+            path.clone()
         }
         other => panic!("expected Elbow path geometry, got {other:?}"),
     };
-    let bounds = GeometryRef::path(path.clone())
+    let bounds = GeometryRef::VectorPath(path.clone())
         .world_bounds(transform)
         .unwrap();
     let points: Vec<_> = path

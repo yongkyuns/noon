@@ -128,6 +128,7 @@ fn large_group_parameter_edit_borrows_source_and_only_member_changes_recapture()
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -250,6 +251,7 @@ fn neutral_parent_releases_retired_child_inputs_and_reactivation_captures_curren
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 4_000_000,
             )
             .unwrap();

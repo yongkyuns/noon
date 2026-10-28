@@ -269,7 +269,7 @@ mod tests {
             Vec2::new(1.0, 1.0),
         );
 
-        let path = GeometryRef::VectorPath(
+        let path = GeometryRef::path(
             VectorPath::new()
                 .move_to(Vec2::ZERO)
                 .quadratic_to(Vec2::new(1.0, 2.0), Vec2::new(2.0, 0.0)),

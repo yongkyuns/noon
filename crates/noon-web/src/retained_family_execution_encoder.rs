@@ -876,7 +876,7 @@ fn resolve_external_geometry(
         .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
     match resource {
         GeometryResource::VectorPath(path) => {
-            *geometry = GeometryRef::VectorPath(path.as_ref().clone());
+            *geometry = GeometryRef::VectorPath(path.clone());
             Ok(None)
         }
         GeometryResource::Mesh(_) => Ok(Some(handle)),

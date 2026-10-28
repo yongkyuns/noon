@@ -370,3 +370,111 @@ fn paired_scope_opacity_programme_animates_and_restores_through_native_export() 
     }
     eprintln!("ANIMATED_SCOPE_EXPORT_PASS frames=112 samples=13 literal_primary_overlap=true empty_exact=true returning_exact=true ancestor_visibility_exact=true final_restoration_exact=true");
 }
+
+#[test]
+#[ignore = "requires native GPU; ordered/composed appearance restoration"]
+fn paired_effect_restore_programme_preserves_exact_pixels_and_copy_independence() {
+    use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
+    use noon::RustHostCallbackTable;
+    use noon_export::capture_frames;
+    let mut program = noon::example_scenes::effect_restore::program().unwrap();
+    let mut options = CaptureOptions::new(640, 360);
+    options.backends = if cfg!(target_os = "macos") {
+        Backends::METAL
+    } else {
+        Backends::VULKAN
+    };
+    let samples_at = [2, 6, 10, 14, 18, 22, 26];
+    let mut samples = std::collections::BTreeMap::new();
+    let summary = capture_frames(
+        &mut program,
+        &mut RustHostCallbackTable::new(),
+        ExportFrameOptions {
+            frame_rate: FrameRate::new(8, 1).unwrap(),
+            start_frame: 0,
+            stop: ExportStop::SourceEnd,
+            max_frames: 29,
+            max_transitions_per_sample: 64,
+            final_hold_seconds: 0.0,
+        },
+        options,
+        |frame| {
+            let index = (frame.observation.requested_time * 8.0).round() as u32;
+            if samples_at.contains(&index) {
+                samples.insert(index, frame.rgba.to_vec());
+            }
+            Ok::<_, std::convert::Infallible>(())
+        },
+    )
+    .unwrap();
+    assert_eq!(summary.sampling.frames, 28);
+    assert_eq!(samples.len(), 7);
+    if let Some(directory) = std::env::var_os("NOON_EFFECT_RESTORE_ARTIFACTS") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        for (index, pixels) in &samples {
+            std::fs::write(directory.join(format!("frame-{index}.rgba")), pixels).unwrap();
+        }
+    }
+    for index in [6, 10, 14, 18, 22, 26] {
+        let mut maximum = 0;
+        let mut changed = 0;
+        let mut left = 0;
+        let mut right = 0;
+        for (pixel, (a, b)) in samples[&2]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(samples[&index].as_chunks::<4>().0.iter())
+            .enumerate()
+        {
+            if a != b {
+                changed += 1;
+                if pixel % 640 < 320 {
+                    left += 1;
+                } else {
+                    right += 1;
+                }
+            }
+            for channel in 0..4 {
+                maximum = maximum.max(a[channel].abs_diff(b[channel]));
+            }
+        }
+        eprintln!("restore frame={index} maximum={maximum} changed_pixels={changed} left={left} right={right}");
+    }
+    assert!(
+        samples[&2] == samples[&14],
+        "restore recovers the whole original frame"
+    );
+    assert!(
+        samples[&2] == samples[&18],
+        "editing the saved copy cannot mutate the restored scene"
+    );
+    for index in [6, 10, 22, 26] {
+        assert!(
+            samples[&2] != samples[&index],
+            "changed/removed output must be observable at {index}"
+        );
+    }
+    for (index, opacity) in [
+        (2, 0.6),
+        (6, 0.25),
+        (10, 0.25),
+        (14, 0.6),
+        (18, 0.6),
+        (22, 0.0),
+        (26, 1.0),
+    ] {
+        for (x, alpha) in [(410_usize, 0.84_f64), (460, 0.6)] {
+            let expected = (f64::from((255.0 * alpha).round() as u8) * opacity).round() as u8;
+            let at = (180 * 640 + x) * 4;
+            assert!(
+                samples[&index][at..at + 3]
+                    .iter()
+                    .all(|value| value.abs_diff(expected) <= 1),
+                "independent interior alpha at frame {index}, x={x}"
+            );
+        }
+    }
+    eprintln!("EFFECT_RESTORE_EXPORT_PASS frames=28 retained_samples=7 restoration_exact=true saved_copy_independent=true interior_alpha_bound=1");
+}

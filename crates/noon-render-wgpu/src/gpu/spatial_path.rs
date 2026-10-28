@@ -1302,7 +1302,7 @@ fn collect_text_paths<'a>(
                             item: item_base,
                         },
                         source: Some(fill_source),
-                        geometry: Cow::Owned(GeometryRef::VectorPath(if needs_fill {
+                        geometry: Cow::Owned(GeometryRef::path(if needs_fill {
                             fill_path
                         } else {
                             noon_core::VectorPath::new()
@@ -1317,7 +1317,7 @@ fn collect_text_paths<'a>(
                             item: item_base + 1,
                         },
                         source: Some(stroke_source),
-                        geometry: Cow::Owned(GeometryRef::VectorPath(if needs_stroke {
+                        geometry: Cow::Owned(GeometryRef::path(if needs_stroke {
                             stroke_path
                         } else {
                             noon_core::VectorPath::new()
@@ -1351,7 +1351,7 @@ fn collect_text_paths<'a>(
                         item: item_base,
                     },
                     source: Some(source),
-                    geometry: Cow::Owned(GeometryRef::VectorPath(path)),
+                    geometry: Cow::Owned(GeometryRef::path(path)),
                     style,
                 });
             }
@@ -1847,7 +1847,7 @@ mod tests {
             ..Style::default()
         };
         let external = GeometryRef::External(handle.id);
-        let inline = GeometryRef::VectorPath(curved_open);
+        let inline = GeometryRef::path(curved_open);
         for geometry in [&inline, &external] {
             let mesh = tessellate(geometry, &resources, style, 1.0, Domain::World).unwrap();
             let stroke = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
@@ -1877,7 +1877,7 @@ mod tests {
             .vertices
             .iter()
             .any(|vertex| vertex.stroke_metadata[0] == 1.0));
-        let corner = GeometryRef::VectorPath(
+        let corner = GeometryRef::path(
             noon_core::VectorPath::new()
                 .move_to(Vec2::new(-1.0, 0.0))
                 .line_to(Vec2::ZERO)
@@ -1929,7 +1929,7 @@ mod tests {
     fn inline_path_key_tracks_exact_command_topology_and_row_identity() {
         let resources = GeometryResourceArena::default();
         let path = |end| {
-            GeometryRef::VectorPath(
+            GeometryRef::path(
                 noon_core::VectorPath::new()
                     .move_to(Vec2::ZERO)
                     .line_to(end)

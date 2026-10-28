@@ -204,35 +204,40 @@ pub(crate) fn stage_effect_copy(
     target: noon_core::SemanticLocalNodeToken,
     transaction: &mut noon_core::SemanticMutationTransaction,
 ) -> Result<(), AuthoringError> {
-    let node = store
-        .node(source)
-        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    if node.effect_ids().is_empty() {
-        // Ordinary unrendered family roots intentionally have no execution row.
-        // There is no attachment state to capture or allocate for those roots.
-        return Ok(());
+    for effect in capture_effects(store, execution, source)? {
+        store.copy_effect_into_with_definition(
+            effect.attachment,
+            target,
+            effect.definition,
+            transaction,
+        )?;
     }
-    if !execution.semantic_object_is_reachable(source) {
-        store.copy_effects_into(source, target, transaction)?;
-        return Ok(());
+    Ok(())
+}
+
+/// Read one owner's coherent attachment values without importing driver or
+/// lifecycle ownership. Detached owners retain their authored declarations.
+pub(crate) fn capture_effects(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+) -> Result<Vec<noon_core::SemanticAnimationEffectSnapshot>, AuthoringError> {
+    let mut snapshot = store.animation_effect_snapshot(source)?;
+    if snapshot.is_empty() || !execution.semantic_object_is_reachable(source) {
+        return Ok(snapshot);
     }
-    match (
-        node.effect_ids(),
-        execution.effective_effects(store, source)?,
-    ) {
-        ([], None) => Ok(()),
-        (attachments, Some(effects)) if attachments == effects.attachments() => {
-            for effect in effects.iter() {
-                store.copy_effect_into_with_definition(
-                    effect.attachment,
-                    target,
-                    effect.definition,
-                    transaction,
-                )?;
-            }
-            Ok(())
-        }
-        // Never rebind a stale generation by name or silently lose an effect.
-        _ => Err(AuthoringError::EffectStateReplacementUnavailable),
+    let effects = execution
+        .effective_effects(store, source)?
+        .ok_or(AuthoringError::EffectCaptureMismatch { owner: source })?;
+    if snapshot
+        .iter()
+        .map(|effect| effect.attachment)
+        .ne(effects.attachments().iter().copied())
+    {
+        return Err(AuthoringError::EffectCaptureMismatch { owner: source });
     }
+    for (captured, effective) in snapshot.iter_mut().zip(effects.iter()) {
+        captured.definition = effective.definition;
+    }
+    Ok(snapshot)
 }

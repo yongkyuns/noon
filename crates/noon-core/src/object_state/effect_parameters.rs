@@ -146,6 +146,7 @@ pub enum EffectParameter {
     Progress,
     Softness,
     Seed,
+    Size,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -153,6 +154,7 @@ pub enum EffectParameterError {
     InvalidColor,
     InvalidOffset,
     InvalidRadius,
+    InvalidSize,
     InvalidIntensity,
     InvalidProgress,
     InvalidSoftness,
@@ -169,6 +171,7 @@ impl std::fmt::Display for EffectParameterError {
                 f.write_str("effect color must have finite RGBA channels in [0, 1]")
             }
             Self::InvalidOffset => f.write_str("effect offset must contain two finite coordinates"),
+            Self::InvalidSize => f.write_str("effect cell size must be finite and non-negative"),
             Self::InvalidRadius => f.write_str("effect radius must be finite and non-negative"),
             Self::InvalidIntensity => f.write_str("effect intensity must be finite and in [0, 8]"),
             Self::InvalidProgress => f.write_str("effect progress must be finite and in [0, 1]"),
@@ -212,6 +215,7 @@ pub struct EffectUpdate {
     pub progress: Option<f64>,
     pub softness: Option<f64>,
     pub seed: Option<u32>,
+    pub size: Option<EffectRadius>,
 }
 
 impl EffectUpdate {
@@ -234,6 +238,9 @@ impl EffectUpdate {
             {
                 return Err(EffectParameterError::InvalidColor);
             }
+        }
+        if let Some(size) = self.size {
+            nonnegative(size.value(), EffectParameterError::InvalidSize)?;
         }
         if let Some(r) = self.radius {
             r.validate()?;
@@ -285,6 +292,11 @@ impl EffectUpdate {
         self.softness = Some(value);
         self
     }
+    pub fn size(mut self, value: impl Into<EffectRadius>) -> Self {
+        self.size = Some(value.into());
+        self
+    }
+
     pub fn seed(mut self, value: u32) -> Self {
         self.seed = Some(value);
         self
@@ -314,6 +326,7 @@ impl EffectUpdate {
             EffectParameter::Progress,
             EffectParameter::Softness,
             EffectParameter::Seed,
+            EffectParameter::Size,
         ]
         .into_iter()
         .filter(move |parameter| self.writes(*parameter))
@@ -329,6 +342,7 @@ impl EffectUpdate {
             EffectParameter::Progress => self.progress.is_some(),
             EffectParameter::Softness => self.softness.is_some(),
             EffectParameter::Seed => self.seed.is_some(),
+            EffectParameter::Size => self.size.is_some(),
         }
     }
 

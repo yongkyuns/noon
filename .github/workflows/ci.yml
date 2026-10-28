@@ -69,7 +69,13 @@ on:
       - "scripts/dissolve-qualification.mjs"
       - "scripts/dissolve-mask-*.mjs"
       - "scripts/scope-opacity-qualification.mjs"
+      - "scripts/effect-restore-qualification.mjs"
+      - "scripts/pixelate-qualification.mjs"
+      - "scripts/glass-lens-qualification.mjs"
+      - "scripts/glass-lens-recovery-qualification.mjs"
       - "crates/noon-export/tests/scope_opacity.rs"
+      - "crates/noon-export/tests/pixelate.rs"
+      - "crates/noon-export/tests/glass_lens.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -102,6 +108,7 @@ on:
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/pixelate.rs"
       - "crates/noon/tests/composed/**"
       - "crates/noon/tests/composed_effects.rs"
       - "crates/noon/tests/linear_gradient_raster.rs"
@@ -255,8 +262,26 @@ jobs:
         run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
+      - name: Qualify authored glass lens and native export
+        env:
+          NOON_GLASS_ARTIFACTS: ${{ github.workspace }}/glass-lens-native-artifacts
+        run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture
+      - name: Qualify authored cell sampling and export
+        run: cargo test -p noon-export --test pixelate -- --ignored --nocapture
       - name: Qualify dissolve mask field and premultiplied alpha operator
-        run: cargo test -p noon-render-wgpu --lib dissolve_filter -- --ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::sample_filter::tests -- --include-ignored --nocapture
+      - name: Qualify clipped backdrop replacement and real-shader negative controls
+        env:
+          NOON_BACKDROP_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests -- --include-ignored --nocapture
+      - name: Qualify retained backdrop camera, resize, Visibility and lifecycle
+        env:
+          NOON_BACKDROP_COORDINATOR_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-coordinator-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::analytic_glow::backdrop::tests -- --include-ignored --nocapture
+      - name: Qualify painter-prefix capture against independent layer references
+        env:
+          NOON_PREFIX_ARTIFACT_DIR: ${{ github.workspace }}/prefix-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests -- --include-ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
@@ -302,12 +327,17 @@ jobs:
           path: glyph-coverage-raster-artifacts
           if-no-files-found: error
           retention-days: 3
-      - name: Preserve native glow qualification evidence
+      - name: Preserve native raster qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: glow-raster-correctness
-          path: glow-raster-artifacts
+          path: |
+            glow-raster-artifacts
+            backdrop-raster-artifacts
+            prefix-raster-artifacts
+            glass-lens-native-artifacts
+            backdrop-coordinator-raster-artifacts
           if-no-files-found: warn
           retention-days: 3
 
@@ -549,6 +579,14 @@ jobs:
         run: node scripts/composed-effects-qualification.mjs
       - name: Qualify animated nested opacity and ancestor Visibility
         run: node scripts/scope-opacity-qualification.mjs
+      - name: Qualify ordered and composed appearance save/restore
+        run: node scripts/effect-restore-qualification.mjs
+      - name: Qualify glass lens through Rust and Python on WebGPU and WebGL2
+        run: node scripts/glass-lens-qualification.mjs
+      - name: Qualify glass lens replay, resize and GPU recovery
+        run: node scripts/glass-lens-recovery-qualification.mjs
+      - name: Qualify bounded cell sampling through Rust and Python
+        run: node scripts/pixelate-qualification.mjs
       - name: Qualify private visibility lifecycle through Rust and Python
         run: node scripts/dissolve-qualification.mjs
       - name: Qualify composed seeded masks through Rust and Python
@@ -610,6 +648,10 @@ jobs:
             browser-smoke-artifacts/ordered-effects
             browser-smoke-artifacts/composed-effects
             browser-smoke-artifacts/scope-opacity
+            browser-smoke-artifacts/effect-restore
+            browser-smoke-artifacts/pixelate
+            browser-smoke-artifacts/glass-lens
+            browser-smoke-artifacts/glass-lens-recovery
             browser-smoke-artifacts/dissolve
             browser-smoke-artifacts/noise-dissolve
           if-no-files-found: warn

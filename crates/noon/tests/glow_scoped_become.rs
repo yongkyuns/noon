@@ -28,40 +28,59 @@ fn unrelated_glow_does_not_block_plain_state_replacement() {
 }
 
 #[test]
-fn local_effect_on_either_operand_still_rejects_and_rolls_back() {
+fn local_effects_copy_independently_and_retire_when_the_donor_has_none() {
     let mut scene = Scene::new();
     let mut receiver = scene.square(1.0).unwrap();
     let mut donor = scene.circle(0.25).unwrap();
     donor
         .set_glow(EffectUpdate::default().intensity(0.8))
         .unwrap();
-
-    let before_state = receiver.state().unwrap();
-    let before_revision = scene.revision();
-    assert!(receiver
+    let donor_effect = donor.get_effect("glow").unwrap();
+    let receiver_id = receiver.node_id();
+    receiver
         .become_handle(&donor, ManimBecomeOptions::default())
-        .is_err());
-    assert_eq!(receiver.state().unwrap(), before_state);
-    assert_eq!(scene.revision(), before_revision);
+        .unwrap();
+    assert_eq!(receiver.node_id(), receiver_id);
+    assert_same_visual(&receiver.state().unwrap(), &donor.state().unwrap());
+    let copied = receiver.get_effect("glow").unwrap();
+    assert_ne!(copied.node_id(), donor_effect.node_id());
+    assert_eq!(
+        copied.authored_definition().unwrap(),
+        donor_effect.authored_definition().unwrap()
+    );
 
-    // Test the receiver independently: leaving the donor's glow installed
-    // would let a broken receiver-side guard pass this second assertion.
     donor.remove_glow().unwrap();
-    assert!(donor.get_effect("glow").is_err());
+    assert!(donor_effect.authored_definition().is_err());
+    assert!(
+        copied.authored_definition().is_ok(),
+        "donor retirement must not retire the independent receiver binding"
+    );
+    receiver
+        .become_handle(&donor, ManimBecomeOptions::default())
+        .unwrap();
+    assert!(receiver.get_effect("glow").is_err());
+    assert!(copied.authored_definition().is_err());
+
     receiver.set_glow(EffectUpdate::default()).unwrap();
-    let generation = receiver.get_effect("glow").unwrap().node_id();
+    let prior = receiver.get_effect("glow").unwrap();
     let before_state = receiver.state().unwrap();
     let before_revision = scene.revision();
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.square(2.0).unwrap();
     assert!(receiver
-        .become_handle(&donor, ManimBecomeOptions::default())
+        .become_handle(&foreign, ManimBecomeOptions::default())
         .is_err());
     assert_eq!(receiver.state().unwrap(), before_state);
     assert_eq!(scene.revision(), before_revision);
-    assert_eq!(receiver.get_effect("glow").unwrap().node_id(), generation);
+    assert_eq!(
+        receiver.get_effect("glow").unwrap().node_id(),
+        prior.node_id()
+    );
+    assert!(prior.authored_definition().is_ok());
 }
 
 #[test]
-fn unrelated_glow_does_not_block_family_replacement_but_local_glow_does() {
+fn family_replacement_copies_local_glow_without_touching_unrelated_bindings() {
     let mut scene = Scene::new();
     let mut remote = scene.circle(0.4).unwrap();
     remote
@@ -88,11 +107,32 @@ fn unrelated_glow_does_not_block_family_replacement_but_local_glow_does() {
     assert_eq!(remote.get_effect("glow").unwrap().node_id(), generation);
 
     target_a.set_glow(EffectUpdate::default()).unwrap();
+    let target_effect = target_a.get_effect("glow").unwrap();
+    let revision = scene.revision();
+    source.become_family(&target, Default::default()).unwrap();
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_same_visual(&first.state().unwrap(), &target_a.state().unwrap());
+    assert_same_visual(&second.state().unwrap(), &target_b.state().unwrap());
+    let copied = first.get_effect("glow").unwrap();
+    assert_ne!(copied.node_id(), target_effect.node_id());
+    assert_eq!(
+        copied.authored_definition().unwrap(),
+        target_effect.authored_definition().unwrap()
+    );
+    assert_eq!(remote.get_effect("glow").unwrap().node_id(), generation);
+
     let before = [first.state().unwrap(), second.state().unwrap()];
     let revision = scene.revision();
-    assert!(source.become_family(&target, Default::default()).is_err());
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.family(&[]).unwrap();
+    assert!(source.become_family(&foreign, Default::default()).is_err());
     assert_eq!([first.state().unwrap(), second.state().unwrap()], before);
     assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        first.get_effect("glow").unwrap().node_id(),
+        copied.node_id()
+    );
+    assert_eq!(remote.get_effect("glow").unwrap().node_id(), generation);
 }
 
 #[test]

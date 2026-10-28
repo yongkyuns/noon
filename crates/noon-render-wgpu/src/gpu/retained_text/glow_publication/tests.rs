@@ -169,6 +169,7 @@ impl Fixture {
                 &prepared,
                 &self.text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -282,6 +283,91 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         assert_eq!(fixture.last_image_upload.textures_retired, 1);
         assert_eq!(fixture.renderer.image_residency_stats().textures, 0);
         assert!(!fixture.renderer.has_draw_source_effect(object));
+    }
+}
+
+#[test]
+fn shrinking_publication_retires_tail_effects_before_painter_sort() {
+    let mut fixture = Fixture::new();
+    let mut scene = runtime(3, true, false);
+    let baseline = fixture.prepare(&mut scene, true);
+    for _ in 0..2 {
+        for index in 0..5 {
+            let mut row = CompiledObject::new(
+                ObjectId::new(200 + index),
+                GeometryRef::circle(0.25),
+                Transform2D::IDENTITY,
+                Style {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                    ..Style::default()
+                },
+            );
+            row.effects = Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: SemanticNodeId::new(200 + index as u32, 0),
+                    definition: Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
+                        .unwrap()
+                        .into(),
+                }])
+                .unwrap(),
+            ));
+            scene
+                .apply_execution_patch(&ExecutionPatch::CreateObject(row))
+                .unwrap();
+        }
+        let full = fixture.prepare(&mut scene, true);
+        assert_eq!(scene.frame().objects.len(), 8);
+        assert!(full.retained_texture_bytes > baseline.retained_texture_bytes);
+        for index in 0..5 {
+            assert_eq!(
+                fixture
+                    .renderer
+                    .retained_effects
+                    .packed
+                    .get(&(3 + index as usize))
+                    .map(|entry| entry.0),
+                Some(ObjectId::new(200 + index))
+            );
+            scene
+                .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(200 + index)))
+                .unwrap();
+        }
+        // Publish the compacted frame while renderer captures still refer to
+        // old tail slots. Browser replay restoration exposes this same shrinking
+        // publication invariant; no retired slot has a current painter rank.
+        scene.reclaim_retired_object_slots().unwrap();
+        assert_eq!(scene.frame().objects.len(), 3);
+        let shrunk = fixture.prepare(&mut scene, true);
+        assert_eq!(
+            shrunk.retained_texture_bytes,
+            baseline.retained_texture_bytes
+        );
+        for index in 0..5 {
+            assert!(!fixture
+                .renderer
+                .retained_effects
+                .packed
+                .contains_key(&(3 + index as usize)));
+        }
+        assert_eq!(fixture.renderer.retained_effects.packed.len(), 1);
+        assert_eq!(
+            fixture
+                .renderer
+                .retained_effects
+                .packed
+                .get(&1)
+                .map(|entry| entry.0),
+            Some(ObjectId::new(101))
+        );
+        let clean = fixture.prepare(&mut scene, true);
+        assert_eq!(
+            clean,
+            RetainedEffectStats {
+                retained_texture_bytes: shrunk.retained_texture_bytes,
+                ..Default::default()
+            }
+        );
     }
 }
 
@@ -649,6 +735,7 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
                 &prepared,
                 &fixture.text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -740,6 +827,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
             &prepared,
             &fixture.text,
             &publication,
+            wgpu::Color::TRANSPARENT,
             1_000_000
         ),
         Err(EffectPrepareError::PublicationMismatch)
@@ -805,6 +893,7 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
             &prepared,
             &fixture.text,
             &publication,
+            wgpu::Color::TRANSPARENT,
             first.retained_texture_bytes - 1
         ),
         Err(EffectPrepareError::ScratchBudgetExceeded)
@@ -907,7 +996,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
         GeometryRef::circle(0.4),
         GeometryRef::rectangle(0.8, 0.6),
         GeometryRef::line(Vec2::new(-0.7, -0.5), Vec2::new(0.7, 0.5)),
-        GeometryRef::VectorPath(
+        GeometryRef::path(
             noon_core::VectorPath::new()
                 .move_to(Vec2::new(-0.7, -0.5))
                 .cubic_to(

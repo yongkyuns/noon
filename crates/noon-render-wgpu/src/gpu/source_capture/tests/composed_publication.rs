@@ -160,6 +160,7 @@ fn qualify_composed_publication(device: &wgpu::Device, queue: &wgpu::Queue, pixe
                 &prepared,
                 &text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();

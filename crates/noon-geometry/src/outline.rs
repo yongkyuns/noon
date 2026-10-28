@@ -11,7 +11,7 @@ pub fn canonical_outline_path(geometry: &GeometryRef) -> Option<VectorPath> {
         GeometryRef::Circle { radius } => Some(circle_path(*radius)),
         GeometryRef::Rectangle { size } => Some(rectangle_path(*size)),
         GeometryRef::Line { start, end } => Some(VectorPath::new().move_to(*start).line_to(*end)),
-        GeometryRef::VectorPath(path) => Some(path.clone()),
+        GeometryRef::VectorPath(path) => Some(path.as_ref().clone()),
         GeometryRef::External(_) => None,
     }
 }

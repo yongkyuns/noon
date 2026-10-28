@@ -84,6 +84,7 @@ impl Raster {
                     &buffer,
                     &[],
                     None,
+                    SIZE,
                 )
                 .unwrap();
         } else {

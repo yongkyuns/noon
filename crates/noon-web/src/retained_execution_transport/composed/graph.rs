@@ -1,8 +1,9 @@
 //! Borrow installed rows and sparse final overlays into the compiler's validator.
 use super::*;
 use noon_compile::{
-    CompiledComposedSourceError, CompiledComposedSourceErrorKind as Kind, ComposedDependencies,
-    ComposedDependencyChanges, ComposedSourceGraphView,
+    unsupported_prefix_input, CompiledComposedSourceError, CompiledComposedSourceErrorKind as Kind,
+    ComposedDependencies, ComposedDependencyChanges, ComposedSourceGraphView,
+    PrefixAdmissionChanges,
 };
 use std::collections::{BTreeSet, HashMap};
 
@@ -26,6 +27,7 @@ struct View<'a> {
     ranks: HashMap<ObjectId, Option<usize>>,
     dependencies: ComposedDependencyChanges<'a>,
     snapshot: bool,
+    prefix: PrefixAdmissionChanges,
 }
 impl<'a> View<'a> {
     fn row(&self, id: ObjectId) -> Option<Row<'a>> {
@@ -107,6 +109,21 @@ impl ComposedSourceGraphView for View<'_> {
             .flatten()
             .map(|rank| rank as usize)
     }
+    fn input_role(&self, owner: ObjectId) -> Option<noon_core::EffectInputRole> {
+        self.row(owner).map(|row| input_role(row.state))
+    }
+    fn prefix_input_unsupported(&self, input: ObjectId) -> bool {
+        self.row(input).is_some_and(|row| {
+            unsupported_prefix_input(
+                &row.state.content,
+                row.state.spatial.is_some(),
+                row.state.draw_enabled,
+            )
+        })
+    }
+    fn prefix_conflict(&self) -> Option<(ObjectId, ObjectId)> {
+        self.dependencies.prefix_conflict(&self.prefix)
+    }
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
         self.dependencies.overlapping(input)
     }
@@ -116,6 +133,13 @@ fn graph_error(owner: ObjectId, kind: Kind) -> RetainedExecutionTransportError {
         owner,
         kind,
     })
+}
+fn input_role(row: &FrameObjectState) -> noon_core::EffectInputRole {
+    row.effects
+        .as_ref()
+        .map_or(noon_core::EffectInputRole::Painted, |stack| {
+            stack.input_role()
+        })
 }
 fn source_arc(content: &ObjectContentRef) -> Option<&Arc<ComposedSource>> {
     if let ObjectContentRef::Composed(source) = content {
@@ -128,6 +152,7 @@ fn source_arc(content: &ObjectContentRef) -> Option<&Arc<ComposedSource>> {
 #[derive(Default)]
 pub(in crate::retained_execution_transport) struct PreparedComposedChanges {
     replacements: Vec<SourceReplacement>,
+    prefix: PrefixAdmissionChanges,
     #[cfg(test)]
     pub stats: noon_compile::ComposedValidationStats,
 }
@@ -135,6 +160,7 @@ struct SourceReplacement {
     owner: ObjectId,
     previous: Option<Arc<ComposedSource>>,
     next: Option<Arc<ComposedSource>>,
+    role: Option<noon_core::EffectInputRole>,
 }
 impl PreparedComposedChanges {
     pub(in crate::retained_execution_transport) fn commit(self, index: &mut ComposedDependencies) {
@@ -142,10 +168,13 @@ impl PreparedComposedChanges {
             owner,
             previous,
             next,
+            role,
         } in self.replacements
         {
             index.replace(owner, previous.as_deref(), next.as_deref());
+            index.set_input_role(owner, role);
         }
+        index.commit_prefix_admission(self.prefix);
     }
 }
 impl RetainedExecutionFrameMirror {
@@ -157,13 +186,12 @@ impl RetainedExecutionFrameMirror {
         let mut index = ComposedDependencies::default();
         for row in rows {
             index.replace(row.id, None, row.content.composed_source());
+            index.set_input_role(row.id, Some(input_role(row)));
         }
-        if index.is_empty() {
-            return Ok(index);
-        }
-        let view = View {
+        let mut view = View {
             mirror: self,
             snapshot: true,
+            prefix: PrefixAdmissionChanges::default(),
             rows: rows
                 .iter()
                 .zip(wire)
@@ -184,7 +212,15 @@ impl RetainedExecutionFrameMirror {
                 .collect(),
             dependencies: ComposedDependencyChanges::new(&index),
         };
-        view.validate(&index.owners().collect())?;
+        view.prefix = view.dependencies.prepare_prefix_admission(
+            &view,
+            rows.iter().map(|row| row.id),
+            std::iter::empty(),
+        );
+        view.validate(&index.validation_owners().collect())?;
+        let prefix = std::mem::take(&mut view.prefix);
+        drop(view);
+        index.commit_prefix_admission(prefix);
         Ok(index)
     }
     pub(in crate::retained_execution_transport) fn preflight_composed_incremental(
@@ -193,17 +229,11 @@ impl RetainedExecutionFrameMirror {
         removed: &[usize],
         order: Option<&PreparedPainterOrder>,
     ) -> Result<PreparedComposedChanges, RetainedExecutionTransportError> {
-        if self.composed_dependencies.is_empty()
-            && !rows
-                .iter()
-                .any(|row| row.state.content.composed_source().is_some())
-        {
-            return Ok(PreparedComposedChanges::default());
-        }
         let frame = self.frame.as_ref().expect("installed incremental frame");
         let mut view = View {
             mirror: self,
             snapshot: false,
+            prefix: PrefixAdmissionChanges::default(),
             rows: HashMap::new(),
             ranks: HashMap::new(),
             dependencies: ComposedDependencyChanges::new(&self.composed_dependencies),
@@ -212,12 +242,17 @@ impl RetainedExecutionFrameMirror {
         let mut changed = BTreeSet::new();
         for &index in removed {
             let old = &frame.objects[index];
-            if let Some(source) = source_arc(&old.content) {
-                view.dependencies.replace(old.id, Some(source), None);
+            if old.content.composed_source().is_some()
+                || input_role(old) == noon_core::EffectInputRole::PainterPrefix
+            {
+                let source = source_arc(&old.content);
+                view.dependencies
+                    .replace(old.id, source.map(AsRef::as_ref), None);
                 prepared.replacements.push(SourceReplacement {
                     owner: old.id,
-                    previous: Some(source.clone()),
+                    previous: source.cloned(),
                     next: None,
+                    role: None,
                 });
             }
             view.rows.insert(old.id, None);
@@ -243,7 +278,7 @@ impl RetainedExecutionFrameMirror {
                 (None, None) => true,
                 _ => false,
             };
-            if !same {
+            if !same || old.is_none_or(|old| input_role(old) != input_role(&row.state)) {
                 view.dependencies.replace(
                     row.state.id,
                     previous.map(AsRef::as_ref),
@@ -253,13 +288,24 @@ impl RetainedExecutionFrameMirror {
                     owner: row.state.id,
                     previous: previous.cloned(),
                     next: next.cloned(),
+                    role: Some(input_role(&row.state)),
                 });
             }
             if old.is_none_or(|old| {
                 old.spatial.is_some() != row.state.spatial.is_some()
+                    || unsupported_prefix_input(
+                        &old.content,
+                        old.spatial.is_some(),
+                        old.draw_enabled,
+                    ) != unsupported_prefix_input(
+                        &row.state.content,
+                        row.state.spatial.is_some(),
+                        row.state.draw_enabled,
+                    )
                     || old.draw_enabled != row.state.draw_enabled
                     || frame.presences[row.index] != row.wire.presence
                     || old.effects.is_some() != row.state.effects.is_some()
+                    || input_role(old) != input_role(&row.state)
                     || (old.style.opacity != 1.0) != (row.state.style.opacity != 1.0)
             }) {
                 changed.insert(row.state.id);
@@ -295,14 +341,23 @@ impl RetainedExecutionFrameMirror {
                 painter_rows.push(id);
             }
         }
+        view.prefix = view.dependencies.prepare_prefix_admission(
+            &view,
+            changed.iter().copied(),
+            painter_rows.iter().copied(),
+        );
         let affected = view
             .dependencies
             .affected_scopes(&view, changed, painter_rows);
         let _stats = view.validate(&affected)?;
         #[cfg(test)]
         {
-            prepared.stats = _stats;
+            prepared.stats = noon_compile::ComposedValidationStats {
+                prefix_rows_examined: view.prefix.rows_examined,
+                .._stats
+            };
         }
+        prepared.prefix = std::mem::take(&mut view.prefix);
         Ok(prepared)
     }
 }

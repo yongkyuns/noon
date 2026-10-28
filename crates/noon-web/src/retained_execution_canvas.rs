@@ -993,6 +993,7 @@ mod wasm {
                         &prepared,
                         &self.text_gpu,
                         publication,
+                        CLEAR_COLOR,
                         noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;

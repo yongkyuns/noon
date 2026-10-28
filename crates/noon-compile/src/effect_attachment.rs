@@ -23,6 +23,7 @@ pub enum CompiledEffectStackError {
     DuplicateAttachment(SemanticNodeId),
     ExceedsProfile,
     InvalidVisibilityRole,
+    MixedInputRoles,
 }
 impl std::fmt::Display for CompiledEffectStackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,11 +69,28 @@ impl CompiledEffectStack {
         }) {
             return Err(CompiledEffectStackError::InvalidVisibilityRole);
         }
+        if definitions
+            .iter()
+            .any(|definition| definition.input_role() == noon_core::EffectInputRole::PainterPrefix)
+            && (definitions[0].as_backdrop_blur().is_none()
+                || definitions.len() != 1 + usize::from(visibility.is_some()))
+        {
+            return Err(CompiledEffectStackError::MixedInputRoles);
+        }
         Ok(Self {
             visibility: visibility.is_some(),
             attachments: attachments.into_boxed_slice(),
             definitions: definitions.into_boxed_slice(),
         })
+    }
+    /// Input role follows the checked immutable attachment topology.
+    pub fn input_role(&self) -> noon_core::EffectInputRole {
+        self.definitions[0].input_role()
+    }
+    pub fn backdrop_blur(&self) -> Option<CompiledEffect> {
+        self.definitions[0]
+            .as_backdrop_blur()
+            .map(|_| self.iter().next().expect("nonempty stack"))
     }
     pub fn len(&self) -> usize {
         self.attachments.len()
@@ -115,6 +133,9 @@ impl CompiledEffectStack {
         else {
             return false;
         };
+        if self.definitions[index].input_role() != effect.definition.input_role() {
+            return false;
+        }
         if self.visibility
             && index + 1 == self.len()
             && effect.definition.as_noise_dissolve().is_none()
@@ -265,5 +286,61 @@ mod visibility_tests {
         assert_eq!(private.visibility(), Some(updated));
         let same_role = CompiledEffectStack::new_with_visibility([updated], Some(id)).unwrap();
         crate::execution_patch::validate_effect_values(object, Some(&private), &same_role).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod backdrop_tests {
+    use super::*;
+    use noon_core::{
+        BackdropBlur, Blur, EffectDefinition, EffectInputRole, EffectUpdate, NoiseDissolve, Pixels,
+    };
+    fn effect(id: u32, definition: impl Into<EffectDefinition>) -> CompiledEffect {
+        CompiledEffect {
+            attachment: SemanticNodeId::new(id, 2),
+            definition: definition.into(),
+        }
+    }
+    #[test]
+    fn prefix_input_has_exact_binding_and_only_trailing_visibility_in_this_profile() {
+        let blur = effect(1, BackdropBlur::default());
+        let mask = effect(2, NoiseDissolve::default());
+        let stack = CompiledEffectStack::new([blur]).unwrap();
+        assert_eq!(stack.input_role(), EffectInputRole::PainterPrefix);
+        assert_eq!(stack.backdrop_blur(), Some(blur));
+        assert!(
+            CompiledEffectStack::new_with_visibility([blur, mask], Some(mask.attachment)).is_ok()
+        );
+        for definitions in [
+            vec![blur, mask],
+            vec![mask, blur],
+            vec![blur, effect(3, Blur::default())],
+            vec![effect(3, Blur::default()), blur],
+            vec![blur, effect(3, BackdropBlur::default())],
+        ] {
+            assert_eq!(
+                CompiledEffectStack::new(definitions),
+                Err(CompiledEffectStackError::MixedInputRoles)
+            );
+        }
+        let mut next = stack;
+        assert!(!next.replace(CompiledEffect {
+            definition: Blur::default().into(),
+            ..blur
+        }));
+        assert_eq!(next.backdrop_blur(), Some(blur));
+        let updated = CompiledEffect {
+            definition: BackdropBlur::new(EffectUpdate::default().radius(Pixels(8.0)))
+                .unwrap()
+                .into(),
+            ..blur
+        };
+        assert!(next.replace(updated));
+        assert_eq!(next.backdrop_blur(), Some(updated));
+        let channels = blur
+            .parameter_channels(EffectUpdate::default().radius(0.4))
+            .unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].0, noon_core::Property::EffectRadius);
     }
 }
