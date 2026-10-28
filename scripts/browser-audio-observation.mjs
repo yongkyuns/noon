@@ -1,5 +1,5 @@
 // Installed only by this harness, before the unmodified product page loads.
-export function observeAudio() {
+export function observeAudio({ sampleRate } = {}) {
   const NativeAudioContext = window.AudioContext;
   let eventOrder = 0;
   const contexts = [], starts = [], stops = [], buffers = [], parameters = [];
@@ -96,7 +96,7 @@ export function observeAudio() {
   };
   class ObservedAudioContext extends NativeAudioContext {
     constructor(...args) {
-      super(...args);
+      super(...(sampleRate === undefined ? args : [{ ...args[0], sampleRate }]));
       const id = contexts.length;
       contextIds.set(this, id);
       const analyser = this.createAnalyser();
@@ -147,7 +147,7 @@ export function observeAudio() {
         analyser.getFloatTimeDomainData(samples);
         let sum = 0, peak = 0;
         for (const value of samples) { sum += value * value; peak = Math.max(peak, Math.abs(value)); }
-        return { state: context.state, deviceTime: context.currentTime, states,
+        return { state: context.state, deviceTime: context.currentTime, sampleRate: context.sampleRate, states,
           rms: Math.sqrt(sum / samples.length), peak };
       });
     },

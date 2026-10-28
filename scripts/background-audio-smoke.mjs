@@ -19,8 +19,12 @@ const artifacts = path.resolve(process.env.NOON_AUDIO_ARTIFACTS ??
   path.join(root, "browser-smoke-artifacts/background-audio"));
 const backend = process.env.NOON_AUDIO_BACKEND ?? "webgpu";
 assert.ok(["webgpu", "webgl"].includes(backend), "unknown audio qualification renderer backend");
+const requestedSampleRate = process.env.NOON_AUDIO_SAMPLE_RATE === undefined
+  ? undefined : Number(process.env.NOON_AUDIO_SAMPLE_RATE);
+assert.ok(requestedSampleRate === undefined || [44100,48000].includes(requestedSampleRate),
+  "audio qualification sample rate must be 44100 or 48000");
 const report = {
-  scope: "finite-direct-rust-wasm-web-audio", status: "running", backend,
+  scope: "finite-direct-rust-wasm-web-audio", status: "running", backend, requestedSampleRate,
   revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   cases: [], browserErrors: [], consoleErrors: [],
@@ -161,7 +165,7 @@ async function newProductPage() {
   result.on("pageerror", error => report.browserErrors.push(String(error)));
   result.on("console", message => { if (message.type() === "error") report.consoleErrors.push(message.text()); });
   await result.route("**/favicon.ico", route => route.fulfill({ status: 204, body: "" }));
-  await result.addInitScript(observeAudio);
+  await result.addInitScript(observeAudio, { sampleRate: requestedSampleRate });
   if (backend === "webgl") {
     await result.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
   }
