@@ -499,3 +499,5 @@ mod retained_color_assets;
 fn visible_retained_view_profile_matches_independent_bloom_pixels() {
     qualify_authored_scene(true, true);
 }
+
+mod hdr_captures;

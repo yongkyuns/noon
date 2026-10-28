@@ -33,6 +33,7 @@ swash = "=0.2.10"
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 
 [dev-dependencies]
+serde_json = "1.0"
 half = "=2.7.1"
 pollster = "=1.0.1"
 noon-typst = { path = "../noon-typst" }

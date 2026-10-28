@@ -198,8 +198,8 @@ pub struct EffectCaptureTile {
     pub local_origin: [u32; 2],
     pub visible_size: [u32; 2],
     pub support_radius: u32,
-    /// Conservative aggregate: source RGBA8 + 3 filter images RGBA8,
-    /// plus one silhouette mask RGBA8 only in silhouette mode.
+    /// Conservative aggregate of source, ordered filter storage and optional
+    /// silhouette, using the selected working format's actual texel sizes.
     pub capture_and_scratch_bytes: u64,
 }
 
@@ -230,6 +230,7 @@ impl EffectCaptureTile {
             viewport,
             &[parameters.definition],
             super::EffectStackParameters {
+                working_format: wgpu::TextureFormat::Rgba8Unorm,
                 output_height: parameters.output_height,
                 world_view_height: parameters.world_view_height,
                 scope_opacity: parameters.scope_opacity,
@@ -310,7 +311,8 @@ impl EffectCaptureTile {
         };
         let mut support_radius = 0_u32;
         let mut active = false;
-        let mut cost_per_pixel = 4_u64; // one RGBA8 source
+        let texel_bytes = capture_texel_bytes(parameters.working_format)?;
+        let mut cost_per_pixel = texel_bytes;
         let mut silhouette = original_by_parent;
         for &definition in definitions {
             let value = EffectCaptureParameters {
@@ -326,7 +328,7 @@ impl EffectCaptureTile {
                 .is_some_and(|glow| glow.source() == GlowSource::Silhouette);
             silhouette |= mask;
             // Include warm neutral storage in the conservative scope budget.
-            cost_per_pixel += value.filter_bytes_per_pixel();
+            cost_per_pixel += value.filter_bytes_per_pixel(parameters.working_format)?;
             if value.is_neutral_at_sigma(sigma) {
                 continue;
             }
@@ -350,7 +352,7 @@ impl EffectCaptureTile {
                     extent.max[axis].max(input.max[axis] + offset.max(0.0) + f64::from(support));
             }
         }
-        cost_per_pixel += if silhouette { 4 } else { 0 };
+        cost_per_pixel += if silhouette { texel_bytes } else { 0 };
         if !isolate && !original_by_parent && (!active || parameters.scope_opacity == 0.0) {
             return Ok(None);
         }
@@ -482,8 +484,19 @@ impl EffectCaptureParameters {
         }
         Ok([x, -y])
     }
-    pub(crate) fn filter_bytes_per_pixel(self) -> u64 {
-        match self.definition {
+    pub(crate) fn filter_bytes_per_pixel(
+        self,
+        format: wgpu::TextureFormat,
+    ) -> Result<u64, EffectPrepareError> {
+        capture_texel_bytes(format)?;
+        if format == wgpu::TextureFormat::Rgba16Float {
+            return match self.definition {
+                noon_core::EffectDefinition::Blur(_)
+                | noon_core::EffectDefinition::BackdropBlur(_) => Ok(24),
+                _ => Err(EffectPrepareError::UnsupportedCapture),
+            };
+        }
+        Ok(match self.definition {
             noon_core::EffectDefinition::NoiseDissolve(_)
             | noon_core::EffectDefinition::Pixelate(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
@@ -491,7 +504,7 @@ impl EffectCaptureParameters {
                 28
             }
             noon_core::EffectDefinition::Shadow(_) => 32,
-        }
+        })
     }
 }
 impl From<GlowParameters> for EffectCaptureParameters {
@@ -883,6 +896,28 @@ impl GlowFilter {
         scope.output_dirty = false;
         stats
     }
+}
+
+pub(super) fn capture_texel_bytes(format: wgpu::TextureFormat) -> Result<u64, EffectPrepareError> {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm => Ok(4),
+        wgpu::TextureFormat::Rgba16Float => Ok(8),
+        _ => Err(EffectPrepareError::UnsupportedCapture),
+    }
+}
+
+pub(super) fn validate_working_capture(texture: &wgpu::Texture) -> Result<(), EffectPrepareError> {
+    capture_texel_bytes(texture.format())?;
+    if texture.dimension() != wgpu::TextureDimension::D2
+        || texture.depth_or_array_layers() != 1
+        || texture.sample_count() != 1
+        || !texture
+            .usage()
+            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
+    {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
+    Ok(())
 }
 
 pub(super) fn validate_capture(texture: &wgpu::Texture) -> Result<(), EffectPrepareError> {
