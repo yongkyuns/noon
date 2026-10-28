@@ -29,7 +29,9 @@ pub struct HdrBloomParameters {
     pub threshold: f32,
     /// Added bloom energy multiplier, [0, 8]. Zero still resolves the HDR base.
     pub intensity: f32,
-    /// Four float images and one unorm image. Source/in-flight images excluded.
+    /// Retained image budget, excluding source/in-flight images. A fresh neutral
+    /// scope needs 12 bytes/pixel; enabling Bloom adds 24 bytes/pixel, kept warm
+    /// until resize or clear to avoid allocation churn during animation.
     pub scratch_budget_bytes: u64,
 }
 
@@ -128,9 +130,9 @@ impl Image {
 #[derive(Debug)]
 struct Resources {
     size: [u32; 2],
-    images: [Image; 5],
+    images: [Option<Image>; 5],
     uniform: wgpu::Buffer,
-    bindings: [wgpu::BindGroup; 5],
+    bindings: [Option<wgpu::BindGroup>; 5],
     source: wgpu::Texture,
 }
 /// Disposable GPU state. A scope belongs to one filter/device until cleared.
@@ -146,16 +148,26 @@ pub struct HdrBloomScope {
 impl HdrBloomScope {
     /// Valid after encoding and submitting all current dirty work.
     pub fn linear_output(&self) -> Option<&wgpu::Texture> {
-        self.resources.as_ref().map(|r| &r.images[3].texture)
+        self.resources.as_ref()?.images[3]
+            .as_ref()
+            .map(|i| &i.texture)
     }
     /// Encoded-premultiplied SDR bytes, for a non-sRGB attachment/presentation
     /// path. Applying another output transfer would be incorrect.
     pub fn display_output(&self) -> Option<&wgpu::Texture> {
-        self.resources.as_ref().map(|r| &r.images[4].texture)
+        self.resources.as_ref()?.images[4]
+            .as_ref()
+            .map(|i| &i.texture)
     }
     pub fn scratch_bytes(&self) -> u64 {
         self.resources.as_ref().map_or(0, |r| {
-            u64::from(r.size[0]) * u64::from(r.size[1]) * BYTES_PER_PIXEL
+            u64::from(r.size[0])
+                * u64::from(r.size[1])
+                * r.images
+                    .iter()
+                    .flatten()
+                    .map(|i| if i.texture.format() == HDR { 8 } else { 4 })
+                    .sum::<u64>()
         })
     }
     /// Required if an encoded command buffer was abandoned before submission.
@@ -170,7 +182,9 @@ impl HdrBloomScope {
 #[derive(Debug)]
 struct Programs {
     layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::RenderPipeline; 5],
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    pipelines: [Option<wgpu::RenderPipeline>; 5],
 }
 #[derive(Debug)]
 pub struct HdrBloomFilter {
@@ -257,11 +271,18 @@ impl HdrBloomFilter {
         {
             return Err(E::ExtentExceedsDevice);
         }
+        let enabled = p.intensity != 0.0;
+        let warm = scope
+            .resources
+            .as_ref()
+            .is_some_and(|r| r.size == size && r.images[0].is_some());
         let bytes = u64::from(size[0])
             .checked_mul(u64::from(size[1]))
-            .and_then(|n| n.checked_mul(BYTES_PER_PIXEL))
-            .filter(|n| *n <= p.scratch_budget_bytes)
+            .and_then(|n| n.checked_mul(if enabled || warm { BYTES_PER_PIXEL } else { 12 }))
             .ok_or(E::ScratchBudgetExceeded)?;
+        if bytes > p.scratch_budget_bytes {
+            return Err(E::ScratchBudgetExceeded);
+        }
         // All rejections preserve the previous coherent scope and program cache.
         let kernel_changed = scope.sigma != Some(p.sigma_pixels);
         let uniform =
@@ -271,25 +292,34 @@ impl HdrBloomFilter {
             kernel_builds: usize::from(kernel_changed),
             ..Default::default()
         };
-        let programs = self.programs.get_or_insert_with(|| {
-            stats.pipeline_compiles = 5;
-            Programs::from_source(device, SHADER)
-        });
+        let programs = self
+            .programs
+            .get_or_insert_with(|| Programs::from_source(device, SHADER));
+        stats.pipeline_compiles = programs.prepare_pipelines(device, enabled);
         let recreate = scope.resources.as_ref().is_none_or(|r| r.size != size);
         let source_changed = scope.resources.as_ref().is_none_or(|r| r.source != *source);
         if recreate {
-            scope.resources = Some(programs.resources(device, source, size));
-            stats.texture_allocations = 5;
+            scope.resources = Some(Resources {
+                size,
+                images: std::array::from_fn(|_| None),
+                bindings: std::array::from_fn(|_| None),
+                uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Noon HDR bloom parameters"),
+                    size: size_of::<BloomUniform>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                source: source.clone(),
+            });
             stats.buffer_allocations = 1;
-            stats.bind_group_creations = 5;
-        } else if source_changed {
-            let r = scope.resources.as_mut().expect("prepared HDR resources");
-            let view = source.create_view(&Default::default());
-            r.bindings[0] = programs.binding(device, &r.uniform, [&view, &view]);
-            r.bindings[3] = programs.binding(device, &r.uniform, [&view, &r.images[2].view]);
-            r.source = source.clone();
-            stats.bind_group_creations = 2;
         }
+        programs.prepare_resources(
+            device,
+            scope.resources.as_mut().unwrap(),
+            source,
+            enabled,
+            &mut stats,
+        );
         let r = scope.resources.as_ref().expect("prepared HDR resources");
         if recreate || kernel_changed {
             queue.write_buffer(&r.uniform, 0, bytemuck::bytes_of(&uniform));
@@ -344,7 +374,7 @@ impl HdrBloomFilter {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Noon linear HDR bloom pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &r.images[at].view,
+                        view: &r.images[at].as_ref().expect("prepared HDR image").view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -357,8 +387,16 @@ impl HdrBloomFilter {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_pipeline(&programs.pipelines[at]);
-                pass.set_bind_group(0, &r.bindings[at], &[]);
+                pass.set_pipeline(
+                    programs.pipelines[at]
+                        .as_ref()
+                        .expect("prepared HDR pipeline"),
+                );
+                pass.set_bind_group(
+                    0,
+                    r.bindings[at].as_ref().expect("prepared HDR binding"),
+                    &[],
+                );
                 pass.draw(0..3, 0..1);
                 scope.dirty[at] = false;
                 stats.passes[at] = 1;
@@ -405,7 +443,19 @@ impl Programs {
             label: Some("Noon HDR bloom"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
-        let pipelines = std::array::from_fn(|at| {
+        Self {
+            layout,
+            shader,
+            pipeline_layout,
+            pipelines: std::array::from_fn(|_| None),
+        }
+    }
+    fn prepare_pipelines(&mut self, device: &wgpu::Device, enabled: bool) -> usize {
+        let mut created = 0;
+        for at in 0..5 {
+            if self.pipelines[at].is_some() || (at < 3 && !enabled) {
+                continue;
+            }
             let entry = [
                 "fs_extract",
                 "fs_horizontal",
@@ -413,33 +463,36 @@ impl Programs {
                 "fs_combine",
                 "fs_resolve",
             ][at];
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_fullscreen"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+            self.pipelines[at] = Some(device.create_render_pipeline(
+                &wgpu::RenderPipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&self.pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &self.shader,
+                        entry_point: Some("vs_fullscreen"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.shader,
+                        entry_point: Some(entry),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: if at == 4 { DISPLAY } else { HDR },
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: None,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: if at == 4 { DISPLAY } else { HDR },
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
-        Self { layout, pipelines }
+            ));
+            created += 1;
+        }
+        created
     }
     fn binding(
         &self,
@@ -466,35 +519,49 @@ impl Programs {
             ],
         })
     }
-    fn resources(
+    fn prepare_resources(
         &self,
         device: &wgpu::Device,
+        r: &mut Resources,
         source: &wgpu::Texture,
-        size: [u32; 2],
-    ) -> Resources {
-        let images =
-            std::array::from_fn(|at| Image::new(device, size, if at == 4 { DISPLAY } else { HDR }));
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Noon HDR bloom parameters"),
-            size: size_of::<BloomUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let view = source.create_view(&Default::default());
-        let bindings = [
-            self.binding(device, &uniform, [&view, &view]),
-            self.binding(device, &uniform, [&images[0].view, &images[0].view]),
-            self.binding(device, &uniform, [&images[1].view, &images[1].view]),
-            self.binding(device, &uniform, [&view, &images[2].view]),
-            self.binding(device, &uniform, [&images[3].view, &images[3].view]),
-        ];
-        Resources {
-            size,
-            images,
-            uniform,
-            bindings,
-            source: source.clone(),
+        enabled: bool,
+        stats: &mut HdrBloomStats,
+    ) {
+        let mut added = [false; 5];
+        for (at, image) in r.images.iter_mut().enumerate() {
+            if image.is_none() && (at >= 3 || enabled) {
+                *image = Some(Image::new(
+                    device,
+                    r.size,
+                    if at == 4 { DISPLAY } else { HDR },
+                ));
+                added[at] = true;
+                stats.texture_allocations += 1;
+            }
         }
+        let source_changed = r.source != *source;
+        if !source_changed && !added.iter().any(|&v| v) {
+            return;
+        }
+        let view = source.create_view(&Default::default());
+        for at in 0..5 {
+            if r.images[at].is_none()
+                || !(added[at] || (source_changed && (at == 0 || at == 3)) || (at == 3 && added[2]))
+            {
+                continue;
+            }
+            let image_view = |index: usize| &r.images[index].as_ref().unwrap().view;
+            let views = match at {
+                0 => [&view, &view],
+                1 => [image_view(0), image_view(0)],
+                2 => [image_view(1), image_view(1)],
+                3 => [&view, r.images[2].as_ref().map_or(&view, |i| &i.view)],
+                _ => [image_view(3), image_view(3)],
+            };
+            r.bindings[at] = Some(self.binding(device, &r.uniform, views));
+            stats.bind_group_creations += 1;
+        }
+        r.source = source.clone();
     }
 }
 #[cfg(test)]
