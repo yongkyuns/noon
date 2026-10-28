@@ -309,6 +309,9 @@ fn apply_effective_track_endpoint(
         (Property::StrokeWidth, TrackValues::Scalar { from, to }) => {
             value.style.stroke_width = if at_end { *to } else { *from };
         }
+        (Property::Emission, TrackValues::Emission { from, to }) => {
+            value.style.emission = if at_end { *to } else { *from };
+        }
         (Property::Opacity, TrackValues::Scalar { from, to }) => {
             value.style.opacity = if at_end { *to } else { *from };
         }

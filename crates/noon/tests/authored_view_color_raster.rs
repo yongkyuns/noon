@@ -250,6 +250,11 @@ fn reference(
     (linear, bytes)
 }
 fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
+    qualify_material(retained, visible, emission, None);
+}
+
+fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option<f64>) {
+    let emission = strength * sample.unwrap_or(1.0);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
@@ -284,7 +289,7 @@ fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
         intensity: 1.5,
         scratch_budget_bytes: 1024 * 1024,
     };
-    let artifact = std::env::var_os(if emission > 0.0 {
+    let artifact = std::env::var_os(if emission > 0.0 || sample.is_some() {
         "NOON_EMISSION_VIEW_ARTIFACT_DIR"
     } else if visible {
         "NOON_VISIBLE_VIEW_ARTIFACT_DIR"
@@ -293,7 +298,8 @@ fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
     } else {
         "NOON_AUTHORED_VIEW_ARTIFACT_DIR"
     })
-    .map(std::path::PathBuf::from);
+    .map(std::path::PathBuf::from)
+    .map(|dir| sample.map_or_else(|| dir.clone(), |time| dir.join(format!("time-{time}"))));
     if let Some(dir) = &artifact {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("adapter.txt"), format!("{:?}", adapter.get_info())).unwrap();
@@ -309,9 +315,24 @@ fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
             for reverse in [false, true] {
                 for clear in [[0.0; 4], [0.125, 0.0625, 0.03125, 1.0]] {
                     let (scene, camera, mut material) = scene(path, paint, reverse);
-                    material.set_emission(emission).unwrap();
+                    material
+                        .set_emission(if sample.is_some() { 0.0 } else { emission })
+                        .unwrap();
+                    let animation = sample.map(|_| {
+                        let mut target = material.target_editor().unwrap();
+                        target.set_emission(strength).unwrap();
+                        scene
+                            .declare_transform_to(
+                                &material,
+                                &target,
+                                noon::AnimationOptions::new()
+                                    .run_time(1.0)
+                                    .rate_func(noon::RateFunction::Linear),
+                            )
+                            .unwrap()
+                    });
                     let mut session = scene.execution_session().unwrap();
-                    if emission > 0.0 {
+                    if emission > 0.0 && sample.is_none() {
                         let initial = session.take_renderer_publication();
                         let mut unsupported = RetainedFramePreparer::new();
                         assert!(matches!(
@@ -328,6 +349,10 @@ fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
                     let mut tx = SemanticMutationTransaction::new();
                     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
                     scene.live(&mut session).apply(tx).unwrap();
+                    if let Some(animation) = &animation {
+                        scene.live(&mut session).play_animation(animation).unwrap();
+                        session.seek(sample.unwrap()).unwrap();
+                    }
                     let publication = session.take_renderer_publication();
                     assert_eq!(publication.color_profile(), ViewColorProfile::LinearHdr);
                     // The semantic profile selects a linear target; the host does not own
@@ -561,4 +586,12 @@ fn authored_emission_survives_above_one_before_bloom_with_unchanged_alpha() {
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn authored_maximum_emission_uses_the_hdr_envelope_without_changing_alpha() {
     qualify_authored_scene(true, false, 63.0);
+}
+
+#[test]
+#[ignore = "requires real native float/blending output; missing adapter fails qualification"]
+fn animated_material_targets_reach_independent_pre_bloom_and_display_pixels() {
+    for time in [0.0, 0.12345678912345, 1.0, 0.5] {
+        qualify_material(true, false, 63.0, Some(time));
+    }
 }

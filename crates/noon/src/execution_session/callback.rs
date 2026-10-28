@@ -616,7 +616,9 @@ fn native_write_domain(property: SemanticObjectProperty) -> u8 {
         SemanticObjectProperty::Scale => CALLBACK_SCALE,
         SemanticObjectProperty::StrokeWidth => CALLBACK_STROKE_WIDTH,
         SemanticObjectProperty::ObjectOpacity => CALLBACK_OPACITY,
-        SemanticObjectProperty::FillOpacity | SemanticObjectProperty::StrokeOpacity => 0,
+        SemanticObjectProperty::FillOpacity
+        | SemanticObjectProperty::StrokeOpacity
+        | SemanticObjectProperty::Emission => 0,
     }
 }
 

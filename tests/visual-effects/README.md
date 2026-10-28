@@ -2011,7 +2011,13 @@ alpha retain `.002`. Color glyphs decode exact stored bytes once before
 reconstruction. Eight ordinary RGBA8 cases independently check Compatibility's
 unassociated filtering and encoded tint with a two-byte bound.
 
-The static Rust prototype does **not** complete emission authoring. Independent
-property/timeline channels, ordinary target animation, family/callback behavior,
-equivalent Python scripts, cross-host execution, composed captures and remaining
-publication/recovery/performance gates are still required before promotion.
+Ordinary Rust target animation and live semantic property writes retain checked
+f64 material values independently of opacity. Completion combines material and
+other style endpoints in one transaction; seeks recover captured source values
+before the first track and authored values after reconciliation.
+
+This candidate does **not** complete emission authoring. Native scalar-graph
+bindings and per-frame effective callback writes are not supported for emission.
+Family authoring, equivalent Python scripts, cross-host execution, composed
+captures and remaining publication/recovery/performance gates are still required
+before promotion.

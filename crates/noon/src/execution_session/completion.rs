@@ -416,7 +416,8 @@ impl ExecutionSession {
                     | SemanticAnimationCompletion::Stroke { .. }
                     | SemanticAnimationCompletion::Property {
                         property: SemanticObjectProperty::ObjectOpacity
-                            | SemanticObjectProperty::StrokeWidth,
+                            | SemanticObjectProperty::StrokeWidth
+                            | SemanticObjectProperty::Emission,
                         ..
                     }
             );
@@ -452,6 +453,13 @@ impl ExecutionSession {
                     property: SemanticObjectProperty::StrokeWidth,
                     value: SemanticSignalValue::Scalar(value),
                 } => style.stroke_width = *value,
+                SemanticAnimationCompletion::Property {
+                    property: SemanticObjectProperty::Emission,
+                    value: SemanticSignalValue::Scalar(value),
+                } => {
+                    style.emission =
+                        noon_core::Emission::new(*value).expect("checked material endpoint")
+                }
                 _ => unreachable!("style-domain completion was classified above"),
             };
         }
@@ -555,7 +563,9 @@ impl ExecutionSession {
                 SemanticAnimationCompletion::Property { property, value } => {
                     if !matches!(
                         property,
-                        SemanticObjectProperty::ObjectOpacity | SemanticObjectProperty::StrokeWidth
+                        SemanticObjectProperty::ObjectOpacity
+                            | SemanticObjectProperty::StrokeWidth
+                            | SemanticObjectProperty::Emission
                     ) && final_property_entries.get(&(entry.semantic_object, *property))
                         == Some(&index)
                     {

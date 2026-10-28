@@ -314,6 +314,7 @@ pub enum SemanticObjectProperty {
     FillOpacity,
     StrokeOpacity,
     StrokeWidth,
+    Emission,
     ObjectOpacity,
 }
 
@@ -326,6 +327,7 @@ impl SemanticObjectProperty {
             | Self::FillOpacity
             | Self::StrokeOpacity
             | Self::StrokeWidth
+            | Self::Emission
             | Self::ObjectOpacity => SemanticSignalValueKind::Scalar,
         }
     }
@@ -1653,6 +1655,7 @@ mod tests {
             SemanticObjectProperty::FillOpacity,
             SemanticObjectProperty::StrokeOpacity,
             SemanticObjectProperty::StrokeWidth,
+            SemanticObjectProperty::Emission,
             SemanticObjectProperty::ObjectOpacity,
         ] {
             assert_eq!(property.value_kind(), SemanticSignalValueKind::Scalar);

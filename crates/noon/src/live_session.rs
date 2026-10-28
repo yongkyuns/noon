@@ -3391,6 +3391,19 @@ impl<'a> LiveSession<'a> {
         })
     }
 
+    /// Set checked linear material radiance without changing coverage or opacity.
+    pub fn set_emission(
+        &mut self,
+        mobject: &Mobject,
+        strength: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            style.emission =
+                noon_core::Emission::new(strength).map_err(crate::AuthoringError::Emission)?;
+            Ok(())
+        })
+    }
+
     /// Set the independent object-composite opacity domain.
     pub fn set_object_opacity(
         &mut self,

@@ -1566,6 +1566,9 @@ impl SceneInstance {
                     self.frame.objects[object_index].style.stroke_width =
                         object.base_style.stroke_width
                 }
+                Property::Emission => {
+                    self.frame.objects[object_index].style.emission = object.base_style.emission
+                }
                 Property::Opacity => {
                     self.frame.objects[object_index].style.opacity = object.base_style.opacity
                 }
@@ -2032,7 +2035,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 23] = [
+const PROPERTY_ORDER: [Property; 24] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -2044,6 +2047,7 @@ const PROPERTY_ORDER: [Property; 23] = [
     Property::Fill,
     Property::Stroke,
     Property::StrokeWidth,
+    Property::Emission,
     Property::Opacity,
     Property::Appearance,
     Property::Reveal,
@@ -2595,6 +2599,17 @@ fn apply_group_to_row(
         // Coupled geometry tracks retain their source snapshot so an earlier
         // wait must recover it, just as affine channels recover their first `from`.
         if let Some(first) = tracks.first() {
+            if group.channel.property == Property::Emission && first.reconciled {
+                let TrackValues::Emission { from, .. } = first.values else {
+                    unreachable!("material channel has checked endpoints")
+                };
+                return apply_evaluated_value(
+                    &mut row,
+                    Property::Emission,
+                    EvaluatedValue::Emission(from),
+                    false,
+                );
+            }
             if group.channel.property == Property::Fill && first.reconciled {
                 if let TrackValues::Paint { transition } = &first.values {
                     return apply_paint_track(&mut row, transition, 0.0);
@@ -2644,10 +2659,18 @@ fn apply_group_to_row(
 
     if matches!(
         group.channel.property,
-        Property::WorldTransform | Property::CameraProfile
+        Property::WorldTransform | Property::CameraProfile | Property::Emission
     ) {
         let latest = &tracks[group.cursor - 1];
         if latest.reconciled && time >= latest.timing.start_time + latest.timing.duration {
+            if group.channel.property == Property::Emission {
+                return apply_evaluated_value(
+                    &mut row,
+                    Property::Emission,
+                    EvaluatedValue::Emission(base_style.emission),
+                    false,
+                );
+            }
             return false;
         }
         let selected = tracks[..group.cursor]
@@ -2657,6 +2680,20 @@ fn apply_group_to_row(
         let Some((track, progress)) = selected else {
             return false;
         };
+        if group.channel.property == Property::Emission {
+            let TrackValues::Emission { from, to } = &track.values else {
+                unreachable!("validated material channel carries checked endpoints")
+            };
+            return apply_evaluated_value(
+                &mut row,
+                Property::Emission,
+                EvaluatedValue::Emission(
+                    from.interpolate(*to, progress)
+                        .expect("finite authored progress"),
+                ),
+                false,
+            );
+        }
         if group.channel.property == Property::CameraProfile {
             let TrackValues::CameraProfile {
                 from,
@@ -2753,6 +2790,7 @@ fn apply_group_to_row(
             Property::Fill => Some(EvaluatedValue::Color(base_style.fill)),
             Property::Stroke => Some(EvaluatedValue::Color(base_style.stroke)),
             Property::StrokeWidth => Some(EvaluatedValue::Scalar(base_style.stroke_width)),
+            Property::Emission => Some(EvaluatedValue::Emission(base_style.emission)),
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
@@ -2897,6 +2935,11 @@ fn apply_evaluated_value(
             row.style.stroke_width = value;
             changed
         }
+        (Property::Emission, EvaluatedValue::Emission(value)) => {
+            let changed = row.style.emission != value;
+            row.style.emission = value;
+            changed
+        }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
             let changed = row.style.opacity != value;
             row.style.opacity = value;
@@ -2937,6 +2980,7 @@ fn apply_evaluated_value(
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum EvaluatedValue {
+    Emission(noon_core::Emission),
     Scalar(f32),
     Vec2(Vec2),
     Color(Option<Color>),
@@ -3615,6 +3659,10 @@ fn interpolate_track_values_with_path_plan(
     path_plan: Option<&noon_geometry::PathProportionPlan>,
 ) -> Option<EvaluatedValue> {
     match values {
+        TrackValues::Emission { from, to } => Some(EvaluatedValue::Emission(
+            from.interpolate(*to, f64::from(progress))
+                .expect("finite material interpolation"),
+        )),
         TrackValues::Scalar { from, to } => {
             Some(EvaluatedValue::Scalar(lerp(*from, *to, progress)))
         }
