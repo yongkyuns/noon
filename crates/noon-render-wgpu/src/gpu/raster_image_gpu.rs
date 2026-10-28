@@ -127,7 +127,8 @@ impl RasterImageGpuRenderer {
             label: Some("Noon raster image shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
+                    crate::color_profile::working_color_shader(format),
                     include_str!("raster_sampling.wgsl"),
                     include_str!("raster_image.wgsl")
                 )

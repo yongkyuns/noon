@@ -61,3 +61,13 @@ impl WithColorProfile for PathInstance {
         self
     }
 }
+
+/// Asset texels and glyph tints are authored sRGB; decode at the draw boundary
+/// before association/filtering. Float target geometry is already CPU-decoded.
+pub(crate) fn working_color_shader(format: wgpu::TextureFormat) -> String {
+    format!(
+        "const LINEAR_WORKING_COLOR: bool = {};\n{}",
+        format == wgpu::TextureFormat::Rgba16Float,
+        include_str!("working_color.wgsl")
+    )
+}

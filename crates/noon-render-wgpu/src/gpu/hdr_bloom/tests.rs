@@ -338,11 +338,7 @@ fn upload(queue: &wgpu::Queue, texture: &wgpu::Texture, values: &[[f64; 4]]) {
         texture.size(),
     );
 }
-pub(in crate::gpu) fn read(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-) -> Vec<u8> {
+pub(crate) fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
     let bytes_per_pixel = if texture.format() == HDR { 8 } else { 4 };
     let row = texture.width() * bytes_per_pixel;
     let stride = row.div_ceil(256) * 256;
@@ -381,7 +377,7 @@ pub(in crate::gpu) fn read(
     buffer.unmap();
     bytes
 }
-pub(in crate::gpu) fn decode(bytes: &[u8]) -> Vec<f64> {
+pub(crate) fn decode(bytes: &[u8]) -> Vec<f64> {
     bytes
         .as_chunks::<2>()
         .0
