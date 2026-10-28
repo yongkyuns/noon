@@ -1,0 +1,246 @@
+name: Audio 2296 bc25 plus 2331 recovery qualification
+
+# Temporary, source-pinned workbench. Do not merge this workflow into master.
+on:
+  push:
+    branches:
+      - codex/audio-2296-bc25-2331-2331-workbench
+    paths:
+      - .github/workflows/audio-2296-bc25-2331-2331-qualification.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-2296-bc25-2331-workbench
+  cancel-in-progress: false
+
+jobs:
+  full-gate:
+    name: Exact combined Rust WASM and recovery gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout pinned candidate with ancestry
+        uses: actions/checkout@v7
+        with:
+          ref: 0cb1b7dabaed0df82567794c09fff17327256d05
+          fetch-depth: 0
+      - name: Verify parents, tree, and unmodified browser fixture
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git rev-parse HEAD)" = "0cb1b7dabaed0df82567794c09fff17327256d05"
+          test "$(git rev-parse HEAD^{tree})" = "bae7f61f423344788ff2bcdc5101ad337c51d088"
+          test "$(git rev-list --parents -n 1 HEAD)" = "0cb1b7dabaed0df82567794c09fff17327256d05 ebab8129a4b0dcc35035e83babc7e53e675f87e1"
+          test "$(git rev-parse HEAD:web/worker-audio-device.js)" = "27effe9441745f3c2f82157306e95d212edc4cb3"
+          test "$(git rev-parse HEAD:web/worker-audio-device.test.mjs)" = "a52baf962a15d4111fc40c465dddf060ca156cf1"
+          test "$(git rev-parse HEAD:scripts/python-background-audio-smoke.mjs)" = "7a422f88420bd64e68526e3680da49d457ff4108"
+          git merge-base --is-ancestor "34f25a35bf2e5856d00b904a27a7675094b2c362" HEAD
+          git merge-base --is-ancestor "bc25e92bb741607f678f6adea528c9e894c6335c" HEAD
+          test -z "$(git status --porcelain)"
+          printf 'candidate=%s\ntree=%s\npr_parent=%s\nmaster_parent=%s\n' "0cb1b7dabaed0df82567794c09fff17327256d05" "bae7f61f423344788ff2bcdc5101ad337c51d088" "34f25a35bf2e5856d00b904a27a7675094b2c362" "bc25e92bb741607f678f6adea528c9e894c6335c" | tee evidence/source.txt
+      - name: Verify original recovery regression suite and JavaScript syntax
+        run: |
+          node --check web/worker-audio-device.js
+          node --check web/worker-audio-device.test.mjs
+          node --test web/worker-audio-device.test.mjs
+      - name: Install repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+          rustc --version --verbose | tee evidence/rustc.txt
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install native audio build prerequisites
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Validate exact merged source through complete repository gate
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh full "bc25e92bb741607f678f6adea528c9e894c6335c" 2>&1 | tee evidence/full-gate.log
+          printf 'passed\n' > evidence/full-gate.result
+      - name: Keep pinned full-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-bc25-2331-full-gate
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 3
+
+  browser-build:
+    name: Clean-source runtime with exact SHA provenance
+    needs: full-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout untouched pinned candidate
+        uses: actions/checkout@v7
+        with:
+          ref: 0cb1b7dabaed0df82567794c09fff17327256d05
+      - name: Verify exact clean source before producing runtime
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 0cb1b7dabaed0df82567794c09fff17327256d05
+          test "$(git rev-parse HEAD^{tree})" = bae7f61f423344788ff2bcdc5101ad337c51d088
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+      - name: Install repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build exactly pinned production browser matrix profile
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Assert exact runtime source revision and byte provenance
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 0cb1b7dabaed0df82567794c09fff17327256d05
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+          import { createRuntimeBuildIdentity } from "./scripts/build-runtime-identity.mjs";
+          const declared = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
+          const observed = await createRuntimeBuildIdentity();
+          assert.equal(declared.sourceRevision, "0cb1b7dabaed0df82567794c09fff17327256d05");
+          assert.deepEqual(declared, observed);
+          console.log("Source-attested browser runtime:", declared.buildId);
+          NODE
+      - name: Upload source-attested browser runtime assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-bc25-2331-browser-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/runtime-build-identity.json
+            web/python/compat-bundle.*.json
+          if-no-files-found: error
+          retention-days: 2
+
+  browser-audio:
+    name: ${{ matrix.browser }} / ${{ matrix.profile }} / original audio fixture
+    needs: browser-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            backend: webgpu
+            render_host: auto
+            profile: desktop-dpr1
+            os: ubuntu-latest
+            display: "xvfb-run -a"
+          - browser: firefox
+            backend: webgl
+            render_host: auto
+            profile: desktop-dpr2
+            os: ubuntu-latest
+            display: "xvfb-run -a"
+          - browser: webkit
+            backend: webgl
+            render_host: main-thread
+            profile: mobile-dpr2
+            os: macos-latest
+            display: ""
+    steps:
+      - name: Checkout the same exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: 0cb1b7dabaed0df82567794c09fff17327256d05
+      - name: Verify exact source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "0cb1b7dabaed0df82567794c09fff17327256d05"
+          test "$(git rev-parse HEAD^{tree})" = "bae7f61f423344788ff2bcdc5101ad337c51d088"
+      - name: Download browser runtime assets
+        uses: actions/download-artifact@v8
+        with:
+          name: audio-2296-bc25-2331-browser-runtime
+          path: web
+      - name: Cache Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
+      - name: Install pinned browser npm dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install browser and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
+      - name: Install native Linux audio output dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: bash scripts/ci-install-reference-deps.sh pulseaudio pulseaudio-utils libasound2-plugins
+      - name: Run unchanged 15-case Python audio fixture
+        timeout-minutes: 5
+        env:
+          NOON_PYTHON_AUDIO_BROWSER: ${{ matrix.browser }}
+          NOON_PYTHON_AUDIO_BACKEND: ${{ matrix.backend }}
+          NOON_PLAYGROUND_RENDER_HOST: ${{ matrix.render_host }}
+          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/audio-2296-bc25/${{ matrix.browser }}-${{ matrix.profile }}
+        run: bash scripts/ci-python-audio-smoke.sh ${{ matrix.display }}
+      - name: Keep browser audio reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-bc25-2331-${{ matrix.browser }}-${{ matrix.profile }}
+          path: browser-smoke-artifacts/audio-2296-bc25/${{ matrix.browser }}-${{ matrix.profile }}
+          if-no-files-found: warn
+          retention-days: 3
