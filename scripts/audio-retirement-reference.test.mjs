@@ -3,10 +3,11 @@ import test from "node:test";
 import { releaseRetirementWitness as witness } from "./audio-retirement-reference.mjs";
 
 function fixture() {
-  const source = { node:4, context:0, source:1, busNode:2, busParameter:1,
+  const source = { node:4, context:0, source:1, buffer:0, busNode:2, busParameter:1,
     loop:false, args:[0.08126984126984127,0,30] };
   const deadline = 0.27188208616780046;
   const snapshot = {
+    buffers:[{duration:80}],
     stops:[{node:4,context:0,args:[deadline],observedAt:0.21188208616780047,order:10}],
     ended:[{node:4,context:0,trusted:true,observedAt:0.2699319727891156,order:11}],
     disconnects:[{node:2,context:0,observedAt:0.2699319727891156,order:13}],
@@ -40,6 +41,8 @@ for (const [name,mutate] of [
   ["another source's event", s=>{s.ended[0].node=99;}],
   ["another context's event", s=>{s.ended[0].context=1;}],
   ["missing event", s=>{s.ended=[];}],
+  ["unordered stop hiding a premature override", s=>{s.stops.push({node:4,context:0,args:[],observedAt:.25});}],
+  ["unordered immediate gain mutation", s=>{delete s.parameters[1].events[0].order;}],
   ["missing causal order", s=>{delete s.disconnects[0].order;}],
   ["superseding immediate stop", s=>{s.stops.push({node:4,context:0,args:[],observedAt:.25,order:11});s.ended[0].order=12;}],
   ["shortened stop", s=>{s.stops[0].args[0]=.25;}],
@@ -52,4 +55,22 @@ for (const [name,mutate] of [
 test("natural completion cannot excuse a stop later than the finite source", () => {
   const {snapshot,source,deadline}=fixture();source.args[2]=.1;
   assert.equal(witness(snapshot,source,deadline),null);
+});
+
+test("finite buffer exhaustion cannot impersonate the scheduled release completion", () => {
+  const {snapshot,source,deadline}=fixture();source.args[1]=79.95;
+  assert.equal(witness(snapshot,source,deadline),null);
+});
+test("source destruction after completion can precede bus destruction", () => {
+  const {snapshot,source,deadline}=fixture();
+  snapshot.stops.push({node:4,context:0,args:[],observedAt:.2699319727891156,order:12});
+  assert.equal(witness(snapshot,source,deadline).kind,"native-ended");
+});
+test("source destruction after the deadline can precede event dispatch", () => {
+  const {snapshot,source,deadline}=fixture();
+  snapshot.disconnects[0].observedAt=deadline;
+  snapshot.ended[0].order=15;
+  snapshot.parameters[1].events[0].observedAt=deadline;
+  snapshot.stops.push({node:4,context:0,args:[],observedAt:deadline,order:12});
+  assert.equal(witness(snapshot,source,deadline).kind,"device-time");
 });
