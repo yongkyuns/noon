@@ -13,6 +13,7 @@ use crate::{EffectCaptureRequest, EffectCaptureStats, EffectPrepareError};
 
 mod backdrop_inputs;
 mod composed;
+mod prefix_admission;
 use backdrop_inputs::BackdropInputs;
 use composed::ComposedCaptures;
 
@@ -24,6 +25,8 @@ pub const DEFAULT_EFFECT_TEXTURE_BUDGET: u64 = 64 * 1024 * 1024;
 pub struct RetainedEffectStats {
     /// Runtime rows examined while updating the sparse source index.
     pub rows_examined: usize,
+    /// Changed/crossed rows checked for finite backdrop input capability.
+    pub prefix_admission_rows: usize,
     pub prefix_queries: usize,
     pub prefix_candidates: usize,
     pub prefix_footprints: usize,
@@ -64,6 +67,8 @@ pub(crate) struct RetainedEffectPublication {
     capture_dirty: BTreeSet<usize>,
     composed: ComposedCaptures,
     prefix_owners: BTreeSet<usize>,
+    prefix_admission: noon_compile::PrefixAdmission,
+    prefix_admission_rows: usize,
     backdrops: BackdropInputs,
     visible: Vec<usize>,
     painter_ranks: Vec<usize>,
@@ -336,6 +341,7 @@ impl RetainedEffectPublication {
                 self.capture_dirty.insert(scope);
             }
         }
+        self.sync_prefix_admission(publication, full)?;
         self.context = Some(context);
         self.sync_failed = false;
         Ok(())
@@ -780,6 +786,12 @@ impl GpuRenderer {
                         .collect::<Vec<_>>()
                 });
                 let definitions = painted.as_deref().unwrap_or(definitions);
+                // The ordinary isolation can survive removal of its backdrop.
+                // Retire prefix/filter textures and their source leases before
+                // replacing the common capture or admitting its next budget.
+                if backdrop.is_none() || prefix.is_none() {
+                    self.retire_backdrop_output(object);
+                }
                 let extra_bytes = self.backdrop_texture_bytes();
                 let request = EffectCaptureRequest {
                     object_index: scratch,
@@ -867,8 +879,6 @@ impl GpuRenderer {
                         texture_budget_bytes,
                     )?;
                     stats.accumulate_work(value);
-                } else if backdrop.is_some() {
-                    self.retire_backdrop_output(object);
                 }
                 self.retained_effects.packed.insert(index, (object, packed));
             }
@@ -879,6 +889,8 @@ impl GpuRenderer {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
         let queries = std::mem::take(&mut self.retained_effects.backdrops.stats);
+        stats.prefix_admission_rows =
+            std::mem::take(&mut self.retained_effects.prefix_admission_rows);
         stats.prefix_queries = queries.queries;
         stats.prefix_candidates = queries.candidates;
         stats.prefix_footprints = queries.footprints;

@@ -12,7 +12,8 @@ mod composed_dependencies;
 pub use composed_dependencies::{
     unsupported_prefix_input, validate_composed_sources, CompiledComposedSourceError,
     CompiledComposedSourceErrorKind, ComposedDependencies, ComposedDependencyChanges,
-    ComposedSourceGraphView, ComposedValidationStats, PrefixAdmissionChanges,
+    ComposedSourceGraphView, ComposedValidationStats, PrefixAdmission, PrefixAdmissionChanges,
+    PrefixAdmissionView,
 };
 mod effect_attachment;
 pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};

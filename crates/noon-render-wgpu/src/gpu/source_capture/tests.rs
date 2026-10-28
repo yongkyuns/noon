@@ -9,6 +9,7 @@ use noon_core::{
 };
 use noon_runtime::SceneInstance;
 
+mod cap_bounds;
 mod composed_publication;
 
 const SIZE: [u32; 2] = [80, 60];

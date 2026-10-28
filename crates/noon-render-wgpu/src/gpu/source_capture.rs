@@ -617,7 +617,14 @@ fn stroke_pad(style: PackedStyle, transform: PackedTransform) -> f32 {
     } else {
         1.0
     };
-    style.stroke_width * 0.5 / scale
+    // Square caps extend a half-width along both tangent and normal; their
+    // radial envelope is sqrt(2) half-widths even for a diagonal local line.
+    let cap = if (style.stroke_enabled >> 2) & 3 == 2 {
+        std::f32::consts::SQRT_2
+    } else {
+        1.0
+    };
+    style.stroke_width * 0.5 * cap / scale
 }
 
 fn transformed(bounds: Rect, transform: PackedTransform) -> Option<Rect> {

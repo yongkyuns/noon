@@ -527,6 +527,10 @@ pub enum EffectPrepareError {
     InvalidScopeOpacity,
     InvalidCaptureClearColor,
     RadiusExceedsProfile,
+    UnsupportedBackdropInput {
+        owner: noon_core::ObjectId,
+        input: noon_core::ObjectId,
+    },
     UnsupportedCapture,
     MissingSilhouette,
     InvalidSourceBounds,

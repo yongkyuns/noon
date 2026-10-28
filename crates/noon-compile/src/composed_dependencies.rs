@@ -6,8 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod prefix_admission;
 mod projection;
-use prefix_admission::PrefixAdmission;
-pub use prefix_admission::{unsupported_prefix_input, PrefixAdmissionChanges};
+pub use prefix_admission::{
+    unsupported_prefix_input, PrefixAdmission, PrefixAdmissionChanges, PrefixAdmissionView,
+};
 mod validation;
 
 /// Borrowed final execution state used to validate composed source dependencies.

@@ -4,12 +4,33 @@
 use super::*;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct PrefixAdmission {
+pub struct PrefixAdmission {
     inputs: BTreeMap<ObjectId, usize>,
     unsupported: BTreeSet<(usize, ObjectId)>,
     owners: BTreeMap<ObjectId, (ObjectId, Option<usize>)>,
     prefixes: BTreeSet<(usize, ObjectId)>,
     anchors: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
+}
+
+/// Borrow only the current order/capability projection required by this index.
+#[doc(hidden)]
+pub trait PrefixAdmissionView {
+    fn prefix_owner(&self, owner: ObjectId) -> Option<(ObjectId, Option<usize>)>;
+    fn unsupported_prefix_rank(&self, input: ObjectId) -> Option<usize>;
+}
+impl<T: ComposedSourceGraphView> PrefixAdmissionView for T {
+    fn prefix_owner(&self, owner: ObjectId) -> Option<(ObjectId, Option<usize>)> {
+        (self.input_role(owner) == Some(EffectInputRole::PainterPrefix)).then(|| {
+            let anchor = self
+                .source(owner)
+                .map_or(owner, |source| source.members()[0]);
+            (anchor, self.rank(anchor))
+        })
+    }
+    fn unsupported_prefix_rank(&self, input: ObjectId) -> Option<usize> {
+        self.rank(input)
+            .filter(|_| self.prefix_input_unsupported(input))
+    }
 }
 
 /// Sparse final-state metadata, checked before either native or worker commit.
@@ -38,6 +59,27 @@ pub fn unsupported_prefix_input(
 }
 
 impl PrefixAdmission {
+    /// Full startup/maintenance rebuild. Ordinary changed rows use prepare.
+    pub fn from_view(
+        view: &impl PrefixAdmissionView,
+        rows: impl IntoIterator<Item = ObjectId>,
+    ) -> Self {
+        let mut index = Self::default();
+        for id in rows {
+            let rank = view.unsupported_prefix_rank(id);
+            index.set_input(id, rank.is_some(), rank);
+            index.set_owner(id, view.prefix_owner(id));
+        }
+        index
+    }
+    pub fn commit(&mut self, changes: PrefixAdmissionChanges) {
+        for (id, rank) in changes.inputs {
+            self.set_input(id, rank.is_some(), rank);
+        }
+        for (id, next) in changes.owners {
+            self.set_owner(id, next);
+        }
+    }
     pub(super) fn set_input(&mut self, object: ObjectId, unsupported: bool, rank: Option<usize>) {
         let next = rank.filter(|_| unsupported);
         if self.inputs.get(&object).copied() == next {
@@ -84,45 +126,46 @@ impl PrefixAdmission {
             self.set_owner(owner, Some((object, rank)));
         }
     }
-    fn prepare(
+    pub fn prepare(
         &self,
-        view: &impl ComposedSourceGraphView,
+        view: &impl PrefixAdmissionView,
         changed: impl IntoIterator<Item = ObjectId>,
         painter: impl IntoIterator<Item = ObjectId>,
     ) -> PrefixAdmissionChanges {
-        let rows = changed.into_iter().chain(painter).collect::<BTreeSet<_>>();
+        // An order-only change cannot introduce a capability or an owner.
+        // Inspect only tracked unsupported inputs and physical prefix anchors;
+        // ordinary painter rows require no capability read.
+        let tracked_order = painter.into_iter().filter(|id| {
+            self.inputs.contains_key(id)
+                || self.owners.contains_key(id)
+                || self.anchors.contains_key(id)
+        });
+        let rows = changed
+            .into_iter()
+            .chain(tracked_order)
+            .collect::<BTreeSet<_>>();
         let mut changes = PrefixAdmissionChanges::default();
         let mut owners = BTreeSet::new();
         for object in rows {
             changes.rows_examined += 1;
-            let next = view
-                .rank(object)
-                .filter(|_| view.prefix_input_unsupported(object));
+            let next = view.unsupported_prefix_rank(object);
             if self.inputs.get(&object).copied() != next {
                 changes.inputs.insert(object, next);
             }
-            if self.owners.contains_key(&object)
-                || view.input_role(object) == Some(EffectInputRole::PainterPrefix)
-            {
+            if self.owners.contains_key(&object) || view.prefix_owner(object).is_some() {
                 owners.insert(object);
             }
             owners.extend(self.anchors.get(&object).into_iter().flatten().copied());
         }
         for owner in owners {
-            let next =
-                (view.input_role(owner) == Some(EffectInputRole::PainterPrefix)).then(|| {
-                    let anchor = view
-                        .source(owner)
-                        .map_or(owner, |source| source.members()[0]);
-                    (anchor, view.rank(anchor))
-                });
+            let next = view.prefix_owner(owner);
             if self.owners.get(&owner).copied() != next {
                 changes.owners.insert(owner, next);
             }
         }
         changes
     }
-    fn conflict(&self, changes: &PrefixAdmissionChanges) -> Option<(ObjectId, ObjectId)> {
+    pub fn conflict(&self, changes: &PrefixAdmissionChanges) -> Option<(ObjectId, ObjectId)> {
         let first = self
             .unsupported
             .iter()
@@ -153,7 +196,7 @@ impl PrefixAdmission {
 impl ComposedDependencies {
     pub fn prepare_prefix_admission(
         &self,
-        view: &impl ComposedSourceGraphView,
+        view: &impl PrefixAdmissionView,
         changed: impl IntoIterator<Item = ObjectId>,
         painter: impl IntoIterator<Item = ObjectId>,
     ) -> PrefixAdmissionChanges {
@@ -166,11 +209,6 @@ impl ComposedDependencies {
         self.prefix_admission.conflict(changes)
     }
     pub fn commit_prefix_admission(&mut self, changes: PrefixAdmissionChanges) {
-        for (id, rank) in changes.inputs {
-            self.prefix_admission.set_input(id, rank.is_some(), rank);
-        }
-        for (id, next) in changes.owners {
-            self.prefix_admission.set_owner(id, next);
-        }
+        self.prefix_admission.commit(changes);
     }
 }

@@ -667,3 +667,532 @@ fn backdrop_prefix_includes_screen_space_background_stroke_outside_its_geometry_
         "stroked target original coverage: maximum error {error}; neutral ordinary output exact"
     );
 }
+
+#[test]
+#[ignore = "requires a real raster adapter; wide diagonal square-cap target capture bounds"]
+fn backdrop_square_capped_line_target_keeps_its_full_original_coverage() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let clear = wgpu::Color::TRANSPARENT;
+    let source = row(10, -0.7, [2.0, 2.4], Color::rgba(0.9, 0.1, 0.2, 0.65));
+    let mut target = CompiledObject::new(
+        ObjectId::new(20),
+        GeometryRef::line(Vec2::new(-0.2, -0.2), Vec2::new(0.2, 0.2)),
+        Transform2D::IDENTITY,
+        Style {
+            fill: None,
+            stroke: Some(Color::rgba(0.1, 0.6, 0.9, 0.27)),
+            stroke_width: 3.0,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..Style::default()
+        },
+    );
+    let prefix = ordinary(&device, &queue, vec![source.clone()], clear);
+    let paint = ordinary(&device, &queue, vec![target.clone()], clear);
+    let mut mask = target.clone();
+    mask.base_style.stroke = Some(Color::WHITE);
+    let coverage = ordinary(&device, &queue, vec![mask], clear);
+    let reference = expected(&prefix, &paint, &coverage, 0.25, 0.6);
+    let mut ordinary_target = target.clone();
+    ordinary_target.base_style.opacity = 0.6;
+    target.effects = Some(panel_effect(0.25));
+    target.base_style.opacity = 0.6;
+    let mut scene = runtime(vec![source.clone(), target]);
+    let mut fixture = Fixture::new(&device, &queue);
+    fixture.render(&device, &queue, &mut scene, clear);
+    let actual = read(&device, &queue, &fixture.target);
+    let error = actual
+        .iter()
+        .zip(&reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain("square-line-target",&actual,&reference,&[("prefix",&prefix),("paint",&paint),("coverage",&coverage)],
+        r#"{"width":80,"height":60,"bound":2,"profile":"diagonal square caps with finite target capture support"}"#.to_owned());
+    assert!(error <= 2, "square line target: maximum error {error}");
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffects {
+            object: ObjectId::new(20),
+            effects: panel_effect(0.0),
+        })
+        .unwrap();
+    fixture.render(&device, &queue, &mut scene, clear);
+    assert_eq!(
+        read(&device, &queue, &fixture.target),
+        ordinary(&device, &queue, vec![source, ordinary_target], clear),
+        "square-cap neutral bypass must be exact"
+    );
+    eprintln!("square-cap line target: maximum error {error}; exact neutral ordinary output");
+}
+
+fn order_fixture() -> (Vec<CompiledObject>, noon_core::TrackDefinition) {
+    let mut objects = rows(Some(2.0), 0.6);
+    objects[0].base_z_index = 0.0;
+    objects[1].base_z_index = 1.0;
+    let mut later = row(30, 0.7, [0.8, 0.8], Color::rgba(0.1, 0.9, 0.2, 0.65));
+    later.base_z_index = 2.0;
+    objects.push(later);
+    let track = noon_core::TrackDefinition {
+        id: noon_core::TrackId::new(1),
+        object: ObjectId::new(20),
+        property: noon_core::Property::ZIndex,
+        values: noon_core::TrackValues::ZIndex { from: 1.0, to: 3.0 },
+        timing: noon_core::TrackTiming::instant(1.0),
+        time_map: Default::default(),
+    };
+    (objects, track)
+}
+fn order_visibility(
+    renderer: &mut GpuRenderer,
+    runtime: &mut SceneInstance,
+) -> Result<(), EffectPrepareError> {
+    let mut index = ExecutionSpatialIndex::default();
+    index.rebuild(
+        runtime.frame(),
+        runtime.geometry_resources(),
+        runtime
+            .painter_order()
+            .iter()
+            .map(|&i| (ExecutionSlotId::new(i, 0), i as usize)),
+    );
+    let publication = runtime
+        .take_renderer_publication()
+        .with_spatial_index(&index);
+    let visible = publication
+        .painter_order()
+        .iter()
+        .map(|&i| i as usize)
+        .collect::<Vec<_>>();
+    renderer
+        .effect_source_visibility(&publication, &visible)
+        .map(|_| ())
+}
+#[test]
+fn unsupported_animated_prefix_preserves_warm_outputs_and_retries_with_existing_storage() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let (objects, track) = order_fixture();
+    let mut scene =
+        SceneInstance::new(CompiledScene::compile_objects(objects.clone(), &[track]).unwrap());
+    let mut fixture = Fixture::new(&device, &queue);
+    let cold = fixture.render(&device, &queue, &mut scene, wgpu::Color::TRANSPARENT);
+    let scope = &fixture.renderer.effect_captures.as_deref().unwrap().scopes[&(2, 1)];
+    let output = scope.placement_output.clone();
+    let erase = scope.placement_erase.clone();
+    let spatial = noon_compile::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+        spatial_anchor_family: None,
+        fixed_orientation_center: None,
+        cairo_path_appearance: None,
+    };
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetSpatialState {
+            object: ObjectId::new(30),
+            base_transform: objects[2].base_transform,
+            spatial: Some(spatial),
+        })
+        .unwrap();
+    order_visibility(&mut fixture.renderer, &mut scene).unwrap();
+    scene.advance_to(1.0).unwrap();
+    assert_eq!(
+        order_visibility(&mut fixture.renderer, &mut scene),
+        Err(EffectPrepareError::UnsupportedBackdropInput {
+            owner: ObjectId::new(20),
+            input: ObjectId::new(30)
+        })
+    );
+    assert_eq!(
+        fixture.renderer.effect_capture_texture_bytes(),
+        cold.retained_texture_bytes
+    );
+    let scope = &fixture.renderer.effect_captures.as_deref().unwrap().scopes[&(2, 1)];
+    assert_eq!(scope.placement_output, output);
+    assert_eq!(scope.placement_erase, erase);
+    scene.seek(0.0).unwrap();
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetSpatialState {
+            object: ObjectId::new(30),
+            base_transform: objects[2].base_transform,
+            spatial: None,
+        })
+        .unwrap();
+    let retry = fixture.render(&device, &queue, &mut scene, wgpu::Color::TRANSPARENT);
+    assert_eq!(retry.texture_allocations, 0);
+    assert_eq!(retry.retained_texture_bytes, cold.retained_texture_bytes);
+    let scope = &fixture.renderer.effect_captures.as_deref().unwrap().scopes[&(2, 1)];
+    assert_eq!(scope.placement_output, output);
+    assert_eq!(scope.placement_erase, erase);
+}
+#[test]
+#[ignore = "requires a real raster adapter; animated planar painter-prefix order and exact direct-seek agreement"]
+fn backdrop_animated_planar_prefix_matches_reference_and_direct_seek() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let (objects, track) = order_fixture();
+    let clear = wgpu::Color::TRANSPARENT;
+    let mut target = objects[1].clone();
+    target.effects = None;
+    target.base_style.opacity = 1.0;
+    let prefix = ordinary(
+        &device,
+        &queue,
+        vec![objects[0].clone(), objects[2].clone()],
+        clear,
+    );
+    let paint = ordinary(&device, &queue, vec![target.clone()], clear);
+    target.base_style.fill = Some(Color::WHITE);
+    let coverage = ordinary(&device, &queue, vec![target], clear);
+    let reference = expected(&prefix, &paint, &coverage, 2.0, 0.6);
+    let compiled = CompiledScene::compile_objects(objects, &[track]).unwrap();
+    let mut scene = SceneInstance::new(compiled.clone());
+    let mut fixture = Fixture::new(&device, &queue);
+    fixture.render(&device, &queue, &mut scene, clear);
+    scene.advance_to(1.0).unwrap();
+    let update = fixture.render(&device, &queue, &mut scene, clear);
+    assert_eq!(
+        update.source_passes, 1,
+        "only the changed earlier prefix recaptures"
+    );
+    assert_eq!(update.texture_allocations, 0);
+    let actual = read(&device, &queue, &fixture.target);
+    let error = actual
+        .iter()
+        .zip(&reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain("animated-planar-prefix",&actual,&reference,&[("prefix",&prefix),("paint",&paint),("coverage",&coverage)],r#"{"width":80,"height":60,"bound":2,"profile":"animated planar target order updates its earlier prefix"}"#.to_owned());
+    assert!(error <= 2, "animated prefix order maximum error {error}");
+    let mut direct = SceneInstance::new(compiled);
+    direct.seek(1.0).unwrap();
+    let mut fresh = Fixture::new(&device, &queue);
+    fresh.render(&device, &queue, &mut direct, clear);
+    assert_eq!(
+        actual,
+        read(&device, &queue, &fresh.target),
+        "direct seek and forward evaluation must agree exactly"
+    );
+    eprintln!("animated planar prefix: maximum error {error}, direct seek exact; warm prefix-only capture with zero extra textures");
+}
+
+fn gaussian_in_view(source: &[u8], origin: [i32; 2], sigma: f64) -> Vec<u8> {
+    let support = (3.0 * sigma).ceil() as i32;
+    let normalization = (-support..=support)
+        .map(|x| (-0.5 * (f64::from(x) / sigma).powi(2)).exp())
+        .sum::<f64>()
+        .powi(2);
+    let mut kernel = Vec::new();
+    for y in -support..=support {
+        for x in -support..=support {
+            kernel.push((
+                x,
+                y,
+                (-0.5 * f64::from(x * x + y * y) / sigma.powi(2)).exp() / normalization,
+            ));
+        }
+    }
+    let mut result = vec![0; VIEW[0] as usize * VIEW[1] as usize * 4];
+    for y in 0..VIEW[1] as i32 {
+        for x in 0..VIEW[0] as i32 {
+            let mut sum = [0.0_f64; 4];
+            for &(dx, dy, weight) in &kernel {
+                let sx = x + dx - origin[0];
+                let sy = y + dy - origin[1];
+                if sx >= 0 && sy >= 0 && sx < VIEW[0] as i32 && sy < VIEW[1] as i32 {
+                    let at = (sy as usize * VIEW[0] as usize + sx as usize) * 4;
+                    for c in 0..4 {
+                        sum[c] += f64::from(source[at + c]) * weight;
+                    }
+                }
+            }
+            let at = (y as usize * VIEW[0] as usize + x as usize) * 4;
+            for c in 0..4 {
+                result[at + c] = sum[c].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    result
+}
+#[test]
+#[ignore = "requires a real raster adapter; isolated target and earlier offscreen filtered group halo"]
+fn backdrop_group_target_consumes_an_earlier_offscreen_group_filter_and_recovers_from_wrong_input()
+{
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let clear = wgpu::Color {
+        r: 24.0 / 255.0,
+        g: 48.0 / 255.0,
+        b: 64.0 / 255.0,
+        a: 128.0 / 255.0,
+    };
+    let mut source = row(10, -3.5, [2.0, 2.4], Color::rgba(0.9, 0.1, 0.2, 1.0));
+    source.base_z_index = 0.0;
+    let mut a = row(20, 0.3, [3.6, 2.0], Color::rgba(0.1, 0.6, 0.9, 0.27));
+    a.base_style.opacity = 0.65;
+    a.base_z_index = 1.0;
+    let mut b = CompiledObject::new(
+        ObjectId::new(21),
+        GeometryRef::circle(0.8),
+        Transform2D {
+            translation: Vec2::new(0.8, 0.2),
+            ..Transform2D::IDENTITY
+        },
+        Style {
+            fill: Some(Color::rgba(0.7, 0.3, 0.1, 0.55)),
+            stroke: None,
+            stroke_width: 0.0,
+            opacity: 0.4,
+            ..Style::default()
+        },
+    );
+    b.base_z_index = 2.0;
+    let group = |id, members: &[u64], opacity| {
+        let mut row = CompiledObject::new(
+            ObjectId::new(id),
+            noon_core::ObjectContentRef::Composed(Arc::new(
+                noon_core::ComposedSource::new(members.iter().copied().map(ObjectId::new), None)
+                    .unwrap(),
+            )),
+            Transform2D::IDENTITY,
+            Style {
+                fill: None,
+                stroke: None,
+                opacity,
+                ..Style::default()
+            },
+        );
+        row.draw_enabled = false;
+        row
+    };
+    let mut target = group(91, &[20, 21], 0.6);
+    target.effects = Some(panel_effect(2.0));
+    let mut prior = group(90, &[10], 0.8);
+    prior.effects = Some(Arc::new(
+        CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(89, 4),
+            definition: noon_core::Blur::new(EffectUpdate::default().radius(Pixels(8.0)))
+                .unwrap()
+                .into(),
+        }])
+        .unwrap(),
+    ));
+    // Full source lies in this shifted ordinary view, including the portion
+    // outside the final viewport. The explicit origin is -20 physical pixels.
+    let mut source_view = Fixture::new(&device, &queue);
+    source_view.renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::new(-2.0, 0.0), Vec2::new(8.0, 6.0)).unwrap(),
+    );
+    source_view.render(
+        &device,
+        &queue,
+        &mut runtime(vec![source.clone()]),
+        wgpu::Color::TRANSPARENT,
+    );
+    let source_pixels = read(&device, &queue, &source_view.target);
+    let filtered = gaussian_in_view(&source_pixels, [-20, 0], 8.0);
+    let mut prefix = vec![0; filtered.len()];
+    let background = [24.0, 48.0, 64.0, 128.0];
+    for (out, pixel) in prefix
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(filtered.as_chunks::<4>().0.iter())
+    {
+        let alpha = f64::from(pixel[3]) / 255.0 * 0.8;
+        for c in 0..4 {
+            out[c] = (background[c] * (1.0 - alpha) + f64::from(pixel[c]) * 0.8)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    let paint = ordinary(
+        &device,
+        &queue,
+        vec![a.clone(), b.clone()],
+        wgpu::Color::TRANSPARENT,
+    );
+    let mut white_a = a.clone();
+    white_a.base_style.fill = Some(Color::WHITE);
+    let mut white_b = b.clone();
+    white_b.base_style.fill = Some(Color::WHITE);
+    let coverage = ordinary(
+        &device,
+        &queue,
+        vec![white_a, white_b],
+        wgpu::Color::TRANSPARENT,
+    );
+    let reference = expected(&prefix, &paint, &coverage, 2.0, 0.6);
+    // Metadata is intentionally in reverse dependency order. The preceding
+    // group's physical terminal rank must drive GPU preparation.
+    let mut scene = runtime(vec![source, a, b, target, prior]);
+    let mut fixture = Fixture::new(&device, &queue);
+    let cold = fixture.render(&device, &queue, &mut scene, clear);
+    let actual = read(&device, &queue, &fixture.target);
+    let error = actual
+        .iter()
+        .zip(&reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain("group-target-prior-offscreen-filter",&actual,&reference,&[("prefix",&prefix),("paint",&paint),("coverage",&coverage),("offscreen-source",&source_pixels)],
+        r#"{"width":80,"height":60,"bound":2,"sourceOrigin":[-20,0],"priorSigma":8,"priorOpacity":0.8,"backdropSigma":2,"scopeOpacity":0.6,"profile":"isolated target consumes prior filtered group, including offscreen source geometry"}"#.to_owned());
+    assert!(
+        error <= 2,
+        "group target and offscreen prior filter: maximum error {error}"
+    );
+    let saved = fixture.renderer.effect_captures.as_deref().unwrap().scopes[&(2, 4)]
+        .placement_output
+        .clone();
+    {
+        let cache = fixture.renderer.effect_captures.as_deref_mut().unwrap();
+        let prior = cache.scopes.get_mut(&(2, 4)).unwrap();
+        prior.placement_output = Some(prior.source.texture.clone());
+        cache
+            .backdrops
+            .scopes
+            .get_mut(&ObjectId::new(91))
+            .unwrap()
+            .prefix
+            .invalidate();
+    }
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffects {
+            object: ObjectId::new(91),
+            effects: panel_effect(1.99),
+        })
+        .unwrap();
+    fixture.render(&device, &queue, &mut scene, clear);
+    let wrong = read(&device, &queue, &fixture.target);
+    let current_reference = expected(&prefix, &paint, &coverage, 1.99, 0.6);
+    let rejected = wrong
+        .iter()
+        .zip(&current_reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain("negative-unfiltered-prior-group",&wrong,&current_reference,&[],r#"{"width":80,"height":60,"bound":2,"negativeControl":true,"profile":"substitute raw input for the prior group's filtered output only in prefix capture"}"#.to_owned());
+    assert!(
+        rejected > 2,
+        "actual wrong-input control must fail the same bound"
+    );
+    {
+        let cache = fixture.renderer.effect_captures.as_deref_mut().unwrap();
+        cache.scopes.get_mut(&(2, 4)).unwrap().placement_output = saved;
+        cache
+            .backdrops
+            .scopes
+            .get_mut(&ObjectId::new(91))
+            .unwrap()
+            .prefix
+            .invalidate();
+    }
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffects {
+            object: ObjectId::new(91),
+            effects: panel_effect(2.0),
+        })
+        .unwrap();
+    let recovery = fixture.render(&device, &queue, &mut scene, clear);
+    assert_eq!(
+        read(&device, &queue, &fixture.target),
+        actual,
+        "recovery must restore exact correct output"
+    );
+    assert_eq!(recovery.texture_allocations, 0);
+    assert_eq!(recovery.retained_texture_bytes, cold.retained_texture_bytes);
+    let mut ordinary_reference = vec![0; prefix.len()];
+    for ((out, background), pixel) in ordinary_reference
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(prefix.as_chunks::<4>().0.iter())
+        .zip(paint.as_chunks::<4>().0.iter())
+    {
+        let alpha = f64::from(pixel[3]) / 255.0 * 0.6;
+        for c in 0..4 {
+            out[c] = (f64::from(background[c]) * (1.0 - alpha) + f64::from(pixel[c]) * 0.6)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    let mut inactive_bytes = None;
+    let mut inactive_pixels = None;
+    let mut attachment = SemanticNodeId::new(83, 2);
+    for generation in 3..=10 {
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(91),
+                expected: vec![attachment].into_boxed_slice(),
+                effects: None,
+            })
+            .unwrap();
+        let removed = fixture.render(&device, &queue, &mut scene, clear);
+        assert_eq!(fixture.renderer.backdrop_texture_bytes(), 0);
+        assert!(fixture
+            .renderer
+            .effect_captures
+            .as_deref()
+            .unwrap()
+            .backdrops
+            .scopes
+            .is_empty());
+        assert!(removed.retained_texture_bytes < cold.retained_texture_bytes);
+        let pixels = read(&device, &queue, &fixture.target);
+        let ordinary_error = pixels
+            .iter()
+            .zip(&ordinary_reference)
+            .map(|(&a, &b)| a.abs_diff(b))
+            .max()
+            .unwrap();
+        assert!(
+            ordinary_error <= 2,
+            "ordinary group after removal: {ordinary_error}"
+        );
+        if inactive_bytes.is_none() {
+            retain("group-target-after-backdrop-removal", &pixels, &ordinary_reference,
+                &[("prefix", &prefix), ("paint", &paint)],
+                r#"{"width":80,"height":60,"bound":2,"profile":"backdrop removed while final group opacity still requires ordinary isolation"}"#.to_owned());
+        }
+        if let Some(previous) = inactive_bytes {
+            assert_eq!(removed.retained_texture_bytes, previous);
+            assert_eq!(Some(&pixels), inactive_pixels.as_ref());
+        } else {
+            inactive_bytes = Some(removed.retained_texture_bytes);
+            inactive_pixels = Some(pixels);
+        }
+        attachment = SemanticNodeId::new(83, generation);
+        let effects = Arc::new(
+            CompiledEffectStack::new([CompiledEffect {
+                attachment,
+                definition: BackdropBlur::new(EffectUpdate::default().radius(Pixels(2.0)))
+                    .unwrap()
+                    .into(),
+            }])
+            .unwrap(),
+        );
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(91),
+                expected: Box::new([]),
+                effects: Some(effects),
+            })
+            .unwrap();
+        let restored = fixture.render(&device, &queue, &mut scene, clear);
+        assert_eq!(restored.retained_texture_bytes, cold.retained_texture_bytes);
+        assert_eq!(read(&device, &queue, &fixture.target), actual);
+        let clean = fixture.render(&device, &queue, &mut scene, clear);
+        assert_eq!(clean.texture_allocations, 0);
+        assert_eq!(clean.sources_prepared, 0);
+    }
+    eprintln!("group backdrop: maximum error {error}, actual unfiltered-prior control {rejected}, recovery exact with no new textures; eight attachment cycles retain stable active/inactive bytes");
+}
