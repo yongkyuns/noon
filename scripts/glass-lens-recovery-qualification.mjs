@@ -44,6 +44,14 @@ function exact(actual, expected, label) {
   assert.deepEqual(actual.data, expected.data, label);
 }
 
+function literalPrefixWitness(image) {
+  assert.equal(image.width, 320); assert.equal(image.height, 180);
+  for (const [x, y, expected] of [[20, 20, [8, 16, 31, 255]], [45, 35, [28, 82, 148, 255]], [65, 35, [240, 166, 70, 255]]]) {
+    const at = (y * 320 + x) * 4;
+    assert.deepEqual(Array.from(image.data.subarray(at, at + 4)), expected, "literal prefix witnesses reject blank/stale captures");
+  }
+}
+
 async function direct(context, backend, size = [320, 180], time = 6) {
   const page = await context.newPage();
   page.setDefaultTimeout(60_000);
@@ -62,9 +70,20 @@ async function direct(context, backend, size = [320, 180], time = 6) {
     renderer.advanceDirectRealtime(0);
     await sampleDirectProgram(renderer, 0);
     await sampleDirectProgramThrough(renderer, time, boundaries);
+    const gpuIdentity = () => {
+      if (renderer.rendererBackend() === "WebGPU") {
+        const capture = window.__noonWebGpuDeviceCapture;
+        const device = capture?.devices[capture.ownerDeviceIndex];
+        const info = device?.adapterInfo;
+        return { api: "WebGPU", vendor: info?.vendor ?? null, architecture: info?.architecture ?? null,
+          device: info?.device ?? null, description: info?.description ?? null };
+      }
+      const gl = surface.getContext("webgl2");
+      return { api: "WebGL2", vendor: gl.getParameter(gl.VENDOR), renderer: gl.getParameter(gl.RENDERER) };
+    };
     const snapshot = () => ({ time: renderer.time(), revision: String(renderer.directSceneRevision()),
       objects: renderer.objectCount(), backend: renderer.rendererBackend(), gpuGeneration: renderer.gpuGeneration(),
-      frame: JSON.parse(renderer.debugSelectionFrameJson()), gpuIdentity: JSON.parse(renderer.rendererAdapterInfo()) });
+      frame: JSON.parse(renderer.debugSelectionFrameJson()), gpuIdentity: gpuIdentity() });
     async function present() {
       for (let i = 0; i < 100; i++) {
         if (renderer.render()) return snapshot();
@@ -93,7 +112,7 @@ async function directProfile(context, backend) {
   const { page, state } = owner;
   const result = { host: "direct-rust-wasm", backend, initial: state, resizes: [] };
   try {
-    const initial = await picture(page, `${backend}-direct-initial`);
+    const initial = await picture(page, `${backend}-direct-initial`); literalPrefixWitness(initial);
     for (const [index, size] of [[640, 360], [240, 160], [320, 180], [640, 360], [320, 180]].entries()) {
       const after = await page.evaluate(async size => {
         const canvas = document.querySelector("#scene");
@@ -239,7 +258,7 @@ async function pythonProfile(context, backend) {
   try {
     assert.equal(state.metrics.backend, backend); assert.equal(state.metrics.time, 6);
     assert.equal(state.frame.time, 6);
-    const initial = await picture(page, `${backend}-python-initial`);
+    const initial = await picture(page, `${backend}-python-initial`); literalPrefixWitness(initial);
     const coldInitial = await direct(context, backend);
     try { exact(initial, await picture(coldInitial.page, `${backend}-python-direct-oracle`), "completed Python seek equals direct Rust forward execution"); }
     finally { await coldInitial.close(); }
