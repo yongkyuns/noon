@@ -26,6 +26,8 @@ jobs:
       MEMORY: "472a61fadfdabba44756b75caaa184cee8c4be57"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      WGPU_BACKEND: vulkan
+      XDG_RUNTIME_DIR: /tmp/noon2308-glyph-xdg
     steps:
       - name: Checkout diagnostic-only helper without credentials
         uses: actions/checkout@v7
@@ -126,7 +128,10 @@ jobs:
           cd "$WORK"
           rustup install
           rustup target add wasm32-unknown-unknown
-          bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config | tee "$EVIDENCE/dependencies.log"
+          bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config mesa-vulkan-drivers libvulkan1 | tee "$EVIDENCE/dependencies.log"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          test -n "$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
           rustc --version --verbose > "$EVIDENCE/rust-version.log"
       - name: Format and verify sealed tracked source
         shell: bash
