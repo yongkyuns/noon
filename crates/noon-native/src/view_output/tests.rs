@@ -480,6 +480,14 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
             );
         }
         if phase != 6 {
+            assert_eq!(
+                stats.passes,
+                if intensity == 0.0 {
+                    [0, 0, 0, 1, 1]
+                } else {
+                    [1; 5]
+                }
+            );
             let raw = read(&device, &queue, output.scope.linear_output().unwrap());
             let values = raw
                 .as_chunks::<2>()

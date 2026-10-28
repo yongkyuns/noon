@@ -182,7 +182,7 @@ impl NativeViewOutput {
             .checked_add(1)
             .ok_or_else(|| error("native HDR source revision exhausted"))?;
         let result = (|| {
-            let hdr = self
+            let mut hdr = self
                 .filter
                 .prepare_view(
                     device,
@@ -194,7 +194,7 @@ impl NativeViewOutput {
                     NATIVE_HDR_TARGET_BUDGET,
                 )
                 .map_err(|e| error(&e.to_string()))?;
-            self.filter.encode(encoder, &mut self.scope);
+            hdr.passes = self.filter.encode(encoder, &mut self.scope).passes;
             let display = self.scope.display_output().expect("prepared view output");
             renderer
                 .encode_display_overlay(device, encoder, display, overlay)
