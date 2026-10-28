@@ -42,6 +42,8 @@ const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],
   ["ci-measurements.yml", "ci-diagnostics"],
+  // Isolated #2300 research workflow: explicitly classified, not a broad audio-* exemption.
+  ["audio-2300-window-bracket-observation.yml", "ci-diagnostics"],
   ["architecture-ratchets.yml", "architecture"],
   ["architecture-diagrams.yml", "architecture"],
   ["provider-features.yml", "provider-isolation"],
