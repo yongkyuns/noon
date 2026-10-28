@@ -11,6 +11,33 @@ use noon_core::{
 
 use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 
+/// Borrow authored/static view metadata from the existing Runtime execution
+/// projection, on the same publication lifetime as the effective frame.
+pub trait ViewColorProfileLookup {
+    fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile>;
+}
+impl ViewColorProfileLookup for crate::SceneInstance {
+    fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile> {
+        self.compiled
+            .object_index(object)
+            .and_then(|index| self.compiled.objects()[index as usize].view_color_profile)
+    }
+}
+impl crate::SceneInstance {
+    pub fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile> {
+        ViewColorProfileLookup::view_color_profile(self, object)
+    }
+}
+
 /// Borrow the publisher's existing identity index. Derived captures resolve
 /// their local inputs without scanning the frame or retaining another index.
 pub trait ObjectIndexLookup {
@@ -244,10 +271,42 @@ pub struct RendererPublication<'a> {
     painter_order: &'a [u32],
     derived_display_objects: &'a [DerivedDisplayObject],
     object_indices: &'a dyn ObjectIndexLookup,
+    primary_view: Option<noon_core::ObjectId>,
+    view_color_profiles: Option<&'a dyn ViewColorProfileLookup>,
     spatial_index: Option<&'a crate::ExecutionSpatialIndex>,
 }
 
-impl RendererPublication<'_> {
+impl<'a> RendererPublication<'a> {
+    /// Select the compiler-derived primary camera for this publication. The
+    /// profile itself remains borrowed from the current execution revision.
+    pub fn with_primary_view(mut self, camera: Option<noon_core::ObjectId>) -> Self {
+        self.primary_view = camera;
+        self
+    }
+
+    /// The working color profile of the selected authored view. Publications
+    /// without a 2D view controller keep the ordinary compatibility profile.
+    pub fn color_profile(&self) -> noon_core::ViewColorProfile {
+        self.primary_view
+            .and_then(|camera| self.view_color_profile(camera))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn with_view_color_profiles(
+        mut self,
+        profiles: &'a dyn ViewColorProfileLookup,
+    ) -> Self {
+        self.view_color_profiles = Some(profiles);
+        self
+    }
+    pub fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile> {
+        self.object_index(object)?;
+        self.view_color_profiles?.view_color_profile(object)
+    }
+
     pub const fn context(&self) -> PublicationContext {
         self.context
     }
@@ -441,6 +500,8 @@ impl<'a> RendererPublication<'a> {
             painter_order,
             derived_display_objects: &[],
             object_indices,
+            primary_view: None,
+            view_color_profiles: None,
             spatial_index: None,
         }
     }

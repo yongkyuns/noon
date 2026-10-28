@@ -33,8 +33,9 @@ struct PaintUniform {
 }
 
 impl PaintUniform {
-    fn set_colors(&mut self, colors: [noon_core::Color; 2]) {
+    fn set_colors(&mut self, colors: [noon_core::Color; 2], profile: noon_core::ViewColorProfile) {
         for (index, color) in colors.into_iter().enumerate() {
+            let color = crate::color_profile::authored_color(color, profile);
             self.stops[index].color = [
                 color.red * color.alpha,
                 color.green * color.alpha,
@@ -45,10 +46,14 @@ impl PaintUniform {
         }
     }
 
-    fn set_stops(&mut self, stops: &[noon_core::GradientStop]) {
+    fn set_stops(
+        &mut self,
+        stops: &[noon_core::GradientStop],
+        profile: noon_core::ViewColorProfile,
+    ) {
         self.metadata[0] = stops.len() as u32;
         for (target, stop) in self.stops.iter_mut().zip(stops) {
-            let c = stop.color();
+            let c = crate::color_profile::authored_color(stop.color(), profile);
             target.color = [
                 c.red * c.alpha,
                 c.green * c.alpha,
@@ -84,7 +89,7 @@ impl PaintUniform {
                     end[0] as f32,
                     end[1] as f32,
                 ];
-                result.set_stops(definition.stops());
+                result.set_stops(definition.stops(), value.color_profile);
             }
             noon_core::SemanticPaint::RadialGradient(definition) => {
                 let center = definition.center();
@@ -96,7 +101,7 @@ impl PaintUniform {
                     radii[1] as f32,
                 ];
                 result.metadata[1] = 2;
-                result.set_stops(definition.stops());
+                result.set_stops(definition.stops(), value.color_profile);
             }
             noon_core::SemanticPaint::Noise(noise) => {
                 let (cell, fraction) = noise.phase_parts();
@@ -108,7 +113,7 @@ impl PaintUniform {
                     fraction[0] as f32,
                     fraction[1] as f32,
                 ];
-                result.set_colors(noise.colors());
+                result.set_colors(noise.colors(), value.color_profile);
             }
             noon_core::SemanticPaint::Hatch(hatch) => {
                 let rows = noon_compile::project_hatch_mapping(hatch)
@@ -116,7 +121,7 @@ impl PaintUniform {
                 result.metadata = [2, 4, u32::from(hatch.cross()), 0];
                 result.image_u = rows[0];
                 result.image_v = rows[1];
-                result.set_colors(hatch.colors());
+                result.set_colors(hatch.colors(), value.color_profile);
             }
             noon_core::SemanticPaint::Image(image) => {
                 let dimensions = images
@@ -200,7 +205,7 @@ impl PaintGpu {
         let source = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../analytic.wgsl"),
-            include_str!("../cairo_color.wgsl"),
+            super::source_color_shader(format),
             include_str!("../polygon_coverage.wgsl"),
             include_str!("raster_sampling.wgsl"),
             include_str!("../paint.wgsl"),
@@ -233,7 +238,7 @@ impl PaintGpu {
         let path_source = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../path.wgsl"),
-            include_str!("../cairo_color.wgsl"),
+            super::source_color_shader(format),
             include_str!("../polygon_coverage.wgsl"),
             include_str!("raster_sampling.wgsl"),
             include_str!("../paint.wgsl"),

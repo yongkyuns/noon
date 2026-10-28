@@ -67,6 +67,7 @@ pub enum ObjectStateField {
     Geometry,
     Transform,
     Style,
+    ViewColorProfile,
 }
 
 impl std::fmt::Display for ObjectStateField {
@@ -75,6 +76,7 @@ impl std::fmt::Display for ObjectStateField {
             Self::Geometry => "geometry",
             Self::Transform => "transform",
             Self::Style => "style",
+            Self::ViewColorProfile => "view color profile",
         })
     }
 }

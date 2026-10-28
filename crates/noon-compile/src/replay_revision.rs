@@ -121,6 +121,7 @@ impl CompiledScene {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetViewColorProfile { object, .. }
             | ExecutionPatch::SetEffects { object, .. } => {
                 rows.insert(index(*object)?);
             }

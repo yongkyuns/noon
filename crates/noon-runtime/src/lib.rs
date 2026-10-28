@@ -548,6 +548,7 @@ impl SceneInstance {
             &self.painter_order,
             self,
         )
+        .with_view_color_profiles(self)
     }
 
     /// Consume one renderer publication while queueing a presentation-only redraw
@@ -575,6 +576,7 @@ impl SceneInstance {
             &self.painter_order,
             self,
         )
+        .with_view_color_profiles(self)
     }
 
     /// Consume derived spatial invalidation for the execution-session index owner.
@@ -910,6 +912,14 @@ impl SceneInstance {
         } = patch
         {
             self.apply_effect_stack_patch(patch, *object, effects.clone())?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetViewColorProfile { object, .. } = patch {
+            self.compiled.apply_execution_patch(patch)?;
+            if let Some(index) = self.compiled.object_index(*object) {
+                self.mark_changed(index as usize);
+            }
+            self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
         }
         if let ExecutionPatch::SetInset2DView { object, .. } = patch {

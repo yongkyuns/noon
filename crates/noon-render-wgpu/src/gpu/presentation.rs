@@ -9,6 +9,17 @@ pub enum OutputTransfer {
 }
 
 impl OutputTransfer {
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn for_target(backend: wgpu::Backend, format: wgpu::TextureFormat) -> Self {
+        // A float radiance image is an offscreen scene input, never the browser
+        // drawing buffer. Its output transfer belongs after HDR resolution.
+        if matches!(format, wgpu::TextureFormat::Rgba16Float) {
+            Self::Direct
+        } else {
+            Self::for_browser_backend(backend)
+        }
+    }
+
     pub const fn for_browser_backend(backend: wgpu::Backend) -> Self {
         match backend {
             wgpu::Backend::Gl => Self::BrowserWebGlSrgb,
@@ -42,7 +53,7 @@ impl PresentationBridge {
         // contract without duplicating adapter plumbing in noon-web.
         #[cfg(target_arch = "wasm32")]
         let transfer = if transfer == OutputTransfer::Direct {
-            OutputTransfer::for_browser_backend(device.adapter_info().backend)
+            OutputTransfer::for_target(device.adapter_info().backend, surface_format)
         } else {
             transfer
         };
@@ -233,6 +244,24 @@ mod tests {
         assert_eq!(
             OutputTransfer::for_browser_backend(wgpu::Backend::Vulkan),
             OutputTransfer::Direct
+        );
+    }
+
+    #[test]
+    fn float_radiance_targets_never_take_the_browser_drawing_buffer_transfer() {
+        for backend in [
+            wgpu::Backend::Gl,
+            wgpu::Backend::BrowserWebGpu,
+            wgpu::Backend::Metal,
+        ] {
+            assert_eq!(
+                OutputTransfer::for_target(backend, wgpu::TextureFormat::Rgba16Float),
+                OutputTransfer::Direct
+            );
+        }
+        assert_eq!(
+            OutputTransfer::for_target(wgpu::Backend::Gl, wgpu::TextureFormat::Rgba8Unorm),
+            OutputTransfer::BrowserWebGlSrgb
         );
     }
 

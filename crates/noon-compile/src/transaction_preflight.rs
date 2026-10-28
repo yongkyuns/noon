@@ -108,6 +108,7 @@ enum ObjectOverlay {
 struct PreflightOverlay {
     objects: BTreeMap<ObjectId, ObjectOverlay>,
     paint_definitions: BTreeMap<u32, bool>,
+    view_color_profiles: BTreeMap<u32, Option<noon_core::ViewColorProfile>>,
     tracks: BTreeMap<TrackId, Option<TrackShadow>>,
     channels: BTreeMap<CompiledChannelKey, BTreeSet<TrackId>>,
     seen_objects: BTreeSet<ObjectId>,
@@ -121,6 +122,7 @@ impl PreflightOverlay {
         Self {
             objects: BTreeMap::new(),
             paint_definitions: BTreeMap::new(),
+            view_color_profiles: BTreeMap::new(),
             tracks: BTreeMap::new(),
             channels: BTreeMap::new(),
             seen_objects: BTreeSet::new(),
@@ -439,6 +441,19 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay
                     .paint_definitions
                     .insert(index, object.fill_paint.is_some());
+                // Ordinary creations need no view-metadata shadow allocation.
+                // An explicit None still masks a former camera at a reused slot.
+                if object.view_color_profile.is_some()
+                    || scene
+                        .objects
+                        .get(index as usize)
+                        .is_some_and(|row| row.view_color_profile.is_some())
+                    || overlay.view_color_profiles.contains_key(&index)
+                {
+                    overlay
+                        .view_color_profiles
+                        .insert(index, object.view_color_profile);
+                }
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
@@ -667,6 +682,28 @@ pub(super) fn preflight_transaction_with_resources(
                     }
                 }
                 overlay.set_effects(scene, *object, effects.clone());
+            }
+            ExecutionPatch::SetViewColorProfile { object, profile } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let current = overlay
+                    .view_color_profiles
+                    .get(&index)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        scene
+                            .objects
+                            .get(index as usize)
+                            .and_then(|row| row.view_color_profile)
+                    });
+                if current.is_none() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::ViewColorProfile,
+                    });
+                }
+                overlay.view_color_profiles.insert(index, Some(*profile));
             }
             ExecutionPatch::SetStyle {
                 object,
