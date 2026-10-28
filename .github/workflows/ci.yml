@@ -248,7 +248,7 @@ jobs:
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify public composed group pixels and lifecycle
-        run: cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture
+        run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
       - name: Qualify dissolve mask field and premultiplied alpha operator
