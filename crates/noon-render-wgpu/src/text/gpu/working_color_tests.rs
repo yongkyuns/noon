@@ -1,5 +1,5 @@
-//! Float glyph-color proof. The atlas owns the sRGB texture format; the shader
-//! must decode only authored tint, associate color taps, and preserve mask alpha.
+//! Float glyph-color proof. The atlas retains encoded bytes; the shader must
+//! decode tint/color taps once, associate color taps and preserve mask alpha.
 use super::*;
 use crate::gpu::{test_decode_hdr as decode, test_read_hdr as read};
 use crate::text::atlas::{GlyphAtlasEntry, GlyphAtlasPlane, GpuGlyphAtlas};
@@ -20,7 +20,13 @@ fn srgb(x: f64) -> f64 {
         ((x + 0.055) / 1.055).powf(2.4)
     }
 }
-fn expected(color: bool, opacity: f64, clear: [f64; 4], emission: f64) -> Vec<[f64; 4]> {
+fn expected(
+    color: bool,
+    opacity: f64,
+    clear: [f64; 4],
+    emission: f64,
+    linear: bool,
+) -> Vec<[f64; 4]> {
     (0..SIDE * SIDE)
         .map(|at| {
             let x = (f64::from(at % SIDE) + 0.5) / 8.0 - 0.5;
@@ -34,24 +40,38 @@ fn expected(color: bool, opacity: f64, clear: [f64; 4], emission: f64) -> Vec<[f
                     let source = if color {
                         let alpha = f64::from(COLOR[4 * i + 3]) / 255.0;
                         [
-                            srgb(f64::from(COLOR[4 * i]) / 255.0) * alpha,
-                            srgb(f64::from(COLOR[4 * i + 1]) / 255.0) * alpha,
-                            srgb(f64::from(COLOR[4 * i + 2]) / 255.0) * alpha,
+                            srgb(f64::from(COLOR[4 * i]) / 255.0)
+                                * if linear { alpha } else { 1.0 },
+                            srgb(f64::from(COLOR[4 * i + 1]) / 255.0)
+                                * if linear { alpha } else { 1.0 },
+                            srgb(f64::from(COLOR[4 * i + 2]) / 255.0)
+                                * if linear { alpha } else { 1.0 },
                             alpha,
                         ]
                     } else {
                         let alpha = f64::from(MASK[i]) / 255.0;
                         [
-                            srgb(0.5) * alpha,
-                            srgb(0.04) * alpha,
-                            srgb(0.75) * alpha,
+                            if linear { srgb(0.5) } else { 0.5 } * alpha,
+                            if linear { srgb(0.04) } else { 0.04 } * alpha,
+                            if linear { srgb(0.75) } else { 0.75 } * alpha,
                             alpha,
                         ]
                     };
                     for c in 0..4 {
-                        value[c] +=
-                            source[c] * w * opacity * if c < 3 { 1.0 + emission } else { 1.0 };
+                        value[c] += source[c]
+                            * w
+                            * if color && !linear && c < 3 {
+                                1.0
+                            } else {
+                                opacity
+                            }
+                            * if c < 3 { 1.0 + emission } else { 1.0 };
                     }
+                }
+            }
+            if color && !linear {
+                for c in 0..3 {
+                    value[c] *= value[3];
                 }
             }
             std::array::from_fn(|c| value[c] + clear[c] * (1.0 - value[3]))
@@ -66,8 +86,8 @@ fn shader_override(renderer: &mut TextGlyphGpuRenderer, device: &wgpu::Device, m
     });
     let glyph = if mode == 2 {
         include_str!("../glyph.wgsl").replace(
-            "return vec4(texel.rgb * texel.a, texel.a);",
-            "return vec4(working_color_rgb(texel.rgb) * texel.a, texel.a);",
+            "return vec4(decoded * texel.a, texel.a);",
+            "return vec4(srgb_decode_rgb(decoded) * texel.a, texel.a);",
         )
     } else {
         include_str!("../glyph.wgsl").to_string()
@@ -100,7 +120,13 @@ fn shader_override(renderer: &mut TextGlyphGpuRenderer, device: &wgpu::Device, m
         "actual color association/decode negative",
     );
 }
-fn qualify_glyph_emission(emission: f64) {
+fn qualify_glyph_emission(emission: f64, linear: bool) {
+    let format = if linear {
+        wgpu::TextureFormat::Rgba16Float
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    };
+    let encoding = if linear { "rgba16f" } else { "rgba8" };
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
@@ -116,7 +142,7 @@ fn qualify_glyph_emission(emission: f64) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba16Float,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
@@ -209,17 +235,13 @@ fn qualify_glyph_emission(emission: f64) {
                     object_glyph_slots: &slots,
                     stats: Default::default(),
                 };
-                let reference = expected(color, opacity, clear, emission);
-                for mode in 0..=2 {
+                let reference = expected(color, opacity, clear, emission, linear);
+                for mode in 0..=if linear { 2 } else { 0 } {
                     if mode == 2 && !color {
                         continue;
                     }
-                    let mut renderer = TextGlyphGpuRenderer::new(
-                        &device,
-                        &queue,
-                        wgpu::TextureFormat::Rgba16Float,
-                        TextCamera2D::DEFAULT,
-                    );
+                    let mut renderer =
+                        TextGlyphGpuRenderer::new(&device, &queue, format, TextCamera2D::DEFAULT);
                     if mode != 0 {
                         shader_override(&mut renderer, &device, mode);
                     }
@@ -256,12 +278,16 @@ fn qualify_glyph_emission(emission: f64) {
                     queue.submit([encoder.finish()]);
                     atlas.acknowledge_pending_uploads();
                     let pixels = read(&device, &queue, &target);
-                    let actual = decode(&pixels);
+                    let actual = if linear {
+                        decode(&pixels)
+                    } else {
+                        pixels.iter().map(|&v| f64::from(v) / 255.0).collect()
+                    };
                     // Failed numeric profiles are evidence too. Write before
                     // checking the envelope so the offending atlas samples survive.
                     if let Some(dir) = &artifact {
                         std::fs::write(
-                            dir.join(format!("raw-glyph-{profiles}-{mode}.rgba16f")),
+                            dir.join(format!("raw-glyph-{profiles}-{mode}.{encoding}")),
                             &pixels,
                         )
                         .unwrap();
@@ -290,12 +316,16 @@ fn qualify_glyph_emission(emission: f64) {
                                 .zip(reference.iter().flatten())
                                 .enumerate()
                                 .all(|(channel, (a, e))| (a - e).abs()
-                                    <= 0.002
-                                        + if emission > 0.0 && channel % 4 != 3 {
-                                            0.001 * e.abs()
-                                        } else {
-                                            0.0
-                                        }),
+                                    <= if !linear {
+                                        2.0 / 255.0
+                                    } else {
+                                        0.002
+                                            + if emission > 0.0 && channel % 4 != 3 {
+                                                0.001 * e.abs()
+                                            } else {
+                                                0.0
+                                            }
+                                    }),
                             "glyph profile {profiles} color={color}: {error}"
                         );
                         max_error = max_error.max(error);
@@ -314,7 +344,7 @@ fn qualify_glyph_emission(emission: f64) {
                     }
                     if let Some(dir) = &artifact {
                         std::fs::write(
-                            dir.join(format!("glyph-{profiles}-mode-{mode}.rgba16f")),
+                            dir.join(format!("glyph-{profiles}-mode-{mode}.{encoding}")),
                             pixels,
                         )
                         .unwrap();
@@ -341,6 +371,11 @@ fn qualify_glyph_emission(emission: f64) {
         }
     }
     let manifest=format!("{{\"profiles\":{profiles},\"float_channels\":{},\"rgb_absolute_bound\":0.002,\"rgb_relative_bound\":{},\"alpha_absolute_bound\":0.002,\"emission_strength\":{emission},\"max_linear_error\":{max_error},\"actual_encoded_tint_or_unassociated_filter_negative\":{},\"actual_double_atlas_decode_negative\":{}}}",profiles*1024,if emission > 0.0 {0.001} else {0.0},negatives[1],negatives[2]);
+    let manifest = if linear {
+        manifest
+    } else {
+        format!("{{\"profiles\":{profiles},\"byte_channels\":{},\"byte_bound\":2,\"maximum_normalized_error\":{max_error}}}", profiles * 1024)
+    };
     if let Some(dir) = &artifact {
         std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
     }
@@ -350,17 +385,23 @@ fn qualify_glyph_emission(emission: f64) {
 #[test]
 #[ignore = "requires real native float blending; missing adapter fails qualification"]
 fn glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_negatives() {
-    qualify_glyph_emission(0.0);
+    qualify_glyph_emission(0.0, true);
 }
 
 #[test]
 #[ignore = "requires real native float blending; missing adapter fails qualification"]
 fn glyph_emission_is_linear_before_association_for_mask_and_color_atlases() {
-    qualify_glyph_emission(7.0);
+    qualify_glyph_emission(7.0, true);
 }
 
 #[test]
 #[ignore = "requires real native float blending; missing adapter fails qualification"]
 fn maximum_glyph_emission_preserves_coverage_and_atlas_reconstruction() {
-    qualify_glyph_emission(63.0);
+    qualify_glyph_emission(63.0, true);
+}
+
+#[test]
+#[ignore = "requires real native color targets; missing adapter fails qualification"]
+fn compatibility_glyph_color_preserves_unassociated_filtering_and_encoded_tint() {
+    qualify_glyph_emission(0.0, false);
 }

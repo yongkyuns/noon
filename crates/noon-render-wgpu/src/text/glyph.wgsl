@@ -54,10 +54,14 @@ fn vs_glyph(input: GlyphVertexInput) -> GlyphVertexOutput {
 }
 
 fn glyph_color_texel(texel: vec4<f32>, color: bool) -> vec4<f32> {
-    if LINEAR_WORKING_COLOR && color {
-        // The color atlas is Rgba8UnormSrgb: textureLoad already decoded RGB.
-        // Associate each tap before interpolation; do not decode it twice.
-        return vec4(texel.rgb * texel.a, texel.a);
+    if color {
+        let decoded = srgb_decode_rgb(texel.rgb);
+        if LINEAR_WORKING_COLOR {
+            // Associate each linear tap before filtering in the HDR profile.
+            return vec4(decoded * texel.a, texel.a);
+        }
+        // Compatibility keeps its existing unassociated color filtering rule.
+        return vec4(decoded, texel.a);
     }
     return texel;
 }

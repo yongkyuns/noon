@@ -1782,12 +1782,11 @@ existing reconstruction and opacity order. The HDR repair has an actual failing
 old-order pixel witness; the 0.002 bound was unchanged.
 
 Mask glyph coverage remains linear alpha; authored tint RGB is decoded at the
-vertex. Color glyph atlas pages already use `Rgba8UnormSrgb`, so texture loads
-perform the one input decode. HDR color texels are associated before bilinear
-interpolation, then multiplied by linear tint and final alpha. Decoding the atlas
-again or associating only after interpolation is incorrect. Compatibility shader
-branches preserve their existing operations. The asset conversion needs no
-additional retained texture images or per-frame pixel upload.
+vertex. Color atlas pages retain encoded `Rgba8Unorm` bytes; the glyph shader
+decodes each tap explicitly, avoiding fixed-function sRGB approximation under
+amplified radiance. HDR associates taps before interpolation; Compatibility keeps
+its existing unassociated filtering and encoded-tint rules. No additional atlas
+mode, retained texture or per-frame pixel upload is needed.
 
 The authored-view integration test now runs the same 16-case independent planar
 source/Bloom oracle through direct, canonical retained, and retained-visible
@@ -1993,46 +1992,26 @@ qualification remain open. New-device resource recreation is not a claim of
 automatic OS/device-loss recovery.
 
 
-### Checked material emission — implementation qualification in progress (#1897 M4)
+### Candidate checked material emission (#1897 M4)
 
-The candidate shared material value retains a checked f64 strength `e` in
-`[0, 63]`. Zero is neutral. Colored material radiance is
-`decode_srgb(base_rgb) * (1 + e)`: apply this before painted coverage,
-object/group opacity, blending and ordered filtering. Emission does not add
-coverage, change alpha, or create an independent halo. A normal opacity fade
-removes its energy too. Bloom remains the separately authored view treatment.
+The shared candidate stores checked f64 strength `e` in `[0, 63]`; zero is neutral.
+Radiance is `decode_srgb(base_rgb) * (1 + e)` before coverage, opacity, blending
+and filtering. Emission changes neither alpha nor coverage and adds no separate
+halo. Bloom remains a view treatment.
 
-The finite first profile requires unit base paints and opacity, primary planar
-linear-HDR output, and the existing qualified capture/view capabilities.
-Compatibility and spatial emission reject before retained view changes. The
-native host performs material admission before discarding previous view targets.
-Paint/image reconstruction retains its established association and filtering
-order; the radiance multiplier never passes through an sRGB transfer. Semantic
-copy/target/effective-style capture retains the material value. GPU projections
-remain disposable and local; no engine boundary or authored clock is added.
+The first profile requires unit base paints/opacity, primary planar linear-HDR
+output and supported capture/view capabilities. Compatibility/spatial emission
+rejects before retained view changes. Copy, target and effective style capture
+retain the material value; GPU state remains a disposable projection.
 
-Amplified RGB uses the **existing** HDR float16 envelope
-`.006 + .004 * abs(reference)` and the existing two-byte display bound.
-Emission never amplifies alpha: its absolute bound remains `.002`. Ordinary
-neutral-material cases retain their original `.002` bound on every channel.
-The glyph-input subprofile uses the stricter RGB envelope
-`.002 + .001 * abs(reference)` for emission, again with `.002` on alpha.
-These declarations precede maximum-strength qualification. A prototype image
-trial used the ordinary absolute-only bound for amplified values and failed
-at `4.0` versus `4.002846107423764`; that failed trial and raw samples remain
-archived, not reclassified as passing the original bound. Float16 spacing at
-four is `.00390625`; the HDR envelope accounts for pass/blend rounding.
+Native shape/image proofs use the existing HDR RGB bound
+`.006 + .004 * abs(reference)` and two-byte display bound. Glyph inputs use
+`.002 + .001 * abs(reference)` for amplified RGB; ordinary float inputs and all
+alpha retain `.002`. Color glyphs decode exact stored bytes once before
+reconstruction. Eight ordinary RGBA8 cases independently check Compatibility's
+unassociated filtering and encoded tint with a two-byte bound.
 
-The prototype Rust setter/getter and static native proofs do **not** complete
-emission authoring. Independent timeline/property channels, ordinary target
-animation, shared family behavior, supported callback semantics, equivalent
-Python creator scripts, direct-WASM/browser/native-Python host qualification,
-ordered composed captures, and complete publication/recovery/performance gates
-remain open. Do not promote this candidate as the completed M4 creator release.
-
-Maximum-strength glyph input qualification remains **failed** under the declared
-stricter glyph envelope. The first observed maximum absolute difference was
-`.035375612963292724` in the color-atlas corpus. This is not accepted by widening
-the glyph gate. Raw failing samples are retained before assertions; investigate
-atlas decode/reconstruction precision and requalify the candidate before public
-promotion. The static shape/image proofs do not resolve this failure.
+The static Rust prototype does **not** complete emission authoring. Independent
+property/timeline channels, ordinary target animation, family/callback behavior,
+equivalent Python scripts, cross-host execution, composed captures and remaining
+publication/recovery/performance gates are still required before promotion.
