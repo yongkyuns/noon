@@ -2023,7 +2023,23 @@ Native scalar-graph bindings and family/provisional callback emission remain
 unsupported. Family material edits reuse the atomic style transaction and ordinary
 method targets; non-rendered roots retain metadata without multiplying leaf radiance.
 Python ordinary and leaf callback setters forward through shared Rust/WASM operations.
-Equivalent executable Python scripts, cross-host execution, composed captures,
-publication/recovery/performance gates and Bloom/emission gallery examples remain
-required before promotion; wrapper dispatch tests and WASM compilation alone do
-not qualify a Python rendering path.
+Native and direct Rust/WASM hosts share `AuthoredViewOutput`, a disposable GPU
+cache over the existing float renderer, Bloom and encoded display presenter. The
+browser selects float drawing resources from the Runtime publication, restores
+them after device/context replacement, and applies viewer overlays after Bloom.
+The finite profile requires a primary planar view, float blending/MSAA4 support,
+no insets, and the existing retained target budget; unsupported requests reject
+before replacing those targets.
+
+`node scripts/direct-view-output-qualification.mjs` checks actual WebGPU/WebGL2
+pixels against an independent f64 uniform-interior reference, live/finite source
+modes, exact seek/restoration and resize admission. The native full-field oracle
+remains `cargo test -p noon-native --lib view_output::native_hdr -- --include-ignored`.
+Held frames may sleep rather than republish time; active animation and explicit
+seek still sample canonical authored time. These software-GPU checks do not
+qualify physical-device performance.
+
+Python HDR host/bindings and executable parity, broader composed/cross-host and
+recovery/performance gates, and Bloom/emission gallery examples remain required
+before promotion. Python wrapper dispatch and WASM compilation alone do not
+qualify a Python rendering path.
