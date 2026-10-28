@@ -1,7 +1,28 @@
 //! Existing immutable resource closures, filtered to not-yet-delivered handles.
 use super::{CompiledReplayRevision, CompiledScene};
 use crate::{CompiledResourceError, CompiledResources};
-use noon_core::{FontResourceKey, GeometryRef, ObjectContentRef};
+use noon_core::{
+    FontResourceKey, GeometryRef, ObjectContentRef, RasterImageResourceHandle, SemanticPaint,
+    TrackValues,
+};
+
+fn capture_image_dependency(
+    source: &CompiledResources,
+    known: &CompiledResources,
+    delta: &mut CompiledResources,
+    handle: RasterImageResourceHandle,
+) -> Result<(), CompiledResourceError> {
+    if known.images.contains_key(&handle) || delta.images.contains_key(&handle) {
+        return Ok(());
+    }
+    let resource = source
+        .images
+        .get(&handle)
+        .ok_or(CompiledResourceError::MissingImage(handle))?
+        .clone();
+    delta.images.insert(handle, resource);
+    Ok(())
+}
 
 impl CompiledScene {
     /// Capture dependency closures for the new forward suffix only. Payloads
@@ -17,6 +38,21 @@ impl CompiledScene {
                 let Some(object) = &row.object else {
                     continue;
                 };
+                // Image fills on vector geometry own the same pixel dependency
+                // as image content. Capture the saved historical value, not only
+                // the producer's current object paint.
+                if let Some(image) = object
+                    .fill_paint
+                    .as_deref()
+                    .and_then(SemanticPaint::as_image)
+                {
+                    capture_image_dependency(
+                        &self.resources,
+                        known,
+                        &mut delta,
+                        image.resource(),
+                    )?;
+                }
                 match &object.content {
                     ObjectContentRef::Text(handle) => {
                         if known.texts.contains_key(handle) || delta.texts.contains_key(handle) {
@@ -55,18 +91,12 @@ impl CompiledScene {
                         )?;
                     }
                     ObjectContentRef::Image(image) => {
-                        let handle = image.resource();
-                        if known.images.contains_key(&handle) || delta.images.contains_key(&handle)
-                        {
-                            continue;
-                        }
-                        let resource = self
-                            .resources
-                            .images
-                            .get(&handle)
-                            .ok_or(CompiledResourceError::MissingImage(handle))?
-                            .clone();
-                        delta.images.insert(handle, resource);
+                        capture_image_dependency(
+                            &self.resources,
+                            known,
+                            &mut delta,
+                            image.resource(),
+                        )?;
                     }
                     ObjectContentRef::Geometry(GeometryRef::External(id)) => {
                         let handle = *self
@@ -107,6 +137,25 @@ impl CompiledScene {
                     // another raw resource. Member rows carry resource
                     // dependencies through the existing closure.
                     ObjectContentRef::Geometry(_) | ObjectContentRef::Composed(_) => {}
+                }
+            }
+            // The saved forward track can outlive removal from the producer.
+            // Its endpoint resources remain necessary for historical seeks.
+            for (_, saved) in &revision.tracks {
+                let Some(track) = saved else {
+                    continue;
+                };
+                if let TrackValues::Paint { transition } = &track.values {
+                    for (paint, _) in transition.endpoints() {
+                        if let Some(image) = paint.and_then(SemanticPaint::as_image) {
+                            capture_image_dependency(
+                                &self.resources,
+                                known,
+                                &mut delta,
+                                image.resource(),
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -170,6 +219,8 @@ impl CompiledResources {
 
 #[cfg(test)]
 mod resource_bytes_tests;
+#[cfg(test)]
+mod image_paint_tests;
 
 #[cfg(test)]
 mod tests {

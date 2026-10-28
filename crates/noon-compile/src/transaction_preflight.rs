@@ -899,6 +899,11 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                crate::validate_execution_paint_track_resources(
+                    &scene.resources,
+                    Some(additions),
+                    &track.values,
+                )?;
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
