@@ -76,7 +76,81 @@ jobs:
           set -euo pipefail
           bash scripts/check.sh full "bc25e92bb741607f678f6adea528c9e894c6335c" 2>&1 | tee evidence/full-gate.log
           printf 'passed\n' > evidence/full-gate.result
-      - name: Upload browser runtime assets
+      - name: Keep pinned full-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-bc25-full-gate
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 3
+
+  browser-build:
+    name: Clean-source runtime with exact SHA provenance
+    needs: full-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout untouched pinned candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ebab8129a4b0dcc35035e83babc7e53e675f87e1
+      - name: Verify exact clean source before producing runtime
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ebab8129a4b0dcc35035e83babc7e53e675f87e1
+          test "$(git rev-parse HEAD^{tree})" = d6e69dc8397d55b1b09d45ff163f51b8f6c71b7a
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+      - name: Install repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build exactly pinned production browser matrix profile
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Assert exact runtime source revision and byte provenance
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ebab8129a4b0dcc35035e83babc7e53e675f87e1
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+          import { createRuntimeBuildIdentity } from "./scripts/build-runtime-identity.mjs";
+          const declared = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
+          const observed = await createRuntimeBuildIdentity();
+          assert.equal(declared.sourceRevision, "ebab8129a4b0dcc35035e83babc7e53e675f87e1");
+          assert.deepEqual(declared, observed);
+          console.log("Source-attested browser runtime:", declared.buildId);
+          NODE
+      - name: Upload source-attested browser runtime assets
         uses: actions/upload-artifact@v7
         with:
           name: audio-2296-bc25-browser-runtime
@@ -87,18 +161,10 @@ jobs:
             web/python/compat-bundle.*.json
           if-no-files-found: error
           retention-days: 2
-      - name: Keep pinned full-gate evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: audio-2296-bc25-full-gate
-          path: evidence/
-          if-no-files-found: warn
-          retention-days: 3
 
   browser-audio:
     name: ${{ matrix.browser }} / ${{ matrix.profile }} / original audio fixture
-    needs: full-gate
+    needs: browser-build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
