@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "4702222686d9ee05b41dd7805ddde21bc8dd3d82",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "4702222686d9ee05b41dd7805ddde21bc8dd3d82",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "894ac384d15cebba153f32300848e1ad73e808d3dd9d9b24746fc10d4711becd"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "907160e83e9cd5a109a5ad9755730c113a3334d76b05d446d25e0bbbbff63f23"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "f6d078a8c79b18fbb7adbac7ed9c9ea4c4309c452ad8880082c7865d1560770d"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "05fef6b0611e8dd46487a9231aab7106a8d2dcff4be69b4f0530f7db18b24f17"
+  },
+  "posters": [
+    {
+      "id": "showcase-painted-surfaces",
+      "captureBuildId": "05fef6b0611e8dd46487a9231aab7106a8d2dcff4be69b4f0530f7db18b24f17",
+      "sourceSha256": "ba191918aefbdc28ea4e9991b938d5ed46548bf45cdcfc79c7488865f0e26f80",
+      "thumbnailTime": 3.6,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 171416,
+        "pngSha256": "97aebcd0fc05acac4c886ba33dc728d07372d9e4111bccdf32b84e8f67a2976f",
+        "pixelSha256": "76fd7d7bc24ba6a04cc2a0864ee44d504ace371418e349f5ac45c8ef87c674dd"
+      },
+      "sample": {
+        "requestedTime": 3.6,
+        "publishedTime": 3.6,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
