@@ -1,0 +1,188 @@
+name: Audio 2300 isolated Chromium clock observation
+
+# Diagnostic helper only. Never merge this workflow into a product branch.
+on:
+  push:
+    branches: [codex/audio-2300-clock-observation]
+    paths: [.github/workflows/audio-2300-clock-observation.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-2300-clock-observation
+  cancel-in-progress: false
+
+jobs:
+  chromium-observation:
+    name: Exact-source clock diagnostics and unchanged Chromium audio fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - name: Checkout exact unpromoted candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ebab8129a4b0dcc35035e83babc7e53e675f87e1
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Construct and attest detached two-file diagnostic source
+        id: source
+        run: |
+          set -euo pipefail
+          export NOON_ANCHOR_EVIDENCE="$RUNNER_TEMP/noon-audio-clock-observation"
+          mkdir -p "$NOON_ANCHOR_EVIDENCE"
+          printf 'NOON_ANCHOR_EVIDENCE=%s\n' "$NOON_ANCHOR_EVIDENCE" >> "$GITHUB_ENV"
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import hashlib, json, os, subprocess
+          source = "ebab8129a4b0dcc35035e83babc7e53e675f87e1"
+          source_tree = "d6e69dc8397d55b1b09d45ff163f51b8f6c71b7a"
+          smoke_hash = "7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a"
+          evidence = Path(os.environ["NOON_ANCHOR_EVIDENCE"])
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          def blob(data):
+              return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+          assert git("rev-parse", "HEAD") == source
+          assert git("rev-parse", "HEAD^{tree}") == source_tree
+          assert git("status", "--porcelain", "--untracked-files=all") == ""
+          fixture = Path("scripts/python-background-audio-smoke.mjs")
+          assert hashlib.sha256(fixture.read_bytes()).hexdigest() == smoke_hash
+          changes = [('web/worker-audio-device.js', '4da187becc6fdf1a08319c576916b16fd905ea3d', '    this.#output.start(session, anchor.time, anchor.sampledEpochMs,\n      performance.timeOrigin + performance.now());', '    // Diagnostic-only: retain the SAME reads used by the original call.\n    // Do not clamp, retry, resample, delay, or reinterpret an anchor.\n    const time = anchor.time;\n    const sampledEpochMs = anchor.sampledEpochMs;\n    const receiptOriginMs = performance.timeOrigin;\n    const receiptNowMs = performance.now();\n    const receivedEpochMs = receiptOriginMs + receiptNowMs;\n    try {\n      this.#output.start(session, time, sampledEpochMs, receivedEpochMs);\n    } catch (error) {\n      // Logging must not replace a native failure, including a thrown string.\n      try {\n        const bits = value => {\n          const bytes = new DataView(new ArrayBuffer(8));\n          bytes.setFloat64(0, value, false);\n          return bytes.getBigUint64(0, false).toString(16).padStart(16, "0");\n        };\n        console.error("noon-worker-audio-anchor-rejection", JSON.stringify({\n          schema: 1, session, anchorSession: anchor.session, time,\n          sampledEpochMs, receivedEpochMs,\n          sampledBits: bits(sampledEpochMs), receivedBits: bits(receivedEpochMs),\n          receivedClock: { timeOriginMs: receiptOriginMs, nowMs: receiptNowMs },\n          sampledClock: anchor.__noonAudioClockObservation ?? null,\n          error: String(error?.message ?? error),\n        }));\n      } catch { /* Preserve the original native result even if logging fails. */ }\n      throw error;\n    }'), ('web/semantic-engine-endpoint.js', '8bffa014ac363018936a0ada8c3e0b28f35915d1', '          audioAnchor = JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt));', '          // Diagnostic-only: preserve the existing clock sample and origin read.\n          const sampledOriginMs = performance.timeOrigin;\n          const sampledEpochMs = sampledOriginMs + sampledAt;\n          const audioAnchorJson = player.audioAnchorJson(sampledEpochMs);\n          audioAnchor = JSON.parse(audioAnchorJson);\n          audioAnchor.__noonAudioClockObservation = {\n            timeOriginMs: sampledOriginMs, nowMs: sampledAt,\n            epochBeforeRustMs: sampledEpochMs,\n            epochAfterRustMs: audioAnchor.sampledEpochMs,\n            anchorJson: audioAnchorJson,\n          };')]
+          for name, expected_blob, old, new in changes:
+              path = Path(name)
+              data = path.read_bytes()
+              assert blob(data) == expected_blob, name
+              text = data.decode("utf-8")
+              assert text.count(old) == 1, name
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          names = sorted(name for name, _, _, _ in changes)
+          assert git("diff", "--name-only").splitlines() == names
+          subprocess.run(["git", "diff", "--check"], check=True)
+          subprocess.run(["git", "add", "--", *names], check=True)
+          tree = git("write-tree")
+          env = dict(os.environ, GIT_AUTHOR_NAME="Noon isolated diagnostic", GIT_AUTHOR_EMAIL="diagnostic@noon.invalid", GIT_COMMITTER_NAME="Noon isolated diagnostic", GIT_COMMITTER_EMAIL="diagnostic@noon.invalid", GIT_AUTHOR_DATE="2026-10-28T00:00:00Z", GIT_COMMITTER_DATE="2026-10-28T00:00:00Z")
+          commit = subprocess.check_output(["git", "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", source], input="Diagnostic only: observe original worker audio anchor operands\n", text=True, env=env).strip()
+          subprocess.run(["git", "checkout", "--detach", commit], check=True)
+          assert git("status", "--porcelain", "--untracked-files=all") == ""
+          assert git("rev-parse", "HEAD^") == source
+          assert hashlib.sha256(fixture.read_bytes()).hexdigest() == smoke_hash
+          assert git("diff", source, "HEAD", "--name-only").splitlines() == names
+          with (evidence / "diagnostic.patch").open("wb") as out:
+              subprocess.run(["git", "diff", "--binary", source, "HEAD"], stdout=out, check=True)
+          subprocess.run(["git", "bundle", "create", str(evidence / "diagnostic.bundle"), "HEAD", "^" + source], check=True)
+          subprocess.run(["git", "bundle", "verify", str(evidence / "diagnostic.bundle")], check=True)
+          for name in names:
+              dest = evidence / "source" / name
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(Path(name).read_bytes())
+          receipt = dict(diagnosticOnly=True, helperCommit=os.environ["GITHUB_SHA"], runId=os.environ["GITHUB_RUN_ID"], runAttempt=os.environ["GITHUB_RUN_ATTEMPT"], sourceParent=source, sourceParentTree=source_tree, diagnosticCommit=commit, diagnosticTree=tree, fixtureSha256=smoke_hash, changedFiles=names, changedFileBlobs={name: blob(Path(name).read_bytes()) for name in names}, patchSha256=hashlib.sha256((evidence / "diagnostic.patch").read_bytes()).hexdigest())
+          (evidence / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"commit={commit}\ntree={tree}\n")
+          print(json.dumps(receipt, indent=2))
+          PYTHON
+      - name: Check syntax and existing endpoint and client regressions
+        run: |
+          set -euo pipefail
+          node --check web/worker-audio-device.js
+          node --check web/semantic-engine-endpoint.js
+          node --test web/semantic-engine-endpoint.test.mjs web/execution-worker-client.test.mjs 2>&1 | tee "$NOON_ANCHOR_EVIDENCE/endpoint-client-tests.tap"
+      - name: Install repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install native audio build prerequisites
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Preserve existing Rust anchor rejection regressions
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --lib worker_audio::tests 2>&1 | tee "$NOON_ANCHOR_EVIDENCE/rust-anchor-tests.log"
+      - name: Build diagnostic runtime with complete web preflight
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/build-web-demo.sh 2>&1 | tee "$NOON_ANCHOR_EVIDENCE/web-build.log"
+      - name: Verify source-attested diagnostic runtime before npm installation
+        env:
+          EXPECTED_COMMIT: ${{ steps.source.outputs.commit }}
+          EXPECTED_TREE: ${{ steps.source.outputs.tree }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile, writeFile } from "node:fs/promises";
+          import { createRuntimeBuildIdentity } from "./scripts/build-runtime-identity.mjs";
+          const declared = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
+          const observed = await createRuntimeBuildIdentity();
+          assert.equal(declared.sourceRevision, process.env.EXPECTED_COMMIT);
+          assert.deepEqual(declared, observed);
+          await writeFile(`${process.env.NOON_ANCHOR_EVIDENCE}/runtime-build-identity.json`, JSON.stringify(declared, null, 2) + "\n");
+          console.log("Source-attested diagnostic runtime:", declared.buildId);
+          NODE
+      - name: Cache original pinned Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install original pinned browser npm dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install Chromium and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh chromium
+      - name: Install native Linux audio output dependencies
+        timeout-minutes: 5
+        run: bash scripts/ci-install-reference-deps.sh pulseaudio pulseaudio-utils libasound2-plugins
+      - name: Run original Chromium audio fixture once without retry or tolerance changes
+        timeout-minutes: 5
+        env:
+          NOON_PYTHON_AUDIO_BROWSER: chromium
+          NOON_PYTHON_AUDIO_BACKEND: webgpu
+          NOON_PLAYGROUND_RENDER_HOST: auto
+          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/audio-2300-clock-observation/chromium
+        run: |
+          set -euo pipefail
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+          bash scripts/ci-python-audio-smoke.sh xvfb-run -a
+      - name: Retain source, build, tests, and original browser failure evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2300-clock-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/noon-audio-clock-observation/
+            browser-smoke-artifacts/audio-2300-clock-observation/
+          if-no-files-found: error
+          retention-days: 7
