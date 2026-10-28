@@ -261,6 +261,7 @@ impl PreparedSource {
                             let PreparedTextItem::GlyphBatch {
                                 plane,
                                 instance_range,
+                                object_opacity,
                                 ..
                             } = item
                             else {
@@ -278,7 +279,7 @@ impl PreparedSource {
                                 source.include(quad_bounds(quad)?);
                                 quad.color[3] /= opacity;
                                 if silhouette {
-                                    quad.color = [1.0; 4];
+                                    quad.color = [1.0, 1.0, 1.0, *object_opacity / opacity];
                                 }
                                 source.bytes.extend_from_slice(bytemuck::bytes_of(&quad));
                             }

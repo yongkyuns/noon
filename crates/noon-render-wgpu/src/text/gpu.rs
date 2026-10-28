@@ -997,6 +997,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: image.page,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
         let mut renderer = TextGlyphGpuRenderer::new(
@@ -1080,6 +1081,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: page_one.page,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
         let mut renderer = TextGlyphGpuRenderer::new(
@@ -1153,6 +1155,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: image.page,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
         let mut renderer = TextGlyphGpuRenderer::new(

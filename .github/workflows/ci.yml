@@ -247,6 +247,10 @@ jobs:
         run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
+      - name: Qualify grouped glyph original coverage and paint alpha
+        env:
+          NOON_GLYPH_COVERAGE_ARTIFACT_DIR: glyph-coverage-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture
       - name: Qualify public composed group pixels and lifecycle
         run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
@@ -290,6 +294,14 @@ jobs:
         run: |
           cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture
           cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture
+      - name: Preserve native glyph coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: glyph-coverage-raster-correctness
+          path: glyph-coverage-raster-artifacts
+          if-no-files-found: warn
+          retention-days: 3
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
