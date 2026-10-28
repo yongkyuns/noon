@@ -1,0 +1,187 @@
+name: One-off 2308 composed-effects local reconciliation and Rust qualification
+on:
+  push:
+    branches:
+      - agent/2308-7542-readonly-inventory-20261028
+    paths:
+      - .github/workflows/one-off-2308-7542-reconcile.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: noop-2308-7542-local-reconcile
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    name: Source-bound local only reconciliation, compiler and web gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SOURCE_RUN: "40617408583"
+      SOURCE_SHA256: "42d70d6fcba3566c29e51a5f9b3a6495955ab9d05eace8ab1a74f44ccc3043e3"
+      SOURCE_TREE: "87cb42b53885c192e539fdddf3ddcf970e67bee4"
+      EXPECTED_OLD_MASTER: "5b38eab85a86f4cc9019e8179e263c7b29771827"
+      NEW_MASTER: "7542dfafb8ce50cbdf7718766a67d98f547ca84e"
+      FEATURE: "b3a4b7f484e607a4b14bc57e70f4947f8520ca42"
+      MEMORY: "472a61fadfdabba44756b75caaa184cee8c4be57"
+    steps:
+      - name: Checkout diagnostic source, without credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Authenticate green source and construct an entirely local merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HELPER_ROOT="$GITHUB_WORKSPACE"
+          export WORK="$RUNNER_TEMP/noon2308-7542/source"
+          export EVIDENCE="$RUNNER_TEMP/noon2308-7542/evidence"
+          export INCOMING="$RUNNER_TEMP/noon2308-7542/incoming"
+          mkdir -p "$WORK" "$EVIDENCE" "$INCOMING"
+          printf 'WORK=%s\nEVIDENCE=%s\n' "$WORK" "$EVIDENCE" >> "$GITHUB_ENV"
+          gh run download "$SOURCE_RUN" -R "$GITHUB_REPOSITORY" \
+            -n noon2308-latest-master-integration-qualification -D "$INCOMING"
+          python3 - <<'PY'
+          import hashlib, io, json, os, subprocess, tarfile
+          from pathlib import Path
+          root=Path(os.environ['WORK']); out=Path(os.environ['EVIDENCE'])
+          archive_root=Path(os.environ['INCOMING'])/'noon2308-latest-evidence'
+          m=json.loads((archive_root/'manifest.json').read_text())
+          b=(archive_root/'combined-source.tar.gz').read_bytes()
+          sha=hashlib.sha256(b).hexdigest()
+          assert sha==os.environ['SOURCE_SHA256']==m['source_archive_sha256']
+          assert m['tested_tree']==os.environ['SOURCE_TREE']
+          assert m['tracked_source_unchanged'] is True
+          assert set(m['command_exit_codes'])=={'callback','fast','build','browser'}
+          assert all(v==0 for v in m['command_exit_codes'].values())
+          for name in m['command_exit_codes']:
+              assert int((archive_root/(name+'.exit')).read_text().strip())==0
+          cases=json.loads((archive_root/'browser-results.json').read_text())
+          assert len(cases)==9 and len({x['case'] for x in cases})==9
+          assert all(x['exit']==0 for x in cases)
+          with tarfile.open(fileobj=io.BytesIO(b),mode='r:gz') as t:
+              t.extractall(root,filter='data')
+          def git(*a,check=True):
+              return subprocess.run(['git',*a],cwd=root,check=check,text=True,capture_output=True)
+          git('init','-q','--initial-branch=qualified')
+          git('config','user.name','Noon read-only reconciliation')
+          git('config','user.email','readonly@example.invalid')
+          git('add','--all')
+          source_tree=git('write-tree').stdout.strip()
+          assert source_tree==os.environ['SOURCE_TREE'], ('archive tree differs',source_tree)
+          pins={k:os.environ[k] for k in ('EXPECTED_OLD_MASTER','NEW_MASTER','FEATURE','MEMORY')}
+          f=git('fetch','--no-tags','--depth=256','https://github.com/'+os.environ['GITHUB_REPOSITORY']+'.git',*pins.values())
+          (out/'fetch.log').write_text(f.stdout+f.stderr)
+          for label,commit in pins.items():
+              assert git('rev-parse',commit+'^{commit}').stdout.strip()==commit, label
+          old=pins['EXPECTED_OLD_MASTER']; new=pins['NEW_MASTER']
+          prepared=git('commit-tree',source_tree,'-p',pins['FEATURE'],'-p',old,'-p',pins['MEMORY']).stdout.strip()
+          git('update-ref','refs/heads/qualified',prepared)
+          git('reset','--hard',prepared)
+          assert git('merge-base','HEAD',new).stdout.strip()==old
+          result=git('merge','--no-commit','--no-ff',new,check=False)
+          (out/'merge.log').write_text(result.stdout+result.stderr)
+          unresolved=git('diff','--name-only','--diff-filter=U').stdout.splitlines()
+          expected={'crates/noon-compile/src/lib.rs',
+                    'crates/noon-compile/src/semantic_lowering/compiled_scene.rs',
+                    'crates/noon-render-wgpu/src/gpu/retained_text.rs'}
+          assert result.returncode==1 and set(unresolved)==expected, (result.returncode,unresolved)
+          (out/'unmerged-index.txt').write_text(git('ls-files','-u').stdout)
+          (out/'initial-conflicts.diff').write_text(git('diff','--cc').stdout)
+          resolution_env={**os.environ,'REPORT_PATH':str(out/'resolution.json')}
+          p=subprocess.run(['python3',str(Path(os.environ['HELPER_ROOT'])/'scripts/one-off-2308-7542-resolve.py')],
+                           cwd=root,env=resolution_env,text=True,capture_output=True)
+          (out/'resolution-output.log').write_text(p.stdout+p.stderr)
+          assert p.returncode==0, (p.returncode,p.stderr)
+          assert not git('ls-files','-u').stdout.strip()
+          resolved_tree=git('write-tree').stdout.strip()
+          (out/'tree-before-format.txt').write_text(resolved_tree+'\n')
+          (out/'reconciliation.patch').write_text(
+              git('diff','--cached','--binary',prepared).stdout)
+          report={'source_run':int(os.environ['SOURCE_RUN']),'source_archive_sha256':sha,
+                  'qualified_source_tree':source_tree,'base_old_master':old,
+                  'new_master':new,'feature':pins['FEATURE'],'memory':pins['MEMORY'],
+                  'local_prepared_commit':prepared,'merge_base':old,
+                  'real_merge_conflicts':unresolved,'resolved_tree_before_format':resolved_tree,
+                  'scope':'read-only proof; no remote ref or PR modification'}
+          (out/'source-proof.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2),flush=True)
+          PY
+      - name: Use repository-pinned Rust, install required build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose | tee "$EVIDENCE/rust-version.txt"
+          bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config | tee "$EVIDENCE/dependencies.log"
+      - name: Format only the local candidate, seal its source tree, capture source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          cargo fmt --all
+          git add --all
+          git diff --cached --check
+          git diff --cached --binary HEAD > "$EVIDENCE/integrated-source.patch"
+          git diff --binary > "$EVIDENCE/unstaged.patch"
+          test ! -s "$EVIDENCE/unstaged.patch"
+          git diff --cached --name-only | tee "$EVIDENCE/changed-paths.txt"
+          tree="$(git write-tree)"
+          before="$(cat "$EVIDENCE/tree-before-format.txt")"
+          printf 'BEFORE=%s\nAFTER=%s\n' "$before" "$tree" > "$EVIDENCE/format-trees.txt"
+          local_prepared="$(python3 -c 'import json,os;print(json.load(open(os.environ["EVIDENCE"]+"/source-proof.json"))["local_prepared_commit"])')"
+          commit="$(printf 'Integrate prepared playback locally with composed-effects master\n' | git commit-tree "$tree" -p "$local_prepared" -p "$NEW_MASTER")"
+          test "$(git show -s --format=%P "$commit" | awk '{print NF}')" = 2
+          test "$(git rev-parse "$commit^{tree}")" = "$tree"
+          test -z "$(git ls-tree -r --name-only "$commit" | grep -E '^\.github/workflows/one-off-2308-' || true)"
+          printf '%s\n' "$commit" > "$EVIDENCE/local-only-commit.txt"
+          printf '%s\n' "$tree" > "$EVIDENCE/candidate-tree.txt"
+          git archive --format=tar "$commit" | gzip -n > "$EVIDENCE/combined-source-latest.tar.gz"
+          sha256sum "$EVIDENCE/combined-source-latest.tar.gz" > "$EVIDENCE/archive.sha256"
+          cargo fmt --all -- --check | tee "$EVIDENCE/rustfmt.log"
+      - name: Rust workspace unit and family tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          cargo test --locked --workspace --all-features --lib --test family 2>&1 | tee "$EVIDENCE/workspace-fast-tests.log"
+      - name: WASM prepared-prefix compile, cross-context API gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/prepared-wasm-check.log"
+      - name: Browser static and JS unit preflight
+        env:
+          NOON_WEB_PREFLIGHT_ONLY: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/web-preflight.log"
+      - name: Verify that qualification did not mutate authenticated tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${WORK:-}" || exit 0
+          test -d "$WORK/.git" || exit 0
+          cd "$WORK"
+          git status --porcelain --untracked-files=no > "$EVIDENCE/source-status.txt"
+          diff -u /dev/null "$EVIDENCE/source-status.txt"
+          test "$(git write-tree)" = "$(cat "$EVIDENCE/candidate-tree.txt")"
+      - name: Keep source-bound local evidence even when qualification fails
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-master-7542-local-reconcile-qualification
+          path: ${{ runner.temp }}/noon2308-7542/evidence/
+          if-no-files-found: warn
+          retention-days: 5
