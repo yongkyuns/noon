@@ -1,0 +1,117 @@
+name: One-off 2308 composed-effects merge inventory
+on:
+  push:
+    branches:
+      - agent/2308-7542-readonly-inventory-20261028
+    paths:
+      - .github/workflows/one-off-2308-7542-inventory.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inventory:
+    name: Read-only actual Git merge conflict inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN: "40617408583"
+      SOURCE_SHA256: "42d70d6fcba3566c29e51a5f9b3a6495955ab9d05eace8ab1a74f44ccc3043e3"
+      SOURCE_TREE: "87cb42b53885c192e539fdddf3ddcf970e67bee4"
+      OLD_MASTER: "5b38eab85a86f4cc9019e8179e263c7b29771827"
+      NEW_MASTER: "7542dfafb8ce50cbdf7718766a67d98f547ca84e"
+      FEATURE: "b3a4b7f484e607a4b14bc57e70f4947f8520ca42"
+      MEMORY: "472a61fadfdabba44756b75caaa184cee8c4be57"
+    steps:
+      - name: Checkout diagnostic helper only
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Reproduce authenticated source and execute actual Git merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export INVENTORY_ROOT="$RUNNER_TEMP/noon2308-7542"
+          export WORK="$INVENTORY_ROOT/work"
+          export OUT="$INVENTORY_ROOT/output"
+          mkdir -p "$WORK" "$OUT" "$INVENTORY_ROOT/incoming"
+          printf 'OUT=%s\n' "$OUT" >> "$GITHUB_ENV"
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" \
+            -n noon2308-latest-master-integration-qualification \
+            -D "$INVENTORY_ROOT/incoming"
+          python3 - <<'PY'
+          import hashlib, io, json, os, subprocess, tarfile
+          from collections import Counter
+          from pathlib import Path
+          root=Path(os.environ['WORK']); out=Path(os.environ['OUT'])
+          incoming=Path(os.environ['INVENTORY_ROOT'])/'incoming'/'noon2308-latest-evidence'
+          manifest=json.loads((incoming/'manifest.json').read_text())
+          source=(incoming/'combined-source.tar.gz').read_bytes()
+          source_sha=hashlib.sha256(source).hexdigest()
+          assert source_sha==os.environ['SOURCE_SHA256']==manifest['source_archive_sha256'], source_sha
+          assert manifest['tested_tree']==os.environ['SOURCE_TREE']
+          assert manifest['tracked_source_unchanged'] is True
+          assert set(manifest['command_exit_codes'])=={'callback','fast','build','browser'}
+          assert all(v==0 for v in manifest['command_exit_codes'].values())
+          cases=json.loads((incoming/'browser-results.json').read_text())
+          assert len(cases)==9 and len(set(x['case'] for x in cases))==9
+          assert all(x['exit']==0 for x in cases)
+          with tarfile.open(fileobj=io.BytesIO(source),mode='r:gz') as tar:
+              tar.extractall(root,filter='data')
+          def git(*args,check=True):
+              return subprocess.run(['git',*args],cwd=root,capture_output=True,text=True,check=check)
+          git('init','-q','--initial-branch=inventory')
+          git('config','user.name','Noon read-only integration inventory')
+          git('config','user.email','inventory@example.invalid')
+          git('add','--all')
+          source_tree=git('write-tree').stdout.strip()
+          assert source_tree==os.environ['SOURCE_TREE'], ('Source archive tree differs',source_tree)
+          pins={k:os.environ[k] for k in ('OLD_MASTER','NEW_MASTER','FEATURE','MEMORY')}
+          fetch=git('fetch','--no-tags','--depth=256',
+                    'https://github.com/'+os.environ['GITHUB_REPOSITORY']+'.git',
+                    *pins.values())
+          (out/'fetch.txt').write_text(fetch.stdout+fetch.stderr)
+          for name,sha in pins.items():
+              assert git('rev-parse',sha+'^{commit}').stdout.strip()==sha,name
+          main_delta=git('diff','--name-only',pins['OLD_MASTER'],pins['NEW_MASTER']).stdout.splitlines()
+          (out/'master-changed-paths.txt').write_text('\n'.join(main_delta)+'\n')
+          local=git('commit-tree',source_tree,'-p',pins['FEATURE'],
+                    '-p',pins['OLD_MASTER'],'-p',pins['MEMORY']).stdout.strip()
+          git('update-ref','refs/heads/inventory',local)
+          git('reset','--hard',local)
+          base=git('merge-base','HEAD',pins['NEW_MASTER']).stdout.strip()
+          assert base==pins['OLD_MASTER'],('unexpected merge-base',base)
+          merge=git('merge','--no-commit','--no-ff',pins['NEW_MASTER'],check=False)
+          (out/'merge.txt').write_text(merge.stdout+merge.stderr)
+          assert merge.returncode in (0,1),('unexpected git merge outcome',merge.returncode)
+          unmerged=git('diff','--name-only','--diff-filter=U').stdout.splitlines()
+          index=git('ls-files','-u').stdout
+          (out/'conflicts.txt').write_text('\n'.join(unmerged)+'\n')
+          (out/'unmerged-index.txt').write_text(index)
+          (out/'combined-conflicts.diff').write_text(git('diff','--cc').stdout)
+          assert (merge.returncode==0)==(len(unmerged)==0),'merge/unmerged-index contradiction'
+          assert all(path in main_delta for path in unmerged),'unmerged path not in latest-master delta'
+          counts=Counter(path.split('/')[1] if '/' in path else path for path in unmerged)
+          report={'scope':'Read-only local merge inventory only; no remote branch, PR, master or workflow changes',
+                  'source_run':int(os.environ['SOURCE_RUN']),'source_archive_sha256':source_sha,
+                  'source_tree':source_tree,'pins':pins,'local_candidate_commit':local,
+                  'verified_merge_base':base,'master_delta_path_count':len(main_delta),
+                  'git_merge_returncode':merge.returncode,'unmerged_file_count':len(unmerged),
+                  'unmerged_files':unmerged,'top_level_areas':dict(sorted(counts.items())),
+                  'conflict_stage_lines':len(index.splitlines()),
+                  'merge_was_clean':merge.returncode==0}
+          if not unmerged:
+              report['merged_tree']=git('write-tree').stdout.strip()
+          (out/'inventory.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2),flush=True)
+          PY
+      - name: Save source-bound read-only conflict evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-master-7542-readonly-inventory
+          path: ${{ runner.temp }}/noon2308-7542/output
+          if-no-files-found: warn
+          retention-days: 3
