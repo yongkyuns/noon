@@ -131,6 +131,11 @@ impl ExecutionSpatialIndex {
         self.entries.contains_key(&slot)
     }
 
+    /// Resolve a query result to its existing execution object identity.
+    pub fn object_for_slot(&self, slot: ExecutionSlotId) -> Option<ObjectId> {
+        self.entries.get(&slot).map(|entry| entry.object)
+    }
+
     pub fn bounds_for_slot(&self, slot: ExecutionSlotId) -> Option<Rect> {
         self.entries.get(&slot).map(|entry| entry.bounds)
     }
@@ -138,7 +143,7 @@ impl ExecutionSpatialIndex {
     pub fn rebuild(
         &mut self,
         frame: &FrameState,
-        resources: &impl GeometryResourceLookup,
+        resources: &(impl GeometryResourceLookup + ?Sized),
         live_slots: impl IntoIterator<Item = (ExecutionSlotId, usize)>,
     ) -> SpatialIndexUpdateStats {
         self.cells.clear();
@@ -164,7 +169,7 @@ impl ExecutionSpatialIndex {
     pub fn upsert_frame_slot(
         &mut self,
         frame: &FrameState,
-        resources: &impl GeometryResourceLookup,
+        resources: &(impl GeometryResourceLookup + ?Sized),
         slot: ExecutionSlotId,
         frame_index: usize,
         painter_order: u64,
@@ -387,10 +392,12 @@ pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize)
     )
 }
 
-fn frame_object_conservative_bounds_with_resources(
+/// Conservative effective geometry/text/image bounds using the owning resource
+/// lookup. These are broad-phase object bounds, before visual filter expansion.
+pub fn frame_object_conservative_bounds_with_resources(
     frame: &FrameState,
     object_index: usize,
-    resources: &impl GeometryResourceLookup,
+    resources: &(impl GeometryResourceLookup + ?Sized),
 ) -> Option<Rect> {
     let object = frame.objects.get(object_index)?;
     let geometry = frame.render_geometry(object_index);
@@ -410,7 +417,7 @@ pub(crate) fn effective_object_conservative_bounds_with_resources(
     text_bounds: Option<Rect>,
     render_transform: noon_core::Transform2D,
     style: noon_core::Style,
-    resources: &impl GeometryResourceLookup,
+    resources: &(impl GeometryResourceLookup + ?Sized),
 ) -> Option<Rect> {
     let external_bounds = match geometry {
         Some(GeometryRef::External(id)) => {

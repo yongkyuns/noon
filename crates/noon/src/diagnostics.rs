@@ -60,7 +60,7 @@ fn diagnostic_geometry_at_progress(
                 path, target, morph, reveal,
             )
             .ok()
-            .map(GeometryRef::VectorPath);
+            .map(GeometryRef::path);
         }
         if morph != 0.0 {
             return None;
@@ -73,9 +73,11 @@ fn diagnostic_geometry_at_progress(
         return Some(geometry.clone());
     }
     let path = noon_geometry::canonical_outline_path(geometry)?;
-    Some(GeometryRef::VectorPath(
-        noon_geometry::authored_partial_path(&path, 0.0, reveal.clamp(0.0, 1.0)),
-    ))
+    Some(GeometryRef::path(noon_geometry::authored_partial_path(
+        &path,
+        0.0,
+        reveal.clamp(0.0, 1.0),
+    )))
 }
 
 /// Capture derived current-frame observations for debugging and test artifacts.
@@ -99,7 +101,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     .and_then(|handle| session.geometry_resources().get(handle))
                     .map(|resource| match resource {
                         GeometryResource::VectorPath(path) => {
-                            GeometryRef::VectorPath((**path).clone())
+                            GeometryRef::VectorPath(path.clone())
                         }
                         GeometryResource::Mesh(_) => GeometryRef::External(*id),
                     }),

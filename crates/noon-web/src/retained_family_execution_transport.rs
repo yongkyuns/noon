@@ -1033,7 +1033,7 @@ mod tests {
             TransientPresentationState {
                 fill_paint: None,
                 z_index: 0.0,
-                content: ObjectContentRef::Geometry(GeometryRef::VectorPath(path.clone())),
+                content: ObjectContentRef::Geometry(GeometryRef::path(path.clone())),
                 text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
@@ -1041,7 +1041,7 @@ mod tests {
                 presence: true,
                 reveal: 1.0,
                 morph: 0.25,
-                render_geometry: Some(Arc::new(GeometryRef::VectorPath(path))),
+                render_geometry: Some(Arc::new(GeometryRef::path(path))),
                 render_transform: None,
             },
         );

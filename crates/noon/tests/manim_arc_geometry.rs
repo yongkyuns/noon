@@ -13,7 +13,7 @@ fn retained_path(options: Options) -> VectorPath {
     scene.add(&object).unwrap();
     let session = scene.execution_session().unwrap();
     match session.frame().render_geometry(0).unwrap() {
-        GeometryRef::VectorPath(path) => path.clone(),
+        GeometryRef::VectorPath(path) => path.as_ref().clone(),
         GeometryRef::External(id) => {
             let resources = session.geometry_resources();
             let GeometryResource::VectorPath(path) = resources

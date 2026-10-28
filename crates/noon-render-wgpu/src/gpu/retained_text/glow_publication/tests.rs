@@ -907,7 +907,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
         GeometryRef::circle(0.4),
         GeometryRef::rectangle(0.8, 0.6),
         GeometryRef::line(Vec2::new(-0.7, -0.5), Vec2::new(0.7, 0.5)),
-        GeometryRef::VectorPath(
+        GeometryRef::path(
             noon_core::VectorPath::new()
                 .move_to(Vec2::new(-0.7, -0.5))
                 .cubic_to(

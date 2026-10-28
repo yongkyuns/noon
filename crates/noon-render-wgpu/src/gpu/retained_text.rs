@@ -2896,7 +2896,7 @@ impl RetainedFramePreparer {
         let style = resolved_text_vector_style(object_style, vector);
         let scratch_slot = self.push_geometry(
             object_id,
-            GeometryRef::VectorPath(path),
+            GeometryRef::path(path),
             object_transform,
             style,
             appearance,
@@ -2944,7 +2944,7 @@ impl RetainedFramePreparer {
                 .unwrap_or(Color::WHITE);
             self.push_geometry(
                 object_id,
-                GeometryRef::VectorPath(fill_path),
+                GeometryRef::path(fill_path),
                 object_transform,
                 Style {
                     fill: Some(fill),
@@ -2969,7 +2969,7 @@ impl RetainedFramePreparer {
                     .unwrap_or(Color::WHITE);
                 self.push_geometry(
                     object_id,
-                    GeometryRef::VectorPath(stroke_path),
+                    GeometryRef::path(stroke_path),
                     object_transform,
                     Style {
                         fill: Some(color),
@@ -3179,7 +3179,7 @@ fn resolve_geometry_ref(
     else {
         return Err(RetainedPrepareError::MissingGeometryResource);
     };
-    Ok(GeometryRef::VectorPath(path.as_ref().clone()))
+    Ok(GeometryRef::VectorPath(path.clone()))
 }
 
 /// Invert packed instance ranges once for a structural mixed-painter rebuild.

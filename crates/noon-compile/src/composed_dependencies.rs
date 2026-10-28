@@ -247,6 +247,11 @@ pub struct ComposedValidationStats {
 }
 
 impl CompiledScene {
+    #[doc(hidden)]
+    pub fn has_painter_prefix_sources(&self) -> bool {
+        !self.composed_dependencies.prefix_owners.is_empty()
+    }
+
     pub(crate) fn composed_plan(&self, owner: ObjectId) -> Option<std::sync::Arc<ComposedSource>> {
         let row = &self.objects[self.object_index(owner)? as usize];
         if let noon_core::ObjectContentRef::Composed(source) = &row.content {

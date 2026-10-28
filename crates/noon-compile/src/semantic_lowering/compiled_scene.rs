@@ -550,7 +550,7 @@ pub(crate) fn lower_semantic_geometry_value(
         StoredGeometry::Resource(resource) => {
             match store.and_then(|store| store.geometry_resources().get(resource)) {
                 Some(GeometryResource::VectorPath(path)) => {
-                    Ok(GeometryRef::path(path.as_ref().clone()))
+                    Ok(GeometryRef::VectorPath(path.clone()))
                 }
                 Some(GeometryResource::Mesh(_)) => Ok(GeometryRef::External(resource.id)),
                 None => Err(SemanticGeometryValueError::UnsupportedGeometryResource(
@@ -582,6 +582,17 @@ mod tests {
         store.attach_to_scene(node).unwrap();
         let mut index = SemanticExecutionIndex::new();
         let lowered = crate::lower_semantic_execution(&store, &mut index).unwrap();
+        let Some(GeometryRef::VectorPath(lowered_path)) =
+            lowered.compiled().objects()[0].geometry()
+        else {
+            panic!("qualified path lowers to an immutable shared path");
+        };
+        let Some(GeometryResource::VectorPath(stored_path)) =
+            store.geometry_resources().get(resource)
+        else {
+            panic!("owning store retains the path resource");
+        };
+        assert!(std::sync::Arc::ptr_eq(lowered_path, stored_path));
         assert_eq!(
             lowered.compiled().objects()[0].geometry(),
             Some(&GeometryRef::path(path))

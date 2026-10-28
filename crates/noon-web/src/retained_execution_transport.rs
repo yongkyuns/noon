@@ -1149,8 +1149,10 @@ pub struct RetainedExecutionFrameMirror {
     resource_session: Option<u32>,
     image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
-    geometry_handles:
-        HashMap<crate::TransportGeometryResourceHandle, noon_core::GeometryResourceHandle>,
+    // Immutable leases resolved from qualified resource keys at the genuine
+    // worker boundary. Planar vectors share their resource Arc just as native
+    // lowering does; a bare arena-local GeometryId cannot bind another layer.
+    geometry_bindings: HashMap<crate::TransportGeometryResourceHandle, GeometryRef>,
     composed_sources: HashMap<crate::TransportComposedSourceHandle, Arc<noon_core::ComposedSource>>,
     composed_dependencies: noon_compile::ComposedDependencies,
     composed_handles: HashMap<ObjectId, crate::TransportComposedSourceHandle>,
@@ -1171,6 +1173,10 @@ struct PreparedPainterOrder {
 }
 
 impl noon_runtime::ObjectIndexLookup for RetainedExecutionFrameMirror {
+    fn painter_rank(&self, index: usize) -> Option<usize> {
+        self.painter_rank_for_frame_index(index)
+    }
+
     fn object_index(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
@@ -1192,22 +1198,18 @@ impl RetainedExecutionFrameMirror {
             self.image_handles.remove(handle);
         }
     }
-    pub(crate) fn extend_installed_geometry_handles(
+    pub(crate) fn extend_installed_geometry_bindings(
         &mut self,
-        additions: &HashMap<
-            crate::TransportGeometryResourceHandle,
-            noon_core::GeometryResourceHandle,
-        >,
+        additions: impl IntoIterator<Item = (crate::TransportGeometryResourceHandle, GeometryRef)>,
     ) {
-        self.geometry_handles
-            .extend(additions.iter().map(|(&key, &value)| (key, value)));
+        self.geometry_bindings.extend(additions);
     }
-    pub(crate) fn remove_installed_geometry_handles<'a>(
+    pub(crate) fn remove_installed_geometry_bindings<'a>(
         &mut self,
         handles: impl IntoIterator<Item = &'a crate::TransportGeometryResourceHandle>,
     ) {
         for handle in handles {
-            self.geometry_handles.remove(handle);
+            self.geometry_bindings.remove(handle);
         }
     }
     pub(crate) fn with_installed_resources(
@@ -1288,10 +1290,13 @@ impl RetainedExecutionFrameMirror {
                 )),
             TransportObjectContent::Geometry { geometry, resource } => {
                 if let Some(resource) = resource {
-                    let local = self.geometry_handles.get(resource).ok_or(
-                        RetainedExecutionTransportError::UnknownGeometryResource(*resource),
-                    )?;
-                    Ok(ObjectContentRef::Geometry(GeometryRef::External(local.id)))
+                    self.geometry_bindings
+                        .get(resource)
+                        .cloned()
+                        .map(ObjectContentRef::Geometry)
+                        .ok_or(RetainedExecutionTransportError::UnknownGeometryResource(
+                            *resource,
+                        ))
                 } else {
                     Ok(ObjectContentRef::Geometry(geometry.clone()))
                 }
@@ -1348,6 +1353,10 @@ impl RetainedExecutionFrameMirror {
         !self.composed_handles.is_empty()
     }
 
+    pub(crate) fn has_painter_prefix_sources(&self) -> bool {
+        self.composed_dependencies.prefix_owners().next().is_some()
+    }
+
     pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
@@ -1391,6 +1400,14 @@ impl RetainedExecutionFrameMirror {
 
     pub fn painter_order(&self) -> &[u32] {
         &self.painter_order
+    }
+
+    pub(crate) fn painter_rank_for_frame_index(&self, index: usize) -> Option<usize> {
+        self.painter_ranks
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|rank| rank as usize)
     }
 
     pub fn apply(
@@ -1869,12 +1886,14 @@ impl RetainedExecutionFrameMirror {
             changed.push(index);
         }
         for &index in &removed_indices {
-            if frame.objects[index].content.composed_source().is_some() {
-                // A retired row retains its identity for re-entry, but must not
-                // retain the immutable member allocation after its last root.
-                frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(0.0));
-                frame.objects[index].effects = None;
-            }
+            // The receiver owns the current effective frame, not playback
+            // history. Preserve only the retired identity, releasing immutable
+            // path/group/appearance leases after their final current root.
+            frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(0.0));
+            frame.objects[index].fill_paint = None;
+            frame.objects[index].effects = None;
+            frame.objects[index].spatial = None;
+            frame.objects[index].text_bounds = None;
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
             frame.render_transforms[index] = None;
@@ -3479,7 +3498,7 @@ mod tests {
             )
             .unwrap()
             .is_some());
-        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::VectorPath(
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::path(
             noon_core::VectorPath::new()
                 .move_to(noon_core::Vec2::ZERO)
                 .line_to(noon_core::Vec2::new(1.0, 1.0)),

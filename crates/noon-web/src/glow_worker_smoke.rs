@@ -108,13 +108,11 @@ fn runtime(
         SourceGeometry::StrokedPath | SourceGeometry::TransparentSilhouettePath => {
             let transparent = matches!(source_geometry, SourceGeometry::TransparentSilhouettePath);
             (
-                GeometryRef::VectorPath(
-                    VectorPath::new().move_to(Vec2::new(-0.7, -0.35)).cubic_to(
-                        Vec2::new(-0.5, 0.7),
-                        Vec2::new(0.45, -0.65),
-                        Vec2::new(0.7, 0.35),
-                    ),
-                ),
+                GeometryRef::path(VectorPath::new().move_to(Vec2::new(-0.7, -0.35)).cubic_to(
+                    Vec2::new(-0.5, 0.7),
+                    Vec2::new(0.45, -0.65),
+                    Vec2::new(0.7, 0.35),
+                )),
                 Style {
                     fill: None,
                     stroke: Some(Color::rgba(

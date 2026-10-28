@@ -2086,7 +2086,7 @@ impl FramePreparer {
                         let GeometryRef::VectorPath(path) = render_geometry else {
                             return false;
                         };
-                        cache.path == *path
+                        cache.path == **path
                     }
                 };
                 let reveal_head_available = reveal_head.is_some()

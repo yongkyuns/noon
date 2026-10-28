@@ -1,3 +1,5 @@
+mod spatial_queries;
+
 use crate::retained_resource_transport::residency::{ResourceResidency, ResourceRoot};
 use crate::retained_resource_transport::{render_geometry_id, RenderGeometrySlot};
 use std::collections::HashMap;
@@ -23,6 +25,8 @@ pub struct InstalledRetainedExecutionMirror {
     family: InstalledRetainedFamilyExecutionState,
     transient_presentations: Vec<noon_runtime::TransientPresentationOccurrence>,
     resource_roots: ResourceResidency,
+    spatial_index: Option<noon_runtime::ExecutionSpatialIndex>,
+    spatial_update_stats: noon_runtime::SpatialIndexUpdateStats,
 }
 
 impl InstalledRetainedExecutionMirror {
@@ -34,7 +38,19 @@ impl InstalledRetainedExecutionMirror {
             resources.text_handle_remap(),
         );
         wire.extend_installed_image_handles(&resources.image_handle_remap());
-        wire.extend_installed_geometry_handles(&resources.geometry_handle_remap());
+        wire.extend_installed_geometry_bindings(resources.geometry_handle_remap().into_iter().map(
+            |(key, local)| {
+                (
+                    key,
+                    resolved_geometry_binding(
+                        local,
+                        resources
+                            .geometry_for_transport(key)
+                            .expect("installed geometry binding"),
+                    ),
+                )
+            },
+        ));
         wire.extend_installed_composed_sources(&resources.composed_source_remap());
         Ok(Self {
             wire,
@@ -42,6 +58,8 @@ impl InstalledRetainedExecutionMirror {
             family: InstalledRetainedFamilyExecutionState::default(),
             transient_presentations: Vec::new(),
             resource_roots: ResourceResidency::default(),
+            spatial_index: None,
+            spatial_update_stats: noon_runtime::SpatialIndexUpdateStats::default(),
         })
     }
 
@@ -82,21 +100,24 @@ impl InstalledRetainedExecutionMirror {
         } else {
             self.family.planned_frame(frame)?
         };
-        Ok(
-            noon_runtime::RendererPublication::from_validated_transport_frame(
-                self.wire.publication_context(),
-                planned_family_frame,
-                changes.clone(),
-                self.resources.texts(),
-                self.resources.fonts(),
-                self.resources.geometries(),
-                self.resources.images(),
-                self.family.plans(),
-                self.family.active_indices(),
-                self.wire.painter_order(),
-                &self.wire,
-            ),
-        )
+        let publication = noon_runtime::RendererPublication::from_validated_transport_frame(
+            self.wire.publication_context(),
+            planned_family_frame,
+            changes.clone(),
+            self.resources.texts(),
+            self.resources.fonts(),
+            self.resources.geometries(),
+            self.resources.images(),
+            self.family.plans(),
+            self.family.active_indices(),
+            self.wire.painter_order(),
+            &self.wire,
+        );
+        Ok(if let Some(index) = &self.spatial_index {
+            publication.with_spatial_index(index)
+        } else {
+            publication
+        })
     }
 
     pub fn family_frame(&self) -> Result<Option<RetainedFamilyFrame<'_>>, InstalledExecutionError> {
@@ -206,6 +227,11 @@ impl InstalledRetainedExecutionMirror {
             self.family = InstalledRetainedFamilyExecutionState::default();
             self.transient_presentations.clear();
         }
+        // Resource-addition publication updates the index only after committing
+        // its prepared resources below; ordinary deltas can update it here.
+        if validate_snapshot_resources {
+            self.update_spatial_query_index(&changes, snapshot);
+        }
         Ok((outcome, changes))
     }
 
@@ -245,7 +271,7 @@ impl InstalledRetainedExecutionMirror {
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
         self.wire
-            .remove_installed_geometry_handles(retirements.geometries.iter());
+            .remove_installed_geometry_bindings(retirements.geometries.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
@@ -256,6 +282,7 @@ impl InstalledRetainedExecutionMirror {
         delta: RetainedFamilyExecutionDeltaEnvelope,
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        let snapshot = delta.retained.snapshot;
         let additions = self.resources.prepare_additions_with_render(bundle)?;
         let composed_sources = additions.composed_source_remap();
         let referenced_sources = delta
@@ -303,7 +330,17 @@ impl InstalledRetainedExecutionMirror {
         self.wire.extend_installed_text_handles(&text_handles);
         let geometry_handles = additions.geometry_handle_remap();
         self.wire
-            .extend_installed_geometry_handles(&geometry_handles);
+            .extend_installed_geometry_bindings(geometry_handles.iter().map(|(&key, &local)| {
+                (
+                    key,
+                    resolved_geometry_binding(
+                        local,
+                        additions
+                            .geometry_for_transport(key)
+                            .expect("prepared geometry binding"),
+                    ),
+                )
+            }));
         self.wire
             .extend_installed_composed_sources(&composed_sources);
 
@@ -324,7 +361,7 @@ impl InstalledRetainedExecutionMirror {
                             .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
                         self.wire
-                            .remove_installed_geometry_handles(geometry_handles.keys());
+                            .remove_installed_geometry_bindings(geometry_handles.keys());
                         return Err(error.into());
                     }
                 }
@@ -342,7 +379,7 @@ impl InstalledRetainedExecutionMirror {
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
-                    .remove_installed_geometry_handles(geometry_handles.keys());
+                    .remove_installed_geometry_bindings(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -358,7 +395,7 @@ impl InstalledRetainedExecutionMirror {
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
-                    .remove_installed_geometry_handles(geometry_handles.keys());
+                    .remove_installed_geometry_bindings(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -376,7 +413,7 @@ impl InstalledRetainedExecutionMirror {
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
-                    .remove_installed_geometry_handles(geometry_handles.keys());
+                    .remove_installed_geometry_bindings(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -390,7 +427,7 @@ impl InstalledRetainedExecutionMirror {
                 .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
             self.wire
-                .remove_installed_geometry_handles(geometry_handles.keys());
+                .remove_installed_geometry_bindings(geometry_handles.keys());
             if let Some(rollback) = render_rollback {
                 self.wire.rollback_installed_render_geometries(rollback);
             }
@@ -406,11 +443,12 @@ impl InstalledRetainedExecutionMirror {
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
         self.wire
-            .remove_installed_geometry_handles(retirements.geometries.iter());
+            .remove_installed_geometry_bindings(retirements.geometries.iter());
         self.wire
             .remove_installed_text_handles(superseded_text_handles.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
+        self.update_spatial_query_index(&changes, snapshot);
         Ok((outcome, changes))
     }
 
@@ -694,6 +732,21 @@ impl InstalledRetainedExecutionMirror {
             }
         }
         Ok(())
+    }
+}
+
+// Resolve once through a full arena/id/version handle, then share the immutable
+// vector lease with the typed frame. Never guess an addition layer from a bare
+// GeometryId; slots and generations are local to their owning resource arena.
+fn resolved_geometry_binding(
+    local: noon_core::GeometryResourceHandle,
+    resource: &noon_core::GeometryResource,
+) -> noon_core::GeometryRef {
+    match resource {
+        noon_core::GeometryResource::VectorPath(path) => {
+            noon_core::GeometryRef::VectorPath(path.clone())
+        }
+        noon_core::GeometryResource::Mesh(_) => noon_core::GeometryRef::External(local.id),
     }
 }
 
@@ -1072,17 +1125,17 @@ mod tests {
                 pointer_view: None,
             })
             .unwrap();
-        let Some(noon_core::GeometryResource::VectorPath(_)) =
+        let Some(noon_core::GeometryResource::VectorPath(source_path)) =
             mirror.resources().geometries().get(local_handle)
         else {
             panic!("versioned source must resolve to an immutable VectorPath");
         };
         let resolved_frame = mirror.frame().unwrap();
         let resolved = &resolved_frame.objects[0];
-        assert_eq!(
-            resolved.content.geometry(),
-            Some(&GeometryRef::External(local_handle.id))
-        );
+        let Some(GeometryRef::VectorPath(resolved_path)) = resolved.content.geometry() else {
+            panic!("planar vector binding retains its qualified immutable lease");
+        };
+        assert!(std::sync::Arc::ptr_eq(source_path, resolved_path));
         assert_eq!(resolved_frame.reveals[0], 0.35);
         assert_eq!(
             resolved

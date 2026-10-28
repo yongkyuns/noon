@@ -658,6 +658,11 @@ impl SceneInstance {
         self.compiled.object_index(id).map(|index| index as usize)
     }
 
+    #[doc(hidden)]
+    pub fn has_painter_prefix_sources(&self) -> bool {
+        self.compiled.has_painter_prefix_sources()
+    }
+
     pub fn painter_order(&self) -> &[u32] {
         &self.painter_order
     }
