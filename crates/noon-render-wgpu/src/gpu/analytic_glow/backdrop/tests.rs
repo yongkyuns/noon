@@ -6,6 +6,9 @@ use noon_compile::{
 use noon_core::{BackdropBlur, Color, EffectUpdate, Pixels, SemanticNodeId, Style};
 use noon_runtime::{ExecutionSlotId, ExecutionSpatialIndex, SceneInstance};
 
+mod mixed;
+mod visibility;
+
 const VIEW: [u32; 2] = [80, 60];
 const BUDGET: u64 = 64 * 1024 * 1024;
 fn panel_effect(radius: f64) -> Arc<CompiledEffectStack> {
@@ -87,6 +90,17 @@ impl Fixture {
         runtime: &mut SceneInstance,
         clear: wgpu::Color,
     ) -> RetainedEffectStats {
+        self.render_budget(device, queue, runtime, clear, BUDGET)
+            .unwrap()
+    }
+    fn render_budget(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        runtime: &mut SceneInstance,
+        clear: wgpu::Color,
+        budget: u64,
+    ) -> Result<RetainedEffectStats, EffectPrepareError> {
         let mut index = ExecutionSpatialIndex::default();
         index.rebuild(
             runtime.frame(),
@@ -107,13 +121,20 @@ impl Fixture {
             .iter()
             .map(|&i| i as usize)
             .collect::<Vec<_>>();
+        let camera = self.renderer.camera;
         let visible = self
             .renderer
-            .effect_source_visibility(&publication, &visible)
-            .unwrap();
-        let metrics = TextDeviceMetrics::uniform(10.0)
+            .effect_source_visibility(&publication, &visible)?;
+        let scale = Vec2::new(
+            VIEW[0] as f32 / camera.world_size.x,
+            VIEW[1] as f32 / camera.world_size.y,
+        );
+        let metrics = TextDeviceMetrics::new(scale)
             .unwrap()
-            .with_world_origin_pixels(Vec2::new(40.0, 30.0))
+            .with_world_origin_pixels(Vec2::new(
+                VIEW[0] as f32 * 0.5 - camera.center.x * scale.x,
+                VIEW[1] as f32 * 0.5 + camera.center.y * scale.y,
+            ))
             .unwrap();
         let prepared = self
             .preparer
@@ -122,19 +143,16 @@ impl Fixture {
         self.renderer
             .upload_retained(device, queue, &prepared, &mut self.text);
         let mut encoder = device.create_command_encoder(&Default::default());
-        let stats = self
-            .renderer
-            .prepare_retained_effects(
-                device,
-                queue,
-                &mut encoder,
-                &prepared,
-                &self.text,
-                &publication,
-                clear,
-                BUDGET,
-            )
-            .unwrap();
+        let stats = self.renderer.prepare_retained_effects(
+            device,
+            queue,
+            &mut encoder,
+            &prepared,
+            &self.text,
+            &publication,
+            clear,
+            budget,
+        )?;
         self.renderer
             .encode_retained(
                 &mut encoder,
@@ -146,7 +164,7 @@ impl Fixture {
             )
             .unwrap();
         queue.submit([encoder.finish()]);
-        stats
+        Ok(stats)
     }
 }
 fn runtime(rows: Vec<CompiledObject>) -> SceneInstance {
@@ -250,10 +268,11 @@ fn cold_offscreen_backdrop_allocates_nothing_and_activation_uses_the_normal_capt
 }
 
 fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
-    let stride = (VIEW[0] * 4).div_ceil(256) * 256;
+    let size = [texture.width(), texture.height()];
+    let stride = (size[0] * 4).div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: u64::from(stride * VIEW[1]),
+        size: u64::from(stride * size[1]),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -265,12 +284,12 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> 
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(stride),
-                rows_per_image: Some(VIEW[1]),
+                rows_per_image: Some(size[1]),
             },
         },
         wgpu::Extent3d {
-            width: VIEW[0],
-            height: VIEW[1],
+            width: size[0],
+            height: size[1],
             depth_or_array_layers: 1,
         },
     );
@@ -284,7 +303,7 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> 
     let mapped = buffer.slice(..).get_mapped_range().unwrap();
     mapped
         .chunks(stride as usize)
-        .flat_map(|row| row[..VIEW[0] as usize * 4].to_vec())
+        .flat_map(|row| row[..size[0] as usize * 4].to_vec())
         .collect()
 }
 fn ordinary(

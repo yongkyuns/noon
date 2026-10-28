@@ -191,7 +191,9 @@ impl PainterPrefixCaptureFilter {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
         let camera = capture_camera(key.camera, key.viewport, request.origin, request.size)?;
-        let camera_uniform = camera.uniform(request.size);
+        let camera_uniform = camera
+            .uniform(request.size)
+            .with_sample_projection(key.camera.uniform(key.viewport));
         let mut stats = EffectRasterStats {
             scratch_bytes: bytes,
             ..Default::default()

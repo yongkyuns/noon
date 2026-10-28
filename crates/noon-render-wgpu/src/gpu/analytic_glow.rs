@@ -837,7 +837,9 @@ impl GpuRenderer {
                     .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
             });
         let capture_camera = tile_camera(self.camera, self.viewport_size, source_tile)?;
-        let camera_uniform = capture_camera.uniform(source_tile.size);
+        let camera_uniform = capture_camera
+            .uniform(source_tile.size)
+            .with_sample_projection(self.camera.uniform(self.viewport_size));
         let placement = Placement {
             origin: tile.origin,
             size: tile.size,
