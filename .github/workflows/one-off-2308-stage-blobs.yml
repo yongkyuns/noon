@@ -1,0 +1,142 @@
+name: Stage authenticated Noon 2308 Git blobs
+
+on:
+  push:
+    branches: [agent/2308-connector-object-stage-20261028]
+    paths: [.github/workflows/one-off-2308-stage-blobs.yml]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated uploader without retained credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download exact successful qualification evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/noon2308-blobs/incoming"
+          gh run download 40659664007 --repo yongkyuns/noon \
+            -n noon2308-master-fd1e-readonly-qualification \
+            -D "$RUNNER_TEMP/noon2308-blobs/incoming"
+      - name: Authenticate source and upload missing immutable blobs only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, io, json, os, subprocess, tarfile, urllib.request
+          from pathlib import Path
+          repo='yongkyuns/noon'
+          assert os.environ['GITHUB_REPOSITORY']==repo
+          root=Path(os.environ['RUNNER_TEMP'])/'noon2308-blobs'
+          incoming=root/'incoming'; source=root/'source'; source.mkdir()
+          out=root/'receipt'; out.mkdir()
+          api_root='https://api.github.com/repos/'+repo
+          token=os.environ['GH_TOKEN']
+          def api(path, payload=None):
+              # This uploader cannot write commits, refs, PRs or workflow files.
+              if payload is not None:
+                  assert path=='/git/blobs', ('disallowed write endpoint',path)
+              request=urllib.request.Request(api_root+path,
+                  data=None if payload is None else json.dumps(payload).encode(),
+                  headers={'Authorization':'Bearer '+token,
+                           'Accept':'application/vnd.github+json',
+                           'X-GitHub-Api-Version':'2022-11-28',
+                           'Content-Type':'application/json'},
+                  method='GET' if payload is None else 'POST')
+              with urllib.request.urlopen(request,timeout=90) as response:
+                  return json.load(response)
+          run=api('/actions/runs/40659664007')
+          assert run['head_sha']=='affa9a70698fb72b4dde050e4d204c56d50bd607'
+          assert run['status']=='completed' and run['conclusion']=='success'
+          assert run['run_attempt']==1
+          proof=json.loads((incoming/'source-proof.json').read_text())
+          assert proof['new_master']=='fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86'
+          assert proof['source_branch']=='b3a4b7f484e607a4b14bc57e70f4947f8520ca42'
+          assert proof['memory_branch']=='472a61fadfdabba44756b75caaa184cee8c4be57'
+          assert proof['git_merge_return_code']==0 and not proof['unmerged_paths']
+          expected='13f654450728458c8dd153741522b789b1133193'
+          assert proof['merged_tree_before_format']==expected
+          assert (incoming/'candidate-tree.txt').read_text().strip()==expected
+          archive=(incoming/'incoming/preflight/combined-source-latest.tar.gz').read_bytes()
+          assert hashlib.sha256(archive).hexdigest()=='d4c437b5cf5669a0e2d470d2a56220e32d690af4a0a9ace76422c33b38e8a7eb'
+          patch=incoming/'local-merge-source.patch'
+          assert hashlib.sha256(patch.read_bytes()).hexdigest()=='b3664e290c67f8bbbfc75fb6e10673f02a9d57b133e3ad570e1a3279beb7e001'
+          with tarfile.open(fileobj=io.BytesIO(archive),mode='r:gz') as tar:
+              tar.extractall(source,filter='data')
+          def git(*args):
+              return subprocess.check_output(['git',*args],cwd=source)
+          git('init','-q','--initial-branch=immutable-objects')
+          git('config','core.autocrlf','false')
+          git('add','--all')
+          assert git('write-tree').decode().strip()=='bec14e0f22d8be668e6e4f38f5c0e982bf2b953f'
+          git('apply','--check','--index',str(patch))
+          git('apply','--index',str(patch))
+          assert git('write-tree').decode().strip()==expected
+          git('diff','--cached','--check','bec14e0f22d8be668e6e4f38f5c0e982bf2b953f')
+          items=[]
+          for entry in git('ls-tree','-r','-z',expected).split(b'\0'):
+              if not entry: continue
+              header,path=entry.split(b'\t',1)
+              mode,kind,sha=header.decode().split()
+              assert kind=='blob',kind
+              items.append({'path':path.decode(),'mode':mode,'type':kind,'sha':sha})
+          assert not any('/one-off-2308' in row['path'] for row in items)
+          master=api('/git/trees/fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86?recursive=1')
+          prior=api('/git/trees/87cb42b53885c192e539fdddf3ddcf970e67bee4?recursive=1')
+          assert not master['truncated'] and not prior['truncated']
+          assert master['sha']=='b78f6a139248e346cf1c62bc3a9435324ad0840b5'
+          assert prior['sha']=='87cb42b53885c192e539fdddf3ddcf970e67bee4'
+          known={row['sha'] for tree in (master,prior) for row in tree['tree'] if row['type']=='blob'}
+          uploaded=[]
+          for row in items:
+              sha=row['sha']
+              if sha in known: continue
+              data=git('cat-file','blob',sha)
+              actual=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              assert actual==sha
+              created=api('/git/blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})
+              assert created['sha']==sha, (row['path'],created)
+              known.add(sha)
+              uploaded.append({'path':row['path'],'sha':sha,'bytes':len(data)})
+              print(json.dumps(uploaded[-1]),flush=True)
+              (out/'uploaded-blobs.json').write_text(json.dumps(uploaded,indent=2)+'\n')
+          assert all(row['sha'] in known for row in items)
+          target={row['path']:row for row in items}
+          current={row['path']:row for row in master['tree'] if row['type']=='blob'}
+          delta=[row for path,row in target.items() if path not in current or
+                 (row['sha'],row['mode'])!=(current[path]['sha'],current[path]['mode'])]
+          delta.extend({'path':path,'mode':row['mode'],'type':'blob','sha':None}
+                       for path,row in current.items() if path not in target)
+          (out/'tree-elements-vs-master.json').write_text(json.dumps(delta,indent=2)+'\n')
+          (out/'master-tree.json').write_text(json.dumps(master)+'\n')
+          report={'source_run':40659664007,'source_tree':expected,
+                  'master':'fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86',
+                  'feature':'b3a4b7f484e607a4b14bc57e70f4947f8520ca42',
+                  'memory':'472a61fadfdabba44756b75caaa184cee8c4be57',
+                  'uploaded_blob_count':len(uploaded),'target_file_count':len(items),
+                  'delta_vs_master_count':len(delta),'all_target_blobs_available':True,
+                  'remote_refs_written':False,'commits_written':False,'trees_written':False,
+                  'next_action':'Use authorized GitHub connector to create verified tree and commit, then nonforced leased PR branch update; no merge until exact-head CI qualifies'}
+          (out/'object-stage.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2),flush=True)
+          PY
+      - name: Preserve immutable object transfer receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-connector-object-stage-receipt
+          path: ${{ runner.temp }}/noon2308-blobs/receipt
+          if-no-files-found: error
+          retention-days: 7
