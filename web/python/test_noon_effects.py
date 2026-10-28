@@ -25,6 +25,8 @@ class EffectFacadeTests(unittest.TestCase):
         js.noonEffectUpdate, js.noonGlow = self.make_update, self.make_glow
         self.make_blur = Mock(return_value=types.SimpleNamespace(kind="blur", radius=4.5, pixels=True))
         js.noonBlur = self.make_blur
+        self.make_backdrop = Mock(return_value=types.SimpleNamespace(kind="backdrop_blur", radius=6.5, pixels=True))
+        js.noonBackdropBlur = self.make_backdrop
         self.make_shadow = Mock(return_value=types.SimpleNamespace(kind="shadow", radius=4.5, pixels=True,
             red=0.2, green=0.4, blue=0.6, alpha=0.5, offsetX=-3.25, offsetY=4.5, offsetPixels=True))
         js.noonShadow = self.make_shadow
@@ -72,6 +74,29 @@ class EffectFacadeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.object.set_effect("detail", size=noon.Pixels(-1))
         self.assertGreaterEqual(self.request.free.call_count, 4)
+
+    def test_backdrop_uses_shared_attachment_identity_and_checked_radius(self):
+        value = noon.BackdropBlur(radius=noon.Pixels(6.5))
+        self.make_update.assert_called_once_with((), 6.5, True, None, None, (), False, None, None, None)
+        self.make_backdrop.assert_called_once_with(self.request)
+        self.make_blur.assert_not_called()
+        self.assertEqual(value.radius, noon.Pixels(6.5))
+        self.assertIs(copy.copy(value), value)
+        self.assertIs(copy.deepcopy(value), value)
+        with self.assertRaises(AttributeError):
+            value.radius = 0
+        self.object.add_effect(value, name="glass")
+        self.handle.addEffect.assert_called_once_with(value._definition, "glass")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = value._definition
+        self.assertIsInstance(self.object.get_effect("glass").authored_definition, noon.BackdropBlur)
+        self.make_update.reset_mock()
+        self.object.set_effect("glass", radius=noon.Pixels(0))
+        self.make_update.assert_called_once_with((), 0.0, True, None, None, (), False, None, None, None)
+        self.handle.setEffect.assert_called_once_with("glass", self.request)
+        self.make_update.side_effect = ValueError("shared Rust radius failure")
+        with self.assertRaises(ValueError):
+            noon.BackdropBlur(radius=-1)
+        self.assertEqual(self.make_backdrop.call_count, 1)
 
     def test_constructor_defers_defaults_and_validation_to_rust(self):
         glow = noon.Glow()

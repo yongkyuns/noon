@@ -145,6 +145,40 @@ class Blur:
         return Pixels(value) if bool(self._definition.pixels) else value
 
 
+class BackdropBlur:
+    """Gaussian blur of the earlier painter content beneath this object/group.
+
+    The original object coverage masks the background treatment; its paint and
+    final opacity remain ordinary. Radius zero preserves the ordinary image.
+    Use one backdrop attachment per scope; nested backdrops and earlier spatial
+    content are outside the current portable profile and fail shared admission.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, radius=None):
+        with _update(radius=radius) as update:
+            from js import noonBackdropBlur
+            self._definition = engine_call(noonBackdropBlur, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def radius(self):
+        value = float(self._definition.radius)
+        return Pixels(value) if bool(self._definition.pixels) else value
+
+
 class Shadow:
     """Colored Gaussian of painted alpha behind the original source.
 
@@ -339,7 +373,7 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
+        return {"glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -395,8 +429,8 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, Shadow, NoiseDissolve, Pixelate)):
-        raise TypeError("this effect profile supports Glow, Blur, Shadow, NoiseDissolve and Pixelate definitions")
+    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate)):
+        raise TypeError("this effect profile supports Glow, Blur, BackdropBlur, Shadow, NoiseDissolve and Pixelate definitions")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)

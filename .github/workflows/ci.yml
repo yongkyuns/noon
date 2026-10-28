@@ -71,8 +71,10 @@ on:
       - "scripts/scope-opacity-qualification.mjs"
       - "scripts/effect-restore-qualification.mjs"
       - "scripts/pixelate-qualification.mjs"
+      - "scripts/glass-lens-qualification.mjs"
       - "crates/noon-export/tests/scope_opacity.rs"
       - "crates/noon-export/tests/pixelate.rs"
+      - "crates/noon-export/tests/glass_lens.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -255,6 +257,10 @@ jobs:
         run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
+      - name: Qualify authored glass lens and native export
+        env:
+          NOON_GLASS_ARTIFACTS: glass-lens-native-artifacts
+        run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture
       - name: Qualify authored cell sampling and export
         run: cargo test -p noon-export --test pixelate -- --ignored --nocapture
       - name: Qualify dissolve mask field and premultiplied alpha operator
@@ -313,6 +319,7 @@ jobs:
             glow-raster-artifacts
             backdrop-raster-artifacts
             prefix-raster-artifacts
+            glass-lens-native-artifacts
           if-no-files-found: warn
           retention-days: 3
 
@@ -556,6 +563,8 @@ jobs:
         run: node scripts/scope-opacity-qualification.mjs
       - name: Qualify ordered and composed appearance save/restore
         run: node scripts/effect-restore-qualification.mjs
+      - name: Qualify glass lens through Rust and Python on WebGPU and WebGL2
+        run: node scripts/glass-lens-qualification.mjs
       - name: Qualify bounded cell sampling through Rust and Python
         run: node scripts/pixelate-qualification.mjs
       - name: Qualify private visibility lifecycle through Rust and Python
@@ -621,6 +630,7 @@ jobs:
             browser-smoke-artifacts/scope-opacity
             browser-smoke-artifacts/effect-restore
             browser-smoke-artifacts/pixelate
+            browser-smoke-artifacts/glass-lens
             browser-smoke-artifacts/dissolve
             browser-smoke-artifacts/noise-dissolve
           if-no-files-found: warn

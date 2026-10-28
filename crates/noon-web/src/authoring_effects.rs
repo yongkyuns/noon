@@ -251,6 +251,15 @@ mod wasm {
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = backdropBlur)]
+        pub fn backdrop_blur(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            noon::effects::BackdropBlur::new(update.value)
+                .map(|value| Self {
+                    value: value.into(),
+                })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = shadow)]
         pub fn shadow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
             noon::effects::Shadow::new(update.value)
@@ -302,6 +311,7 @@ mod wasm {
                 EffectDefinition::Pixelate(_) => "pixelate",
                 EffectDefinition::Glow(_) => "glow",
                 EffectDefinition::Blur(_) => "blur",
+                EffectDefinition::BackdropBlur(_) => "backdrop_blur",
                 EffectDefinition::Shadow(_) => "shadow",
                 EffectDefinition::NoiseDissolve(_) => "noise_dissolve",
             }

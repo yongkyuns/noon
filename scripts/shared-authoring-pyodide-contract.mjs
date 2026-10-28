@@ -68,6 +68,7 @@ try {
     noonEffectUpdate: (...args) => new wasm.WasmEffectUpdate(...args),
     noonGlow: (update) => wasm.WasmEffectDefinition.glow(update),
     noonBlur: (update) => wasm.WasmEffectDefinition.blur(update),
+    noonBackdropBlur: (update) => wasm.WasmEffectDefinition.backdropBlur(update),
     noonNoiseDissolve: (update) => wasm.WasmEffectDefinition.noiseDissolve(update),
     noonPixelate: (update) => wasm.WasmEffectDefinition.pixelate(update),
     noonShadow: (update) => wasm.WasmEffectDefinition.shadow(update),

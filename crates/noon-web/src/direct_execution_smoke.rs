@@ -824,6 +824,15 @@ pub async fn create_direct_pixelate_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Moving glass card through the same typed Rust live program as native.
+#[wasm_bindgen(js_name = createDirectGlassLensSmokeRenderer)]
+pub async fn create_direct_glass_lens_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::glass_lens::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Save/restore uses the same live Rust programme as native export.
 #[wasm_bindgen(js_name = createDirectEffectRestoreSmokeRenderer)]
 pub async fn create_direct_effect_restore_smoke_renderer(
