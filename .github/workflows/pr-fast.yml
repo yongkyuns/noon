@@ -222,7 +222,9 @@ jobs:
         run: node scripts/typed-authoring-errors-smoke.mjs
 
       - name: Check direct background audio and scene controls
-        run: timeout --signal=TERM 240s node scripts/background-audio-smoke.mjs
+        run: |
+          node --test scripts/audio-retirement-reference.test.mjs
+          timeout --signal=TERM 240s node scripts/background-audio-smoke.mjs
 
       - name: Retain direct background audio evidence
         if: always()
