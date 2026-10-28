@@ -475,7 +475,7 @@ fn render_with_query(
     let prepared = frame_preparer.prepare_incremental(publication.frame(), publication.changes());
     renderer.upload(device, queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
-    let timestamp_readback = if let Some(query) = query {
+    if let Some(query) = query {
         renderer.encode_profiled(
             &mut encoder,
             &target.view,
@@ -483,6 +483,15 @@ fn render_with_query(
             wgpu::Color::BLACK,
             query,
         );
+    } else {
+        renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
+    }
+    let pixels = target.read(device, queue, encoder);
+    if let Some(query) = query {
+        // Metal can resolve counter memory before pass samples become visible.
+        // The pixel read already waits for this render; resolve afterward so
+        // this assertion tests the renderer's writes, not resolution ordering.
+        let mut encoder = device.create_command_encoder(&Default::default());
         let resolved = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spatial timestamp validation"),
             size: 16,
@@ -497,13 +506,7 @@ fn render_with_query(
             mapped_at_creation: false,
         });
         encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
-        Some(readback)
-    } else {
-        renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
-        None
-    };
-    let pixels = target.read(device, queue, encoder);
-    if let Some(readback) = timestamp_readback {
+        queue.submit([encoder.finish()]);
         let (sender, receiver) = std::sync::mpsc::channel();
         readback
             .slice(..)
@@ -517,7 +520,8 @@ fn render_with_query(
         let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
         assert!(
             end > begin,
-            "both spatial/mixed GPU timestamps must be written: {begin}..{end}"
+            "both spatial/mixed GPU timestamps must be written: {begin}..{end}, time={}, planar batches={}",
+            prepared.time, prepared.ordered_render_batches().count()
         );
         drop(bytes);
         readback.unmap();
