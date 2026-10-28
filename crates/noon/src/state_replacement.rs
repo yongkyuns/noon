@@ -16,29 +16,8 @@ use noon_core::{
     SemanticNodeKind, SemanticObjectState, SemanticStore, SemanticTransactionNodeRef, VectorPath,
 };
 
-/// A state-only replacement cannot preserve an attachment on either operand.
-/// Effects elsewhere in the semantic store are irrelevant: this check visits
-/// only the receiver/target ownership graphs and leaves all unrelated effects
-/// and their generations untouched.
-fn require_effect_free_operands(
-    store: &SemanticStore,
-    operands: impl IntoIterator<Item = SemanticNodeId>,
-) -> Result<(), AuthoringError> {
-    if !store.has_effect_attachments() {
-        return Ok(());
-    }
-    for operand in operands {
-        for id in store.ordered_authoring_nodes(operand)? {
-            if store
-                .node(id)
-                .is_some_and(|node| !node.effect_ids().is_empty())
-            {
-                return Err(AuthoringError::EffectStateReplacementUnavailable);
-            }
-        }
-    }
-    Ok(())
-}
+mod effects;
+use effects::EffectReplacement;
 
 /// Pair through the same topology/alias contract as ordinary family Transform.
 /// All captures and fitting succeed before a caller can publish any edit.
@@ -46,6 +25,7 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     source: &MobjectFamily,
     target: &MobjectFamily,
     options: ManimBecomeOptions,
+    execution: Option<&crate::ExecutionSession>,
     mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
 ) -> Result<crate::path_editing::PreparedPathEdits, E> {
     if !Rc::ptr_eq(source.integration_store(), target.integration_store()) {
@@ -53,10 +33,6 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     }
     source.validate()?;
     target.validate()?;
-    require_effect_free_operands(
-        &source.integration_store().borrow(),
-        [source.node_id(), target.node_id()],
-    )?;
     let pairing = source
         .integration_store()
         .borrow()
@@ -77,16 +53,31 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
                 &mut transaction,
                 source.node_id(),
                 target.node_id(),
+                execution,
             )?;
+            let mut effects =
+                EffectReplacement::new(&store, execution, options == ManimBecomeOptions::default());
+            for (source, target) in store
+                .ordered_family_root_pairs(source.node_id(), target.node_id())
+                .map_err(AuthoringError::from)?
+            {
+                effects.stage(source, target, &mut transaction)?;
+            }
             return crate::path_editing::PreparedPathEdits::prepare(&store, Vec::new())
-                .map(|prepared| prepared.with_transaction(transaction))
+                .map(|prepared| {
+                    prepared
+                        .with_node_retirements(effects.into_retirements())
+                        .with_transaction(transaction)
+                })
                 .map_err(E::from);
         }
         Err(
             noon_core::SemanticFamilyPairingError::TopologyMismatch { .. }
             | noon_core::SemanticFamilyPairingError::AliasMismatch { .. },
         ) => {
-            return prepare_persistent_family_reconcile(source, target, options, capture);
+            return prepare_persistent_family_reconcile(
+                source, target, options, execution, capture,
+            );
         }
         Err(error) => return Err(AuthoringError::from(error).into()),
     };
@@ -106,7 +97,21 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     let targets = prepare_become_states(&store, &sources, targets, options)?;
     let mut transaction = SemanticMutationTransaction::new();
     stage_paired_family_colors(&store, &mut transaction, source.node_id(), target.node_id())?;
-    stage_paired_family_styles(&store, &mut transaction, source.node_id(), target.node_id())?;
+    stage_paired_family_styles(
+        &store,
+        &mut transaction,
+        source.node_id(),
+        target.node_id(),
+        execution,
+    )?;
+    let mut effects =
+        EffectReplacement::new(&store, execution, options == ManimBecomeOptions::default());
+    for (source, target) in store
+        .ordered_family_root_pairs(source.node_id(), target.node_id())
+        .map_err(AuthoringError::from)?
+    {
+        effects.stage(source, target, &mut transaction)?;
+    }
     let mut replacements = Vec::new();
     let mut staged = HashMap::<SemanticNodeId, SemanticObjectState>::new();
     for ((source, target_id), (mut target, path)) in pairs.into_iter().zip(targets) {
@@ -118,6 +123,7 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
             }
             staged.insert(source, target.clone());
         }
+        effects.stage(source, target_id, &mut transaction)?;
         let previous = store
             .semantic_object_state_checked(source)
             .map_err(AuthoringError::from)?;
@@ -129,6 +135,7 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     }
     Ok(
         crate::path_editing::PreparedPathEdits::prepare(&store, replacements)?
+            .with_node_retirements(effects.into_retirements())
             .with_transaction(transaction),
     )
 }
@@ -176,6 +183,7 @@ fn stage_paired_family_styles(
     transaction: &mut SemanticMutationTransaction,
     source: SemanticNodeId,
     target: SemanticNodeId,
+    execution: Option<&crate::ExecutionSession>,
 ) -> Result<(), AuthoringError> {
     for (
         source,
@@ -183,7 +191,7 @@ fn stage_paired_family_styles(
         background_stroke_color,
         background_stroke_width,
         background_stroke_opacity,
-    ) in paired_family_style_states(store, source, target)?
+    ) in paired_family_style_states(store, source, target, execution)?
     {
         transaction.set_family_style_with_background_stroke_update(
             source,
@@ -213,7 +221,7 @@ pub(crate) fn paired_family_styles(
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<Vec<(SemanticNodeId, noon_core::SemanticStyle)>, AuthoringError> {
-    Ok(paired_family_style_states(store, source, target)?
+    Ok(paired_family_style_states(store, source, target, None)?
         .into_iter()
         .map(|(source, style, _, _, _)| (source, style))
         .collect())
@@ -231,6 +239,7 @@ fn paired_family_style_states(
     store: &SemanticStore,
     source: SemanticNodeId,
     target: SemanticNodeId,
+    execution: Option<&crate::ExecutionSession>,
 ) -> Result<Vec<PairedFamilyStyleState>, AuthoringError> {
     store
         .ordered_family_root_pairs(source, target)
@@ -240,9 +249,14 @@ fn paired_family_style_states(
             let node = store.node(target).ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
             })?;
-            let style = node.family_style().cloned().ok_or_else(|| {
+            let mut style = node.family_style().cloned().ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
             })?;
+            if let Some(execution) = execution {
+                crate::effective_capture::capture_family_style(
+                    store, execution, target, &mut style,
+                )?;
+            }
             let background_stroke_color =
                 node.family_background_stroke_color().ok_or_else(|| {
                     AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
@@ -306,6 +320,8 @@ fn aligned_source_prototype(
 struct PersistentFamilyReconcile<'a> {
     store: &'a SemanticStore,
     target_states: &'a HashMap<SemanticNodeId, (SemanticObjectState, Option<VectorPath>)>,
+    execution: Option<&'a crate::ExecutionSession>,
+    effects: EffectReplacement<'a>,
     transaction: SemanticMutationTransaction,
     target_to_receiver: HashMap<SemanticNodeId, SemanticTransactionNodeRef>,
     source_to_target: HashMap<SemanticNodeId, SemanticNodeId>,
@@ -316,10 +332,13 @@ impl<'a> PersistentFamilyReconcile<'a> {
     fn new(
         store: &'a SemanticStore,
         target_states: &'a HashMap<SemanticNodeId, (SemanticObjectState, Option<VectorPath>)>,
+        execution: Option<&'a crate::ExecutionSession>,
     ) -> Self {
         Self {
             store,
             target_states,
+            execution,
+            effects: EffectReplacement::new(store, execution, false),
             transaction: SemanticMutationTransaction::new(),
             target_to_receiver: HashMap::new(),
             source_to_target: HashMap::new(),
@@ -336,7 +355,15 @@ impl<'a> PersistentFamilyReconcile<'a> {
             SemanticNodeKind::Family(_) => Ok(PersistentTargetNode::Family {
                 members: node.members_iter().collect(),
                 own_color: node.family_color().expect("family color"),
-                own_style: Box::new(node.family_style().expect("family style").clone()),
+                own_style: {
+                    let mut style = node.family_style().expect("family style").clone();
+                    if let Some(execution) = self.execution {
+                        crate::effective_capture::capture_family_style(
+                            self.store, execution, target, &mut style,
+                        )?;
+                    }
+                    Box::new(style)
+                },
                 own_background_stroke_color: node
                     .family_background_stroke_color()
                     .expect("family background stroke color"),
@@ -424,6 +451,8 @@ impl<'a> PersistentFamilyReconcile<'a> {
                         )
                     }
                 };
+                self.effects
+                    .stage(receiver, target, &mut self.transaction)?;
                 self.target_to_receiver.insert(target, receiver);
                 Ok(receiver)
             }
@@ -464,6 +493,8 @@ impl<'a> PersistentFamilyReconcile<'a> {
                         prototype_members,
                     )
                 };
+                self.effects
+                    .stage(receiver, target, &mut self.transaction)?;
                 self.transaction.set_family_color(receiver, own_color);
                 self.transaction
                     .set_family_style_with_background_stroke_update(
@@ -564,6 +595,7 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
     source: &MobjectFamily,
     target: &MobjectFamily,
     options: ManimBecomeOptions,
+    execution: Option<&crate::ExecutionSession>,
     mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
 ) -> Result<crate::path_editing::PreparedPathEdits, E> {
     let (source_leaves, target_leaves) = {
@@ -595,7 +627,7 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
     let store = source.integration_store().borrow();
     let fitted_targets = prepare_become_states(&store, &source_states, captured_targets, options)?;
     let target_states: HashMap<_, _> = target_leaves.into_iter().zip(fitted_targets).collect();
-    let mut reconcile = PersistentFamilyReconcile::new(&store, &target_states);
+    let mut reconcile = PersistentFamilyReconcile::new(&store, &target_states, execution);
     let root = reconcile.reconcile_node(
         Some(source.node_id()),
         Some(source.node_id()),
@@ -603,6 +635,7 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
     )?;
     debug_assert_eq!(root.existing(), Some(source.node_id()));
 
+    let retirements = reconcile.effects.into_retirements();
     let mut transaction = reconcile.transaction;
     let mut replacements = Vec::new();
     for (source_id, target_id) in reconcile.existing_leaf_pairs {
@@ -621,6 +654,7 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
     }
     Ok(
         crate::path_editing::PreparedPathEdits::prepare(&store, replacements)?
+            .with_node_retirements(retirements)
             .with_transaction(transaction),
     )
 }
@@ -636,7 +670,7 @@ impl MobjectFamily {
         target: &Self,
         options: ManimBecomeOptions,
     ) -> Result<(), AuthoringError> {
-        prepare_family_become(self, target, options, Mobject::state)?.publish(
+        prepare_family_become(self, target, options, None, Mobject::state)?.publish(
             &mut self.integration_store().borrow_mut(),
             |store, transaction| {
                 transaction
@@ -665,15 +699,15 @@ pub(crate) fn prepare_become(
     source: &SemanticObjectState,
     target: SemanticObjectState,
     options: ManimBecomeOptions,
+    execution: Option<&crate::ExecutionSession>,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
-    // State-only capture cannot import an effect from its counterpart, but a
-    // glow on an unrelated object must not poison ordinary become operations.
-    require_effect_free_operands(store, [node, other_node])?;
     let (target, path) =
         prepare_become_states(store, std::slice::from_ref(source), vec![target], options)?
             .pop()
             .expect("one target state");
     let mut transaction = SemanticMutationTransaction::new();
+    let mut effects = EffectReplacement::new(store, execution, false);
+    effects.stage(node, other_node, &mut transaction)?;
     let replacements = if let Some(path) = path {
         vec![(node, target, path)]
     } else {
@@ -687,6 +721,7 @@ pub(crate) fn prepare_become(
     };
     Ok(
         crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
+            .with_node_retirements(effects.into_retirements())
             .with_transaction(transaction),
     )
 }

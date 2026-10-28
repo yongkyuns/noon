@@ -146,6 +146,7 @@ impl Surface {
                 &prepared,
                 &self.text,
                 &publication,
+                background,
                 1_000_000,
             )
             .unwrap_or_else(|error| {

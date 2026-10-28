@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{CircleInstance, PackedStyle, PreparedFrame, RectangleInstance, RenderPrimitive};
 
+mod backdrop;
 mod inputs;
 
 /// One effective renderer request. Object identity/attachment values and animation
@@ -180,6 +181,9 @@ impl CaptureImage {
 struct ResidentEffect {
     object: ObjectId,
     tile: EffectCaptureTile,
+    // Raster projection depends on the requested footprint, never on spare
+    // high-water texture capacity retained from an earlier effect profile.
+    capture_viewport: [u32; 2],
     // Finite contribution before capacity rounding/high-water reuse. Ancestor
     // bounds must never feed retained transparent storage back into capture size.
     contribution_bounds: EffectPixelBounds,
@@ -190,7 +194,7 @@ struct ResidentEffect {
     source_instance: SourceInstance,
     source: CaptureImage,
     silhouette: Option<CaptureImage>,
-    original_mask: super::DissolveScope,
+    original_mask: super::SampleScope,
     original_masked: bool,
     source_buffer: wgpu::Buffer,
     silhouette_buffer: Option<wgpu::Buffer>,
@@ -206,6 +210,9 @@ struct ResidentEffect {
     placement_buffer: wgpu::Buffer,
     placement_binding: Option<wgpu::BindGroup>,
     placement_output: Option<wgpu::Texture>,
+    original_opacity: f32,
+    placement_erase: Option<wgpu::Texture>,
+    placement_erase_binding: Option<wgpu::BindGroup>,
     filter: EffectStackScope,
     revision: u64,
     output_revision: u64,
@@ -214,10 +221,11 @@ struct ResidentEffect {
 }
 
 #[derive(Debug)]
-struct PlacementPrograms {
-    layout: wgpu::BindGroupLayout,
+pub(super) struct PlacementPrograms {
+    pub(super) layout: wgpu::BindGroupLayout,
     single: wgpu::RenderPipeline,
-    multisampled: wgpu::RenderPipeline,
+    pub(super) multisampled: wgpu::RenderPipeline,
+    replacement: Option<[wgpu::RenderPipeline; 4]>,
 }
 
 #[derive(Debug, Default)]
@@ -229,6 +237,7 @@ pub(super) struct EffectCaptureGpu {
     filter: EffectStackFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
+    backdrops: backdrop::BackdropGpu,
 }
 
 /// Sparse request for one runtime-owned row, never a host copy of effect values.
@@ -367,6 +376,15 @@ impl GpuRenderer {
         demand: super::glow_filter::CaptureDemand,
         visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        // Prefix roles must enter through the explicit backdrop coordinator;
+        // ordinary object/group capture must never reinterpret their input.
+        if request
+            .definitions
+            .iter()
+            .any(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix)
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
             RenderPrimitive::Rectangle => 1,
@@ -452,13 +470,22 @@ impl GpuRenderer {
         demand: super::glow_filter::CaptureDemand,
         visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        // Prefix roles must enter through the explicit backdrop coordinator;
+        // ordinary object/group capture must never reinterpret their input.
+        if request
+            .definitions
+            .iter()
+            .any(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix)
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
         if !matches!(
             self.target_format,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
         ) {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
-        let mut own_capture = composed.is_some() && opacity != 1.0;
+        let mut own_capture = demand.isolate || (composed.is_some() && opacity != 1.0);
         for &definition in request.definitions {
             let parameters = crate::EffectCaptureParameters {
                 definition,
@@ -574,20 +601,7 @@ impl GpuRenderer {
                 ..Default::default()
             });
         };
-        let px = f64::from(self.viewport_size[0]) / f64::from(self.camera.world_size.x);
-        let py = f64::from(self.viewport_size[1]) / f64::from(self.camera.world_size.y);
-        let x = |world: f32| {
-            (f64::from(world) - f64::from(self.camera.center.x)) * px
-                + f64::from(self.viewport_size[0]) * 0.5
-        };
-        let y = |world: f32| {
-            f64::from(self.viewport_size[1]) * 0.5
-                - (f64::from(world) - f64::from(self.camera.center.y)) * py
-        };
-        let bounds = EffectPixelBounds {
-            min: [x(b.min.x), y(b.max.y)],
-            max: [x(b.max.x), y(b.min.y)],
-        };
+        let bounds = EffectPixelBounds::from_world_rect(b, self.camera, self.viewport_size);
         self.prepare_source_effect(
             device,
             queue,
@@ -601,7 +615,7 @@ impl GpuRenderer {
             opacity,
             Some(text),
             super::glow_filter::CaptureDemand {
-                isolate: composed.is_some() && opacity != 1.0,
+                isolate: demand.isolate || (composed.is_some() && opacity != 1.0),
                 ..demand
             },
             visibility,
@@ -655,7 +669,9 @@ impl GpuRenderer {
                     // Drop obsolete child-output leases even while this scope is
                     // neutral. Its warmed source image is reusable only when its
                     // normalized inputs still describe that captured image.
-                    effective.set_capture_region(scope.tile)?;
+                    let mut source_tile = scope.tile;
+                    source_tile.size = scope.capture_viewport;
+                    effective.set_capture_region(source_tile)?;
                     let mut source_instance = effective.clone();
                     if key.0 != 2 {
                         source_instance.style_mut().opacity = 1.0;
@@ -706,6 +722,7 @@ impl GpuRenderer {
                 ..Default::default()
             });
         };
+        let mut source_tile = tile;
         let contribution_bounds = EffectPixelBounds {
             min: tile.origin.map(f64::from),
             max: std::array::from_fn(|axis| {
@@ -746,6 +763,9 @@ impl GpuRenderer {
                 .saturating_add(1)
                 .next_multiple_of(16)
                 .min(device.limits().max_texture_dimension_2d);
+            // Preserve the existing profile-local block rounding, while
+            // keeping a previous larger allocation out of the raster camera.
+            source_tile.size[axis] = reserved;
             tile.size[axis] = reserved.max(previous);
         }
         tile.refresh_visible_region(self.viewport_size);
@@ -753,6 +773,13 @@ impl GpuRenderer {
             min: std::array::from_fn(|axis| bounds.min[axis] - f64::from(tile.origin[axis])),
             max: std::array::from_fn(|axis| bounds.max[axis] - f64::from(tile.origin[axis])),
         };
+        if request
+            .definitions
+            .iter()
+            .any(|definition| definition.as_pixelate().is_some())
+        {
+            super::sample_filter::checked_sample_origin(source_bounds)?;
+        }
         if request.definitions.iter().any(|definition| {
             definition
                 .as_noise_dissolve()
@@ -761,7 +788,7 @@ impl GpuRenderer {
             // Check the final high-water capture domain before taking or
             // mutating any retained scope. A rejected tiny source must keep the
             // previous coherent outputs, including unrelated captures.
-            super::dissolve_filter::checked_domain(tile.size, source_bounds)?;
+            super::sample_filter::checked_domain(tile.size, source_bounds)?;
         }
         tile.capture_and_scratch_bytes = u64::from(tile.size[0])
             .checked_mul(u64::from(tile.size[1]))
@@ -788,7 +815,9 @@ impl GpuRenderer {
             })
             .map_or(0, |s| s.tile.capture_and_scratch_bytes);
         let total = self
-            .effect_capture_texture_bytes()
+            .effect_captures
+            .as_deref()
+            .map_or(0, |cache| cache.bytes)
             .checked_sub(old_bytes)
             .and_then(|v| v.checked_sub(relocated_bytes))
             .and_then(|v| v.checked_add(tile.capture_and_scratch_bytes))
@@ -796,7 +825,7 @@ impl GpuRenderer {
         if total > request.texture_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        effective.set_capture_region(tile)?;
+        effective.set_capture_region(source_tile)?;
         let mut source_instance = effective.clone();
         if key.0 != 2 {
             source_instance.style_mut().opacity = 1.0;
@@ -807,8 +836,10 @@ impl GpuRenderer {
                     .as_glow()
                     .is_some_and(|effect| effect.source() == GlowSource::Silhouette)
             });
-        let capture_camera = tile_camera(self.camera, self.viewport_size, tile)?;
-        let camera_uniform = capture_camera.uniform(tile.size);
+        let capture_camera = tile_camera(self.camera, self.viewport_size, source_tile)?;
+        let camera_uniform = capture_camera
+            .uniform(source_tile.size)
+            .with_sample_projection(self.camera.uniform(self.viewport_size));
         let placement = Placement {
             origin: tile.origin,
             size: tile.size,
@@ -865,6 +896,7 @@ impl GpuRenderer {
                     ResidentEffect {
                         object,
                         tile,
+                        capture_viewport: source_tile.size,
                         contribution_bounds,
                         original_bounds: bounds,
                         camera: self.camera,
@@ -873,7 +905,7 @@ impl GpuRenderer {
                         source_instance: source_instance.clone(),
                         source,
                         silhouette,
-                        original_mask: super::DissolveScope::default(),
+                        original_mask: super::SampleScope::default(),
                         original_masked: false,
                         source_buffer,
                         silhouette_buffer,
@@ -907,6 +939,9 @@ impl GpuRenderer {
                         placement_buffer,
                         placement_binding: None,
                         placement_output: None,
+                        original_opacity: opacity,
+                        placement_erase: None,
+                        placement_erase_binding: None,
                         filter: EffectStackScope::default(),
                         revision: 0,
                         output_revision: 0,
@@ -926,7 +961,18 @@ impl GpuRenderer {
             {
                 glows.scopes.remove(&previous_key);
             }
+            if let SourceInstance::Draws { source, silhouette } = &source_instance {
+                if source.has_replacements()
+                    || silhouette.as_ref().is_some_and(|s| s.has_replacements())
+                {
+                    stats.filter.pipeline_compiles +=
+                        programs.ensure_replacement(device, self.target_format);
+                }
+            }
             let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
+            scope.original_opacity = opacity;
+            scope.placement_erase = None;
+            scope.placement_erase_binding = None;
             if !retain_original_mask {
                 scope.original_mask.clear();
             }
@@ -934,6 +980,7 @@ impl GpuRenderer {
             let source_changed = scope.invalidated
                 || !scope.source_instance.same_source(&source_instance)
                 || scope.tile.origin != tile.origin
+                || scope.capture_viewport != source_tile.size
                 || scope.camera != self.camera
                 || scope.viewport != self.viewport_size;
             if source_changed {
@@ -973,7 +1020,8 @@ impl GpuRenderer {
                                     .expect("isolated text camera"),
                                 &scope.source_buffer,
                                 &scope.source_image_bindings,
-                                Some((&programs.multisampled, &scope.source_filtered_bindings)),
+                                Some((programs, &scope.source_filtered_bindings)),
+                                source_tile.size,
                             )
                             .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                         stats.source_passes = 1;
@@ -1010,10 +1058,8 @@ impl GpuRenderer {
                                         .expect("isolated text camera"),
                                     buffer,
                                     &scope.silhouette_image_bindings,
-                                    Some((
-                                        &programs.multisampled,
-                                        &scope.silhouette_filtered_bindings,
-                                    )),
+                                    Some((programs, &scope.silhouette_filtered_bindings)),
+                                    source_tile.size,
                                 )
                                 .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                             stats.source_passes += 1;
@@ -1035,6 +1081,7 @@ impl GpuRenderer {
                             &scope.camera_binding,
                             &self.quad_buffer,
                             &scope.source_buffer,
+                            source_tile.size,
                         );
                         stats.source_passes = 1;
                         if let (Some(image), Some(buffer)) =
@@ -1048,6 +1095,7 @@ impl GpuRenderer {
                                 &scope.camera_binding,
                                 &self.quad_buffer,
                                 buffer,
+                                source_tile.size,
                             );
                             stats.source_bytes_uploaded += source_instance.bytes().len();
                             stats.source_passes += 1;
@@ -1097,7 +1145,7 @@ impl GpuRenderer {
                     .silhouette
                     .as_ref()
                     .ok_or(EffectPrepareError::MissingSilhouette)?;
-                glows.filter.dissolve.prepare_encode(
+                glows.filter.sample.prepare_encode(
                     device,
                     queue,
                     encoder,
@@ -1106,8 +1154,10 @@ impl GpuRenderer {
                         source: &image.texture,
                         revision: scope.revision,
                     },
-                    super::DissolveParameters {
-                        definition: visibility.expect("active private visibility"),
+                    super::SampleParameters {
+                        definition: visibility.expect("active private visibility").into(),
+                        output_height: parameters.output_height,
+                        world_view_height: parameters.world_view_height,
                         source_bounds,
                         scope_opacity: 1.0,
                         scratch_budget_bytes: u64::from(tile.size[0]) * u64::from(tile.size[1]) * 4,
@@ -1116,7 +1166,9 @@ impl GpuRenderer {
             } else {
                 EffectRasterStats::default()
             };
+            let pipeline_compiles = stats.filter.pipeline_compiles;
             stats.filter = upload;
+            stats.filter.pipeline_compiles += pipeline_compiles;
             stats.filter.composite_passes += original_work.composite_passes;
             stats.filter.bytes_uploaded += original_work.bytes_uploaded;
             stats.filter.texture_allocations += original_work.texture_allocations;
@@ -1164,6 +1216,7 @@ impl GpuRenderer {
             scope.effective = effective;
             scope.source_instance = source_instance;
             scope.tile = tile;
+            scope.capture_viewport = source_tile.size;
             scope.contribution_bounds = contribution_bounds;
             scope.camera = self.camera;
             scope.viewport = self.viewport_size;
@@ -1180,6 +1233,7 @@ impl GpuRenderer {
     /// Existing scene identity/lifecycle owners decide when this is called.
     pub fn remove_effect_capture(&mut self, object: ObjectId) {
         if let Some(glows) = self.effect_captures.as_deref_mut() {
+            glows.backdrops.remove(object);
             if let Some(key) = glows.owners.remove(&object) {
                 if let Some(scope) = glows.scopes.remove(&key) {
                     glows.bytes -= scope.tile.capture_and_scratch_bytes;
@@ -1189,7 +1243,9 @@ impl GpuRenderer {
     }
 
     pub fn effect_capture_texture_bytes(&self) -> u64 {
-        self.effect_captures.as_deref().map_or(0, |g| g.bytes)
+        self.effect_captures
+            .as_deref()
+            .map_or(0, |g| g.bytes + g.backdrops.bytes())
     }
 
     /// Call when recorded capture/filter commands were abandoned rather than
@@ -1197,6 +1253,7 @@ impl GpuRenderer {
     pub fn invalidate_effect_captures(&mut self) {
         self.retained_effects.invalidate();
         if let Some(glows) = self.effect_captures.as_deref_mut() {
+            glows.backdrops.invalidate();
             for scope in glows.scopes.values_mut() {
                 scope.invalidated = true;
                 scope.filter.invalidate();
@@ -1269,20 +1326,16 @@ impl GpuRenderer {
             "source capture must follow resize"
         );
         let programs = glows.placement.as_ref().expect("prepared placement");
-        pass.set_pipeline(if single_sample {
-            &programs.single
-        } else {
-            &programs.multisampled
-        });
-        pass.set_bind_group(
-            0,
+        programs.draw(
+            pass,
             scope
                 .placement_binding
                 .as_ref()
                 .expect("prepared source output"),
-            &[],
+            scope.placement_erase_binding.as_ref(),
+            single_sample,
         );
-        pass.draw(0..6, 0..1);
+
         true
     }
 
@@ -1379,25 +1432,32 @@ fn tile_camera(
     viewport: [u32; 2],
     tile: EffectCaptureTile,
 ) -> Result<Camera2D, EffectPrepareError> {
+    capture_camera(camera, viewport, tile.origin, tile.size)
+}
+
+pub(super) fn capture_camera(
+    camera: Camera2D,
+    viewport: [u32; 2],
+    origin: [i32; 2],
+    size: [u32; 2],
+) -> Result<Camera2D, EffectPrepareError> {
     let pixel = [
         f64::from(camera.world_size.x) / f64::from(viewport[0]),
         f64::from(camera.world_size.y) / f64::from(viewport[1]),
     ];
     let center = [
         f64::from(camera.center.x)
-            + (f64::from(tile.origin[0]) + f64::from(tile.size[0]) * 0.5
-                - f64::from(viewport[0]) * 0.5)
+            + (f64::from(origin[0]) + f64::from(size[0]) * 0.5 - f64::from(viewport[0]) * 0.5)
                 * pixel[0],
         f64::from(camera.center.y)
-            - (f64::from(tile.origin[1]) + f64::from(tile.size[1]) * 0.5
-                - f64::from(viewport[1]) * 0.5)
+            - (f64::from(origin[1]) + f64::from(size[1]) * 0.5 - f64::from(viewport[1]) * 0.5)
                 * pixel[1],
     ];
     Camera2D::new(
         Vec2::new(center[0] as f32, center[1] as f32),
         Vec2::new(
-            (f64::from(tile.size[0]) * pixel[0]) as f32,
-            (f64::from(tile.size[1]) * pixel[1]) as f32,
+            (f64::from(size[0]) * pixel[0]) as f32,
+            (f64::from(size[1]) * pixel[1]) as f32,
         ),
     )
     .map_err(|_| EffectPrepareError::InvalidProjection)
@@ -1421,6 +1481,7 @@ fn capture_source(
     camera: &wgpu::BindGroup,
     quad: &wgpu::Buffer,
     instance: &wgpu::Buffer,
+    viewport: [u32; 2],
 ) {
     let attachments = [Some(wgpu::RenderPassColorAttachment {
         view,
@@ -1439,6 +1500,7 @@ fn capture_source(
         occlusion_query_set: None,
         multiview_mask: None,
     });
+    pass.set_viewport(0.0, 0.0, viewport[0] as f32, viewport[1] as f32, 0.0, 1.0);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, camera, &[]);
     pass.set_vertex_buffer(0, quad.slice(..));
@@ -1447,7 +1509,105 @@ fn capture_source(
 }
 
 impl PlacementPrograms {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    /// Ordinary scenes compile only their existing source-over programs.
+    pub(super) fn ensure_replacement(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> usize {
+        if self.replacement.is_some() {
+            return 0;
+        }
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Noon replacement tile placement"),
+            bind_group_layouts: &[Some(&self.layout)],
+            immediate_size: 0,
+        });
+        let shader = device.create_shader_module(wgpu::include_wgsl!("analytic_glow.wgsl"));
+        let pipeline = |count, erase| {
+            let blend = wgpu::BlendComponent {
+                src_factor: if erase {
+                    wgpu::BlendFactor::Zero
+                } else {
+                    wgpu::BlendFactor::One
+                },
+                dst_factor: if erase {
+                    wgpu::BlendFactor::OneMinusSrcAlpha
+                } else {
+                    wgpu::BlendFactor::One
+                },
+                operation: wgpu::BlendOperation::Add,
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Noon replacement tile pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_tile"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_tile"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState {
+                            color: blend,
+                            alpha: blend,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        self.replacement = Some([
+            pipeline(1, true),
+            pipeline(1, false),
+            pipeline(PATH_SAMPLE_COUNT, true),
+            pipeline(PATH_SAMPLE_COUNT, false),
+        ]);
+        4
+    }
+
+    pub(super) fn draw<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        contribution: &'a wgpu::BindGroup,
+        erase: Option<&'a wgpu::BindGroup>,
+        single_sample: bool,
+    ) {
+        if let Some(erase) = erase {
+            let programs = self
+                .replacement
+                .as_ref()
+                .expect("prepared replacement programs");
+            let at = if single_sample { 0 } else { 2 };
+            pass.set_pipeline(&programs[at]);
+            pass.set_bind_group(0, erase, &[]);
+            pass.draw(0..6, 0..1);
+            pass.set_pipeline(&programs[at + 1]);
+        } else {
+            pass.set_pipeline(if single_sample {
+                &self.single
+            } else {
+                &self.multisampled
+            });
+        }
+        pass.set_bind_group(0, contribution, &[]);
+        pass.draw(0..6, 0..1);
+    }
+
+    pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon glow tile placement layout"),
             entries: &[
@@ -1513,6 +1673,7 @@ impl PlacementPrograms {
             single: pipeline(1),
             multisampled: pipeline(PATH_SAMPLE_COUNT),
             layout,
+            replacement: None,
         }
     }
 }

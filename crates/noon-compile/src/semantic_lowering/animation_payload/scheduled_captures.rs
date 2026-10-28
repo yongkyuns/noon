@@ -233,6 +233,7 @@ fn apply_effective_track_endpoint(
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
+            | Property::EffectSize
             | Property::EffectSeed,
             TrackValues::Effect {
                 attachment,

@@ -23,10 +23,10 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V27 carries ordered bindings, composed source plans, seeded masks, HatchPaint
+// V29 adds explicit BackdropBlur input roles; V28 added finite Pixelate cell sampling to V27's ordered bindings, composed source plans, seeded masks, HatchPaint
 // and exact private Visibility roles across the genuine worker boundary. Older
 // envelopes reject; native and direct Rust/WASM execution remain typed in process.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 27;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 29;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +65,9 @@ pub struct TransportEffectState {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TransportEffectDefinition {
+    Pixelate {
+        size: EffectRadius,
+    },
     Glow {
         color: Color,
         radius: EffectRadius,
@@ -72,6 +75,9 @@ pub enum TransportEffectDefinition {
         source: TransportGlowSource,
     },
     Blur {
+        radius: EffectRadius,
+    },
+    BackdropBlur {
         radius: EffectRadius,
     },
     Shadow {
@@ -88,6 +94,9 @@ pub enum TransportEffectDefinition {
 impl From<&noon_compile::CompiledEffect> for TransportEffectState {
     fn from(effect: &noon_compile::CompiledEffect) -> Self {
         let definition = match effect.definition {
+            noon_core::EffectDefinition::Pixelate(v) => {
+                TransportEffectDefinition::Pixelate { size: v.size() }
+            }
             noon_core::EffectDefinition::Glow(effect) => TransportEffectDefinition::Glow {
                 color: effect.color(),
                 radius: effect.radius(),
@@ -102,6 +111,11 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
             noon_core::EffectDefinition::Blur(blur) => TransportEffectDefinition::Blur {
                 radius: blur.radius(),
             },
+            noon_core::EffectDefinition::BackdropBlur(blur) => {
+                TransportEffectDefinition::BackdropBlur {
+                    radius: blur.radius(),
+                }
+            }
             noon_core::EffectDefinition::NoiseDissolve(value) => {
                 TransportEffectDefinition::NoiseDissolve {
                     seed: value.seed(),
@@ -119,6 +133,11 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
 impl TransportEffectState {
     fn to_compiled(self) -> Option<noon_compile::CompiledEffect> {
         let definition = match self.definition {
+            TransportEffectDefinition::Pixelate { size } => {
+                noon_core::Pixelate::new(EffectUpdate::default().size(size))
+                    .ok()?
+                    .into()
+            }
             TransportEffectDefinition::Glow {
                 color,
                 radius,
@@ -147,6 +166,11 @@ impl TransportEffectState {
             .into(),
             TransportEffectDefinition::Blur { radius } => {
                 noon_core::Blur::new(EffectUpdate::default().radius(radius))
+                    .ok()?
+                    .into()
+            }
+            TransportEffectDefinition::BackdropBlur { radius } => {
+                noon_core::BackdropBlur::new(EffectUpdate::default().radius(radius))
                     .ok()?
                     .into()
             }
@@ -1125,8 +1149,10 @@ pub struct RetainedExecutionFrameMirror {
     resource_session: Option<u32>,
     image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
-    geometry_handles:
-        HashMap<crate::TransportGeometryResourceHandle, noon_core::GeometryResourceHandle>,
+    // Immutable leases resolved from qualified resource keys at the genuine
+    // worker boundary. Planar vectors share their resource Arc just as native
+    // lowering does; a bare arena-local GeometryId cannot bind another layer.
+    geometry_bindings: HashMap<crate::TransportGeometryResourceHandle, GeometryRef>,
     composed_sources: HashMap<crate::TransportComposedSourceHandle, Arc<noon_core::ComposedSource>>,
     composed_dependencies: noon_compile::ComposedDependencies,
     composed_handles: HashMap<ObjectId, crate::TransportComposedSourceHandle>,
@@ -1147,6 +1173,10 @@ struct PreparedPainterOrder {
 }
 
 impl noon_runtime::ObjectIndexLookup for RetainedExecutionFrameMirror {
+    fn painter_rank(&self, index: usize) -> Option<usize> {
+        self.painter_rank_for_frame_index(index)
+    }
+
     fn object_index(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
@@ -1168,22 +1198,18 @@ impl RetainedExecutionFrameMirror {
             self.image_handles.remove(handle);
         }
     }
-    pub(crate) fn extend_installed_geometry_handles(
+    pub(crate) fn extend_installed_geometry_bindings(
         &mut self,
-        additions: &HashMap<
-            crate::TransportGeometryResourceHandle,
-            noon_core::GeometryResourceHandle,
-        >,
+        additions: impl IntoIterator<Item = (crate::TransportGeometryResourceHandle, GeometryRef)>,
     ) {
-        self.geometry_handles
-            .extend(additions.iter().map(|(&key, &value)| (key, value)));
+        self.geometry_bindings.extend(additions);
     }
-    pub(crate) fn remove_installed_geometry_handles<'a>(
+    pub(crate) fn remove_installed_geometry_bindings<'a>(
         &mut self,
         handles: impl IntoIterator<Item = &'a crate::TransportGeometryResourceHandle>,
     ) {
         for handle in handles {
-            self.geometry_handles.remove(handle);
+            self.geometry_bindings.remove(handle);
         }
     }
     pub(crate) fn with_installed_resources(
@@ -1264,10 +1290,13 @@ impl RetainedExecutionFrameMirror {
                 )),
             TransportObjectContent::Geometry { geometry, resource } => {
                 if let Some(resource) = resource {
-                    let local = self.geometry_handles.get(resource).ok_or(
-                        RetainedExecutionTransportError::UnknownGeometryResource(*resource),
-                    )?;
-                    Ok(ObjectContentRef::Geometry(GeometryRef::External(local.id)))
+                    self.geometry_bindings
+                        .get(resource)
+                        .cloned()
+                        .map(ObjectContentRef::Geometry)
+                        .ok_or(RetainedExecutionTransportError::UnknownGeometryResource(
+                            *resource,
+                        ))
                 } else {
                     Ok(ObjectContentRef::Geometry(geometry.clone()))
                 }
@@ -1324,6 +1353,10 @@ impl RetainedExecutionFrameMirror {
         !self.composed_handles.is_empty()
     }
 
+    pub(crate) fn has_painter_prefix_sources(&self) -> bool {
+        self.composed_dependencies.prefix_owners().next().is_some()
+    }
+
     pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
@@ -1367,6 +1400,14 @@ impl RetainedExecutionFrameMirror {
 
     pub fn painter_order(&self) -> &[u32] {
         &self.painter_order
+    }
+
+    pub(crate) fn painter_rank_for_frame_index(&self, index: usize) -> Option<usize> {
+        self.painter_ranks
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|rank| rank as usize)
     }
 
     pub fn apply(
@@ -1845,12 +1886,14 @@ impl RetainedExecutionFrameMirror {
             changed.push(index);
         }
         for &index in &removed_indices {
-            if frame.objects[index].content.composed_source().is_some() {
-                // A retired row retains its identity for re-entry, but must not
-                // retain the immutable member allocation after its last root.
-                frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(0.0));
-                frame.objects[index].effects = None;
-            }
+            // The receiver owns the current effective frame, not playback
+            // history. Preserve only the retired identity, releasing immutable
+            // path/group/appearance leases after their final current root.
+            frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(0.0));
+            frame.objects[index].fill_paint = None;
+            frame.objects[index].effects = None;
+            frame.objects[index].spatial = None;
+            frame.objects[index].text_bounds = None;
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
             frame.render_transforms[index] = None;
@@ -2402,6 +2445,8 @@ mod tests {
         mirror
     }
 
+    mod prefix_admission;
+
     fn mixed_frame() -> FrameState {
         let text = TextResourceHandle {
             arena: 0,
@@ -2498,6 +2543,111 @@ mod tests {
         effect: &noon_compile::CompiledEffect,
     ) -> Arc<noon_compile::CompiledEffectStack> {
         Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
+    }
+
+    #[test]
+    fn backdrop_worker_values_retain_source_role_precision_and_reject_bad_suffix_atomically() {
+        let mut frame = mixed_frame();
+        let effect = noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(96, 17),
+            definition: noon_core::BackdropBlur::new(
+                EffectUpdate::default().radius(noon_core::Pixels(3.500000000000123)),
+            )
+            .unwrap()
+            .into(),
+        };
+        frame.objects[0].effects = Some(effect_stack(&effect));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(29);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["protocol_version"], 29);
+        assert_eq!(json["objects"][0]["effects"][0]["kind"], "backdrop_blur");
+        let mut mirror = test_mirror();
+        mirror.apply(serde_json::from_value(json).unwrap()).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &frame);
+        assert_eq!(
+            mirror
+                .composed_dependencies
+                .prefix_owners()
+                .collect::<Vec<_>>(),
+            [frame.objects[0].id]
+        );
+        frame.objects[0].effects = Some(effect_stack(&noon_compile::CompiledEffect {
+            definition: EffectUpdate::default()
+                .radius(noon_core::Pixels(6.500000000000123))
+                .apply_to(effect.definition)
+                .unwrap(),
+            ..effect
+        }));
+        let good = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let before = mirror.frame().unwrap().clone();
+        for failure in 0..5 {
+            let mut bad = good.clone();
+            let mut suffix = snapshot.objects[1].clone();
+            suffix.effects = snapshot.objects[0].effects.clone();
+            match failure {
+                0 => {
+                    suffix.effects[0].definition = TransportEffectDefinition::BackdropBlur {
+                        radius: EffectRadius::Pixels(-1.0),
+                    }
+                }
+                1 => suffix.effects.push(TransportEffectState {
+                    attachment: SemanticNodeId::new(97, 18),
+                    definition: TransportEffectDefinition::Blur {
+                        radius: EffectRadius::Pixels(2.0),
+                    },
+                }),
+                2 => suffix.effects.push(TransportEffectState {
+                    attachment: SemanticNodeId::new(97, 18),
+                    definition: suffix.effects[0].definition,
+                }),
+                3 => bad.protocol_version = 28,
+                _ => {
+                    suffix.effects[0].definition = TransportEffectDefinition::BackdropBlur {
+                        radius: EffectRadius::Scene(f64::INFINITY),
+                    }
+                }
+            }
+            bad.objects.push(suffix);
+            assert!(mirror.apply(bad).is_err());
+            assert_eq!(mirror.frame().unwrap(), &before);
+            assert_eq!(mirror.applied_sequence(), Some(0));
+            assert_eq!(
+                mirror
+                    .composed_dependencies
+                    .prefix_owners()
+                    .collect::<Vec<_>>(),
+                [frame.objects[0].id]
+            );
+        }
+        mirror.apply(good).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &frame);
+        frame.objects[0].effects = None;
+        let remove = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        mirror.apply(remove).unwrap();
+        assert!(mirror.composed_dependencies.is_empty());
     }
 
     #[test]
@@ -2756,6 +2906,60 @@ mod tests {
     }
 
     #[test]
+    fn tagged_cell_size_round_trips_and_failed_values_keep_the_current_publication() {
+        let mut frame = mixed_frame();
+        let effect = Arc::new(noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(77, u32::MAX),
+            definition: noon_core::Pixelate::new(
+                EffectUpdate::default().size(noon_core::Pixels(7.750000000000123)),
+            )
+            .unwrap()
+            .into(),
+        });
+        frame.objects[0].effects = Some(effect_stack(&effect));
+        let snapshot = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["protocol_version"], 29);
+        assert_eq!(json["objects"][0]["effects"][0]["kind"], "pixelate");
+        let mut mirror = test_mirror();
+        let mut older = snapshot.clone();
+        older.protocol_version = 27;
+        assert!(mirror.apply(older).is_err());
+        assert!(mirror.frame().is_none());
+        mirror
+            .apply(serde_json::from_value(json.clone()).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+        let before = mirror.frame().unwrap().clone();
+        for size in [f64::NAN, f64::INFINITY, -1.0] {
+            let mut bad = snapshot.clone();
+            bad.snapshot = false;
+            bad.sequence = 1;
+            bad.objects[0].effects[0].definition = TransportEffectDefinition::Pixelate {
+                size: EffectRadius::Pixels(size),
+            };
+            assert!(mirror.apply(bad).is_err());
+            assert_eq!(mirror.frame().unwrap(), &before);
+        }
+        let mut foreign = json;
+        foreign["objects"][0]["effects"][0]["radius"] = serde_json::json!(1.0);
+        assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(foreign).is_err());
+        let mut corrected = snapshot;
+        corrected.snapshot = false;
+        corrected.sequence = 1;
+        mirror.apply(corrected).unwrap();
+    }
+
+    #[test]
     fn tagged_mask_preserves_seed_and_precision_and_rejects_foreign_fields() {
         let mut frame = mixed_frame();
         let definition = noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
@@ -2775,7 +2979,7 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(value["protocol_version"], 27);
+        assert_eq!(value["protocol_version"], 29);
         let mask = &value["objects"][0]["effects"][0];
         assert_eq!(mask["kind"], "noise_dissolve");
         assert_eq!(mask["seed"], u32::MAX);
@@ -2831,7 +3035,7 @@ mod tests {
                 PublicationContext::default(),
             )
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 27);
+        assert_eq!(snapshot.protocol_version, 29);
         let encoded = serde_json::to_value(&snapshot).unwrap();
         let decoded: RetainedExecutionDeltaEnvelope =
             serde_json::from_value(encoded.clone()).unwrap();
@@ -3066,7 +3270,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 27);
+        assert_eq!(snapshot.protocol_version, 29);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -3296,7 +3500,7 @@ mod tests {
             )
             .unwrap()
             .is_some());
-        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::VectorPath(
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::path(
             noon_core::VectorPath::new()
                 .move_to(noon_core::Vec2::ZERO)
                 .line_to(noon_core::Vec2::new(1.0, 1.0)),

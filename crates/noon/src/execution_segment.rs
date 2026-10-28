@@ -102,7 +102,7 @@ pub(crate) struct GlowPulseAttachmentCompletion {
     pub owner: SemanticNodeId,
     pub tracks: BTreeSet<TrackId>,
     /// Parameters still owned by ordinary non-pulse tracks in this composition.
-    pub ordinary_parameters: u8,
+    pub ordinary_parameters: u16,
     /// Keep a temporary neutral attachment throughout the enclosing composition:
     /// a reversing parent may reopen a child after its intensity has restored.
     /// Only the segment completion barrier removes an unadopted exact identity.

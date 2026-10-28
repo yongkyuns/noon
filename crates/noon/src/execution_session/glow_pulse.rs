@@ -217,7 +217,7 @@ pub(super) fn adopt_ordinary_parameter_tracks(
     }
 }
 
-const fn parameter_bit(parameter: EffectParameter) -> u8 {
+const fn parameter_bit(parameter: EffectParameter) -> u16 {
     match parameter {
         EffectParameter::Color => 1,
         EffectParameter::Radius => 2,
@@ -227,6 +227,7 @@ const fn parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Progress => 32,
         EffectParameter::Softness => 64,
         EffectParameter::Seed => 128,
+        EffectParameter::Size => 256,
     }
 }
 

@@ -409,10 +409,18 @@ pub enum PathCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryRef {
-    Circle { radius: f32 },
-    Rectangle { size: Vec2 },
-    Line { start: Vec2, end: Vec2 },
-    VectorPath(VectorPath),
+    Circle {
+        radius: f32,
+    },
+    Rectangle {
+        size: Vec2,
+    },
+    Line {
+        start: Vec2,
+        end: Vec2,
+    },
+    /// Immutable path data shared by compiled/runtime rows and resource leases.
+    VectorPath(std::sync::Arc<VectorPath>),
     External(GeometryId),
 }
 
@@ -448,7 +456,7 @@ impl GeometryRef {
     }
 
     pub fn path(path: VectorPath) -> Self {
-        Self::VectorPath(path)
+        Self::VectorPath(std::sync::Arc::new(path))
     }
 
     pub fn local_bounds(&self) -> Option<Rect> {
@@ -526,7 +534,7 @@ mod tests {
         assert!(matches!(path.commands()[0], PathCommand::MoveTo { .. }));
         assert_eq!(
             GeometryRef::path(path.clone()),
-            GeometryRef::VectorPath(path)
+            GeometryRef::VectorPath(std::sync::Arc::new(path))
         );
     }
 

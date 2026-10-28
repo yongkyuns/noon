@@ -1089,8 +1089,9 @@ impl SemanticStore {
     /// Intern immutable path content in this store's resource namespace.
     pub fn insert_geometry_path(
         &mut self,
-        path: crate::VectorPath,
+        path: impl Into<std::sync::Arc<crate::VectorPath>>,
     ) -> Result<crate::GeometryResourceHandle, crate::GeometryResourceError> {
+        let path = path.into();
         if !path.is_finite() {
             return Err(crate::GeometryResourceError::NonFinitePath);
         }
@@ -1110,7 +1111,7 @@ impl SemanticStore {
     /// fallible validation boundary above.
     pub(crate) fn insert_preflighted_geometry_path(
         &mut self,
-        path: crate::VectorPath,
+        path: std::sync::Arc<crate::VectorPath>,
     ) -> crate::GeometryResourceHandle {
         self.geometry_resources.insert_path(path)
     }
@@ -1120,13 +1121,16 @@ impl SemanticStore {
     /// discards only the unpublished resource, preserving existing handles.
     pub fn with_geometry_path<T, E>(
         &mut self,
-        path: crate::VectorPath,
+        path: impl Into<std::sync::Arc<crate::VectorPath>>,
         publish: impl FnOnce(&mut Self, crate::GeometryResourceHandle) -> Result<T, E>,
     ) -> Result<T, E>
     where
         E: From<crate::GeometryResourceError>,
     {
-        self.with_geometry_paths([path], |store, handles| publish(store, handles[0]))
+        self.with_geometry_resources(
+            [crate::GeometryResource::VectorPath(path.into())],
+            |store, handles| publish(store, handles[0]),
+        )
     }
 
     /// Admit one validated mesh for an atomic semantic publication. If the

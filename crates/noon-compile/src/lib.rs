@@ -10,9 +10,10 @@ pub use audio::CompiledAudioClip;
 mod compaction;
 mod composed_dependencies;
 pub use composed_dependencies::{
-    validate_composed_sources, CompiledComposedSourceError, CompiledComposedSourceErrorKind,
-    ComposedDependencies, ComposedDependencyChanges, ComposedSourceGraphView,
-    ComposedValidationStats,
+    unsupported_prefix_input, validate_composed_sources, CompiledComposedSourceError,
+    CompiledComposedSourceErrorKind, ComposedDependencies, ComposedDependencyChanges,
+    ComposedSourceGraphView, ComposedValidationStats, PrefixAdmission, PrefixAdmissionChanges,
+    PrefixAdmissionView,
 };
 mod effect_attachment;
 pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};
@@ -92,6 +93,7 @@ impl DynamicProperties {
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
+            | Property::EffectSize
             | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
@@ -168,7 +170,7 @@ pub struct CompiledEffect {
 
 impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 7] = [
+    pub const PARAMETER_PROPERTIES: [Property; 8] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
@@ -176,6 +178,7 @@ impl CompiledEffect {
         Property::EffectProgress,
         Property::EffectSoftness,
         Property::EffectSeed,
+        Property::EffectSize,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -192,7 +195,8 @@ impl CompiledEffect {
             + usize::from(update.intensity.is_some())
             + usize::from(update.offset.is_some())
             + usize::from(update.progress.is_some())
-            + usize::from(update.softness.is_some());
+            + usize::from(update.softness.is_some())
+            + usize::from(update.size.is_some());
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
             (update.color.is_some(), Property::EffectColor),
@@ -201,6 +205,7 @@ impl CompiledEffect {
             (update.offset.is_some(), Property::EffectOffset),
             (update.progress.is_some(), Property::EffectProgress),
             (update.softness.is_some(), Property::EffectSoftness),
+            (update.size.is_some(), Property::EffectSize),
         ] {
             if requested {
                 channels.push((
@@ -1521,6 +1526,7 @@ impl CompiledScene {
                         | Property::EffectOffset
                         | Property::EffectProgress
                         | Property::EffectSoftness
+                        | Property::EffectSize
                         | Property::EffectSeed
                 )
             {
@@ -1837,7 +1843,7 @@ impl CompiledScene {
     }
 
     fn reposition_painter_row(&mut self, index: u32) {
-        reposition_order_row(
+        let range = reposition_order_row(
             &mut self.painter_order,
             &mut self.painter_ranks,
             index,
@@ -1856,6 +1862,10 @@ impl CompiledScene {
                     .then_with(|| self.family_ranks[a as usize].cmp(&self.family_ranks[b as usize]))
             },
         );
+        for rank in range {
+            let id = self.objects[self.painter_order[rank] as usize].id;
+            self.refresh_prefix_rank(id, Some(rank));
+        }
     }
 
     pub const fn resources(&self) -> &CompiledResources {
@@ -2276,9 +2286,13 @@ impl CompiledScene {
     ) -> Result<CompiledPatchStats, CompilePatchError> {
         let owner = match patch {
             ExecutionPatch::CreateObject(row) => Some(row.id),
-            ExecutionPatch::RemoveObject(id) | ExecutionPatch::SetContent { object: id, .. } => {
-                Some(*id)
-            }
+            ExecutionPatch::RemoveObject(id)
+            | ExecutionPatch::SetContent { object: id, .. }
+            | ExecutionPatch::SetEffects { object: id, .. }
+            | ExecutionPatch::SetEffectStack { object: id, .. }
+            | ExecutionPatch::SetSpatialState { object: id, .. }
+            | ExecutionPatch::SetSemanticTransform { object: id, .. }
+            | ExecutionPatch::SetDrawEnabled { object: id, .. } => Some(*id),
             _ => None,
         };
         let previous = owner.and_then(|id| self.composed_plan(id));
@@ -2385,6 +2399,10 @@ impl CompiledScene {
                 self.painter_order.remove(painter_position);
                 for rank in painter_position..self.painter_order.len() {
                     self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                    self.refresh_prefix_rank(
+                        self.objects[self.painter_order[rank] as usize].id,
+                        Some(rank),
+                    );
                 }
                 let family_position = self.family_ranks[index as usize]
                     .take()
@@ -2852,6 +2870,7 @@ impl CompiledScene {
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
+                            | Property::EffectSize
                             | Property::EffectSeed
                     )
                 {
@@ -3672,6 +3691,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectProgress => 19,
         Property::EffectSoftness => 20,
         Property::EffectSeed => 21,
+        Property::EffectSize => 22,
     }
 }
 

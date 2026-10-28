@@ -494,8 +494,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         debug_assert_eq!(payloads.len(), tokens.len());
         let resource_tokens = payloads.iter().map(|(token, _)| *token).collect::<Vec<_>>();
         let final_states = preflight.staged_pending_paths.clone();
-        store.with_geometry_paths(
-            payloads.into_iter().map(|(_, path)| path),
+        store.with_geometry_resources(
+            payloads
+                .into_iter()
+                .map(|(_, path)| crate::GeometryResource::VectorPath(path)),
             move |store, handles| {
                 let resources = resource_tokens
                     .iter()

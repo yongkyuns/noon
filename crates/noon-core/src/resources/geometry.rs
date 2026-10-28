@@ -129,8 +129,8 @@ impl GeometryResourceArena {
         Self::default()
     }
 
-    pub fn insert_path(&mut self, path: VectorPath) -> GeometryResourceHandle {
-        self.insert(GeometryResource::VectorPath(Arc::new(path)))
+    pub fn insert_path(&mut self, path: impl Into<Arc<VectorPath>>) -> GeometryResourceHandle {
+        self.insert(GeometryResource::VectorPath(path.into()))
     }
 
     pub fn insert_mesh(&mut self, mesh: MeshResource) -> GeometryResourceHandle {
@@ -186,7 +186,7 @@ impl GeometryResourceArena {
                 end: *end,
             },
             GeometryRef::VectorPath(path) => {
-                StoredGeometry::Resource(self.insert_path(path.clone()))
+                StoredGeometry::Resource(self.insert(GeometryResource::VectorPath(path.clone())))
             }
             GeometryRef::External(id) => {
                 let handle = self

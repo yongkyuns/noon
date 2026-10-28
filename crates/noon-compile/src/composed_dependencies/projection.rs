@@ -14,10 +14,16 @@ struct Row<'a> {
     painted: bool,
     text_bounds: bool,
     z: f64,
+    input_role: EffectInputRole,
+    unresolved_geometry: bool,
 }
 impl<'a> Row<'a> {
     fn from_object(row: &'a crate::CompiledObject) -> Self {
         Self {
+            unresolved_geometry: matches!(
+                row.content.geometry(),
+                Some(noon_core::GeometryRef::External(_))
+            ),
             source: if let ObjectContentRef::Composed(source) = &row.content {
                 Some(source)
             } else {
@@ -31,6 +37,10 @@ impl<'a> Row<'a> {
                 || row.fill_paint.is_some(),
             text_bounds: row.text_bounds.is_some(),
             z: row.base_z_index,
+            input_role: row
+                .effects
+                .as_ref()
+                .map_or(EffectInputRole::Painted, |stack| stack.input_role()),
         }
     }
 }
@@ -42,6 +52,7 @@ pub(super) struct Projection<'a> {
     dependencies: ComposedDependencyChanges<'a>,
     family: ProjectedOrder<'a>,
     painter: ProjectedOrder<'a>,
+    prefix: PrefixAdmissionChanges,
 }
 impl<'a> Projection<'a> {
     pub(super) fn new(scene: &'a CompiledScene) -> Self {
@@ -56,6 +67,7 @@ impl<'a> Projection<'a> {
             dependencies: ComposedDependencyChanges::new(base),
             family: ProjectedOrder::new(scene, true),
             painter: ProjectedOrder::new(scene, false),
+            prefix: PrefixAdmissionChanges::default(),
         }
     }
     fn row(&self, id: ObjectId) -> Option<Row<'a>> {
@@ -120,6 +132,12 @@ impl<'a> Projection<'a> {
                 .then_with(|| family.rank(a).cmp(&family.rank(b)))
         });
     }
+    fn stage_input_role(&mut self, id: ObjectId, input_role: EffectInputRole) {
+        if self.row(id).is_some_and(|row| row.input_role != input_role) {
+            self.edit(id, |row| row.input_role = input_role);
+            self.changed.insert(id);
+        }
+    }
     pub(super) fn stage(
         &mut self,
         patches: &'a [ExecutionPatch],
@@ -168,14 +186,41 @@ impl<'a> Projection<'a> {
                         .and_then(|row| row.source)
                         .zip(source)
                         .is_some_and(|(old, new)| !Arc::ptr_eq(old, new));
+                    let capability_changed = self.row(*object).is_some_and(|row| {
+                        row.unresolved_geometry
+                            != matches!(
+                                content.geometry(),
+                                Some(noon_core::GeometryRef::External(_))
+                            )
+                    });
                     self.edit(*object, |row| {
+                        row.unresolved_geometry = matches!(
+                            content.geometry(),
+                            Some(noon_core::GeometryRef::External(_))
+                        );
                         row.source = source;
                         row.text_bounds = text_bounds.is_some();
                     });
+                    if capability_changed {
+                        self.changed.insert(*object);
+                    }
                     if replaces_plan {
                         self.changed.insert(*object);
                         self.replaced.insert(*object);
                     }
+                }
+                ExecutionPatch::SetEffects { object, effects } => {
+                    self.stage_input_role(*object, effects.input_role());
+                }
+                ExecutionPatch::SetEffectStack {
+                    object, effects, ..
+                } => {
+                    self.stage_input_role(
+                        *object,
+                        effects
+                            .as_ref()
+                            .map_or(EffectInputRole::Painted, |stack| stack.input_role()),
+                    );
                 }
                 ExecutionPatch::SetZIndex { object, value } => {
                     self.edit(*object, |row| row.z = *value);
@@ -249,9 +294,10 @@ impl<'a> Projection<'a> {
                             style.fill.is_some() || style.stroke.is_some() || fill_paint.is_some()
                     });
                 }
-                ExecutionPatch::SetDrawEnabled { object, enabled }
-                    if self.source(*object).is_some() =>
-                {
+                ExecutionPatch::SetDrawEnabled { object, enabled } => {
+                    if self.row(*object).is_some_and(|row| row.draw != *enabled) {
+                        self.changed.insert(*object);
+                    }
                     self.edit(*object, |row| row.draw = *enabled);
                 }
                 _ => {}
@@ -265,10 +311,18 @@ impl<'a> Projection<'a> {
                 });
             }
         }
+        self.prefix = self.dependencies.prepare_prefix_admission(
+            self,
+            self.changed.iter().copied(),
+            self.painter.touched(),
+        );
         for &id in &self.replaced {
             self.dependencies.replace(id, None, self.source(id));
         }
         Ok(())
+    }
+    pub(super) fn prefix_rows_examined(&self) -> usize {
+        self.prefix.rows_examined
     }
     pub(super) fn affected_scopes(&self) -> BTreeSet<ObjectId> {
         self.dependencies.affected_scopes(
@@ -292,6 +346,16 @@ impl ComposedSourceGraphView for Projection<'_> {
     fn rank(&self, input: ObjectId) -> Option<usize> {
         self.rank(input)
     }
+    fn input_role(&self, owner: ObjectId) -> Option<EffectInputRole> {
+        self.row(owner).map(|row| row.input_role)
+    }
+    fn prefix_input_unsupported(&self, input: ObjectId) -> bool {
+        self.row(input)
+            .is_some_and(|row| row.draw && (row.spatial.is_some() || row.unresolved_geometry))
+    }
+    fn prefix_conflict(&self) -> Option<(ObjectId, ObjectId)> {
+        self.dependencies.prefix_conflict(&self.prefix)
+    }
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
         self.dependencies.overlapping(input)
     }
@@ -299,8 +363,20 @@ impl ComposedSourceGraphView for Projection<'_> {
 
 pub(super) fn introduces_scope(patch: &ExecutionPatch) -> bool {
     match patch {
-        ExecutionPatch::CreateObject(row) => row.content.composed_source().is_some(),
+        ExecutionPatch::CreateObject(row) => {
+            row.content.composed_source().is_some()
+                || row
+                    .effects
+                    .as_ref()
+                    .is_some_and(|stack| stack.input_role() == EffectInputRole::PainterPrefix)
+        }
         ExecutionPatch::SetContent { content, .. } => content.composed_source().is_some(),
+        ExecutionPatch::SetEffects { effects, .. } => {
+            effects.input_role() == EffectInputRole::PainterPrefix
+        }
+        ExecutionPatch::SetEffectStack { effects, .. } => effects
+            .as_ref()
+            .is_some_and(|stack| stack.input_role() == EffectInputRole::PainterPrefix),
         _ => false,
     }
 }
@@ -312,6 +388,8 @@ pub(super) fn affects_source_graph(patch: &ExecutionPatch) -> bool {
             | ExecutionPatch::ReorderObject { .. }
             | ExecutionPatch::SetZIndex { .. }
             | ExecutionPatch::SetContent { .. }
+            | ExecutionPatch::SetEffects { .. }
+            | ExecutionPatch::SetEffectStack { .. }
             | ExecutionPatch::SetSpatialState { .. }
             | ExecutionPatch::SetSemanticTransform { .. }
             | ExecutionPatch::SetTransform { .. }

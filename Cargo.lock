@@ -2101,6 +2101,7 @@ name = "noon-render-wgpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "half",
  "noon-compile",
  "noon-core",
  "noon-geometry",

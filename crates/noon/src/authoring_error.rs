@@ -136,7 +136,10 @@ pub enum AuthoringError {
     AudioResource(noon_core::AudioResourceError),
     /// A finite authored clip has invalid timing, trim, gain, or fades.
     AudioClip(noon_core::AudioClipError),
-    EffectStateReplacementUnavailable,
+    /// Authored and published effect generations disagree for a coherent capture.
+    EffectCaptureMismatch {
+        owner: noon_core::SemanticNodeId,
+    },
     EffectParameter(noon_core::EffectParameterError),
     EffectNotFound {
         owner: noon_core::SemanticNodeId,
@@ -343,7 +346,7 @@ impl std::fmt::Display for AuthoringError {
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
             Self::EffectParameter(error) => error.fmt(f),
-            Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
+            Self::EffectCaptureMismatch { owner } => write!(f, "effect capture for {owner:?} requires the exact published attachment generations"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
             Self::EffectOwnerMismatch { effect, owner } => write!(f, "effect {effect:?} does not belong to object {owner:?}"),
             #[cfg(feature = "image-decode")]

@@ -40,12 +40,13 @@ impl PreparedSource {
             let SourceDraw::Filtered { capture, bytes } = draw else {
                 continue;
             };
-            if bindings
-                .get(count)
-                .is_none_or(|old| old.texture != capture.texture || old.offset != bytes.start)
-            {
-                let view = capture.texture.create_view(&Default::default());
-                let binding =
+            if bindings.get(count).is_none_or(|old| {
+                old.texture != capture.texture
+                    || old.erase_texture != capture.erase
+                    || old.offset != bytes.start
+            }) {
+                let bind = |texture: &wgpu::Texture| {
+                    let view = texture.create_view(&Default::default());
                     device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("Noon nested source tile binding"),
                         layout,
@@ -65,11 +66,14 @@ impl PreparedSource {
                                 resource: wgpu::BindingResource::TextureView(&view),
                             },
                         ],
-                    });
+                    })
+                };
                 let value = FilteredBinding {
                     texture: capture.texture.clone(),
                     offset: bytes.start,
-                    binding,
+                    binding: bind(&capture.texture),
+                    erase_texture: capture.erase.clone(),
+                    erase_binding: capture.erase.as_ref().map(bind),
                 };
                 if count == bindings.len() {
                     bindings.push(value);

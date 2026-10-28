@@ -251,7 +251,7 @@ fn incremental_prune_remaps_batches_even_when_packed_generation_is_stale() {
     };
     assert_eq!(
         preparer.path_mesh_cache[preparer.path_batch_cache_indices[1]].path,
-        *second_path
+        **second_path
     );
 
     // A subsequent incremental reveal reads the remapped row descriptor to

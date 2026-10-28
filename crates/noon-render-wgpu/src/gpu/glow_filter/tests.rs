@@ -45,6 +45,7 @@ fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
         required_by_parent: true,
         original_by_parent: true,
         isolate: false,
+        padding_pixels: 0,
     };
     // Eight by eight pixels plus a one-pixel coverage fringe, with one painted
     // and one original RGBA8 image. No filter scratch or invented attachment.

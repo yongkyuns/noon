@@ -5,16 +5,28 @@ use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
+mod backdrop_composite;
+pub use backdrop_composite::{
+    BackdropCompositeFilter, BackdropCompositeInputs, BackdropCompositeParameters,
+    BackdropCompositeScope,
+};
 mod derived_display;
 mod paint;
 mod source_capture;
 pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
-mod dissolve_filter;
+pub use source_capture::{
+    PainterPrefixCaptureFilter, PainterPrefixCaptureRequest, PainterPrefixCaptureScope,
+};
 mod effect_stack;
 mod gaussian_blur;
+mod hdr_bloom;
+pub use hdr_bloom::{
+    HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomPrepareError, HdrBloomScope,
+    HdrBloomStats,
+};
 mod glow_filter;
+mod sample_filter;
 mod shadow_filter;
-pub use dissolve_filter::{DissolveFilter, DissolveParameters, DissolveScope};
 pub use effect_stack::{
     EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,
 };
@@ -26,6 +38,7 @@ pub use glow_filter::{
     EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
     EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
+pub use sample_filter::{SampleFilter, SampleParameters, SampleScope};
 mod overlay;
 mod path_batching;
 mod presentation;
@@ -269,6 +282,22 @@ struct CameraUniform {
     clip_scale: [f32; 2],
     viewport_size: [f32; 2],
     viewport_origin: [f32; 2],
+    // Image texel decisions retain the original output-pixel projection when
+    // the vertex camera is cropped for an isolated capture. Reconstructing the
+    // same pixel through a recentered f32 camera can flip nearest texel ties.
+    sample_center: [f32; 2],
+    sample_clip_scale: [f32; 2],
+    sample_viewport_size: [f32; 2],
+    sample_viewport_origin: [f32; 2],
+}
+impl CameraUniform {
+    fn with_sample_projection(mut self, original: Self) -> Self {
+        self.sample_center = original.center;
+        self.sample_clip_scale = original.clip_scale;
+        self.sample_viewport_size = original.viewport_size;
+        self.sample_viewport_origin = original.viewport_origin;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -329,6 +358,10 @@ impl Camera2D {
             clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
             viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
             viewport_origin: [origin[0] as f32, origin[1] as f32],
+            sample_center: [self.center.x, self.center.y],
+            sample_clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
+            sample_viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
+            sample_viewport_origin: [origin[0] as f32, origin[1] as f32],
         }
     }
 }
@@ -2661,7 +2694,7 @@ mod tests {
 
     #[test]
     fn camera_maps_world_size_to_clip_scale() {
-        assert_eq!(size_of::<CameraUniform>(), 32);
+        assert_eq!(size_of::<CameraUniform>(), 64);
         let camera =
             Camera2D::new(Vec2::new(3.0, -2.0), Vec2::new(16.0, 9.0)).expect("valid camera");
         let uniform = camera.uniform([1_920, 1_080]);

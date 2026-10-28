@@ -152,6 +152,7 @@ impl Host {
                 &prepared,
                 &self.text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();

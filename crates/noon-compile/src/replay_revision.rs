@@ -260,6 +260,10 @@ impl CompiledScene {
                     self.painter_order.remove(rank as usize);
                     for rank in rank as usize..self.painter_order.len() {
                         self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                        self.refresh_prefix_rank(
+                            self.objects[self.painter_order[rank] as usize].id,
+                            Some(rank),
+                        );
                     }
                 }
             }
@@ -296,6 +300,9 @@ impl CompiledScene {
                 }
             }
             self.update_composed_dependency(id, previous_composed);
+            if self.objects[index].id != id {
+                self.refresh_prefix_admission(self.objects[index].id);
+            }
             saved.object = current;
             saved.order = current_order;
         }

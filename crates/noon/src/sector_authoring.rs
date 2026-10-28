@@ -104,7 +104,7 @@ pub(crate) fn annular_sector_geometry(
         ),
     )
     .map_err(AuthoringError::from)?;
-    Ok(GeometryRef::VectorPath(path))
+    Ok(GeometryRef::path(path))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -144,5 +144,5 @@ pub(crate) fn annulus_geometry(
         ),
     )
     .map_err(AuthoringError::from)?;
-    Ok(GeometryRef::VectorPath(path))
+    Ok(GeometryRef::path(path))
 }

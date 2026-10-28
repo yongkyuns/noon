@@ -774,6 +774,7 @@ impl NativeApp {
                     &prepared,
                     &gpu.text_state,
                     &publication,
+                    CLEAR_COLOR,
                     noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                 )
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;

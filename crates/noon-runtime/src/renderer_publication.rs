@@ -1,3 +1,6 @@
+mod spatial_queries;
+pub use spatial_queries::{PainterPrefixGeometryQuery, PainterPrefixGeometryQueryError};
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use noon_core::{
@@ -12,9 +15,14 @@ use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 /// their local inputs without scanning the frame or retaining another index.
 pub trait ObjectIndexLookup {
     fn object_index(&self, object: noon_core::ObjectId) -> Option<usize>;
+    fn painter_rank(&self, index: usize) -> Option<usize>;
 }
 
 impl ObjectIndexLookup for crate::SceneInstance {
+    fn painter_rank(&self, index: usize) -> Option<usize> {
+        self.painter_rank(index).map(|rank| rank as usize)
+    }
+
     fn object_index(&self, object: noon_core::ObjectId) -> Option<usize> {
         self.compiled
             .object_index(object)
@@ -236,6 +244,7 @@ pub struct RendererPublication<'a> {
     painter_order: &'a [u32],
     derived_display_objects: &'a [DerivedDisplayObject],
     object_indices: &'a dyn ObjectIndexLookup,
+    spatial_index: Option<&'a crate::ExecutionSpatialIndex>,
 }
 
 impl RendererPublication<'_> {
@@ -254,6 +263,23 @@ impl RendererPublication<'_> {
                 .get(index)
                 .is_some_and(|row| row.id == object)
         })
+    }
+
+    pub fn painter_rank(&self, index: usize) -> Option<usize> {
+        self.object_indices.painter_rank(index).filter(|&rank| {
+            self.painter_order
+                .get(rank)
+                .copied()
+                .map(|row| row as usize)
+                == Some(index)
+        })
+    }
+
+    /// Execution-owned broad-phase geometry bounds for this exact publication.
+    /// Filters may additionally contribute outside these bounds; the renderer
+    /// must expand that declared source closure before capturing a prefix.
+    pub const fn spatial_index(&self) -> Option<&crate::ExecutionSpatialIndex> {
+        self.spatial_index
     }
 
     pub const fn changes(&self) -> &FrameChanges {
@@ -311,6 +337,15 @@ impl RendererPublication<'_> {
 }
 
 impl<'a> RendererPublication<'a> {
+    /// Borrow the caller's synchronized execution index. The session or validated
+    /// transport receiver must update it to this publication before borrowing it.
+    /// This adds no renderer-owned object bounds or identity allocator.
+    #[doc(hidden)]
+    pub fn with_spatial_index(mut self, index: &'a crate::ExecutionSpatialIndex) -> Self {
+        self.spatial_index = Some(index);
+        self
+    }
+
     /// Attach identity-free transient presentation rows to the exact publication
     /// that owns the effective stable frame they were derived from.
     ///
@@ -406,6 +441,7 @@ impl<'a> RendererPublication<'a> {
             painter_order,
             derived_display_objects: &[],
             object_indices,
+            spatial_index: None,
         }
     }
 }

@@ -18,7 +18,7 @@ from _noon_errors import engine_call
 
 @dataclass(frozen=True, slots=True)
 class Pixels:
-    """Gaussian sigma in final output pixels, validated when used in an effect."""
+    """A length in final output pixels, validated when used in an effect."""
     value: float | tuple[float, float]
 
 
@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -60,6 +60,9 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
         raise ValueError("effect offset requires two coordinates")
     request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels, progress, softness, seed)
     try:
+        if size is not None:
+            size_pixels = isinstance(size, Pixels)
+            engine_call(request.setSize, _number(size.value if size_pixels else size, "size"), size_pixels)
         yield request
     finally:
         request.free()
@@ -142,6 +145,40 @@ class Blur:
         return Pixels(value) if bool(self._definition.pixels) else value
 
 
+class BackdropBlur:
+    """Gaussian blur of the earlier painter content beneath this object/group.
+
+    The original object coverage masks the background treatment; its paint and
+    final opacity remain ordinary. Radius zero preserves the ordinary image.
+    Use one backdrop attachment per scope; nested backdrops and earlier spatial
+    content are outside the current portable profile and fail shared admission.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, radius=None):
+        with _update(radius=radius) as update:
+            from js import noonBackdropBlur
+            self._definition = engine_call(noonBackdropBlur, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def radius(self):
+        value = float(self._definition.radius)
+        return Pixels(value) if bool(self._definition.pixels) else value
+
+
 class Shadow:
     """Colored Gaussian of painted alpha behind the original source.
 
@@ -183,6 +220,39 @@ class Shadow:
     def offset(self):
         value = (float(self._definition.offsetX), float(self._definition.offsetY))
         return Pixels(value) if bool(self._definition.offsetPixels) else value
+
+
+class Pixelate:
+    """Nearest-centre square cells over the painted object or composed group.
+
+    A plain size uses scene units; Pixels uses final output pixels. Cells follow
+    the original source bounds in screen axes. Sizes <= one pixel bypass exactly.
+    The portable renderer profile accepts at most 128 resolved output pixels.
+    """
+    __slots__ = ("_definition",)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def __init__(self, *, size=None):
+        with _update(size=size) as update:
+            from js import noonPixelate
+            self._definition = engine_call(noonPixelate, update)
+
+    @property
+    def size(self):
+        value = float(self._definition.size)
+        return Pixels(value) if bool(self._definition.sizePixels) else value
 
 
 class NoiseDissolve:
@@ -303,7 +373,7 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur, "shadow": Shadow, "noise_dissolve": NoiseDissolve}[str(definition.kind)]._from_definition(definition)
+        return {"glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -359,8 +429,8 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, Shadow, NoiseDissolve)):
-        raise TypeError("this effect profile supports Glow, Blur, Shadow and NoiseDissolve definitions")
+    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate)):
+        raise TypeError("this effect profile supports Glow, Blur, BackdropBlur, Shadow, NoiseDissolve and Pixelate definitions")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)
@@ -375,9 +445,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

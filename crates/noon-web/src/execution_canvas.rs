@@ -2888,6 +2888,7 @@ mod wasm {
                         &prepared,
                         &self.direct_text_gpu,
                         &publication,
+                        self.clear_color,
                         noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;

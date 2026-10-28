@@ -691,7 +691,7 @@ impl FramePreparer {
             for index in range.clone() {
                 self.zero_contribution[3].set(
                     packed_row_span(index),
-                    !self.paths[index].style.may_contribute_color(),
+                    !self.paths[index].may_contribute_color(),
                 );
             }
         }
@@ -700,9 +700,9 @@ impl FramePreparer {
     pub(crate) fn set_mega_zero_contribution(
         &mut self,
         range: Range<u32>,
-        style: crate::PackedStyle,
+        path: crate::PathInstance,
     ) {
-        self.zero_contribution[4].set(range, !style.may_contribute_color());
+        self.zero_contribution[4].set(range, !path.may_contribute_color());
     }
 }
 
@@ -913,6 +913,44 @@ mod tests {
                 "style: {:?}",
                 state.style
             );
+        }
+    }
+
+    #[test]
+    fn background_only_path_eligibility_is_exact_local_and_shared_with_mega_paths() {
+        use noon_core::{Color, Vec2, VectorPath};
+        for individual in [false, true] {
+            let mut state = object(
+                0,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, 0.0))
+                        .line_to(Vec2::new(0.5, 0.0)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = None;
+            state.style.stroke_width = 0.0;
+            state.style.background_stroke = Some(Color::WHITE);
+            state.style.background_stroke_width = 0.2;
+            let mut frame = frame(vec![state]);
+            let mut preparer = FramePreparer::new();
+            preparer.individual_path_draws = individual;
+            let prepared = preparer.prepare(&frame);
+            assert!(eligible_geometry_count(&prepared) > 0);
+            let vertices = prepared.path_vertices.to_vec();
+            let indices = prepared.mega_path_indices.to_vec();
+            for opacity in [0.0, f32::MIN_POSITIVE, 0.3, 1.0, 0.0] {
+                frame.objects[0].style.opacity = opacity;
+                let prepared =
+                    preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+                assert_eq!(eligible_geometry_count(&prepared) > 0, opacity != 0.0);
+                assert_eq!(prepared.stats.full_rebuilds, 0);
+                assert_eq!(prepared.stats.geometry_cache_misses, 0);
+                assert_eq!(prepared.stats.render_order_positions_visited, 0);
+                assert_eq!(prepared.path_vertices, vertices);
+                assert_eq!(prepared.mega_path_indices, indices);
+            }
         }
     }
 

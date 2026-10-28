@@ -989,6 +989,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
+                            | Property::EffectSize
                             | Property::EffectSeed
                     )
                 {

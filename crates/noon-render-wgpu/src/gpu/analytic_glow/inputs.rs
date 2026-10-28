@@ -40,7 +40,8 @@ impl GpuRenderer {
         let Some(scope) = self.retained_input(index, object) else {
             return Ok(None);
         };
-        if scope.camera != self.camera || scope.viewport != self.viewport_size {
+        if scope.invalidated || scope.camera != self.camera || scope.viewport != self.viewport_size
+        {
             return Err(EffectPrepareError::PublicationMismatch);
         }
         let texture = if original {
@@ -93,15 +94,20 @@ impl GpuRenderer {
         Ok(Some(FilteredCapture {
             object,
             texture,
+            erase: (!original).then(|| scope.placement_erase.clone()).flatten(),
             revision: scope.output_revision,
-            opacity: scope.placement.opacity,
+            opacity: if original {
+                scope.original_opacity
+            } else {
+                scope.placement.opacity
+            },
             origin,
             size,
             bounds,
         }))
     }
 
-    pub(super) fn prepare_composed_replacements(
+    pub(in crate::gpu) fn prepare_composed_replacements(
         &self,
         prepared: &super::super::retained_text::PreparedRetainedGpuFrame<'_>,
         owner: usize,
@@ -123,6 +129,17 @@ impl GpuRenderer {
             let (capture, count) = if let Some((index, owner, count, first, _)) = candidate {
                 if first != object || count > members.len() - at {
                     return Err(EffectPrepareError::PublicationMismatch);
+                }
+                // Prefix selections can have spatial gaps. A replacement still
+                // represents its complete, contiguous isolated child interval;
+                // do not accidentally consume a different following candidate.
+                let start = prepared
+                    .capture_rank(first)
+                    .ok_or(EffectPrepareError::PublicationMismatch)?;
+                for (offset, &member) in members[at..at + count].iter().enumerate() {
+                    if prepared.capture_rank(member) != start.checked_add(offset) {
+                        return Err(EffectPrepareError::PublicationMismatch);
+                    }
                 }
                 (self.filtered_input(index, owner, original)?, count)
             } else {

@@ -1636,6 +1636,10 @@ impl ExecutionSession {
 
     /// Consume one coherent renderer publication from this typed session.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let prefix_queries = self.runtime.has_painter_prefix_sources();
+        if prefix_queries {
+            self.sync_spatial_index();
+        }
         let expiring =
             self.derived_display_plan.is_some() && self.derived_display_expire_after_publication;
         if let Some(plan) = self.derived_display_plan.as_ref() {
@@ -1654,6 +1658,11 @@ impl ExecutionSession {
                 .take_renderer_publication_with_followup_presentation_redraw()
         } else {
             self.runtime.take_renderer_publication()
+        };
+        let publication = if prefix_queries {
+            publication.with_spatial_index(&self.spatial_index)
+        } else {
+            publication
         };
         publication
             .with_transient_presentations(&self.derived_display_objects)
