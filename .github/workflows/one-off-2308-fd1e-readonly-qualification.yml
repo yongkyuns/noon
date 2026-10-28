@@ -1,0 +1,183 @@
+name: One-off 2308 glyph-master source reconciliation (read-only)
+on:
+  push:
+    branches:
+      - agent/2308-7542-readonly-inventory-20261028
+    paths:
+      - .github/workflows/one-off-2308-fd1e-readonly-qualification.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  reconcile:
+    name: Authenticated local merge, Rust, WASM, web, glyph raster
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      PREVIOUS_SOURCE_RUN: "40638498544"
+      PREVIOUS_BROWSER_RUN: "40642472152"
+      PREVIOUS_ARTIFACT: "noon2308-master-7542-local-reconcile-qualification"
+      PREVIOUS_BROWSER_ARTIFACT: "noon2308-master-7542-real-browser-qualification"
+      SOURCE_SHA256: "d4c437b5cf5669a0e2d470d2a56220e32d690af4a0a9ace76422c33b38e8a7eb"
+      SOURCE_TREE: "bec14e0f22d8be668e6e4f38f5c0e982bf2b953f"
+      OLD_MASTER: "7542dfafb8ce50cbdf7718766a67d98f547ca84e"
+      NEW_MASTER: "fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86"
+      FEATURE: "b3a4b7f484e607a4b14bc57e70f4947f8520ca42"
+      MEMORY: "472a61fadfdabba44756b75caaa184cee8c4be57"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Checkout diagnostic-only helper without credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify previous source-bound gates and perform actual local Git merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WORK="$RUNNER_TEMP/noon2308-fd1e/source"
+          export EVIDENCE="$RUNNER_TEMP/noon2308-fd1e/evidence"
+          mkdir -p "$WORK" "$EVIDENCE/incoming/preflight" "$EVIDENCE/incoming/browser"
+          printf 'WORK=%s\nEVIDENCE=%s\n' "$WORK" "$EVIDENCE" >> "$GITHUB_ENV"
+          gh run download "$PREVIOUS_SOURCE_RUN" --repo "$GITHUB_REPOSITORY" -n "$PREVIOUS_ARTIFACT" -D "$EVIDENCE/incoming/preflight"
+          gh run download "$PREVIOUS_BROWSER_RUN" --repo "$GITHUB_REPOSITORY" -n "$PREVIOUS_BROWSER_ARTIFACT" -D "$EVIDENCE/incoming/browser"
+          python3 - <<'PY'
+          import hashlib,io,json,os,subprocess,tarfile
+          from pathlib import Path
+          env=os.environ; root=Path(env['WORK']); e=Path(env['EVIDENCE'])
+          pre=e/'incoming/preflight'; browser=e/'incoming/browser'
+          proof=json.loads((pre/'source-proof.json').read_text())
+          assert proof['resolved_tree_before_format']==env['SOURCE_TREE']
+          assert proof['new_master']==env['OLD_MASTER']
+          assert proof['feature']==env['FEATURE'] and proof['memory']==env['MEMORY']
+          assert proof['qualified_source_tree']=='87cb42b53885c192e539fdddf3ddcf970e67bee4'
+          assert (pre/'candidate-tree.txt').read_text().strip()==env['SOURCE_TREE']
+          assert (pre/'format-trees.txt').read_text().splitlines()==[
+              'BEFORE='+env['SOURCE_TREE'],'AFTER='+env['SOURCE_TREE']]
+          assert not (pre/'unstaged-postqualification.txt').read_text().strip()
+          bp=json.loads((browser/'browser-source.json').read_text())
+          assert bp['source_tree']==env['SOURCE_TREE'] and bp['master']==env['OLD_MASTER']
+          assert bp['source_archive_sha256']==env['SOURCE_SHA256']
+          assert all((browser/(item+'.exit')).read_text().strip()=='0' for item in ('build','browser'))
+          cases=json.loads((browser/'browser-results.json').read_text())
+          assert len(cases)==9 and len({c['case'] for c in cases})==9 and all(c['exit']==0 for c in cases)
+          assert not (browser/'source-status.txt').read_text().strip()
+          payload=(pre/'combined-source-latest.tar.gz').read_bytes()
+          digest=hashlib.sha256(payload).hexdigest()
+          assert digest==env['SOURCE_SHA256'], digest
+          with tarfile.open(fileobj=io.BytesIO(payload),mode='r:gz') as tar:
+              tar.extractall(root,filter='data')
+          def git(*args,check=True):
+              return subprocess.run(['git',*args],cwd=root,text=True,capture_output=True,check=check)
+          git('init','-q','--initial-branch=prepared')
+          git('config','user.name','Read-only prepared playback qualification')
+          git('config','user.email','readonly@example.invalid')
+          git('add','--all')
+          source_tree=git('write-tree').stdout.strip()
+          assert source_tree==env['SOURCE_TREE'], ('source archive tree mismatch',source_tree)
+          pins={k:env[k] for k in ('OLD_MASTER','NEW_MASTER','FEATURE','MEMORY')}
+          fetched=git('fetch','--no-tags','--depth=256',
+              'https://github.com/'+env['GITHUB_REPOSITORY']+'.git',*pins.values())
+          (e/'fetch.log').write_text(fetched.stdout+fetched.stderr)
+          for k,v in pins.items():
+              assert git('rev-parse',v+'^{commit}').stdout.strip()==v,k
+          old,new=env['OLD_MASTER'],env['NEW_MASTER']
+          assert git('merge-base',old,new).stdout.strip()==old,'master has moved nonlinearly'
+          local=git('commit-tree',source_tree,'-p',env['FEATURE'],'-p',old,'-p',env['MEMORY']).stdout.strip()
+          git('update-ref','refs/heads/prepared',local)
+          git('reset','--hard',local)
+          assert git('merge-base','HEAD',new).stdout.strip()==old,'unexpected source ancestry'
+          result=git('merge','--no-commit','--no-ff',new,check=False)
+          (e/'merge.log').write_text(result.stdout+result.stderr)
+          conflicts=git('diff','--name-only','--diff-filter=U').stdout.splitlines()
+          (e/'conflicts.txt').write_text('\n'.join(conflicts)+'\n')
+          (e/'unmerged-index.txt').write_text(git('ls-files','-u').stdout)
+          (e/'conflicts.diff').write_text(git('diff','--cc').stdout)
+          oldpaths=git('diff','--name-only',old,new).stdout.splitlines()
+          assert set(conflicts).issubset(oldpaths)
+          report={'scope':'READ ONLY: no source PR publication, remote ref writes or master modifications',
+             'base_master':old,'new_master':new,'previous_source_tree':source_tree,
+             'previous_source_archive_sha256':digest,'source_branch':env['FEATURE'],
+             'memory_branch':env['MEMORY'],'local_source_commit':local,
+             'old_browser_cases_passed':len(cases),'new_master_changed_paths':oldpaths,
+             'git_merge_return_code':result.returncode,'unmerged_paths':conflicts}
+          if result.returncode==0 and not conflicts:
+              merged_tree=git('write-tree').stdout.strip()
+              report['merged_tree_before_format']=merged_tree
+              (e/'candidate-tree.txt').write_text(merged_tree+'\n')
+              assert not git('diff','--name-only').stdout.strip(),'unexpected unstaged change'
+              (e/'local-merge-source.patch').write_text(git('diff','--cached','--binary',local).stdout)
+              assert not any(p.startswith('.github/workflows/one-off-2308-') for p in git('ls-tree','-r','--name-only',merged_tree).stdout.splitlines())
+          (e/'source-proof.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2),flush=True)
+          if result.returncode!=0 or conflicts:
+              raise SystemExit('Unresolved real Git conflicts: see attached source-bound proof')
+          PY
+      - name: Install pinned Rust target and native references
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config | tee "$EVIDENCE/dependencies.log"
+          rustc --version --verbose > "$EVIDENCE/rust-version.log"
+      - name: Format and verify sealed tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          cargo fmt --all -- --check 2>&1 | tee "$EVIDENCE/fmt.log"
+          git diff --cached --check
+          git diff --exit-code
+          test "$(git write-tree)" = "$(cat "$EVIDENCE/candidate-tree.txt")"
+      - name: Rust workspace and family tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          cargo test --locked --workspace --all-features --lib --test family 2>&1 | tee "$EVIDENCE/workspace-fast-tests.log"
+      - name: Native glyph capture opacity exact pixels
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          mkdir -p "$EVIDENCE/glyph-coverage"
+          NOON_GLYPH_COVERAGE_ARTIFACT_DIR="$EVIDENCE/glyph-coverage" \
+            cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture 2>&1 | tee "$EVIDENCE/glyph-opacity-pixels.log"
+      - name: Prepared-prefix WASM compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/prepared-wasm-check.log"
+      - name: JS and Python web static preflight
+        env:
+          NOON_WEB_PREFLIGHT_ONLY: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/web-preflight.log"
+      - name: Final source integrity
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$WORK/.git" || exit 0
+          cd "$WORK"
+          git diff --name-only > "$EVIDENCE/unstaged-postqualification.txt"
+          test ! -s "$EVIDENCE/unstaged-postqualification.txt"
+          test "$(git write-tree)" = "$(cat "$EVIDENCE/candidate-tree.txt")"
+          git diff --cached --binary HEAD | cmp - "$EVIDENCE/local-merge-source.patch"
+      - name: Preserve exact source and merge evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-master-fd1e-readonly-qualification
+          path: ${{ runner.temp }}/noon2308-fd1e/evidence
+          if-no-files-found: warn
+          retention-days: 5
