@@ -10,7 +10,7 @@ class PaintedSurfaces(Scene):
     def construct(self):
         ink = Color(0.035, 0.045, 0.09)
         muted = Color(0.62, 0.69, 0.82)
-        self.add(Rectangle(width=16, height=9, fill=ink, stroke=None))
+        self.add(Rectangle(width=16, height=9, fill=ink, fill_opacity=1, stroke=None))
         self.add(Text("PAINTED SURFACES", font_size=36, color=Color(0.96, 0.97, 1))
                  .move_to((0, 3.22, 0)))
         self.add(Text("One shape. A changing surface.", font_size=20, color=muted)
@@ -39,7 +39,7 @@ class PaintedSurfaces(Scene):
             (-3.05, -1.65, "NOISE", "Change scale and phase", noise),
             (3.05, -1.65, "HATCH", "Turn a woven pattern", hatch),
         ]:
-            panel = Rectangle(width=5.35, height=1.65, stroke=None).set_fill(paint)
+            panel = Rectangle(width=5.35, height=1.65, stroke=None).set_fill(paint, opacity=1)
             panel.move_to((x, y, 0))
             panels.append(panel)
             self.add(panel)
