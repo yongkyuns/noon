@@ -291,7 +291,7 @@ impl CompiledScene {
                     geometry_ids.insert(*id);
                     geometries.insert(handle);
                 }
-                ObjectContentRef::Geometry(_) => {}
+                ObjectContentRef::Geometry(_) | ObjectContentRef::Composed(_) => {}
             }
         }
 

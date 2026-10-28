@@ -806,6 +806,50 @@ pub async fn create_direct_ordered_effects_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Visibility lifecycle through native's shared live Rust program.
+#[wasm_bindgen(js_name = createDirectDissolveSmokeRenderer)]
+pub async fn create_direct_dissolve_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::dissolve::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[wasm_bindgen(js_name = createDirectScopeOpacitySmokeRenderer)]
+pub async fn create_direct_scope_opacity_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::scope_opacity::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Persistent composed masks through native's shared live Rust program.
+#[wasm_bindgen(js_name = createDirectNoiseDissolveSmokeRenderer)]
+pub async fn create_direct_noise_dissolve_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::noise_dissolve::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Nested composed families through the same live Rust program as native.
+#[wasm_bindgen(js_name = createDirectComposedEffectsSmokeRenderer)]
+pub async fn create_direct_composed_effects_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::composed_effects::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Animated nested family effects, paired with ordinary Python method targets.
+#[wasm_bindgen(js_name = createDirectComposedEffectsAnimatedSmokeRenderer)]
+pub async fn create_direct_composed_effects_animated_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::composed_effects::animated_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct shared Rust/WASM shadow program, paired with the ordinary Python scene.
 #[wasm_bindgen(js_name = createDirectShadowSmokeRenderer)]
 pub async fn create_direct_shadow_smoke_renderer(

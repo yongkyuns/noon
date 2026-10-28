@@ -61,7 +61,7 @@ pub fn effective_mobject_point_count(
         .map_err(AuthoringError::from)?;
     match observed.object.content {
         noon_core::ObjectContentRef::Image(_) => Ok(4),
-        noon_core::ObjectContentRef::Text(_) => Ok(0),
+        noon_core::ObjectContentRef::Text(_) | noon_core::ObjectContentRef::Composed(_) => Ok(0),
         noon_core::ObjectContentRef::Geometry(_) => {
             let path = effective_geometry_path(&observed)?;
             PathQuery::prepare(&path, SemanticTransform2_5D::default())

@@ -7,7 +7,9 @@ use noon_core::{
     SemanticStore,
 };
 
-use crate::{AuthoringError, LiveSession, LiveSessionError, Mobject, Scene};
+use crate::{
+    AuthoringError, LiveSession, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
+};
 
 /// A store-scoped generational attachment reference. Dropping it never detaches
 /// an effect. `authored_definition` is explicitly not an effective-runtime query.
@@ -48,17 +50,10 @@ impl<'a> From<&'a EffectHandle> for EffectSelector<'a> {
     }
 }
 
-fn require_store(
-    store: &Rc<RefCell<SemanticStore>>,
-    object: &Mobject,
-) -> Result<(), AuthoringError> {
-    if !Rc::ptr_eq(store, object.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    object.validate()
-}
-
-fn lookup(object: &Mobject, selector: EffectSelector<'_>) -> Result<EffectHandle, AuthoringError> {
+fn lookup(
+    object: MobjectTarget<'_>,
+    selector: EffectSelector<'_>,
+) -> Result<EffectHandle, AuthoringError> {
     object.validate()?;
     let store = object.integration_store();
     let node = match selector {
@@ -90,7 +85,7 @@ fn lookup(object: &Mobject, selector: EffectSelector<'_>) -> Result<EffectHandle
 }
 
 fn glow_transaction(
-    object: &Mobject,
+    object: MobjectTarget<'_>,
     update: EffectUpdate,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     object.validate()?;
@@ -118,7 +113,7 @@ fn glow_transaction(
 }
 
 fn add_transaction(
-    object: &Mobject,
+    object: MobjectTarget<'_>,
     definition: EffectDefinition,
     name: &str,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
@@ -129,7 +124,7 @@ fn add_transaction(
 }
 
 fn update_transaction(
-    object: &Mobject,
+    object: MobjectTarget<'_>,
     selector: EffectSelector<'_>,
     update: EffectUpdate,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
@@ -140,7 +135,7 @@ fn update_transaction(
 }
 
 fn remove_transaction(
-    object: &Mobject,
+    object: MobjectTarget<'_>,
     selector: EffectSelector<'_>,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     let handle = lookup(object, selector)?;
@@ -150,7 +145,7 @@ fn remove_transaction(
 }
 
 fn remove_glow_transaction(
-    object: &Mobject,
+    object: MobjectTarget<'_>,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     object.validate()?;
     let mut tx = SemanticMutationTransaction::new();
@@ -178,7 +173,8 @@ impl Mobject {
     /// Author the canonical glow. Like other raw Mobject mutators, this is for
     /// pre-execution/target editing; running scenes must use Scene or LiveSession.
     pub fn set_glow(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
-        glow_transaction(self, update)?.apply(&mut self.integration_store().borrow_mut())?;
+        glow_transaction((&*self).into(), update)?
+            .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
 
@@ -187,13 +183,13 @@ impl Mobject {
         definition: impl Into<EffectDefinition>,
         name: &str,
     ) -> Result<(), AuthoringError> {
-        add_transaction(self, definition.into(), name)?
+        add_transaction((&*self).into(), definition.into(), name)?
             .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
 
     pub fn get_effect(&self, name: &str) -> Result<EffectHandle, AuthoringError> {
-        lookup(self, name.into())
+        lookup(self.into(), name.into())
     }
 
     pub fn set_effect<'a>(
@@ -201,7 +197,7 @@ impl Mobject {
         selector: impl Into<EffectSelector<'a>>,
         update: EffectUpdate,
     ) -> Result<(), AuthoringError> {
-        update_transaction(self, selector.into(), update)?
+        update_transaction((&*self).into(), selector.into(), update)?
             .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
@@ -210,70 +206,132 @@ impl Mobject {
         &mut self,
         selector: impl Into<EffectSelector<'a>>,
     ) -> Result<(), AuthoringError> {
-        remove_transaction(self, selector.into())?
+        remove_transaction((&*self).into(), selector.into())?
             .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
 
     /// Idempotent when absent; an invalid object handle still fails.
     pub fn remove_glow(&mut self) -> Result<(), AuthoringError> {
-        remove_glow_transaction(self)?.apply(&mut self.integration_store().borrow_mut())?;
+        remove_glow_transaction((&*self).into())?
+            .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
 }
 
-impl Scene {
-    /// Declare a glow through the normal scene transaction. Execution validates
-    /// the finite filled, unstroked planar circle/rectangle profile.
-    pub fn set_glow(
-        &mut self,
-        object: &Mobject,
-        update: EffectUpdate,
-    ) -> Result<(), AuthoringError> {
-        self.require_object(object)?;
-        self.apply_semantic_transaction(glow_transaction(object, update)?)?;
-        Ok(())
-    }
-
+impl MobjectFamily {
+    /// Author an isolated family treatment before execution. Descendants never
+    /// receive copied per-leaf attachments. Live edits use Scene or LiveSession.
     pub fn add_effect(
         &mut self,
-        object: &Mobject,
         definition: impl Into<EffectDefinition>,
         name: &str,
     ) -> Result<(), AuthoringError> {
-        self.require_object(object)?;
-        self.apply_semantic_transaction(add_transaction(object, definition.into(), name)?)?;
+        add_transaction((&*self).into(), definition.into(), name)?
+            .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
 
-    pub fn get_effect(&self, object: &Mobject, name: &str) -> Result<EffectHandle, AuthoringError> {
-        self.require_object(object)?;
-        lookup(object, name.into())
+    pub fn get_effect(&self, name: &str) -> Result<EffectHandle, AuthoringError> {
+        lookup(self.into(), name.into())
     }
 
     pub fn set_effect<'a>(
         &mut self,
-        object: &Mobject,
         selector: impl Into<EffectSelector<'a>>,
         update: EffectUpdate,
     ) -> Result<(), AuthoringError> {
-        self.require_object(object)?;
-        self.apply_semantic_transaction(update_transaction(object, selector.into(), update)?)?;
+        update_transaction((&*self).into(), selector.into(), update)?
+            .apply(&mut self.integration_store().borrow_mut())?;
         Ok(())
     }
 
     pub fn remove_effect<'a>(
         &mut self,
-        object: &Mobject,
         selector: impl Into<EffectSelector<'a>>,
     ) -> Result<(), AuthoringError> {
-        self.require_object(object)?;
+        remove_transaction((&*self).into(), selector.into())?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+
+    pub fn set_glow(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
+        glow_transaction((&*self).into(), update)?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+
+    pub fn remove_glow(&mut self) -> Result<(), AuthoringError> {
+        remove_glow_transaction((&*self).into())?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+}
+
+impl Scene {
+    /// Declare a glow on an object or isolated family through the normal scene transaction.
+    pub fn set_glow<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        update: EffectUpdate,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
+        self.apply_semantic_transaction(glow_transaction(object, update)?)?;
+        Ok(())
+    }
+
+    pub fn add_effect<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        definition: impl Into<EffectDefinition>,
+        name: &str,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
+        self.apply_semantic_transaction(add_transaction(object, definition.into(), name)?)?;
+        Ok(())
+    }
+
+    pub fn get_effect<'owner>(
+        &self,
+        object: impl Into<MobjectTarget<'owner>>,
+        name: &str,
+    ) -> Result<EffectHandle, AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
+        lookup(object, name.into())
+    }
+
+    pub fn set_effect<'owner, 'a>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        selector: impl Into<EffectSelector<'a>>,
+        update: EffectUpdate,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
+        self.apply_semantic_transaction(update_transaction(object, selector.into(), update)?)?;
+        Ok(())
+    }
+
+    pub fn remove_effect<'owner, 'a>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        selector: impl Into<EffectSelector<'a>>,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply_semantic_transaction(remove_transaction(object, selector.into())?)?;
         Ok(())
     }
 
-    pub fn remove_glow(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.require_object(object)?;
+    pub fn remove_glow<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply_semantic_transaction(remove_glow_transaction(object)?)?;
         Ok(())
     }
@@ -282,50 +340,58 @@ impl Scene {
 impl LiveSession<'_> {
     /// Publish through the ordinary live transaction, including attachment
     /// enrollment/removal. Unsupported profiles fail before either state commits.
-    pub fn set_glow(
+    pub fn set_glow<'owner>(
         &mut self,
-        object: &Mobject,
+        object: impl Into<MobjectTarget<'owner>>,
         update: EffectUpdate,
     ) -> Result<(), LiveSessionError> {
-        require_store(self.integration_store(), object)?;
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply(glow_transaction(object, update)?)?;
         Ok(())
     }
 
-    pub fn add_effect(
+    pub fn add_effect<'owner>(
         &mut self,
-        object: &Mobject,
+        object: impl Into<MobjectTarget<'owner>>,
         definition: impl Into<EffectDefinition>,
         name: &str,
     ) -> Result<(), LiveSessionError> {
-        require_store(self.integration_store(), object)?;
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply(add_transaction(object, definition.into(), name)?)?;
         Ok(())
     }
 
-    pub fn set_effect<'a>(
+    pub fn set_effect<'owner, 'a>(
         &mut self,
-        object: &Mobject,
+        object: impl Into<MobjectTarget<'owner>>,
         selector: impl Into<EffectSelector<'a>>,
         update: EffectUpdate,
     ) -> Result<(), LiveSessionError> {
-        require_store(self.integration_store(), object)?;
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply(update_transaction(object, selector.into(), update)?)?;
         Ok(())
     }
 
-    pub fn remove_effect<'a>(
+    pub fn remove_effect<'owner, 'a>(
         &mut self,
-        object: &Mobject,
+        object: impl Into<MobjectTarget<'owner>>,
         selector: impl Into<EffectSelector<'a>>,
     ) -> Result<(), LiveSessionError> {
-        require_store(self.integration_store(), object)?;
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply(remove_transaction(object, selector.into())?)?;
         Ok(())
     }
 
-    pub fn remove_glow(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
-        require_store(self.integration_store(), object)?;
+    pub fn remove_glow<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+    ) -> Result<(), LiveSessionError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
         self.apply(remove_glow_transaction(object)?)?;
         Ok(())
     }

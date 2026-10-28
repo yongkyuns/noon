@@ -174,6 +174,25 @@ pub(crate) fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
     }
 }
 
+/// Unrendered family roots own composite opacity independently from child
+/// paints. Capture that one runtime value, preserving exact authored precision
+/// when lowering has not changed it. Membership and capture scheduling stay in
+/// the existing root-local semantic copy preparation.
+pub(crate) fn capture_family_style(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+    style: &mut SemanticStyle,
+) -> Result<(), AuthoringError> {
+    if execution.semantic_object_is_reachable(source) {
+        preserve_or_capture_f32(
+            &mut style.object_opacity,
+            execution.effective_family_opacity(store, source)?,
+        );
+    }
+    Ok(())
+}
+
 /// Stage one independent attachment copy at the same coherent publication as
 /// the target's object state. Detached sources retain authored declarations;
 /// resident sources copy the effective value without borrowing their identity.
@@ -185,15 +204,22 @@ pub(crate) fn stage_effect_copy(
     target: noon_core::SemanticLocalNodeToken,
     transaction: &mut noon_core::SemanticMutationTransaction,
 ) -> Result<(), AuthoringError> {
+    let node = store
+        .node(source)
+        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
+    if node.effect_ids().is_empty() {
+        // Ordinary unrendered family roots intentionally have no execution row.
+        // There is no attachment state to capture or allocate for those roots.
+        return Ok(());
+    }
     if !execution.semantic_object_is_reachable(source) {
         store.copy_effects_into(source, target, transaction)?;
         return Ok(());
     }
-    let observed = execution.effective_semantic_object(store, source)?;
-    let node = store
-        .node(source)
-        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.effects.as_deref()) {
+    match (
+        node.effect_ids(),
+        execution.effective_effects(store, source)?,
+    ) {
         ([], None) => Ok(()),
         (attachments, Some(effects)) if attachments == effects.attachments() => {
             for effect in effects.iter() {

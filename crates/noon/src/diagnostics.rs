@@ -14,6 +14,9 @@ fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
         noon_core::EffectDefinition::Blur(blur) => {
             json!({ "kind": "blur", "radius": blur.radius() })
         }
+        noon_core::EffectDefinition::NoiseDissolve(mask) => {
+            json!({"kind":"noise_dissolve","seed":mask.seed(),"softness":mask.softness(),"progress":mask.progress()})
+        }
     };
     json!({ "attachment": effect.attachment, "definition": definition })
 }

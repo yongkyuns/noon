@@ -158,6 +158,114 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
 }
 
 #[test]
+fn composed_parameter_publication_reuses_its_plan_and_existing_exact_channel_scheduler() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let source = store.insert_family();
+    let mut children = Vec::new();
+    for _ in 0..512 {
+        let child = store.insert_semantic_object(circle());
+        store.add_member(source, child).unwrap();
+        children.push(child);
+    }
+    store.add_member(root, source).unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    let token = tx.create_effect(source, "glow", effect(0.25));
+    let attachment = tx.apply(&mut store).unwrap().resolve(token).unwrap();
+    let mut index = SemanticExecutionIndex::new();
+    let lowered = lower_semantic_execution_root(&store, root, &mut index).unwrap();
+    let object = index.execution_object_id(source).unwrap();
+    let row = lowered.compiled().object_index(object).unwrap() as usize;
+    let reachability = SemanticExecutionReachability::from_root(&store, root).unwrap();
+    let mut f = Fixture {
+        store,
+        root,
+        source,
+        index,
+        reachability,
+        runtime: SceneInstance::from_semantic_execution(lowered),
+    };
+    let source_plan = if let noon_core::ObjectContentRef::Composed(plan) =
+        &f.runtime.frame().objects[row].content
+    {
+        plan.clone()
+    } else {
+        panic!("composed target")
+    };
+    {
+        let publication = f.runtime.take_renderer_publication();
+        assert_eq!(publication.object_index(object), Some(row));
+        for &child in &children {
+            let child = f.index.execution_object_id(child).unwrap();
+            let index = publication.object_index(child).unwrap();
+            assert_eq!(publication.frame().objects[index].id, child);
+        }
+        assert_eq!(publication.object_index(ObjectId::new(u64::MAX)), None);
+    }
+    f.runtime
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(91),
+            object,
+            property: Property::EffectIntensity,
+            values: TrackValues::Effect {
+                attachment,
+                from: noon_core::EffectTrackValue::Intensity(0.25),
+                to: noon_core::EffectTrackValue::Intensity(2.25),
+                end_behavior: noon_core::EffectTrackEndBehavior::Sample,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: Default::default(),
+        }))
+        .unwrap();
+    f.runtime.seek(1.0).unwrap();
+    f.runtime.take_frame_changes();
+    f.runtime.take_spatial_changes();
+    let child_before = f.runtime.frame().objects[0].clone();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(attachment, EffectUpdate::default().radius(Pixels(6.0)));
+    f.publish(tx);
+    let changed = &f.runtime.frame().objects[row];
+    let definition = changed
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(attachment)
+        .unwrap()
+        .definition
+        .as_glow()
+        .unwrap();
+    assert_eq!(definition.intensity(), 1.25);
+    assert_eq!(definition.radius(), Pixels(6.0).into());
+    let noon_core::ObjectContentRef::Composed(current) = &changed.content else {
+        panic!("same target")
+    };
+    assert!(
+        std::sync::Arc::ptr_eq(current, &source_plan),
+        "parameter edits must not rebuild or copy the family input plan"
+    );
+    assert_eq!(f.runtime.frame().objects[0], child_before);
+    assert_eq!(
+        f.runtime.take_frame_changes(),
+        FrameChanges::objects(vec![row])
+    );
+    assert!(f.runtime.take_spatial_changes().is_empty());
+    f.runtime.seek(1.5).unwrap();
+    assert_eq!(
+        f.runtime.frame().objects[row]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(attachment)
+            .unwrap()
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity(),
+        1.75
+    );
+}
+
+#[test]
 fn removal_and_replacement_are_single_owner_patches_not_object_recreation() {
     let mut f = Fixture::new(0);
     let old = f.attach(0.4);

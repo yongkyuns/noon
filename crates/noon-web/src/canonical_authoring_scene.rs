@@ -452,6 +452,20 @@ enum OrdinaryCompositionChild {
         intensity: f64,
         options: noon_core::AnimationOptions,
     },
+    Dissolve {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: noon_core::AnimationOptions,
+    },
+    FamilyDissolve {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: noon_core::AnimationOptions,
+    },
     FamilyIndicate {
         target: noon::MobjectFamily,
         indication: noon::IndicateOptions,
@@ -2342,6 +2356,30 @@ impl CanonicalAuthoringScene {
                     intensity: *intensity,
                     options: *options,
                 },
+                OrdinaryCompositionChild::Dissolve {
+                    target,
+                    direction,
+                    style,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Dissolve {
+                    target: target.into(),
+                    direction: *direction,
+                    style: *style,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::FamilyDissolve {
+                    target,
+                    direction,
+                    style,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Dissolve {
+                    target: target.into(),
+                    direction: *direction,
+                    style: *style,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyIndicate {
                     target,
                     indication,
@@ -2613,6 +2651,11 @@ impl CanonicalAuthoringScene {
                     entering_id,
                     target,
                     ..
+                }
+                | OrdinaryCompositionChild::Dissolve {
+                    entering_id,
+                    target,
+                    ..
                 } => {
                     if let Some(id) = entering_id {
                         output.push((*id, target));
@@ -2625,6 +2668,7 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilyFade { entering, .. }
+                | OrdinaryCompositionChild::FamilyDissolve { entering, .. }
                 | OrdinaryCompositionChild::FamilyArrowGrow { entering, .. }
                 | OrdinaryCompositionChild::FamilyTextWrite { entering, .. }
                 | OrdinaryCompositionChild::FamilyReveal { entering, .. } => {
@@ -2894,6 +2938,12 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 }
+                | OrdinaryCompositionChild::FamilyDissolve {
+                    target,
+                    entering,
+                    options,
+                    ..
+                }
                 | OrdinaryCompositionChild::FamilyArrowGrow {
                     target,
                     entering,
@@ -2952,7 +3002,13 @@ impl CanonicalAuthoringScene {
                             return Err("invalid shared Arrow growth target or lifecycle".into());
                         }
                     }
-                    noon_core::resolve_animation_options(
+                    let resolver =
+                        if matches!(child, OrdinaryCompositionChild::FamilyDissolve { .. }) {
+                            noon_core::resolve_transform_animation_options
+                        } else {
+                            noon_core::resolve_animation_options
+                        };
+                    resolver(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         if matches!(
@@ -3202,6 +3258,12 @@ impl CanonicalAuthoringScene {
                     target,
                     options,
                     ..
+                }
+                | OrdinaryCompositionChild::Dissolve {
+                    entering_id,
+                    target,
+                    options,
+                    ..
                 } => (*entering_id, target, *options),
                 OrdinaryCompositionChild::Rotate {
                     entering_id,
@@ -3261,7 +3323,11 @@ impl CanonicalAuthoringScene {
                 );
             }
             target.validate().map_err(|error| error.to_string())?;
-            let resolved = if matches!(child, OrdinaryCompositionChild::TransformTo { .. }) {
+            let resolved = if matches!(
+                child,
+                OrdinaryCompositionChild::TransformTo { .. }
+                    | OrdinaryCompositionChild::Dissolve { .. }
+            ) {
                 noon_core::resolve_transform_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
@@ -5539,6 +5605,121 @@ mod wasm {
                 options: Self::family_options(child_run_time, rate_function, lag_ratio)?
                     .reverse_rate_function(reverse_rate_function),
             });
+            Ok(())
+        }
+
+        fn dissolve_parameters(
+            direction: &str,
+            seed: Option<f64>,
+            softness: Option<f64>,
+        ) -> Result<(noon_core::DissolveDirection, noon_core::DissolveStyle), JsValue> {
+            let direction = match parse_fade_direction(direction)? {
+                noon_core::SemanticFadeDirection::In => noon_core::DissolveDirection::In,
+                noon_core::SemanticFadeDirection::Out => noon_core::DissolveDirection::Out,
+            };
+            let update = crate::authoring_effects::mask_parameters(
+                noon_core::EffectUpdate::default(),
+                None,
+                softness,
+                seed,
+            )
+            .map_err(js_error)?;
+            let style = noon_core::DissolveStyle::new(update)
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)?;
+            Ok((direction, style))
+        }
+
+        #[wasm_bindgen(js_name = appendDissolveMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_dissolve_mobject(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            seed: Option<f64>,
+            softness: Option<f64>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let (direction, style) = Self::dissolve_parameters(direction, seed, softness)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .reverse_rate_function(reverse_rate_function);
+            options.introducer = introducer;
+            options.remover = remover;
+            self.children.push(OrdinaryCompositionChild::Dissolve {
+                entering_id: if object_id.is_empty() {
+                    None
+                } else {
+                    Some(parse_object_id("dissolve object ID", object_id)?)
+                },
+                target: target.semantic_mobject().clone(),
+                direction,
+                style,
+                options,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDissolveFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_dissolve_family(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            direction: &str,
+            seed: Option<f64>,
+            softness: Option<f64>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let (direction, style) = Self::dissolve_parameters(direction, seed, softness)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .reverse_rate_function(reverse_rate_function);
+            options.introducer = introducer;
+            options.remover = remover;
+            self.children
+                .push(OrdinaryCompositionChild::FamilyDissolve {
+                    target: target.semantic_family()?,
+                    entering: Vec::new(),
+                    direction,
+                    style,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDissolveFamilyEntering)]
+        pub fn append_dissolve_family_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyDissolve {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error("family entering member must follow Dissolve"));
+            };
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
+                return Err(js_error(
+                    "dissolve family member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("dissolve family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
             Ok(())
         }
 
@@ -11506,6 +11687,18 @@ mod wasm {
                 .live_set_family_own_opacity(&source.semantic_family()?, opacity)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyObjectOpacity)]
+        pub fn live_set_family_object_opacity(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_object_opacity(&source.semantic_family()?, opacity)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
         pub fn live_match_family_style(
             &mut self,
@@ -14900,6 +15093,87 @@ mod tests {
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
         );
+    }
+
+    #[test]
+    fn ordinary_dissolve_admits_objects_and_families_through_shared_lifecycle() {
+        for composed in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let source = context.scene.circle(0.4).unwrap();
+            let family = composed.then(|| context.scene.family(&[(&source).into()]).unwrap());
+            let owner = family
+                .as_ref()
+                .map_or(source.node_id(), |family| family.node_id());
+            let style =
+                noon_core::DissolveStyle::new(noon_core::EffectUpdate::default().seed(u32::MAX))
+                    .unwrap();
+            for direction in [
+                noon_core::DissolveDirection::In,
+                noon_core::DissolveDirection::Out,
+            ] {
+                let introducing = direction == noon_core::DissolveDirection::In;
+                let options = AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear);
+                let child = if let Some(family) = &family {
+                    OrdinaryCompositionChild::FamilyDissolve {
+                        target: family.clone(),
+                        entering: if introducing {
+                            vec![(ObjectId::new(0), source.clone())]
+                        } else {
+                            Vec::new()
+                        },
+                        direction,
+                        style,
+                        options,
+                    }
+                } else {
+                    OrdinaryCompositionChild::Dissolve {
+                        target: source.clone(),
+                        entering_id: introducing.then_some(ObjectId::new(0)),
+                        direction,
+                        style,
+                        options,
+                    }
+                };
+                let end = context
+                    .begin_ordinary_mixed_composition(
+                        noon_core::SemanticAnimationCompositionKind::Parallel,
+                        &[child],
+                        AnimationOptions::new(),
+                        AnimationOptions::new(),
+                    )
+                    .unwrap();
+                context
+                    .active_live_player()
+                    .unwrap()
+                    .live_advance_segment_to(end)
+                    .unwrap();
+                context
+                    .active_live_player()
+                    .unwrap()
+                    .live_complete_segment()
+                    .unwrap();
+                assert!(context
+                    .scene
+                    .integration_store()
+                    .borrow()
+                    .visibility_effect(owner)
+                    .unwrap()
+                    .is_none());
+                assert_eq!(
+                    context
+                        .scene
+                        .integration_store()
+                        .borrow()
+                        .node(owner)
+                        .unwrap()
+                        .parents()
+                        .is_empty(),
+                    !introducing
+                );
+            }
+        }
     }
 
     #[test]

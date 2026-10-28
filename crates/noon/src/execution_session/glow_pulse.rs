@@ -68,7 +68,8 @@ impl ExecutionSession {
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?
-                .is_empty()
+                .iter()
+                .all(|effect| effect.name.authored() != Some("glow"))
             {
                 missing.insert(owner);
             }
@@ -223,6 +224,9 @@ const fn parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Intensity => 4,
         EffectParameter::Source => 8,
         EffectParameter::Offset => 16,
+        EffectParameter::Progress => 32,
+        EffectParameter::Softness => 64,
+        EffectParameter::Seed => 128,
     }
 }
 

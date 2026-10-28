@@ -65,7 +65,7 @@ fn blur_animation_completion_seek_and_lifetime_use_the_existing_row() {
     scene.live(&mut session).complete_segment(segment).unwrap();
     assert_eq!(
         original.authored_definition().unwrap().radius(),
-        Pixels(5.25).into()
+        Some(Pixels(5.25).into())
     );
     session.take_renderer_publication();
     scene

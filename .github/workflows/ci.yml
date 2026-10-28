@@ -63,6 +63,13 @@ on:
       - "scripts/gaussian-blur-*.mjs"
       - "scripts/blur-qualification.mjs"
       - "scripts/shadow-qualification.mjs"
+      - "scripts/ordered-effects-qualification.mjs"
+      - "scripts/composed-effects-qualification.mjs"
+      - "scripts/noise-dissolve-qualification.mjs"
+      - "scripts/dissolve-qualification.mjs"
+      - "scripts/dissolve-mask-*.mjs"
+      - "scripts/scope-opacity-qualification.mjs"
+      - "crates/noon-export/tests/scope_opacity.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -95,6 +102,8 @@ on:
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/composed/**"
+      - "crates/noon/tests/composed_effects.rs"
       - "crates/noon/tests/linear_gradient_raster.rs"
       - "crates/noon/tests/radial_gradient_raster.rs"
       - "crates/noon/tests/noise_paint_raster.rs"
@@ -238,6 +247,12 @@ jobs:
         run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
+      - name: Qualify public composed group pixels and lifecycle
+        run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
+      - name: Qualify native composed opacity and ancestor Visibility lifecycle
+        run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
+      - name: Qualify dissolve mask field and premultiplied alpha operator
+        run: cargo test -p noon-render-wgpu --lib dissolve_filter -- --ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
@@ -516,6 +531,16 @@ jobs:
         run: node scripts/blur-qualification.mjs
       - name: Qualify paired Rust and Python Shadow authoring on WebGPU and WebGL2
         run: node scripts/shadow-qualification.mjs
+      - name: Qualify paired ordered effect stacks on WebGPU and WebGL2
+        run: node scripts/ordered-effects-qualification.mjs
+      - name: Qualify paired composed family controls on WebGPU and WebGL2
+        run: node scripts/composed-effects-qualification.mjs
+      - name: Qualify animated nested opacity and ancestor Visibility
+        run: node scripts/scope-opacity-qualification.mjs
+      - name: Qualify private visibility lifecycle through Rust and Python
+        run: node scripts/dissolve-qualification.mjs
+      - name: Qualify composed seeded masks through Rust and Python
+        run: node scripts/noise-dissolve-qualification.mjs
       - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2
         run: node scripts/image-fill-qualification.mjs
       - name: Qualify retained worker glow images and recovery
@@ -563,4 +588,17 @@ jobs:
           name: browser-backend-visual-parity
           path: browser-backend-parity-report
           if-no-files-found: error
+          retention-days: 3
+      - name: Preserve finite effect pixel evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: finite-effect-authoring-pixels
+          path: |
+            browser-smoke-artifacts/ordered-effects
+            browser-smoke-artifacts/composed-effects
+            browser-smoke-artifacts/scope-opacity
+            browser-smoke-artifacts/dissolve
+            browser-smoke-artifacts/noise-dissolve
+          if-no-files-found: warn
           retention-days: 3

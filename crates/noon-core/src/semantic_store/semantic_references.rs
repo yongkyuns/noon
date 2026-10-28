@@ -83,6 +83,24 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    /// Appearance declarations require their source row even at an identity
+    /// endpoint, so activation and seek capture the same real family scope.
+    /// This follows only the owner's indexed incoming references.
+    pub fn family_appearance_animations(
+        &self,
+        owner: SemanticNodeId,
+    ) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.incoming_references.get(&owner).into_iter().flatten()
+            .filter(move |reference| reference.kind == SemanticReferenceKind::AnimationTarget
+                && self.semantic_animation_state(reference.owner).is_ok_and(|state|
+                    matches!(state.intent(), SemanticAnimationIntent::EffectTargetTo { target, .. } if *target == owner)))
+            .map(|reference| reference.owner)
+    }
+
+    pub fn has_family_appearance_target(&self, owner: SemanticNodeId) -> bool {
+        self.family_appearance_animations(owner).next().is_some()
+    }
+
     /// Return live object owners whose FixedOrientation anchor is one of the
     /// supplied identities. The query follows the retained reverse-reference
     /// index and preserves target/reference order.
@@ -632,6 +650,11 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 target,
                 target_state,
                 ..
+            }
+            | SemanticAnimationIntent::EffectTargetTo {
+                target,
+                target_state,
+                ..
             } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
@@ -653,6 +676,7 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             | SemanticAnimationIntent::CameraProfileTo { target, .. }
             | SemanticAnimationIntent::Indicate { target, .. }
             | SemanticAnimationIntent::GlowPulse { target, .. }
+            | SemanticAnimationIntent::Dissolve { target, .. }
             | SemanticAnimationIntent::DrawBorderThenFill { target, .. }
             | SemanticAnimationIntent::PassingFlash { target, .. }
             | SemanticAnimationIntent::SubsetDisplayMember { target, .. }

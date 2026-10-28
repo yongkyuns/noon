@@ -168,6 +168,15 @@ pub struct EffectCaptureTile {
     pub capture_and_scratch_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CaptureDemand {
+    pub required_by_parent: bool,
+    pub isolate: bool,
+    /// A composed ancestor needs this scope's original coverage before its
+    /// authored paint filters, with the scope opacity applied by placement.
+    pub original_by_parent: bool,
+}
+
 impl EffectCaptureTile {
     /// Check before any GPU allocation. Return None only for validated
     /// neutral contributions or tiles whose entire halo misses the output.
@@ -188,6 +197,7 @@ impl EffectCaptureTile {
                 world_view_height: parameters.world_view_height,
                 scope_opacity: parameters.scope_opacity,
                 scratch_budget_bytes: memory_budget_bytes,
+                source_bounds: None,
             },
             maximum_texture_dimension,
             memory_budget_bytes,
@@ -205,6 +215,33 @@ impl EffectCaptureTile {
         maximum_texture_dimension: u32,
         memory_budget_bytes: u64,
     ) -> Result<Option<Self>, EffectPrepareError> {
+        Self::prepare_stack_input(
+            bounds,
+            viewport,
+            definitions,
+            parameters,
+            maximum_texture_dimension,
+            memory_budget_bytes,
+            CaptureDemand::default(),
+        )
+    }
+
+    /// An ancestor filter can consume pixels that are outside the final view.
+    /// This changes contribution clipping only, never output units or the camera.
+    pub(super) fn prepare_stack_input(
+        bounds: EffectPixelBounds,
+        viewport: [u32; 2],
+        definitions: &[noon_core::EffectDefinition],
+        parameters: super::EffectStackParameters,
+        maximum_texture_dimension: u32,
+        memory_budget_bytes: u64,
+        demand: CaptureDemand,
+    ) -> Result<Option<Self>, EffectPrepareError> {
+        let CaptureDemand {
+            required_by_parent,
+            isolate,
+            original_by_parent,
+        } = demand;
         if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
         }
@@ -233,7 +270,7 @@ impl EffectCaptureTile {
         let mut support_radius = 0_u32;
         let mut active = false;
         let mut cost_per_pixel = 4_u64; // one RGBA8 source
-        let mut silhouette = false;
+        let mut silhouette = original_by_parent;
         for &definition in definitions {
             let value = EffectCaptureParameters {
                 definition,
@@ -264,7 +301,7 @@ impl EffectCaptureTile {
             }
         }
         cost_per_pixel += if silhouette { 4 } else { 0 };
-        if !active || parameters.scope_opacity == 0.0 {
+        if !isolate && !original_by_parent && (!active || parameters.scope_opacity == 0.0) {
             return Ok(None);
         }
         let mut start = [0_i64; 2];
@@ -291,7 +328,7 @@ impl EffectCaptureTile {
             end[0].min(i64::from(viewport[0])),
             end[1].min(i64::from(viewport[1])),
         ];
-        if (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
+        if !required_by_parent && (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
             return Ok(None);
         }
         let width = end[0] - start[0];
@@ -311,21 +348,28 @@ impl EffectCaptureTile {
         if bytes > memory_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
-        Ok(Some(Self {
+        let mut tile = Self {
             origin: [start[0] as i32, start[1] as i32],
             size,
-            viewport_origin: [visible_start[0] as u32, visible_start[1] as u32],
-            local_origin: [
-                (visible_start[0] - start[0]) as u32,
-                (visible_start[1] - start[1]) as u32,
-            ],
-            visible_size: [
-                (visible_end[0] - visible_start[0]) as u32,
-                (visible_end[1] - visible_start[1]) as u32,
-            ],
+            viewport_origin: [0; 2],
+            local_origin: [0; 2],
+            visible_size: [0; 2],
             support_radius,
             capture_and_scratch_bytes: bytes,
-        }))
+        };
+        tile.refresh_visible_region(viewport);
+        Ok(Some(tile))
+    }
+
+    pub(super) fn refresh_visible_region(&mut self, viewport: [u32; 2]) {
+        for (axis, viewport) in viewport.into_iter().enumerate() {
+            let origin = i64::from(self.origin[axis]);
+            let start = origin.clamp(0, i64::from(viewport));
+            let end = (origin + i64::from(self.size[axis])).clamp(0, i64::from(viewport));
+            self.viewport_origin[axis] = start as u32;
+            self.local_origin[axis] = (start - origin).clamp(0, i64::from(self.size[axis])) as u32;
+            self.visible_size[axis] = (end - start).max(0) as u32;
+        }
     }
 }
 
@@ -346,6 +390,7 @@ impl EffectCaptureParameters {
         let sigma = self
             .definition
             .radius()
+            .unwrap_or(noon_core::EffectRadius::Pixels(0.0))
             .to_output_pixels(self.output_height, self.world_view_height)
             .map_err(EffectPrepareError::Parameter)?;
         if sigma > MAX_SIGMA {
@@ -374,6 +419,7 @@ impl EffectCaptureParameters {
     }
     pub(crate) fn filter_bytes_per_pixel(self) -> u64 {
         match self.definition {
+            noon_core::EffectDefinition::NoiseDissolve(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
             noon_core::EffectDefinition::Blur(_) => 28,
             noon_core::EffectDefinition::Shadow(_) => 32,

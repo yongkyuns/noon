@@ -266,6 +266,60 @@ impl ExecutionSession {
         for &(root, target) in lifecycle_removals {
             membership_removals.entry(root).or_default().insert(target);
         }
+        let visibility_endpoints = entries
+            .iter()
+            .filter_map(|entry| match entry.completion {
+                SemanticAnimationCompletion::Visibility {
+                    attachment,
+                    remover,
+                    ..
+                } => Some((
+                    attachment,
+                    (entry.semantic_object, entry.execution_object, remover),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut removed_visibility = BTreeSet::new();
+        for (&attachment, &(owner, object, remover)) in &visibility_endpoints {
+            // The enclosing composition can reverse or return through a child.
+            // Release the value evaluated by the common runtime at this barrier,
+            // rather than assuming the child's forward authored endpoint.
+            let index = self
+                .runtime
+                .frame_index_for_object(object)
+                .expect("pending visibility source has a resident row");
+            let endpoint = self.frame().objects[index]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(attachment))
+                .and_then(|effect| effect.definition.as_noise_dissolve())
+                .expect("pending visibility keeps its exact mask generation");
+            if remover {
+                let parents = store
+                    .node(owner)
+                    .expect("pending visibility owner remains live")
+                    .parents();
+                let [parent] = parents else {
+                    return Err(ExecutionSegmentCompletionError::MissingLifecycleRoot(owner));
+                };
+                membership_removals
+                    .entry(*parent)
+                    .or_default()
+                    .insert(owner);
+            }
+            if remover || endpoint.is_neutral() {
+                removed_visibility.insert(attachment);
+            } else {
+                semantic.update_effect(
+                    attachment,
+                    noon_core::EffectUpdate::default()
+                        .progress(endpoint.progress())
+                        .softness(endpoint.softness())
+                        .seed(endpoint.seed()),
+                );
+            }
+        }
         if let Some(replacement) = segment.family_replacement() {
             super::family_transform::validate_matching_family_completion_swap(
                 store,
@@ -336,7 +390,25 @@ impl ExecutionSession {
         // current authored style once per affected object, merge every completed
         // style domain, then emit one replacement so parallel paint channels cannot
         // overwrite each other or unrelated style fields.
-        let mut completed_styles = BTreeMap::new();
+        let mut completed_styles = family_styles
+            .iter()
+            .cloned()
+            .map(|(family, mut style)| {
+                // Rendered appearance belongs to the ordinary opacity channel.
+                // A metadata handoff must not turn an omitted or returning channel
+                // into an endpoint write on an unrendered family root.
+                if let Some(node) = store
+                    .node(family)
+                    .filter(|node| node.semantic_object_state().is_none())
+                {
+                    style.object_opacity = node
+                        .family_style()
+                        .expect("family metadata owner")
+                        .object_opacity;
+                }
+                (family, style)
+            })
+            .collect::<BTreeMap<_, _>>();
         for entry in entries {
             let is_style_domain = matches!(
                 &entry.completion,
@@ -354,10 +426,13 @@ impl ExecutionSession {
             let style = completed_styles
                 .entry(entry.semantic_object)
                 .or_insert_with(|| {
-                    store
-                        .semantic_object_state_checked(entry.semantic_object)
-                        .expect("pending completion object remains live at the same scene revision")
-                        .style
+                    let node = store
+                        .node(entry.semantic_object)
+                        .expect("pending completion owner remains live at the same scene revision");
+                    node.semantic_object_state()
+                        .map(|state| &state.style)
+                        .or_else(|| node.family_style())
+                        .expect("pending style completion has an object or family owner")
                         .clone()
                 });
             match &entry.completion {
@@ -391,11 +466,15 @@ impl ExecutionSession {
         for (family, color) in family_colors {
             semantic.set_family_color(*family, *color);
         }
-        for (family, style) in family_styles {
-            semantic.set_family_style(*family, style.clone());
-        }
         for (object, style) in &completed_styles {
-            semantic.replace_style(*object, style.clone());
+            if store
+                .node(*object)
+                .is_some_and(|node| node.semantic_object_state().is_some())
+            {
+                semantic.replace_style(*object, style.clone());
+            } else {
+                semantic.set_family_style(*object, style.clone());
+            }
         }
 
         // A sequential composition may release several tracks for one domain.
@@ -502,6 +581,7 @@ impl ExecutionSession {
                     }
                 }
                 SemanticAnimationCompletion::Effect { .. }
+                | SemanticAnimationCompletion::Visibility { .. }
                 | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
@@ -624,6 +704,9 @@ impl ExecutionSession {
         // Node removals form the transaction's suffix. Property completion for
         // this or another source must be staged before retiring temporary IDs.
         for attachment in removed_glow {
+            semantic.remove_node(attachment);
+        }
+        for attachment in removed_visibility {
             semantic.remove_node(attachment);
         }
         let prepared = semantic.prepare(store).map_err(|error| {

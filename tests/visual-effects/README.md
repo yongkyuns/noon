@@ -1218,6 +1218,40 @@ transparent input, fractional signed shadows, scene/pixel units, sigma 64, final
 opacity, clean exact repeat and invalidation recovery. These tests qualify the
 operator contract; they do not assert public group or animation-stack support.
 
+### Nested original coverage and private Visibility
+
+Nested capture keeps painted output and original coverage separate. An ancestor
+silhouette consumes the child's original coverage before authored Blur/Glow,
+with child scope opacity applied once after that child is composed. Dissolve's
+private Visibility binding clips both streams using the same normalized source
+domain and seeded mask. An ordinary named NoiseDissolve remains a painted filter;
+it does not acquire the private lifecycle role or clip original coverage.
+
+The immutable compiled attachment column preserves the exact trailing private
+binding generation through initial, prepared and target lowering. Parameter
+updates cannot change that role. The genuine worker boundary carries it in
+protocol 27; direct native and Rust/WASM execution remain typed in process.
+
+The nested native raster corpus checks partial masks, empty/full endpoints,
+reverse progress, cleanup, ordinary named-filter witnesses and clean reuse
+against scalar noise and full two-dimensional convolution references. The normal
+Rust Scene/LiveSession capture regression separately checks leaf and family
+Dissolve under an ancestor silhouette, including exact empty output and rewind.
+These native checks do not establish browser or physical-device pacing support.
+
+The paired `scope_opacity` creator programme additionally animates child and
+ancestor opacity, including a returning rate, then dissolves and restores the
+child beneath an ancestor silhouette. `scope-opacity-qualification.mjs` samples
+50 authored times through the normal direct Rust/WASM and Python-worker paths
+on WebGPU and WebGL2. Literal rectangles, independently evaluated seeded fields
+and full two-dimensional Gaussian composition define its whole-frame reference,
+with a predeclared two-byte bound. Empty endpoints are exact; returning samples
+and completed restoration compare byte-for-byte with their earlier same-backend
+frames. The same Rust programme runs through native fixed-time export. The
+composed, scope-opacity, Dissolve and named NoiseDissolve browser scripts retain
+raw images and reports in CI. These are correctness and reuse checks; the
+physical-device frame-pacing gate remains separate.
+
 ## RGBA Gaussian raster prerequisite
 
 The reusable renderer's `GaussianBlurFilter` consumes an encoded-premultiplied

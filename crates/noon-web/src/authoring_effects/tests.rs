@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn mask_boundary_checks_seed_before_narrowing_and_keeps_explicit_zero() {
+    let update = mask_parameters(
+        EffectUpdate::default(),
+        Some(0.0),
+        Some(0.08),
+        Some(f64::from(u32::MAX)),
+    )
+    .unwrap();
+    let value = update
+        .apply_to(noon_core::NoiseDissolve::default())
+        .unwrap();
+    assert_eq!(
+        (value.seed(), value.progress(), value.softness()),
+        (u32::MAX, 0.0, 0.08)
+    );
+    assert!(update.writes(noon_core::EffectParameter::Progress));
+    assert!(update.apply_to(Glow::default()).is_err());
+    for seed in [
+        -1.0,
+        0.5,
+        f64::NAN,
+        f64::INFINITY,
+        f64::from(u32::MAX) + 1.0,
+    ] {
+        assert_eq!(
+            mask_parameters(EffectUpdate::default(), None, None, Some(seed))
+                .unwrap_err()
+                .code,
+            "effect.invalid_seed"
+        );
+    }
+    for invalid in [-0.1, 1.0 + f64::EPSILON, f64::NAN, f64::INFINITY] {
+        assert!(mask_parameters(EffectUpdate::default(), Some(invalid), None, None).is_err());
+        assert!(mask_parameters(EffectUpdate::default(), None, Some(invalid), None).is_err());
+    }
+}
+
+#[test]
 fn offset_shape_units_and_validation_reach_the_shared_shadow_value() {
     let update = effect_update(
         &[0.2, 0.4, 0.6, 0.5],

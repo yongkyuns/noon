@@ -10,10 +10,18 @@ fn parameters() -> EffectStackParameters {
         world_view_height: 8.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 16 * 1024 * 1024,
+        source_bounds: None,
     }
 }
 fn blur(sigma: f64) -> EffectDefinition {
     Blur::new(EffectUpdate::default().radius(Pixels(sigma)))
+        .unwrap()
+        .into()
+}
+fn dissolve(seed: u32, softness: f64, progress: f64) -> EffectDefinition {
+    noon_core::NoiseDissolve::new(seed, softness)
+        .unwrap()
+        .with_progress(progress)
         .unwrap()
         .into()
 }
@@ -79,6 +87,131 @@ fn render(
         queue.submit([encoder.finish()]);
     }
     result
+}
+
+#[test]
+fn trailing_mask_destination_reuse_stays_charged_and_budget_failures_are_atomic() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let image = texture(&device, [33, 29]);
+    let capture = GlowCapture {
+        source: &image,
+        silhouette: None,
+        revision: 1,
+    };
+    let mut filter = EffectStackFilter::default();
+    let mut scope = EffectStackScope::default();
+    let effects = [blur(2.0), dissolve(7, 0.2, 0.5)];
+    let first = render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &effects,
+        parameters(),
+    )
+    .unwrap();
+    let mut budget = parameters();
+    budget.scratch_budget_bytes = first.scratch_bytes;
+    let mask_output = scope.output().unwrap().clone();
+    for seed in 0..16 {
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &effects[..1],
+            budget,
+        )
+        .unwrap();
+        assert_eq!(
+            scope.scratch_bytes(),
+            first.scratch_bytes,
+            "warm destination remains budgeted"
+        );
+        assert_eq!(
+            scope.retained_profile_bytes(&effects[..1]),
+            first.scratch_bytes
+        );
+        let output = scope.output().unwrap().clone();
+        let revision = scope.output_revision();
+        assert!(matches!(
+            render(
+                &mut filter,
+                &mut scope,
+                &device,
+                &queue,
+                GlowCapture {
+                    source: &mask_output,
+                    ..capture
+                },
+                &effects,
+                budget
+            ),
+            Err(EffectPrepareError::UnsupportedCapture)
+        ));
+        assert!(matches!(
+            render(
+                &mut filter,
+                &mut scope,
+                &device,
+                &queue,
+                capture,
+                &effects[..1],
+                EffectStackParameters {
+                    scratch_budget_bytes: first.scratch_bytes - 1,
+                    ..budget
+                }
+            ),
+            Err(EffectPrepareError::ScratchBudgetExceeded)
+        ));
+        assert_eq!(scope.output(), Some(&output));
+        assert_eq!(scope.output_revision(), revision);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+        scope.deactivate_profile(&effects[..1]);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+        let neutral = [blur(2.0), dissolve(seed, 0.4, 0.0)];
+        let work = render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &neutral,
+            budget,
+        )
+        .unwrap();
+        assert_eq!(work.texture_allocations, 0);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+        let work = render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &[blur(2.0), dissolve(seed, 0.4, 0.5)],
+            budget,
+        )
+        .unwrap();
+        assert_eq!(work.texture_allocations, 0);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+    }
+    render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &[],
+        budget,
+    )
+    .unwrap();
+    assert_eq!(
+        scope.scratch_bytes(),
+        0,
+        "retired capture releases active and warm resources"
+    );
 }
 
 #[test]
@@ -343,6 +476,18 @@ fn late_invalid_pass_preserves_the_previous_coherent_stack_and_earlier_parameter
         ..capture
     };
     for (capture, effects, params, error) in [
+        (
+            capture,
+            vec![blur(4.0), dissolve(7, 0.08, 0.5)],
+            EffectStackParameters {
+                source_bounds: Some(EffectPixelBounds {
+                    min: [0.0; 2],
+                    max: [0.0, 29.0],
+                }),
+                ..parameters()
+            },
+            EffectPrepareError::InvalidSourceBounds,
+        ),
         (
             capture,
             vec![blur(4.0), blur(65.0)],

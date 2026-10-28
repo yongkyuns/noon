@@ -91,7 +91,7 @@ fn predeclared_motion_and_glow_complete_through_public_scene() {
         middle.as_glow().unwrap().intensity(),
         old.intensity() + (1.4 - old.intensity()) * 0.5
     );
-    assert_eq!(middle.radius(), Pixels(4.875).into());
+    assert_eq!(middle.radius(), Some(Pixels(4.875).into()));
     assert_eq!(row(&session, &source).transform.translation.x, 1.0);
     assert_eq!(
         definition(&source),

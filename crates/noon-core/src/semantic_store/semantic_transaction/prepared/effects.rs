@@ -49,6 +49,18 @@ pub(super) fn effect_snapshot(
             copy_provenance: *copy_provenance,
         });
     }
+    // Named additions precede the one visibility binding even when they were
+    // staged later. Match committed insertion without sorting authored order.
+    let mut visibility = None;
+    result.retain(|effect| {
+        if effect.name.is_visibility() {
+            visibility = Some(effect.clone());
+            false
+        } else {
+            true
+        }
+    });
+    result.extend(visibility);
     result
 }
 
@@ -60,7 +72,27 @@ impl PreparedSemanticMutationTransaction<'_> {
         owner: impl Into<SemanticTransactionNodeRef>,
     ) -> Result<Vec<SemanticAnimationEffectSnapshot>, SemanticTransactionReadError> {
         let owner = owner.into();
-        self.object_state(owner)?;
+        match owner {
+            SemanticTransactionNodeRef::Existing(id) => {
+                self.validate_existing_authoring_node(id)?
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+                if !matches!(
+                    self.pending_creation(token),
+                    Some(
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::Family { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
+                ) {
+                    return Err(SemanticTransactionReadError::NotObject(owner));
+                }
+            }
+        }
         Ok(effect_snapshot(
             self.store,
             &self.preflight,

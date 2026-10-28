@@ -16,6 +16,7 @@ use super::prepared_composition::PreparedSemanticAnimationTrack;
 #[derive(Default)]
 pub(super) struct ScheduledCaptures {
     base: HashMap<ObjectId, EffectiveAnimationProperties>,
+    effect_base: HashMap<ObjectId, std::sync::Arc<crate::CompiledEffectStack>>,
     completed: DriverMap<(Property, TrackValues, bool)>,
     latest_tracks: DriverMap<usize>,
     recorded_tracks: usize,
@@ -32,6 +33,44 @@ impl ScheduledCaptures {
 
     pub fn insert(&mut self, object: ObjectId, value: EffectiveAnimationProperties) {
         self.base.insert(object, value);
+    }
+
+    /// A newly composed family can have parameter tracks before its first
+    /// runtime row exists. Capture only its effect column, without inventing
+    /// object geometry or a second execution state.
+    pub fn insert_effects(
+        &mut self,
+        object: ObjectId,
+        value: std::sync::Arc<crate::CompiledEffectStack>,
+    ) {
+        self.effect_base.insert(object, value);
+    }
+
+    pub fn effects(&self, object: ObjectId) -> Option<std::sync::Arc<crate::CompiledEffectStack>> {
+        if let Some(value) = self.get(object) {
+            return value.effects;
+        }
+        let mut stack = self.effect_base.get(&object)?.clone();
+        for (_, (_, values, at_end)) in object_drivers(&self.completed, object) {
+            let TrackValues::Effect {
+                attachment,
+                from,
+                to,
+                ..
+            } = values
+            else {
+                continue;
+            };
+            let mut effect = stack.get(*attachment)?;
+            effect.definition = (if *at_end { *to } else { *from })
+                .update()
+                .apply_to(effect.definition)
+                .ok()?;
+            if !std::sync::Arc::make_mut(&mut stack).replace(effect) {
+                return None;
+            }
+        }
+        Some(stack)
     }
 
     pub fn begin_leaf(
@@ -191,7 +230,10 @@ fn apply_effective_track_endpoint(
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
-            | Property::EffectOffset,
+            | Property::EffectOffset
+            | Property::EffectProgress
+            | Property::EffectSoftness
+            | Property::EffectSeed,
             TrackValues::Effect {
                 attachment,
                 from,

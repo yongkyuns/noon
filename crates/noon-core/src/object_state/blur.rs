@@ -30,16 +30,7 @@ impl Blur {
 impl sealed::Sealed for Blur {}
 impl EffectValue for Blur {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
-        for parameter in [
-            EffectParameter::Color,
-            EffectParameter::Offset,
-            EffectParameter::Intensity,
-            EffectParameter::Source,
-        ] {
-            if update.writes(parameter) {
-                return Err(EffectParameterError::UnsupportedParameter(parameter));
-            }
-        }
+        update.require_parameters(&[EffectParameter::Radius])?;
         if let Some(radius) = update.radius {
             radius.validate()?;
         }

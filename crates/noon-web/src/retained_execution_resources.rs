@@ -35,6 +35,7 @@ impl InstalledRetainedExecutionMirror {
         );
         wire.extend_installed_image_handles(&resources.image_handle_remap());
         wire.extend_installed_geometry_handles(&resources.geometry_handle_remap());
+        wire.extend_installed_composed_sources(&resources.composed_source_remap());
         Ok(Self {
             wire,
             resources,
@@ -93,6 +94,7 @@ impl InstalledRetainedExecutionMirror {
                 self.family.plans(),
                 self.family.active_indices(),
                 self.wire.painter_order(),
+                &self.wire,
             ),
         )
     }
@@ -237,6 +239,8 @@ impl InstalledRetainedExecutionMirror {
         }
         self.resources.retire(&retirements);
         self.wire
+            .remove_installed_composed_sources(retirements.composed_sources.iter());
+        self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
@@ -253,6 +257,34 @@ impl InstalledRetainedExecutionMirror {
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let additions = self.resources.prepare_additions_with_render(bundle)?;
+        let composed_sources = additions.composed_source_remap();
+        let referenced_sources = delta
+            .retained
+            .objects
+            .iter()
+            .filter_map(|row| {
+                if let TransportObjectContent::Composed { source } = row.content {
+                    Some(source)
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::HashSet<_>>();
+        // Reusing an installed immutable key is valid for parameter rows. A new
+        // resource must belong to this accepted publication and a proposed row;
+        // retired keys cannot be rebound or unused plans accumulated as preload.
+        for key in composed_sources.keys() {
+            if key.session != delta.retained.session
+                || key.version != delta.retained.sequence
+                || !referenced_sources.contains(key)
+            {
+                return Err(RetainedResourceTransportError::InvalidComposedSource {
+                    handle: *key,
+                    reason: "new plan must bind a row in its originating publication".into(),
+                }
+                .into());
+            }
+        }
         // Validate the changed rows against the existing plus staged immutable
         // geometry closure before publishing any resource or worker state.
         validate_hatch_geometry(&delta.retained, |handle| {
@@ -272,6 +304,8 @@ impl InstalledRetainedExecutionMirror {
         let geometry_handles = additions.geometry_handle_remap();
         self.wire
             .extend_installed_geometry_handles(&geometry_handles);
+        self.wire
+            .extend_installed_composed_sources(&composed_sources);
 
         let render_rollback = match (
             additions.render_geometry_session(),
@@ -284,6 +318,8 @@ impl InstalledRetainedExecutionMirror {
                 {
                     Ok(rollback) => Some(rollback),
                     Err(error) => {
+                        self.wire
+                            .remove_installed_composed_sources(composed_sources.keys());
                         self.wire
                             .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
@@ -301,6 +337,8 @@ impl InstalledRetainedExecutionMirror {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
@@ -314,6 +352,8 @@ impl InstalledRetainedExecutionMirror {
         let prepared_transient = match self.prepare_transient_presentations(&delta) {
             Ok(prepared) => prepared,
             Err(error) => {
+                self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
                 self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
@@ -331,6 +371,8 @@ impl InstalledRetainedExecutionMirror {
             Ok(applied) => applied,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
@@ -342,6 +384,8 @@ impl InstalledRetainedExecutionMirror {
             }
         };
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            self.wire
+                .remove_installed_composed_sources(composed_sources.keys());
             self.wire
                 .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
@@ -355,6 +399,8 @@ impl InstalledRetainedExecutionMirror {
 
         self.resources.commit_additions_with_render(additions);
         self.resources.retire(&retirements);
+        self.wire
+            .remove_installed_composed_sources(retirements.composed_sources.iter());
         self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
@@ -373,6 +419,31 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedFamilyExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         let staged = self.resource_roots.stage(&delta.retained);
+        let released = self.resource_roots.retirements(&staged);
+        let retired = delta
+            .resource_retirements
+            .composed_sources
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        for source in released.composed_sources {
+            if !retired.contains(&source) {
+                return Err(
+                    RetainedResourceTransportError::MissingComposedSourceRetirement(source).into(),
+                );
+            }
+        }
+        for source in &delta.resource_retirements.composed_sources {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Composed(*source))
+                > 0
+            {
+                return Err(
+                    RetainedResourceTransportError::RetiredLiveComposedSource(*source).into(),
+                );
+            }
+        }
         for image in &delta.resource_retirements.images {
             if self
                 .resource_roots
@@ -566,6 +637,13 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let TransportObjectContent::Composed { source } = object.content {
+                if self.resources.composed_source(source).is_none() {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownComposedSource(source).into(),
+                    );
+                }
+            }
             if let Some(image) = object
                 .fill_paint
                 .as_deref()
@@ -955,6 +1033,7 @@ mod tests {
                 order: 0,
                 object: ObjectId::new(90),
                 effects: vec![crate::TransportEffectState::from(&compiled_glow)],
+                visibility: None,
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -1172,6 +1251,7 @@ mod tests {
                     order: 0,
                     object: ObjectId::new(90),
                     effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -1219,6 +1299,7 @@ mod tests {
                     order: slot,
                     object: ObjectId::new(object),
                     effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1356,6 +1437,7 @@ mod tests {
                         order: 0,
                         object: ObjectId::new(90),
                         effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1440,6 +1522,7 @@ mod tests {
                         order: 0,
                         object: ObjectId::new(90),
                         effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),
@@ -1552,7 +1635,9 @@ mod tests {
             .collect::<Vec<_>>();
         let wire_text = match wire.objects[0].content {
             TransportObjectContent::Text { text } => text,
-            TransportObjectContent::Image { .. } | TransportObjectContent::Geometry { .. } => {
+            TransportObjectContent::Image { .. }
+            | TransportObjectContent::Geometry { .. }
+            | TransportObjectContent::Composed { .. } => {
                 panic!("expected text")
             }
         };
@@ -1985,5 +2070,7 @@ mod tests {
 #[cfg(test)]
 mod morph_tests;
 
+#[cfg(test)]
+mod composed_tests;
 #[cfg(test)]
 mod image_tests;

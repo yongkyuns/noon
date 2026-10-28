@@ -17,6 +17,47 @@ fn parameters(sigma: f64) -> GlowParameters {
 }
 
 #[test]
+fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
+    let bounds = EffectPixelBounds {
+        min: [17.0, 25.0],
+        max: [25.0, 33.0],
+    };
+    let parameters = super::super::EffectStackParameters {
+        output_height: 64,
+        world_view_height: 6.4,
+        scope_opacity: 1.0,
+        scratch_budget_bytes: 800,
+        source_bounds: None,
+    };
+    let prepare = |demand, budget| {
+        EffectCaptureTile::prepare_stack_input(
+            bounds,
+            [64; 2],
+            &[],
+            parameters,
+            1024,
+            budget,
+            demand,
+        )
+    };
+    assert_eq!(prepare(CaptureDemand::default(), 800), Ok(None));
+    let demand = CaptureDemand {
+        required_by_parent: true,
+        original_by_parent: true,
+        isolate: false,
+    };
+    // Eight by eight pixels plus a one-pixel coverage fringe, with one painted
+    // and one original RGBA8 image. No filter scratch or invented attachment.
+    let tile = prepare(demand, 800).unwrap().unwrap();
+    assert_eq!(tile.size, [10; 2]);
+    assert_eq!(tile.capture_and_scratch_bytes, 800);
+    assert_eq!(
+        prepare(demand, 799),
+        Err(EffectPrepareError::ScratchBudgetExceeded)
+    );
+}
+
+#[test]
 fn uniform_layout_and_complete_finite_kernel_are_normalized() {
     assert_eq!(size_of::<GlowUniform>(), 1072);
     assert_eq!(std::mem::offset_of!(GlowUniform, tint), 16);
@@ -363,6 +404,7 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
         world_view_height: 10.0,
         scope_opacity: 0.5,
         scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
     };
     let bounds = EffectPixelBounds {
         min: [-16.0, 50.0],
@@ -447,6 +489,7 @@ fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
         world_view_height: 10.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
     };
     let silhouette =
         EffectCaptureTile::prepare_stack(bounds, [100, 100], &[a, b], values, 4096, 1_000_000)

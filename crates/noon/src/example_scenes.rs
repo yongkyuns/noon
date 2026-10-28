@@ -18,8 +18,10 @@ pub mod circle_surround;
 pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
 pub mod code_block;
+pub mod composed_effects;
 pub mod cyclic_replace;
 pub mod dimension_fitting;
+pub mod dissolve;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
 pub mod family_affine;
@@ -51,6 +53,7 @@ pub mod mixed_scalar_composition;
 pub mod moving_around;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod moving_zoomed_scene_around;
+pub mod noise_dissolve;
 pub mod noise_paint;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;
@@ -71,6 +74,7 @@ pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
+pub mod scope_opacity;
 pub mod shadow;
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub mod spatial_camera_labels;

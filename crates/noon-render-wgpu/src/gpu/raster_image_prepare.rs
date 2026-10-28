@@ -24,8 +24,13 @@ pub(super) struct ImageUniform {
 impl ImageUniform {
     /// Remove final scope opacity for an isolated source. Intrinsic texture alpha
     /// is image coverage in both modes; silhouette omits only fill modulation.
-    pub(super) fn captured(mut self, paint_opacity: f32, silhouette: bool) -> Self {
-        self.opacity = if silhouette { 1.0 } else { paint_opacity };
+    pub(super) fn captured(
+        mut self,
+        paint_opacity: f32,
+        object_opacity: f32,
+        silhouette: bool,
+    ) -> Self {
+        self.opacity = object_opacity * if silhouette { 1.0 } else { paint_opacity };
         self
     }
 
@@ -65,6 +70,9 @@ pub(super) struct PreparedImageObject {
     // Keep paint modulation separate from final scope opacity for isolated source
     // capture; recovering it by division would make opacity-only edits dirty.
     pub paint_opacity: f32,
+    // A composed capture retains child opacity, including fully transparent paint
+    // whose geometric silhouette cannot recover this factor from the product.
+    pub object_opacity: f32,
     // This small immutable row shares its Arc<[u8]>; pixels never enter instance
     // rows or per-frame publications.
     pub resource: RasterImageResource,
@@ -119,7 +127,7 @@ impl std::error::Error for RasterImagePrepareError {}
 /// An unpublished sparse change set. All fallible resource checks finish before
 /// this can replace renderer rows.
 pub(super) struct ImagePreparation {
-    reset: bool,
+    pub(super) reset: bool,
     updates: Vec<(usize, Option<PreparedImageObject>)>,
     paint_updates: Vec<(usize, Option<PreparedPaintImage>)>,
 }
@@ -279,7 +287,8 @@ impl RasterImageFramePreparer {
             }
             let transform = frame.render_transform(index);
             let paint_opacity = object.style.fill.map_or(1.0, |fill| fill.alpha);
-            let opacity = object.style.opacity * object.appearance * paint_opacity;
+            let object_opacity = object.style.opacity * object.appearance;
+            let opacity = object_opacity * paint_opacity;
             let uniform = ImageUniform {
                 translation: [transform.translation.x, transform.translation.y],
                 scale: [transform.scale.x, transform.scale.y],
@@ -311,6 +320,7 @@ impl RasterImageFramePreparer {
                         && row.content == content
                         && row.uniform == uniform
                         && row.paint_opacity == paint_opacity
+                        && row.object_opacity == object_opacity
                 })
             {
                 return Ok(());
@@ -322,6 +332,7 @@ impl RasterImageFramePreparer {
                     content,
                     uniform,
                     paint_opacity,
+                    object_opacity,
                     resource: resource.clone(),
                 }),
             ));

@@ -5,6 +5,8 @@ use noon_core::Glow;
 use noon_core::{Color, EffectUpdate, Pixels, Style};
 use noon_runtime::{FrameChanges, SceneInstance};
 
+mod composed;
+
 fn runtime() -> SceneInstance {
     SceneInstance::new(
         CompiledScene::compile_objects(
@@ -316,6 +318,125 @@ fn truncating_a_warm_stack_rebinds_the_final_output_and_retires_neutral_suffix()
         truncated.retained_texture_bytes
     );
     queue.submit([encoder.finish()]);
+}
+
+#[cfg(feature = "ci-noop")]
+#[test]
+fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(&device, &queue, 80, 60);
+    renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+    );
+    let make_runtime = |radius| {
+        SceneInstance::new(
+            CompiledScene::compile_objects(
+                vec![CompiledObject::new(
+                    ObjectId::new(2),
+                    GeometryRef::circle(radius),
+                    Transform2D::IDENTITY,
+                    Style {
+                        fill: Some(Color::WHITE),
+                        stroke: None,
+                        ..Style::default()
+                    },
+                )],
+                &[],
+            )
+            .unwrap(),
+        )
+    };
+    let mut preparer = FramePreparer::new();
+    let mask = noon_core::NoiseDissolve::default()
+        .with_progress(0.5)
+        .unwrap()
+        .into();
+    let normal = make_runtime(0.4);
+    let prepared = preparer.prepare(normal.frame());
+    renderer.upload(&device, &queue, &prepared);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer
+        .prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            EffectCaptureRequest {
+                object_index: 0,
+                ..request(&[mask])
+            },
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let bytes = renderer.effect_capture_texture_bytes();
+    assert!(bytes > 0);
+    for index in 0..8 {
+        let value = noon_core::NoiseDissolve::new(index + 7, 0.4)
+            .unwrap()
+            .with_progress(0.25 + f64::from(index) * 0.05)
+            .unwrap()
+            .into();
+        for changed in [true, false] {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let stats = renderer
+                .prepare_effect_capture(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &prepared,
+                    EffectCaptureRequest {
+                        object_index: 0,
+                        ..request(&[value])
+                    },
+                )
+                .unwrap();
+            queue.submit([encoder.finish()]);
+            assert_eq!(
+                stats.source_passes
+                    + stats.source_bytes_uploaded
+                    + stats.source_texture_allocations,
+                0
+            );
+            assert_eq!(
+                stats.filter.texture_allocations
+                    + stats.filter.pipeline_compiles
+                    + stats.filter.kernel_builds,
+                0
+            );
+            assert_eq!(stats.filter.bytes_uploaded, if changed { 48 } else { 0 });
+            assert_eq!(stats.filter.composite_passes, usize::from(changed));
+            assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
+        }
+    }
+    let output = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)]
+        .filter
+        .output()
+        .unwrap()
+        .clone();
+    let revision = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)].output_revision;
+    let tiny = make_runtime(1e-6);
+    let prepared = preparer.prepare(tiny.frame());
+    renderer.upload(&device, &queue, &prepared);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert_eq!(
+        renderer.prepare_effect_capture(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            EffectCaptureRequest {
+                object_index: 0,
+                ..request(&[mask])
+            }
+        ),
+        Err(EffectPrepareError::CaptureCoordinatesOutOfRange)
+    );
+    assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
+    let scope = &renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)];
+    assert_eq!(scope.filter.output(), Some(&output));
+    assert_eq!(scope.output_revision, revision);
 }
 
 #[cfg(feature = "ci-noop")]

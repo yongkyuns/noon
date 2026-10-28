@@ -121,6 +121,7 @@ mod tests {
             .unwrap()
             .definition
             .radius()
+            .unwrap()
     }
 
     #[test]
@@ -203,6 +204,102 @@ mod tests {
     }
 
     #[test]
+    fn mask_seed_publication_preserves_drivers_and_removal_retires_only_its_channels() {
+        let a = CompiledEffect {
+            attachment: SemanticNodeId::new(10, 2),
+            definition: noon_core::NoiseDissolve::new(7, 0.08).unwrap().into(),
+        };
+        let b = CompiledEffect {
+            attachment: SemanticNodeId::new(11, 2),
+            definition: noon_core::NoiseDissolve::new(11, 0.08).unwrap().into(),
+        };
+        let mut tracks = Vec::new();
+        for (effect, update) in [
+            (a, EffectUpdate::default().progress(0.8).softness(0.4)),
+            (b, EffectUpdate::default().progress(0.6)),
+        ] {
+            for (property, values) in effect.parameter_channels(update).unwrap() {
+                tracks.push(TrackDefinition {
+                    id: TrackId::new(tracks.len() as u64 + 1),
+                    object: ObjectId::new(0),
+                    property,
+                    values,
+                    timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                    time_map: Default::default(),
+                });
+            }
+        }
+        let mut runtime = runtime(stack([a, b]), &tracks);
+        runtime.seek(1.0).unwrap();
+        let edited_b = CompiledEffect {
+            definition: EffectUpdate::default()
+                .seed(u32::MAX)
+                .apply_to(b.definition)
+                .unwrap(),
+            ..b
+        };
+        runtime.take_frame_changes();
+        runtime.take_spatial_changes();
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffects {
+                object: ObjectId::new(0),
+                effects: stack([a, edited_b]),
+            })
+            .unwrap();
+        let value = runtime.frame().objects[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(b.attachment)
+            .unwrap()
+            .definition
+            .as_noise_dissolve()
+            .unwrap();
+        assert_eq!(
+            (value.seed(), value.progress(), value.softness()),
+            (u32::MAX, 0.3, 0.08)
+        );
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(0),
+                expected: Box::new([a.attachment, b.attachment]),
+                effects: Some(stack([edited_b])),
+            })
+            .unwrap();
+        assert_eq!(runtime.compiled.track_count(), 1);
+        assert!(runtime.compiled.track(TrackId::new(1)).is_none());
+        assert!(runtime.compiled.track(TrackId::new(2)).is_none());
+        assert!(runtime.compiled.track(TrackId::new(3)).is_some());
+        assert_eq!(
+            runtime.take_frame_changes(),
+            crate::FrameChanges::objects(vec![0])
+        );
+        assert!(runtime.take_spatial_changes().is_empty());
+        for time in [1.5, 0.25, 1.0] {
+            runtime.seek(time).unwrap();
+            let value = runtime.frame().objects[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .get(b.attachment)
+                .unwrap()
+                .definition
+                .as_noise_dissolve()
+                .unwrap();
+            assert_eq!((value.seed(), value.progress()), (u32::MAX, 0.3 * time));
+        }
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(0),
+                expected: Box::new([b.attachment]),
+                effects: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.compiled.track_count(), 0);
+        assert!(runtime.frame().objects[0].effects.is_none());
+    }
+
+    #[test]
     fn prepared_value_columns_share_the_submitted_allocation_and_reject_late_stale_write_atomically(
     ) {
         let a = blur(10, 1.0);
@@ -252,7 +349,10 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(radius(&runtime, a.attachment), a.definition.radius());
+        assert_eq!(
+            radius(&runtime, a.attachment),
+            a.definition.radius().unwrap()
+        );
         runtime.commit_prepared_authored_value_publication(prepared);
         assert!(
             Arc::ptr_eq(

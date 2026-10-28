@@ -246,6 +246,7 @@ impl CompiledScene {
             let current = self.objects[index]
                 .live
                 .then(|| self.objects[index].clone());
+            let previous_composed = self.composed_plan(self.objects[index].id);
             let current_order = saved.order.map(|_| self.family_successor(saved.index));
             if saved.order.is_some() {
                 if let Some(rank) = self.family_ranks[index].take() {
@@ -289,6 +290,7 @@ impl CompiledScene {
                     self.reposition_painter_row(saved.index);
                 }
             }
+            self.update_composed_dependency(id, previous_composed);
             saved.object = current;
             saved.order = current_order;
         }

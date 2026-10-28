@@ -188,6 +188,7 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
             (only_effect(middle.effects.as_ref().unwrap())
                 .definition
                 .radius()
+                .unwrap()
                 .value()
                 - 4.875)
                 .abs()
@@ -212,7 +213,7 @@ fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pul
             only_effect(final_row.effects.as_ref().unwrap())
                 .definition
                 .radius(),
-            Pixels(6.5).into()
+            Some(Pixels(6.5).into())
         );
         assert_eq!(final_row.transform.translation.x, 2.0);
     }

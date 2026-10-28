@@ -28,6 +28,8 @@ class EffectFacadeTests(unittest.TestCase):
         self.make_shadow = Mock(return_value=types.SimpleNamespace(kind="shadow", radius=4.5, pixels=True,
             red=0.2, green=0.4, blue=0.6, alpha=0.5, offsetX=-3.25, offsetY=4.5, offsetPixels=True))
         js.noonShadow = self.make_shadow
+        self.make_mask = Mock(return_value=types.SimpleNamespace(kind="noise_dissolve", seed=7, softness=0.08, progress=0.4))
+        js.noonNoiseDissolve = self.make_mask
         ffi = types.ModuleType("pyodide.ffi")
         ffi.to_js = tuple
         self.enter(patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}))
@@ -36,6 +38,7 @@ class EffectFacadeTests(unittest.TestCase):
         self.enter(patch.object(handles, "_handle_for", side_effect=lambda value: self.handle))
         self.enter(patch.object(handles, "_is_shared_family", return_value=False))
         self.enter(patch.object(handles, "_live_mutation_context", side_effect=lambda value: self.context))
+        self.enter(patch.object(handles, "_live_constructor_context", return_value=None))
         token = updaters._ACTIVE_CANONICAL_CONTEXT.set(None)
         self.addCleanup(updaters._ACTIVE_CANONICAL_CONTEXT.reset, token)
 
@@ -46,7 +49,7 @@ class EffectFacadeTests(unittest.TestCase):
 
     def test_constructor_defers_defaults_and_validation_to_rust(self):
         glow = noon.Glow()
-        self.make_update.assert_called_once_with((), None, False, None, None, (), False)
+        self.make_update.assert_called_once_with((), None, False, None, None, (), False, None, None, None)
         self.make_glow.assert_called_once_with(self.request)
         self.request.free.assert_called_once_with()
         self.assertEqual(glow.radius, noon.Pixels(12.0))
@@ -60,7 +63,7 @@ class EffectFacadeTests(unittest.TestCase):
 
     def test_blur_uses_the_same_rust_definition_attachment_and_update_handles(self):
         blur = noon.Blur(radius=noon.Pixels(4.5))
-        self.make_update.assert_called_once_with((), 4.5, True, None, None, (), False)
+        self.make_update.assert_called_once_with((), 4.5, True, None, None, (), False, None, None, None)
         self.make_blur.assert_called_once_with(self.request)
         self.assertEqual(blur.radius, noon.Pixels(4.5))
         self.assertIs(copy.copy(blur), blur)
@@ -74,7 +77,7 @@ class EffectFacadeTests(unittest.TestCase):
 
     def test_shadow_coerces_offset_units_without_owning_effect_state(self):
         shadow = noon.Shadow(offset=noon.Pixels((-3.25, 4.5)))
-        self.make_update.assert_called_once_with((), None, False, None, None, (-3.25, 4.5), True)
+        self.make_update.assert_called_once_with((), None, False, None, None, (-3.25, 4.5), True, None, None, None)
         self.make_shadow.assert_called_once_with(self.request)
         self.assertEqual(shadow.offset, noon.Pixels((-3.25, 4.5)))
         self.assertEqual(shadow.color.alpha, 0.5)
@@ -85,7 +88,7 @@ class EffectFacadeTests(unittest.TestCase):
         self.assertIsInstance(self.object.get_effect("depth").authored_definition, noon.Shadow)
         self.make_update.reset_mock()
         self.object.set_effect("depth", offset=(0.25, -0.5))
-        self.make_update.assert_called_once_with((), None, False, None, None, (0.25, -0.5), False)
+        self.make_update.assert_called_once_with((), None, False, None, None, (0.25, -0.5), False, None, None, None)
         self.handle.setEffect.assert_called_once_with("depth", self.request)
         self.assertFalse(hasattr(self.object, "_effects"))
 
@@ -94,6 +97,37 @@ class EffectFacadeTests(unittest.TestCase):
             with self.subTest(offset=offset), self.assertRaises((TypeError,ValueError)):
                 self.object.set_effect("depth", offset=offset)
         self.make_update.assert_not_called()
+
+    def test_mask_definition_and_explicit_zero_updates_use_checked_shared_values(self):
+        mask = noon.NoiseDissolve(seed=7, softness=0.08, progress=0.4)
+        self.make_update.assert_called_once_with((), None, False, None, None, (), False, 0.4, 0.08, 7.0)
+        self.make_mask.assert_called_once_with(self.request)
+        self.assertEqual((mask.seed, mask.softness, mask.progress), (7, 0.08, 0.4))
+        self.assertIs(copy.copy(mask), mask)
+        self.assertIs(copy.deepcopy(mask), mask)
+        with self.assertRaises(AttributeError):
+            mask.progress = 1.0
+        self.object.add_effect(mask, name="mask")
+        self.handle.addEffect.assert_called_once_with(mask._definition, "mask")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = mask._definition
+        self.assertIsInstance(self.object.get_effect("mask").authored_definition, noon.NoiseDissolve)
+        self.make_update.reset_mock()
+        self.object.set_effect("mask", progress=0, softness=0, seed=0)
+        self.make_update.assert_called_once_with((), None, False, None, None, (), False, 0.0, 0.0, 0.0)
+        self.handle.setEffect.assert_called_once_with("mask", self.request)
+
+    def test_mask_argument_type_checks_leave_ranges_and_seed_integrality_to_rust(self):
+        for field in ("progress", "softness", "seed"):
+            for value in (True, "1"):
+                with self.subTest(field=field, value=value), self.assertRaises(TypeError):
+                    self.object.set_effect("mask", **{field: value})
+        self.make_update.assert_not_called()
+        failure = ValueError("Rust rejects a fractional seed")
+        self.make_update.side_effect = failure
+        with self.assertRaises(ValueError) as caught:
+            noon.NoiseDissolve(seed=1.5)
+        self.assertIs(caught.exception, failure)
+        self.make_mask.assert_not_called()
 
     def test_pulse_constructor_is_inert_and_carries_only_intensity_and_timing(self):
         pulse = noon.GlowPulse(self.object, intensity=2)
@@ -114,13 +148,13 @@ class EffectFacadeTests(unittest.TestCase):
 
     def test_setter_returns_receiver_and_passes_only_explicit_fields(self):
         self.assertIs(self.object.set_glow(intensity=1.4), self.object)
-        self.make_update.assert_called_once_with((), None, False, 1.4, None, (), False)
+        self.make_update.assert_called_once_with((), None, False, 1.4, None, (), False, None, None, None)
         self.handle.setGlow.assert_called_once_with(self.request)
         self.request.free.assert_called_once_with()
 
     def test_pixels_and_color_are_argument_conversion_not_state(self):
         self.object.set_glow(color="#FF0000", radius=noon.Pixels(12), source="silhouette")
-        self.make_update.assert_called_once_with((1.0, 0.0, 0.0, 1.0), 12.0, True, None, "silhouette", (), False)
+        self.make_update.assert_called_once_with((1.0, 0.0, 0.0, 1.0), 12.0, True, None, "silhouette", (), False, None, None, None)
 
     def test_invalid_python_types_and_unknown_names_never_publish(self):
         for field, value in [("radius", True), ("intensity", False), ("intensity", "1"), ("source", 1), ("radius", noon.Pixels(True))]:
@@ -209,9 +243,6 @@ class EffectFacadeTests(unittest.TestCase):
         for scope in ("each", "composed", "view", "family", "unknown"):
             with self.subTest(scope=scope), self.assertRaises(NotImplementedError):
                 self.object.add_effect(glow, name="accent", scope=scope)
-        with patch.object(handles, "_is_shared_family", return_value=True):
-            with self.assertRaises(NotImplementedError):
-                self.object.set_glow(intensity=1.4)
         token = updaters._ACTIVE_CANONICAL_CONTEXT.set(object())
         try:
             with self.assertRaises(NotImplementedError):
@@ -221,6 +252,65 @@ class EffectFacadeTests(unittest.TestCase):
         self.handle.addEffect.assert_not_called()
         self.handle.setGlow.assert_not_called()
         self.handle.removeGlow.assert_not_called()
+
+    def family(self):
+        class NoWalkGroup(noon.VGroup):
+            @property
+            def submobjects(self):
+                raise AssertionError("effect routing must not walk Python children")
+        value = object.__new__(NoWalkGroup)
+        value._semantic_family_handle = self.handle
+        return value
+
+    def test_composed_family_controls_use_one_shared_handle_without_child_expansion(self):
+        family = self.family()
+        with patch.object(handles, "_is_shared_family", return_value=True):
+            self.assertIs(family.set_glow(intensity=1.4, scope="composed"), family)
+            blur = noon.Blur(radius=noon.Pixels(4.5))
+            self.assertIs(family.add_effect(blur, name="soften"), family)
+            bound = family.get_effect("soften")
+            family.set_effect(bound, radius=noon.Pixels(0))
+            family.remove_effect(bound)
+            family.remove_glow()
+        self.handle.setGlow.assert_called_once_with(self.request)
+        self.handle.addEffect.assert_called_once_with(blur._definition, "soften")
+        self.handle.setEffectHandle.assert_called_once_with(bound._handle, self.request)
+        self.handle.removeEffectHandle.assert_called_once_with(bound._handle)
+        self.handle.removeGlow.assert_called_once_with()
+
+    def test_live_family_calls_use_the_same_owner_and_never_raw_fallback(self):
+        family = self.family()
+        self.context = Mock()
+        with patch.object(handles, "_is_shared_family", return_value=True):
+            family.set_glow(intensity=1.4)
+            family.add_effect(noon.Blur(), name="soften")
+            bound = family.get_effect("soften")
+            family.set_effect("soften", radius=noon.Pixels(4))
+            family.set_effect(bound, radius=noon.Pixels(3))
+            family.remove_effect("soften")
+            family.remove_effect(bound)
+            family.remove_glow()
+            self.context.liveSetFamilyGlow.side_effect = RuntimeError("transferred player")
+            with self.assertRaisesRegex(RuntimeError, "transferred"):
+                family.set_glow(intensity=1)
+        self.context.liveAddFamilyEffect.assert_called_once()
+        self.context.liveSetFamilyEffect.assert_called_once_with(self.handle, "soften", self.request)
+        self.context.liveSetFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle, self.request)
+        self.context.liveRemoveFamilyEffect.assert_called_once_with(self.handle, "soften")
+        self.context.liveRemoveFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle)
+        self.context.liveRemoveFamilyGlow.assert_called_once_with(self.handle)
+        self.handle.setGlow.assert_not_called()
+        self.handle.setEffect.assert_not_called()
+
+    def test_detached_family_after_bootstrap_routes_via_current_constructor_owner(self):
+        family = self.family()
+        context = Mock()
+        with patch.object(handles, "_is_shared_family", return_value=True), patch.object(
+            handles, "_live_constructor_context", return_value=context
+        ):
+            family.set_glow(intensity=0.5)
+        context.liveSetFamilyGlow.assert_called_once_with(self.handle, self.request)
+        self.handle.setGlow.assert_not_called()
 
     def test_existing_animate_builder_composes_motion_and_effect_updates(self):
         # Only boundary routing is mocked. Do not simulate copy/interpolation in Python.

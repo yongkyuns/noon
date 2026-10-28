@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
 use crate::{
     Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Glow,
-    Shadow,
+    NoiseDissolve, Shadow,
 };
 
 /// Maximum attachment count in the qualified finite planar execution profile.
@@ -19,6 +19,13 @@ pub enum EffectDefinition {
     Glow(Glow),
     Blur(Blur),
     Shadow(Shadow),
+    NoiseDissolve(NoiseDissolve),
+}
+
+impl From<NoiseDissolve> for EffectDefinition {
+    fn from(value: NoiseDissolve) -> Self {
+        Self::NoiseDissolve(value)
+    }
 }
 
 impl From<Shadow> for EffectDefinition {
@@ -40,11 +47,12 @@ impl From<Glow> for EffectDefinition {
 }
 
 impl EffectDefinition {
-    pub const fn radius(self) -> EffectRadius {
+    pub const fn radius(self) -> Option<EffectRadius> {
         match self {
-            Self::Glow(v) => v.radius(),
-            Self::Blur(v) => v.radius(),
-            Self::Shadow(v) => v.radius(),
+            Self::Glow(v) => Some(v.radius()),
+            Self::Blur(v) => Some(v.radius()),
+            Self::Shadow(v) => Some(v.radius()),
+            Self::NoiseDissolve(_) => None,
         }
     }
     pub fn is_neutral(self) -> bool {
@@ -52,6 +60,7 @@ impl EffectDefinition {
             Self::Glow(v) => v.is_neutral(),
             Self::Blur(v) => v.is_neutral(),
             Self::Shadow(v) => v.is_neutral(),
+            Self::NoiseDissolve(v) => v.is_neutral(),
         }
     }
     pub const fn as_shadow(self) -> Option<Shadow> {
@@ -65,7 +74,7 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => Some(v.color()),
             Self::Shadow(v) => Some(v.color()),
-            Self::Blur(_) => None,
+            Self::Blur(_) | Self::NoiseDissolve(_) => None,
         }
     }
     pub const fn as_glow(self) -> Option<Glow> {
@@ -80,6 +89,13 @@ impl EffectDefinition {
             _ => None,
         }
     }
+    pub const fn as_noise_dissolve(self) -> Option<NoiseDissolve> {
+        if let Self::NoiseDissolve(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
     /// Compare only the supplied write channels against the prepared result.
     /// Declaration identity and stack order are independent of parameter dirtiness.
     pub(crate) fn parameter_changed(self, next: Self, parameter: EffectParameter) -> bool {
@@ -90,6 +106,7 @@ impl EffectDefinition {
                 EffectParameter::Radius => previous.radius() != next.radius(),
                 EffectParameter::Intensity => previous.intensity() != next.intensity(),
                 EffectParameter::Source => previous.source() != next.source(),
+                _ => false,
             },
             (Self::Shadow(previous), Self::Shadow(next)) => match parameter {
                 EffectParameter::Color => previous.color() != next.color(),
@@ -100,12 +117,27 @@ impl EffectDefinition {
             (Self::Blur(previous), Self::Blur(next)) => {
                 parameter == EffectParameter::Radius && previous.radius() != next.radius()
             }
+            (Self::NoiseDissolve(previous), Self::NoiseDissolve(next)) => match parameter {
+                EffectParameter::Progress => previous.progress() != next.progress(),
+                EffectParameter::Softness => previous.softness() != next.softness(),
+                EffectParameter::Seed => previous.seed() != next.seed(),
+                _ => false,
+            },
             _ => true,
         }
     }
 
     pub fn update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         update.apply_to(self)
+    }
+    /// Authored fields with no continuous runtime channel. Persistent value
+    /// publication carries these directly while preserving other driven fields.
+    pub fn discrete_parameters(self) -> EffectUpdate {
+        match self {
+            Self::Glow(value) => EffectUpdate::default().source(value.source()),
+            Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
+            Self::Blur(_) | Self::Shadow(_) => EffectUpdate::default(),
+        }
     }
 }
 
@@ -116,6 +148,13 @@ impl EffectValue for EffectDefinition {
             Self::Glow(v) => update.apply_to(v).map(Self::Glow),
             Self::Blur(v) => update.apply_to(v).map(Self::Blur),
             Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
+            Self::NoiseDissolve(v) => update.apply_to(v).map(Self::NoiseDissolve),
+        }
+    }
+    fn validate_effect_value_update(self, target: Self) -> Result<(), EffectParameterError> {
+        match (self, target) {
+            (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_value_update(b),
+            _ => self.validate_effect_transition(target),
         }
     }
     fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
@@ -123,6 +162,7 @@ impl EffectValue for EffectDefinition {
             (Self::Glow(a), Self::Glow(b)) => a.validate_effect_transition(b),
             (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
             (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
+            (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_transition(b),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -136,6 +176,9 @@ impl EffectValue for EffectDefinition {
             (Self::Glow(a), Self::Glow(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Blur(a), Self::Blur(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Shadow(a), Self::Shadow(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => {
+                a.sample_effect_parameters(b, request, alpha)
+            }
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -192,16 +235,54 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u8 {
         EffectParameter::Intensity => 4,
         EffectParameter::Source => 8,
         EffectParameter::Offset => 16,
+        EffectParameter::Progress => 32,
+        EffectParameter::Softness => 64,
+        EffectParameter::Seed => 128,
     }
 }
 
-/// One named attachment. Identity is the containing node's ordinary NodeId.
-/// This first authored slice is leaf-local; composed scopes are not silently
-/// expanded into independent children. The renderer support gate is separate.
+/// Attachment keys share one owner-local namespace. Visibility is a distinct
+/// semantic role, so an animation cannot overwrite an authored name or be
+/// followed by a filter that resurrects an otherwise hidden contribution.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticEffectName {
+    Authored(Arc<str>),
+    Visibility,
+}
+impl SemanticEffectName {
+    pub fn authored(&self) -> Option<&str> {
+        match self {
+            Self::Authored(name) => Some(name),
+            Self::Visibility => None,
+        }
+    }
+    pub const fn is_visibility(&self) -> bool {
+        matches!(self, Self::Visibility)
+    }
+}
+impl From<Arc<str>> for SemanticEffectName {
+    fn from(value: Arc<str>) -> Self {
+        Self::Authored(value)
+    }
+}
+impl From<&str> for SemanticEffectName {
+    fn from(value: &str) -> Self {
+        Self::Authored(value.into())
+    }
+}
+impl From<String> for SemanticEffectName {
+    fn from(value: String) -> Self {
+        Self::Authored(value.into())
+    }
+}
+
+/// One appearance attachment. Identity is the containing node's ordinary NodeId.
+/// A family owns a composed treatment; it is never silently expanded into
+/// independent child attachments. Execution validates source/isolation support.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticEffectState {
     owner: SemanticNodeId,
-    name: Arc<str>,
+    name: SemanticEffectName,
     definition: EffectDefinition,
     copy_provenance: Option<SemanticEffectCopyProvenance>,
 }
@@ -211,11 +292,11 @@ impl SemanticEffectState {
         self.owner
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> Option<&str> {
+        self.name.authored()
     }
 
-    pub(crate) fn shared_name(&self) -> &Arc<str> {
+    pub fn attachment_name(&self) -> &SemanticEffectName {
         &self.name
     }
 
@@ -256,6 +337,15 @@ impl SemanticStore {
         self.effect_nodes != 0
     }
 
+    /// Constant-time gate for declarations that can require an isolated family
+    /// image. The cardinalities are maintained with the same semantic nodes.
+    pub const fn has_composed_source_declarations(&self) -> bool {
+        self.effect_nodes != 0
+            || self.partial_opacity_families != 0
+            || self.explicit_family_opacity_targets != 0
+            || self.appearance_target_animations != 0
+    }
+
     pub fn semantic_effect_state(
         &self,
         effect: SemanticNodeId,
@@ -278,28 +368,96 @@ impl SemanticStore {
         Ok(node.effect_ids().iter().copied().find(|effect| {
             self.node(*effect)
                 .and_then(SemanticNode::semantic_effect_state)
-                .is_some_and(|state| state.name() == name)
+                .is_some_and(|state| state.name() == Some(name))
         }))
+    }
+
+    /// One bounded visibility binding, always last in this owner's stack.
+    pub fn visibility_effect(
+        &self,
+        owner: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticStoreError> {
+        let node = self
+            .node(owner)
+            .ok_or(SemanticStoreError::UnknownNode(owner))?;
+        Ok(node.effect_ids().last().copied().filter(|id| {
+            self.semantic_effect_state(*id)
+                .is_ok_and(|state| state.attachment_name().is_visibility())
+        }))
+    }
+
+    /// Stage creation or replacement of one visibility value. Repeated
+    /// operations reuse its exact generation until ordinary node retirement.
+    /// No animation, clock or completion ownership is introduced by this helper.
+    pub fn stage_visibility_mask(
+        &self,
+        owner: impl Into<crate::SemanticTransactionNodeRef>,
+        definition: NoiseDissolve,
+        transaction: &mut crate::SemanticMutationTransaction,
+    ) -> Result<crate::SemanticTransactionNodeRef, SemanticStoreError> {
+        let owner = owner.into();
+        if let crate::SemanticTransactionNodeRef::Existing(id) = owner {
+            if let Some(attachment) = self.visibility_effect(id)? {
+                transaction.update_effect(
+                    attachment,
+                    EffectUpdate::default()
+                        .progress(definition.progress())
+                        .softness(definition.softness())
+                        .seed(definition.seed()),
+                );
+                return Ok(attachment.into());
+            }
+        }
+        Ok(transaction
+            .create_visibility_effect(owner, definition)
+            .into())
+    }
+
+    pub(crate) fn effect_by_attachment_name(
+        &self,
+        owner: SemanticNodeId,
+        name: &SemanticEffectName,
+    ) -> Result<Option<SemanticNodeId>, SemanticStoreError> {
+        match name {
+            SemanticEffectName::Authored(name) => self.effect_by_name(owner, name),
+            SemanticEffectName::Visibility => self.visibility_effect(owner),
+        }
     }
 
     pub(crate) fn insert_semantic_effect(
         &mut self,
         owner: SemanticNodeId,
-        name: Arc<str>,
+        name: SemanticEffectName,
         definition: EffectDefinition,
         copy_provenance: Option<SemanticEffectCopyProvenance>,
     ) -> SemanticNodeId {
+        let last_is_visibility = self
+            .node(owner)
+            .expect("preflighted effect owner")
+            .effect_ids()
+            .last()
+            .is_some_and(|id| {
+                self.semantic_effect_state(*id)
+                    .expect("live attachment")
+                    .attachment_name()
+                    .is_visibility()
+            });
+        let insert_before_visibility = !name.is_visibility() && last_is_visibility;
         let effect = self.insert_kind(SemanticNodeKind::Effect(SemanticEffectState {
             owner,
             name,
             definition,
             copy_provenance,
         }));
-        self.node_mut(owner)
+        let effects = self
+            .node_mut(owner)
             .expect("preflighted effect owner")
             .effects
-            .get_or_insert_with(|| Box::new(Vec::new()))
-            .push(effect);
+            .get_or_insert_with(|| Box::new(Vec::new()));
+        effects.insert(
+            effects.len() - usize::from(insert_before_visibility),
+            effect,
+        );
         self.register_semantic_references_for_owner(effect);
         effect
     }

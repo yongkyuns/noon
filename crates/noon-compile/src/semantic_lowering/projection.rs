@@ -21,7 +21,7 @@ use crate::CompiledGraphArrowPolicy;
 /// key is a one-to-one encoding of the semantic node's generational identity, while
 /// the existing compiler/runtime remains responsible for dense/stable execution
 /// slots.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemanticExecutionIndex {
     object_ids: HashMap<SemanticNodeId, ObjectId>,
     /// Reverse family dependencies for composed spatial appearance groups. These
@@ -120,6 +120,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::FamilyColor { .. }
                 | SemanticMutationImpact::FamilyStyle { .. }
+                | SemanticMutationImpact::FamilyAppearanceScope { .. }
                 | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::DrawEnabled { .. }
@@ -348,18 +349,25 @@ impl SemanticExecutionIndex {
         let graph_roots = reachable_graph_roots(store, &roots)?;
         let pending_graph_edges = lower_graph_dependencies(store, &graph_roots, &seen)?;
 
+        let composed = super::composed::prepare_initial(
+            store,
+            &roots,
+            pending
+                .iter()
+                .map(|(id, state)| (*id, state.presentation.z_index)),
+        )?;
         for (semantic_id, _) in &pending {
             self.update_spatial_anchor_owner(store, *semantic_id);
         }
 
-        let objects = pending
+        let mut objects = pending
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
                 fill_paint: state.fill_paint,
                 semantic_id,
                 effects: state.effects,
                 execution_id: self.ensure_object(semantic_id),
-                content: state.content,
+                content: SemanticExecutionContent::Object(state.content),
                 base_transform: state.base_transform,
                 base_style: state.base_style,
                 spatial: state.spatial,
@@ -368,6 +376,10 @@ impl SemanticExecutionIndex {
                 decimal_number: state.decimal_number,
             })
             .collect::<Vec<_>>();
+        for source in composed {
+            let execution_id = self.ensure_object(source.owner);
+            objects.push(source.into_execution_object(execution_id));
+        }
         let execution_ids = objects
             .iter()
             .map(|object| (object.semantic_id, object.execution_id))
@@ -463,7 +475,7 @@ pub struct SemanticExecutionObject {
     /// Temporary key accepted by the existing compiled/runtime object domain.
     pub execution_id: ObjectId,
     /// Target mixed content/resource handle, without a retained compatibility copy.
-    pub content: SemanticObjectContent,
+    pub content: SemanticExecutionContent,
     /// Current compact 2D/f32 execution transform.
     pub base_transform: Transform2D,
     /// Current compact solid-paint execution style.
@@ -477,6 +489,30 @@ pub struct SemanticExecutionObject {
     pub signal_bindings: Vec<SemanticSignalBinding>,
     /// Optional numeric source/format declaration used to lower effective text drivers.
     pub decimal_number: Option<noon_core::SemanticDecimalNumber>,
+}
+
+/// Renderer-independent execution content; a scope has no fabricated geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticExecutionContent {
+    Object(SemanticObjectContent),
+    Composed(std::sync::Arc<noon_core::ComposedSource>),
+}
+
+impl SemanticExecutionContent {
+    pub fn geometry(&self) -> Option<noon_core::StoredGeometry> {
+        if let Self::Object(content) = self {
+            content.geometry()
+        } else {
+            None
+        }
+    }
+    pub fn image(&self) -> Option<noon_core::SemanticImageContent> {
+        if let Self::Object(content) = self {
+            content.image()
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -532,6 +568,10 @@ pub enum SemanticLoweringError {
     },
     UnsupportedEffectProfile {
         owner: SemanticNodeId,
+    },
+    InvalidEffectIsolation {
+        owner: SemanticNodeId,
+        reason: &'static str,
     },
     UnsupportedPaintProfile {
         node: SemanticNodeId,
@@ -605,6 +645,7 @@ impl std::fmt::Display for SemanticLoweringError {
                 owner.slot(),
                 owner.generation()
             ),
+            Self::InvalidEffectIsolation { owner, reason } => write!(formatter,"composed effect scope {}:{} cannot be isolated: {reason}",owner.slot(),owner.generation()),
             Self::UnsupportedPaintProfile { node, field } => write!(
                 formatter,
                 "semantic object {}:{} has unsupported {field}; linear paint requires a finite planar geometry fill with at most 16 GPU-representable stops",
@@ -929,17 +970,22 @@ fn lower_effect_stack(
     }
     validate_effect_source_profile(owner, state, store)?;
     let mut lowered = Vec::with_capacity(effects.len());
+    let mut visibility = None;
     for &attachment in effects {
         let effect = store.semantic_effect_state(attachment)?;
         if effect.owner() != owner {
             return Err(unsupported());
+        }
+        if effect.attachment_name().is_visibility() {
+            visibility = Some(attachment);
         }
         lowered.push(crate::CompiledEffect {
             attachment,
             definition: effect.definition(),
         });
     }
-    let stack = crate::CompiledEffectStack::new(lowered).map_err(|_| unsupported())?;
+    let stack = crate::CompiledEffectStack::new_with_visibility(lowered, visibility)
+        .map_err(|_| unsupported())?;
     Ok(Some(std::sync::Arc::new(stack)))
 }
 
@@ -1395,7 +1441,7 @@ mod tests {
         ));
         assert!(matches!(
             lowered.objects()[1].content,
-            SemanticObjectContent::Text(_)
+            SemanticExecutionContent::Object(SemanticObjectContent::Text(_))
         ));
         assert_eq!(index.len(), 2);
     }

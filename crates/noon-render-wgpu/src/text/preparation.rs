@@ -374,6 +374,26 @@ impl RetainedTextQuadPreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
         metrics.validate()?;
+        // Once a coherent generation has no drawable text, view metrics cannot
+        // change its empty glyph arrays. Inspect only the submitted dirty rows
+        // for text admission; structural/full publications still rebuild.
+        if self.prepared_once
+            && self.stats.text_objects == 0
+            && !changes.is_all()
+            && !changes.is_structural()
+            && frame.objects.len() == self.object_states.len()
+            && changes.object_indices().iter().all(|&index| {
+                frame
+                    .objects
+                    .get(index)
+                    .is_some_and(|object| object.text().is_none() || !frame.is_drawable(index))
+            })
+        {
+            self.last_metrics = Some(metrics);
+            self.incremental_stats.reused_frames =
+                self.incremental_stats.reused_frames.saturating_add(1);
+            return Ok(self.prepared_frame(frame.time, false));
+        }
         if self.prepared_once && changes.is_empty() && self.last_metrics == Some(metrics) {
             self.incremental_stats.reused_frames =
                 self.incremental_stats.reused_frames.saturating_add(1);
@@ -1635,6 +1655,51 @@ mod tests {
             Some(PreparedTextItem::OutlineRun { reveal, .. }) if (*reveal - 0.4).abs() < f32::EPSILON
         ));
         assert_eq!(preparer.raster_stats().entries, 0);
+    }
+
+    #[test]
+    fn empty_text_metrics_reuse_keeps_admission_and_glyph_rasterization_correct() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let absent = retained_frame(handle, false, scene_transform());
+        let (device, _queue) = wgpu::Device::noop(&Default::default());
+        let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
+        preparer
+            .prepare(&device, &absent, &texts, &artifact.fonts, metrics())
+            .unwrap();
+        let updated_metrics = TextDeviceMetrics::uniform(200.0).unwrap();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &absent,
+                &FrameChanges::default(),
+                &texts,
+                &artifact.fonts,
+                updated_metrics,
+            )
+            .unwrap();
+        assert!(
+            !prepared.layout_rebuilt,
+            "empty glyph arrays do not depend on the view metrics"
+        );
+        assert_eq!(prepared.stats.text_objects, 0);
+        assert_eq!(preparer.raster_stats().entries, 0);
+        assert_eq!(preparer.atlas_stats().entries, 0);
+        let visible = retained_frame(handle, true, scene_transform());
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &visible,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                updated_metrics,
+            )
+            .unwrap();
+        assert!(prepared.layout_rebuilt);
+        assert_eq!(prepared.stats.text_objects, 1);
+        assert!(!prepared.mask_quads.is_empty());
     }
 
     #[test]

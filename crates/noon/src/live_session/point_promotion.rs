@@ -26,6 +26,10 @@ impl LiveSession<'_> {
                 )
                 .map_err(LiveSessionError::from)
             },
+            |store, source, style| {
+                crate::effective_capture::capture_family_style(store, self.session, source, style)
+                    .map_err(LiveSessionError::from)
+            },
             |store, source, target, transaction| {
                 crate::effective_capture::stage_effect_copy(
                     store,

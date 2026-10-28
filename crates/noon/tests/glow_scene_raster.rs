@@ -13,6 +13,8 @@ use std::time::Duration;
 const SIZE: [u32; 2] = [80, 60];
 const START: f64 = 0.4000000000000123;
 
+mod composed;
+
 fn scene(effect: bool) -> (Scene, Mobject, noon::DeclaredAnimation) {
     let mut scene = Scene::new();
     let mut source = scene.circle(0.4).unwrap();

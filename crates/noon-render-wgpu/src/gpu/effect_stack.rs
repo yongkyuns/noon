@@ -9,8 +9,8 @@ use super::{
         GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurScope,
     },
     shadow_filter::{ShadowFilter, ShadowScope},
-    EffectCaptureParameters, EffectPrepareError, EffectRasterStats, GlowCapture, GlowFilter,
-    GlowParameters, GlowScope,
+    DissolveFilter, DissolveParameters, DissolveScope, EffectCaptureParameters, EffectPixelBounds,
+    EffectPrepareError, EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
 
 /// The fixed-quality finite operator profile; no silent truncation of a stack.
@@ -25,6 +25,29 @@ pub struct EffectStackParameters {
     /// All currently retained filter images, including warm neutral slots.
     /// Source/mask images and in-flight host resources are accounted separately.
     pub scratch_budget_bytes: u64,
+    /// Original source extent in capture pixels, excluding padding and rounded
+    /// capacity. None describes a raw capture whose entire image is the source.
+    pub source_bounds: Option<EffectPixelBounds>,
+}
+
+impl EffectStackParameters {
+    fn dissolve(
+        self,
+        definition: noon_core::NoiseDissolve,
+        source: &wgpu::Texture,
+        opacity: f32,
+        budget: u64,
+    ) -> DissolveParameters {
+        DissolveParameters {
+            definition,
+            source_bounds: self.source_bounds.unwrap_or(EffectPixelBounds {
+                min: [0.0; 2],
+                max: [f64::from(source.width()), f64::from(source.height())],
+            }),
+            scope_opacity: opacity,
+            scratch_budget_bytes: budget,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -32,6 +55,7 @@ enum PassFilter {
     Glow(Box<GlowScope>),
     Blur(Box<GaussianBlurScope>),
     Shadow(Box<ShadowScope>),
+    Dissolve(Box<DissolveScope>),
 }
 impl PassFilter {
     fn new(definition: EffectDefinition) -> Self {
@@ -39,6 +63,7 @@ impl PassFilter {
             EffectDefinition::Glow(_) => Self::Glow(Box::default()),
             EffectDefinition::Blur(_) => Self::Blur(Box::default()),
             EffectDefinition::Shadow(_) => Self::Shadow(Box::default()),
+            EffectDefinition::NoiseDissolve(_) => Self::Dissolve(Box::default()),
         }
     }
     fn matches(&self, definition: EffectDefinition) -> bool {
@@ -47,6 +72,7 @@ impl PassFilter {
             (Self::Glow(_), EffectDefinition::Glow(_))
                 | (Self::Blur(_), EffectDefinition::Blur(_))
                 | (Self::Shadow(_), EffectDefinition::Shadow(_))
+                | (Self::Dissolve(_), EffectDefinition::NoiseDissolve(_))
         )
     }
     fn output(&self) -> Option<&wgpu::Texture> {
@@ -54,6 +80,7 @@ impl PassFilter {
             Self::Glow(v) => v.output(),
             Self::Blur(v) => v.output(),
             Self::Shadow(v) => v.output(),
+            Self::Dissolve(v) => v.output(),
         }
     }
     fn output_view(&self) -> Option<&wgpu::TextureView> {
@@ -61,6 +88,7 @@ impl PassFilter {
             Self::Glow(v) => v.output_view(),
             Self::Blur(v) => v.output_view(),
             Self::Shadow(v) => v.output_view(),
+            Self::Dissolve(v) => v.output_view(),
         }
     }
     fn scratch_bytes(&self) -> u64 {
@@ -68,6 +96,7 @@ impl PassFilter {
             Self::Glow(v) => v.scratch_bytes(),
             Self::Blur(v) => v.scratch_bytes(),
             Self::Shadow(v) => v.scratch_bytes(),
+            Self::Dissolve(v) => v.scratch_bytes(),
         }
     }
     fn invalidate(&mut self) {
@@ -75,6 +104,7 @@ impl PassFilter {
             Self::Glow(v) => v.invalidate(),
             Self::Blur(v) => v.invalidate(),
             Self::Shadow(v) => v.invalidate(),
+            Self::Dissolve(v) => v.invalidate(),
         }
     }
 }
@@ -92,6 +122,10 @@ struct RetainedPass {
 pub struct EffectStackScope {
     passes: Vec<RetainedPass>,
     output: Option<usize>,
+    // One disposable pointwise destination can survive removal of a trailing
+    // mask while this capture still owns authored effects. No semantic identity
+    // or mask parameters live here; an empty/retired scope releases it normally.
+    warm_mask: Option<Box<DissolveScope>>,
 }
 impl EffectStackScope {
     /// None means ordinary source submission, including an entirely neutral stack.
@@ -110,7 +144,11 @@ impl EffectStackScope {
         self.passes
             .iter()
             .map(|pass| pass.filter.scratch_bytes())
-            .sum()
+            .sum::<u64>()
+            + self
+                .warm_mask
+                .as_ref()
+                .map_or(0, |mask| mask.scratch_bytes())
     }
     pub fn clear(&mut self) {
         *self = Self::default();
@@ -126,17 +164,85 @@ impl EffectStackScope {
             .zip(effects)
             .filter(|(pass, effect)| pass.filter.matches(**effect))
             .map(|(pass, _)| pass.filter.scratch_bytes())
-            .sum()
+            .sum::<u64>()
+            + self.mask_candidate_bytes(effects)
     }
-    /// An invisible/neutral capture still retires removed or replaced slots.
-    /// Surviving warm resources remain charged; no GPU work is necessary.
-    pub(super) fn deactivate_profile(&mut self, effects: &[EffectDefinition]) {
-        self.passes.truncate(effects.len());
-        for (pass, &effect) in self.passes.iter_mut().zip(effects) {
-            if !pass.filter.matches(effect) {
-                pass.filter = PassFilter::new(effect);
+    fn mask_candidate_bytes(&self, effects: &[EffectDefinition]) -> u64 {
+        if effects.is_empty() {
+            return 0;
+        }
+        self.passes
+            .iter()
+            .skip(effects.len())
+            .rev()
+            .find_map(|pass| match &pass.filter {
+                PassFilter::Dissolve(mask) => Some(mask.scratch_bytes()),
+                _ => None,
+            })
+            .or_else(|| self.warm_mask.as_ref().map(|mask| mask.scratch_bytes()))
+            .unwrap_or(0)
+    }
+    fn mask_reuse_index(&self, effects: &[EffectDefinition]) -> Option<usize> {
+        (self.mask_candidate_bytes(effects) > 0)
+            .then(|| {
+                effects.iter().enumerate().find_map(|(index, effect)| {
+                    (effect.as_noise_dissolve().is_some()
+                        && self
+                            .passes
+                            .get(index)
+                            .is_none_or(|pass| !pass.filter.matches(*effect)))
+                    .then_some(index)
+                })
+            })
+            .flatten()
+    }
+    fn sync_profile(&mut self, effects: &[EffectDefinition]) {
+        if effects.is_empty() {
+            self.clear();
+            return;
+        }
+        for pass in self.passes.drain(effects.len().min(self.passes.len())..) {
+            if let PassFilter::Dissolve(mask) = pass.filter {
+                self.warm_mask = Some(mask);
             }
         }
+        for (index, &effect) in effects.iter().enumerate() {
+            if self
+                .passes
+                .get(index)
+                .is_some_and(|pass| pass.filter.matches(effect))
+            {
+                continue;
+            }
+            let filter = if effect.as_noise_dissolve().is_some() {
+                self.warm_mask
+                    .take()
+                    .map(|mut mask| {
+                        mask.invalidate();
+                        PassFilter::Dissolve(mask)
+                    })
+                    .unwrap_or_else(|| PassFilter::new(effect))
+            } else {
+                PassFilter::new(effect)
+            };
+            let pass = RetainedPass {
+                filter,
+                revision: 0,
+            };
+            if index == self.passes.len() {
+                self.passes.push(pass);
+            } else {
+                self.passes[index] = pass;
+            }
+        }
+    }
+    /// Surviving warm resources remain charged; no GPU work is necessary.
+    pub(super) fn deactivate_profile(&mut self, effects: &[EffectDefinition]) {
+        if self.passes.is_empty() {
+            self.output = None;
+            return;
+        }
+        self.sync_profile(effects);
         self.output = None;
     }
 }
@@ -148,6 +254,7 @@ pub struct EffectStackFilter {
     glow: GlowFilter,
     blur: GaussianBlurFilter,
     shadow: ShadowFilter,
+    pub(super) dissolve: DissolveFilter,
 }
 
 impl EffectStackFilter {
@@ -175,21 +282,11 @@ impl EffectStackFilter {
             active,
             last,
         } = preflight(device, scope, capture, effects, parameters)?;
-        scope.passes.truncate(effects.len());
         if last.is_none() && scope.passes.is_empty() {
             scope.output = None;
             return Ok(EffectRasterStats::default());
         }
-        for (index, &effect) in effects.iter().enumerate() {
-            if index == scope.passes.len() {
-                scope.passes.push(RetainedPass {
-                    filter: PassFilter::new(effect),
-                    revision: 0,
-                });
-            } else if !scope.passes[index].filter.matches(effect) {
-                scope.passes[index].filter = PassFilter::new(effect);
-            }
-        }
+        scope.sync_profile(effects);
         let mut stats = EffectRasterStats::default();
         let mut input = capture.source.clone();
         let mut revision = capture.revision;
@@ -210,6 +307,19 @@ impl EffectStackFilter {
                     revision,
                 };
                 let work = match (&mut pass.filter, effect) {
+                    (PassFilter::Dissolve(filter), EffectDefinition::NoiseDissolve(definition)) => {
+                        self.dissolve.prepare_encode(
+                            device,
+                            queue,
+                            encoder,
+                            filter,
+                            GaussianBlurCapture {
+                                source: capture.source,
+                                revision,
+                            },
+                            parameters.dissolve(definition, capture.source, opacity, budget),
+                        )?
+                    }
                     (PassFilter::Glow(filter), EffectDefinition::Glow(definition)) => {
                         let upload = self.glow.prepare(
                             device,
@@ -331,10 +441,24 @@ fn preflight(
         .map_err(EffectPrepareError::Parameter)?;
     let limits = device.limits();
     let size = [capture.source.width(), capture.source.height()];
+    if scope.passes.iter().any(|p| {
+        p.filter
+            .output()
+            .is_some_and(|output| output == capture.source)
+    }) || scope
+        .warm_mask
+        .as_ref()
+        .and_then(|mask| mask.output())
+        .is_some_and(|output| output == capture.source)
+    {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
     let pixels = u64::from(size[0]) * u64::from(size[1]);
     let mut budgets = [0; MAX_EFFECT_STACK_LEN];
     let mut active = [false; MAX_EFFECT_STACK_LEN];
     let mut total = 0_u64;
+    let mask_reuse = scope.mask_reuse_index(effects);
+    let warm_mask_bytes = scope.mask_candidate_bytes(effects);
     let mut last = None;
     for (index, &effect) in effects.iter().enumerate() {
         let values = EffectCaptureParameters {
@@ -349,7 +473,16 @@ fn preflight(
                 .passes
                 .get(index)
                 .filter(|pass| pass.filter.matches(effect))
-                .map_or(0, |pass| pass.filter.scratch_bytes());
+                .map_or_else(
+                    || {
+                        if mask_reuse == Some(index) {
+                            warm_mask_bytes
+                        } else {
+                            0
+                        }
+                    },
+                    |pass| pass.filter.scratch_bytes(),
+                );
         } else {
             super::glow_filter::validate_capture(capture.source)?;
             values.offset_pixels()?;
@@ -390,11 +523,30 @@ fn preflight(
             budgets[index] = pixels
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
+            if let EffectDefinition::NoiseDissolve(definition) = effect {
+                super::dissolve_filter::validate_input(
+                    GaussianBlurCapture {
+                        source: capture.source,
+                        revision: capture.revision,
+                    },
+                    parameters.dissolve(
+                        definition,
+                        capture.source,
+                        parameters.scope_opacity,
+                        budgets[index],
+                    ),
+                )?;
+            }
             active[index] = true;
             last = Some(index);
         }
         total = total
             .checked_add(budgets[index])
+            .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
+    }
+    if mask_reuse.is_none() {
+        total = total
+            .checked_add(warm_mask_bytes)
             .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
     }
     if total > parameters.scratch_budget_bytes {

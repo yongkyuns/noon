@@ -1,7 +1,7 @@
 """Noon-native effect syntax over the shared Rust authoring handles.
 
 Definitions are immutable Rust values; attachments and targets live in Rust.
-The finite glow profile executes through the shared Rust scene and renderer.
+Finite ordered effects execute through the shared Rust scene and renderer.
 Shared execution/publication admission remains authoritative. No Python interpolation,
 attachment table, family traversal, or callback-local shadow state is provided.
 """
@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -43,6 +43,9 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     pixels = isinstance(radius, Pixels)
     radius = None if radius is None else _number(radius.value if pixels else radius, "radius")
     intensity = None if intensity is None else _number(intensity, "intensity")
+    progress = None if progress is None else _number(progress, "progress")
+    softness = None if softness is None else _number(softness, "softness")
+    seed = None if seed is None else _number(seed, "seed")
     if source is not None and not isinstance(source, str):
         raise TypeError("glow source must be a string")
     try:
@@ -55,7 +58,7 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     packed_offset = [] if raw_offset is None else [_number(v, "offset coordinate") for v in raw_offset]
     if raw_offset is not None and len(packed_offset) != 2:
         raise ValueError("effect offset requires two coordinates")
-    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels)
+    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels, progress, softness, seed)
     try:
         yield request
     finally:
@@ -182,6 +185,73 @@ class Shadow:
         return Pixels(value) if bool(self._definition.offsetPixels) else value
 
 
+class NoiseDissolve:
+    """Immutable seeded alpha mask over normalized source bounds.
+
+    Progress zero preserves the input; one is transparent. Softness is the
+    threshold feather width. Rust validates values and owns parameter animation.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, seed=None, softness=None, progress=None):
+        with _update(seed=seed, softness=softness, progress=progress) as update:
+            from js import noonNoiseDissolve
+            self._definition = engine_call(noonNoiseDissolve, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def progress(self):
+        return float(self._definition.progress)
+
+    @property
+    def softness(self):
+        return float(self._definition.softness)
+
+    @property
+    def seed(self):
+        return int(self._definition.seed)
+
+
+class Dissolve:
+    """Animate an object or composed family's seeded visibility mask in Rust.
+
+    Construction is inert. Direction is ``"in"`` or ``"out"``; omitted style
+    fields preserve an existing visibility mask. Rust owns the clock, enrollment
+    and completion. ``remover=False`` keeps an out endpoint for a later reveal.
+    """
+    __slots__ = ("mobject", "direction", "seed", "softness", "introducer", "remover", "anim_args")
+
+    def __init__(self, mobject, *, direction="out", seed=None, softness=None,
+                 introducer=None, remover=None, **kwargs):
+        from _manim_semantic_handles import _is_shared_family
+        if not isinstance(mobject, _base.Mobject) and not _is_shared_family(mobject):
+            raise TypeError("Dissolve target must be a Mobject or Group")
+        if direction not in ("in", "out"):
+            raise ValueError('Dissolve direction must be "in" or "out"')
+        for name, value in (("introducer", introducer), ("remover", remover)):
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"Dissolve {name} must be a boolean")
+        self.mobject = mobject
+        self.direction = direction
+        self.seed = None if seed is None else _number(seed, "seed")
+        self.softness = None if softness is None else _number(softness, "softness")
+        self.introducer = introducer
+        self.remover = remover
+        self.anim_args = dict(kwargs)
+
+
 class GlowPulse:
     """Temporarily animate one leaf's canonical glow intensity in shared Rust.
 
@@ -233,27 +303,45 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur, "shadow": Shadow}[str(definition.kind)]._from_definition(definition)
+        return {"glow": Glow, "blur": Blur, "shadow": Shadow, "noise_dissolve": NoiseDissolve}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import (
+        _handle_for, _is_shared_family, _live_mutation_context, _live_constructor_context,
+    )
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("effect edits in callbacks require shared staged effect publication")
-    if scope is not None or _is_shared_family(value):
-        raise NotImplementedError("this effect profile supports leaf declarations only; group/view execution is unavailable")
-    handle = _handle_for(value)
+    family = _is_shared_family(value)
+    if scope is not None and not (family and scope == "composed"):
+        raise NotImplementedError("explicit effect scope requires a composed family target")
+    handle = value._semantic_family_handle if family else _handle_for(value)
     if handle is None:
         raise RuntimeError("effects require a current shared Rust object handle")
-    return handle, _live_mutation_context(value)
+    context = _live_mutation_context(value)
+    if context is None and family:
+        context = _live_constructor_context("family effect")
+    return handle, context, family
+
+
+_FAMILY_LIVE_METHODS = {
+    "setGlow": "liveSetFamilyGlow",
+    "addEffect": "liveAddFamilyEffect",
+    "setEffect": "liveSetFamilyEffect",
+    "setEffectHandle": "liveSetFamilyEffectHandle",
+    "removeEffect": "liveRemoveFamilyEffect",
+    "removeEffectHandle": "liveRemoveFamilyEffectHandle",
+    "removeGlow": "liveRemoveFamilyGlow",
+}
 
 
 def _call(value, method, *args, scope=None):
-    handle, context = _target(value, scope)
+    handle, context, family = _target(value, scope)
     if context is None:
         return engine_call(getattr(handle, method), *args)
-    return engine_call(getattr(context, "live" + method[0].upper() + method[1:]), handle, *args)
+    live_method = _FAMILY_LIVE_METHODS[method] if family else "live" + method[0].upper() + method[1:]
+    return engine_call(getattr(context, live_method), handle, *args)
 
 
 def _selector(selector):
@@ -271,8 +359,8 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, Shadow)):
-        raise TypeError("this effect profile supports Glow, Blur and Shadow definitions")
+    if not isinstance(definition, (Glow, Blur, Shadow, NoiseDissolve)):
+        raise TypeError("this effect profile supports Glow, Blur, Shadow and NoiseDissolve definitions")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)
@@ -282,14 +370,14 @@ def add_effect(value, definition, *, name, scope=None):
 def get_effect(value, name):
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
-    handle, _context = _target(value)
+    handle, _context, _family = _target(value)
     # Explicit authored attachment lookup, not an effective frame read.
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

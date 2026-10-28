@@ -58,6 +58,7 @@ struct ObjectResidency {
 #[derive(Debug)]
 pub(super) struct CapturedImageBinding {
     pub resource: RasterImageResourceHandle,
+    pub offset: u64,
     texture: wgpu::BindGroup,
     object: wgpu::BindGroup,
 }
@@ -209,6 +210,7 @@ impl RasterImageGpuRenderer {
         index: usize,
         resource: RasterImageResourceHandle,
         buffer: &wgpu::Buffer,
+        offset: u64,
     ) -> Result<CapturedImageBinding, RasterImageDrawError> {
         if !self
             .objects
@@ -228,13 +230,14 @@ impl RasterImageGpuRenderer {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer,
-                    offset: 0,
+                    offset,
                     size: wgpu::BufferSize::new(size_of::<ImageUniform>() as u64),
                 }),
             }],
         });
         Ok(CapturedImageBinding {
             resource,
+            offset,
             texture: texture.binding.clone(),
             object,
         })

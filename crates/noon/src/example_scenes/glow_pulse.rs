@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/glow_pulse.py`.
 
 use crate::{
-    effects::{EffectUpdate, Pixels},
+    effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
@@ -88,13 +88,21 @@ pub fn program() -> Result<LiveProgram<GlowPulseScene>, String> {
     scene.add(&background).map_err(message)?;
 
     let mut persistent = white_dot(&mut scene, -2.0)?;
-    let temporary = white_dot(&mut scene, 2.0)?;
+    let mut temporary = white_dot(&mut scene, 2.0)?;
     persistent
         .set_glow(
             EffectUpdate::default()
                 .color(Color::BLUE)
                 .radius(Pixels(10.0))
                 .intensity(0.35),
+        )
+        .map_err(message)?;
+    // A neutral authored treatment must survive temporary glow enrollment and
+    // cleanup. It preserves the ordinary pixels while exercising a nonempty stack.
+    temporary
+        .add_effect(
+            Blur::new(EffectUpdate::default().radius(Pixels(0.0))).map_err(message)?,
+            "soften",
         )
         .map_err(message)?;
     scene.add(&persistent).map_err(message)?;
@@ -142,30 +150,34 @@ mod tests {
             let left =
                 crate::effect_authoring::only_effect(frame.objects[1].effects.as_ref().unwrap())
                     .definition;
+            let right = frame.objects[2].effects.as_ref().unwrap();
+            assert_eq!(
+                right.definitions()[0].as_blur().unwrap().radius(),
+                Pixels(0.0).into()
+            );
+            assert!(right.len() == 1 || right.len() == 2);
+            let right_glow = right
+                .definitions()
+                .get(1)
+                .map(|value| value.as_glow().unwrap());
             if time == 1.3 {
                 assert!((left.as_glow().unwrap().intensity() - 2.0).abs() < 1e-12);
-                assert_eq!(left.radius(), noon_core::EffectRadius::Pixels(11.0));
+                assert_eq!(left.radius(), Some(noon_core::EffectRadius::Pixels(11.0)));
                 assert!((frame.render_transform(1).translation.y - 0.2).abs() < 1e-6);
-                assert!(
-                    (crate::effect_authoring::only_effect(
-                        frame.objects[2].effects.as_ref().unwrap()
-                    )
-                    .definition
-                    .as_glow()
-                    .unwrap()
-                    .intensity()
-                        - 2.0)
-                        .abs()
-                        < 1e-12
-                );
+                assert!((right_glow.unwrap().intensity() - 2.0).abs() < 1e-12);
             }
             if time >= 1.6 {
                 assert!((left.as_glow().unwrap().intensity() - 1.2).abs() < 1e-12);
-                assert_eq!(left.radius(), noon_core::EffectRadius::Pixels(12.0));
+                assert_eq!(left.radius(), Some(noon_core::EffectRadius::Pixels(12.0)));
                 assert!((frame.render_transform(1).translation.y - 0.4).abs() < 1e-6);
             }
             if [1.6, 2.5, 3.25, 3.5].contains(&time) {
-                assert!(frame.objects[2].effects.is_none());
+                assert_eq!(
+                    right.len(),
+                    1,
+                    "cleanup must retire only the temporary glow"
+                );
+                assert!(right_glow.is_none());
             }
             let expected = if [2.125, 3.125].contains(&time) {
                 Some(0.375)
@@ -175,16 +187,7 @@ mod tests {
                 None
             };
             if let Some(expected) = expected {
-                assert_eq!(
-                    crate::effect_authoring::only_effect(
-                        frame.objects[2].effects.as_ref().unwrap()
-                    )
-                    .definition
-                    .as_glow()
-                    .unwrap()
-                    .intensity(),
-                    expected
-                );
+                assert_eq!(right_glow.unwrap().intensity(), expected);
             }
             match status {
                 LiveProgramStatus::PublicationPending(expected) => {

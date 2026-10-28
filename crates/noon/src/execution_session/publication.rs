@@ -691,14 +691,7 @@ impl ExecutionSession {
                 .map(ExecutionPatch::RemoveObject),
         );
         let graph_patches = publication.conservative_graph_patches().collect::<Vec<_>>();
-        if !execution_suffix.is_empty()
-            || order_patches
-                .as_ref()
-                .is_some_and(|items| !items.is_empty())
-            || !graph_patches.is_empty()
-        {
-            conservative_patches.extend(publication.conservative_entry_patches(&prepared));
-        }
+        conservative_patches.extend(publication.conservative_entry_patches(&prepared));
         conservative_patches.extend(order_patches.iter().flatten().cloned());
         conservative_patches.extend(graph_patches);
         conservative_patches.extend(execution_suffix.iter().cloned());
@@ -711,9 +704,7 @@ impl ExecutionSession {
                 declaration: entry.declaration,
             })
             .collect::<Vec<_>>();
-        let mut numeric_patches = conservative.mutations().to_vec();
-        numeric_patches.extend(publication.conservative_entry_patches(&prepared));
-        let numeric_transaction = ExecutionMutationTransaction::from_mutations(numeric_patches);
+        let numeric_transaction = conservative.clone();
         let mut pending_numeric_signals = scalar
             .as_ref()
             .and_then(|scalar| scalar.reactive_enrollment.as_ref())
@@ -902,6 +893,44 @@ impl ExecutionSession {
 
     pub const fn last_structural_publication_stats(&self) -> StructuralPublicationStats {
         self.last_structural_publication
+    }
+
+    /// Borrow the published attachment column for a drawable or composed owner.
+    /// A composed controller has no object geometry and cannot use layout queries.
+    pub(crate) fn effective_effects(
+        &self,
+        store: &SemanticStore,
+        node: SemanticNodeId,
+    ) -> Result<Option<&noon_compile::CompiledEffectStack>, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        store
+            .node(node)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let index = self
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| self.runtime.frame_index_for_object(object))
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        Ok(self.runtime.frame().objects[index].effects.as_deref())
+    }
+
+    /// Read an isolated family's owned opacity from the indexed coherent row.
+    pub(crate) fn effective_family_opacity(
+        &self,
+        store: &SemanticStore,
+        node: SemanticNodeId,
+    ) -> Result<f32, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        store
+            .node(node)
+            .and_then(|node| node.family_style())
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let object = self
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| self.runtime.effective_object(object))
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        Ok(object.style.opacity)
     }
 
     /// Query a live semantic object through its originating store in indexed time.

@@ -23,6 +23,7 @@ pub enum EffectTargetLoweringError {
     MissingEffectiveValue,
     UnsupportedContentChange,
     UnsupportedPulseOptions,
+    UnsupportedTargetOptions,
     Parameter(EffectParameterError),
     Timeline(TimelineError),
 }
@@ -38,6 +39,42 @@ impl std::fmt::Display for EffectTargetLoweringError {
 }
 impl std::error::Error for EffectTargetLoweringError {}
 
+/// Common frozen-generation and activation-value projection for object and
+/// composed-family targets. Scheduling and track installation stay with the
+/// ordinary prepared animation path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepared_channels(
+    prepared: &noon_core::PreparedSemanticMutationTransaction<'_>,
+    animation: noon_core::SemanticTransactionNodeRef,
+    owner: noon_core::SemanticTransactionNodeRef,
+    target: noon_core::SemanticTransactionNodeRef,
+    current: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    newly_admitted: bool,
+    method_target: bool,
+    temporary: &HashSet<SemanticNodeId>,
+) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
+    let source = prepared
+        .animation_effect_snapshot(owner)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let target = prepared
+        .animation_effect_snapshot(target)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let snapshot = prepared
+        .transform_effect_snapshot(animation)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let effective = prepared_effective(current, &source, newly_admitted, |attachment| {
+        prepared.store().node(attachment).is_none()
+    })?;
+    channels(
+        snapshot,
+        &source,
+        &target,
+        effective.as_deref(),
+        method_target,
+        temporary,
+    )
+}
+
 pub(super) fn channels(
     snapshot: Option<&SemanticTransformEffectSnapshot>,
     source: &[SemanticAnimationEffectSnapshot],
@@ -51,15 +88,16 @@ pub(super) fn channels(
     let omitted: HashSet<_> = source
         .iter()
         .filter(|effect| {
-            temporary_attachments.contains(&effect.attachment)
-                && effect
-                    .definition
-                    .as_glow()
-                    .is_some_and(|glow| glow.intensity() == 0.0)
-                && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
-                && !target
-                    .iter()
-                    .any(|destination| destination.name == effect.name)
+            effect.name.is_visibility()
+                || (temporary_attachments.contains(&effect.attachment)
+                    && effect
+                        .definition
+                        .as_glow()
+                        .is_some_and(|glow| glow.intensity() == 0.0)
+                    && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
+                    && !target
+                        .iter()
+                        .any(|destination| destination.name == effect.name))
         })
         .map(|effect| effect.attachment)
         .collect();
@@ -68,6 +106,12 @@ pub(super) fn channels(
         .filter(|effect| !omitted.contains(&effect.attachment))
         .cloned()
         .collect();
+    let target: Vec<_> = target
+        .iter()
+        .filter(|effect| !effect.name.is_visibility())
+        .cloned()
+        .collect();
+    let target = target.as_slice();
     let Some(snapshot) = snapshot else {
         return if source.is_empty()
             && target.is_empty()
@@ -171,8 +215,25 @@ fn attachment_channels(
             update.offset = Some(b.offset());
         }
     }
-    if writes_radius || baseline.radius() != destination.radius() {
-        update.radius = Some(destination.radius());
+    if let (Some(a), Some(b)) = (baseline.radius(), destination.radius()) {
+        if writes_radius || a != b {
+            update.radius = Some(b);
+        }
+    }
+    if let (Some(a), Some(b)) = (
+        baseline.as_noise_dissolve(),
+        destination.as_noise_dissolve(),
+    ) {
+        if a.progress() != b.progress()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Progress))
+        {
+            update.progress = Some(b.progress());
+        }
+        if a.softness() != b.softness()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Softness))
+        {
+            update.softness = Some(b.softness());
+        }
     }
     effective
         .parameter_channels(update)
@@ -217,10 +278,11 @@ pub(super) fn prepared_effective(
             values.push(value);
         } else if newly_admitted
             || (unpublished(effect.attachment)
-                && effect
-                    .definition
-                    .as_glow()
-                    .is_some_and(|glow| glow.intensity() == 0.0))
+                && (effect.name.is_visibility()
+                    || effect
+                        .definition
+                        .as_glow()
+                        .is_some_and(|glow| glow.intensity() == 0.0)))
         {
             values.push(crate::CompiledEffect {
                 attachment: effect.attachment,
@@ -230,8 +292,14 @@ pub(super) fn prepared_effective(
             return Err(EffectTargetLoweringError::MissingEffectiveValue);
         }
     }
-    let stack = crate::CompiledEffectStack::new(values)
-        .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
+    let stack = crate::CompiledEffectStack::new_with_visibility(
+        values,
+        source
+            .iter()
+            .find(|effect| effect.name.is_visibility())
+            .map(|effect| effect.attachment),
+    )
+    .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
     Ok(Some(std::sync::Arc::new(stack)))
 }
 

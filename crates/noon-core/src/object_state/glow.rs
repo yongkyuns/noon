@@ -77,11 +77,12 @@ impl Glow {
 impl sealed::Sealed for Glow {}
 impl EffectValue for Glow {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
-        if update.offset.is_some() {
-            return Err(EffectParameterError::UnsupportedParameter(
-                EffectParameter::Offset,
-            ));
-        }
+        update.require_parameters(&[
+            EffectParameter::Color,
+            EffectParameter::Radius,
+            EffectParameter::Intensity,
+            EffectParameter::Source,
+        ])?;
         update.validate()?;
         Ok(Glow {
             color: update.color.unwrap_or(self.color),
@@ -127,6 +128,7 @@ impl EffectValue for Glow {
                 .map(|_| interpolate(self.intensity, target.intensity, alpha)),
             source: request.source,
             offset: None,
+            ..EffectUpdate::default()
         };
         // Keep even extreme finite radius arithmetic fail-closed.
         update.apply_to(self)?;

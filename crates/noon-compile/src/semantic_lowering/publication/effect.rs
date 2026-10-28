@@ -24,12 +24,30 @@ pub(super) fn lower_prepared_attachment(
     if effects.is_empty() {
         return Ok(None);
     }
-    let state = prepared.proposed_object_state(owner)?;
-    super::super::projection::validate_effect_source_profile(semantic, &state, prepared.store())?;
-    let stack = CompiledEffectStack::new(effects.into_iter().map(|effect| CompiledEffect {
-        attachment: effect.attachment,
-        definition: effect.definition,
-    }))
+    match prepared.proposed_object_state(owner) {
+        Ok(state) => super::super::projection::validate_effect_source_profile(
+            semantic,
+            &state,
+            prepared.store(),
+        )?,
+        Err(error) => {
+            // An admitted non-drawable family already owns its immutable input
+            // plan. Parameter-only publication must not traverse that family.
+            if prepared.family_style(owner).is_err() {
+                return Err(error.into());
+            }
+        }
+    }
+    let stack = CompiledEffectStack::new_with_visibility(
+        effects.iter().map(|effect| CompiledEffect {
+            attachment: effect.attachment,
+            definition: effect.definition,
+        }),
+        effects
+            .iter()
+            .find(|effect| effect.name.is_visibility())
+            .map(|effect| effect.attachment),
+    )
     .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner: semantic })?;
     Ok(Some(Arc::new(stack)))
 }
@@ -72,9 +90,19 @@ pub(super) fn lower_changes(
         if !reachability.is_reachable(owner) || prepared.node_is_removed(owner) {
             continue;
         }
+        // First family attachment is an ordinary prepared execution entry.
+        // Removing its last attachment is an ordinary execution membership exit.
+        if !reachability.is_object_reachable(owner)
+            || (super::composed::unrendered_family(prepared, owner.into())?
+                && prepared.animation_effect_snapshot(owner)?.is_empty()
+                && prepared.family_style(owner)?.object_opacity == 1.0
+                && !prepared.has_family_appearance_target(owner))
+        {
+            continue;
+        }
         let Some(object) = index.execution_object_id(owner) else {
-            // A reachable family cannot quietly accept a per-leaf treatment
-            // in place of an unimplemented composed-group effect.
+            // Every already-live execution row must have its existing identity.
+            // Newly admitted scope rows are prepared separately above.
             return Err(SemanticLoweringError::UnsupportedEffectProfile { owner }.into());
         };
         let original = prepared
@@ -85,10 +113,16 @@ pub(super) fn lower_changes(
             None
         } else {
             Some(
-                CompiledEffectStack::new(original.into_iter().map(|effect| CompiledEffect {
-                    attachment: effect.attachment,
-                    definition: effect.definition,
-                }))
+                CompiledEffectStack::new_with_visibility(
+                    original.iter().map(|effect| CompiledEffect {
+                        attachment: effect.attachment,
+                        definition: effect.definition,
+                    }),
+                    original
+                        .iter()
+                        .find(|effect| effect.name.is_visibility())
+                        .map(|effect| effect.attachment),
+                )
                 .map_err(|_| SemanticLoweringError::UnsupportedEffectProfile { owner })?,
             )
         };

@@ -14,16 +14,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::{TransportImageResourceHandle, TransportImageSampling, TransportSlotId};
 
+mod composed;
 pub(crate) mod incremental_render_resources;
+use composed::PublishedComposedSource;
 
 /// Resource-aware execution channel for the retained geometry/text runtime.
 ///
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V25 combines ordered, generation-checked effect bindings and checked HatchPaint.
-// The two independent V24 layouts are rejected at the genuine worker boundary.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 25;
+// V27 carries ordered bindings, composed source plans, seeded masks, HatchPaint
+// and exact private Visibility roles across the genuine worker boundary. Older
+// envelopes reject; native and direct Rust/WASM execution remain typed in process.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 27;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,6 +79,11 @@ pub enum TransportEffectDefinition {
         radius: EffectRadius,
         offset: noon_core::EffectOffset,
     },
+    NoiseDissolve {
+        seed: u32,
+        softness: f64,
+        progress: f64,
+    },
 }
 impl From<&noon_compile::CompiledEffect> for TransportEffectState {
     fn from(effect: &noon_compile::CompiledEffect) -> Self {
@@ -94,6 +102,13 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
             noon_core::EffectDefinition::Blur(blur) => TransportEffectDefinition::Blur {
                 radius: blur.radius(),
             },
+            noon_core::EffectDefinition::NoiseDissolve(value) => {
+                TransportEffectDefinition::NoiseDissolve {
+                    seed: value.seed(),
+                    softness: value.softness(),
+                    progress: value.progress(),
+                }
+            }
         };
         Self {
             attachment: effect.attachment,
@@ -135,6 +150,15 @@ impl TransportEffectState {
                     .ok()?
                     .into()
             }
+            TransportEffectDefinition::NoiseDissolve {
+                seed,
+                softness,
+                progress,
+            } => noon_core::NoiseDissolve::new(seed, softness)
+                .ok()?
+                .with_progress(progress)
+                .ok()?
+                .into(),
         };
         Some(noon_compile::CompiledEffect {
             attachment: self.attachment,
@@ -163,6 +187,9 @@ impl TransportTextResourceHandle {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransportObjectContent {
+    Composed {
+        source: crate::TransportComposedSourceHandle,
+    },
     Image {
         image: TransportImageResourceHandle,
         sampling: TransportImageSampling,
@@ -380,9 +407,15 @@ impl TransportSpatialState {
     }
 }
 
-impl From<&ObjectContentRef> for TransportObjectContent {
-    fn from(value: &ObjectContentRef) -> Self {
-        match value {
+impl TryFrom<&ObjectContentRef> for TransportObjectContent {
+    type Error = RetainedExecutionTransportError;
+    fn try_from(value: &ObjectContentRef) -> Result<Self, Self::Error> {
+        Ok(match value {
+            // Bare conversion has no session/sequence-qualified resource key.
+            // Only the resource-aware encoder can bind a composed source.
+            ObjectContentRef::Composed(_) => {
+                return Err(RetainedExecutionTransportError::UnsupportedComposedSource)
+            }
             ObjectContentRef::Image(image) => Self::Image {
                 image: image.resource().into(),
                 sampling: image.sampling().into(),
@@ -394,7 +427,7 @@ impl From<&ObjectContentRef> for TransportObjectContent {
             ObjectContentRef::Text(text) => Self::Text {
                 text: TransportTextResourceHandle::from_source_handle(*text),
             },
-        }
+        })
     }
 }
 
@@ -409,6 +442,9 @@ pub struct RetainedTransportObjectState {
     pub object: ObjectId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<TransportEffectState>,
+    /// Exact trailing private Visibility binding, distinct from named filters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<SemanticNodeId>,
     /// Effective layer of this published row, not its painter rank.
     pub z_index: f64,
     pub content: TransportObjectContent,
@@ -507,6 +543,10 @@ pub enum RetainedTransportApplyOutcome {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
+    UnsupportedComposedSource,
+    UnknownComposedSource(crate::TransportComposedSourceHandle),
+    InvalidComposedSourceHandle(TransportSlotId),
+    InvalidComposedSource(noon_compile::CompiledComposedSourceError),
     UnknownImageResource(TransportImageResourceHandle),
     ImageRenderGeometry(TransportSlotId),
     InvalidChannel(String),
@@ -553,6 +593,10 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnknownComposedSource(handle) => write!(formatter, "unknown immutable composed source {handle:?}"),
+            Self::InvalidComposedSourceHandle(slot) => write!(formatter, "invalid composed source provenance or owner profile at {slot:?}"),
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
+            Self::UnsupportedComposedSource => write!(formatter,"composed source conversion requires a publication resource key"),
             Self::InvalidEffectState(slot) => write!(
                 formatter,
                 "retained worker slot {}:{} contains invalid or unsupported effect stack",
@@ -703,6 +747,7 @@ pub struct RetainedExecutionDeltaEncoder {
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
     render_geometry_indices: Option<HashMap<usize, u64>>,
     published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
+    published_composed_sources: Vec<Option<PublishedComposedSource>>,
 }
 
 impl RetainedExecutionDeltaEncoder {
@@ -719,6 +764,7 @@ impl RetainedExecutionDeltaEncoder {
             render_geometries: None,
             render_geometry_indices: None,
             published_render_geometries: Vec::new(),
+            published_composed_sources: Vec::new(),
         }
     }
 
@@ -765,7 +811,12 @@ impl RetainedExecutionDeltaEncoder {
                 .as_ref()
                 .is_some_and(|items| (index as usize) < items.len())
         }));
-        let mut object = transport_object(frame, index, resource)?;
+        let mut object = transport_object(
+            frame,
+            index,
+            resource,
+            self.composed_source_handle(frame, index),
+        )?;
         let render_geometry = render_geometry_identity(frame, index);
         if reuse_inline_geometry
             && resource.is_none()
@@ -817,6 +868,7 @@ impl RetainedExecutionDeltaEncoder {
         let indices = indices.into_iter().collect::<Vec<_>>();
         let mut orders = vec![None; frame.objects.len()];
         let mut render_geometries = vec![None; frame.objects.len()];
+        let mut composed_sources = vec![None; frame.objects.len()];
         let objects = indices
             .into_iter()
             .enumerate()
@@ -829,6 +881,7 @@ impl RetainedExecutionDeltaEncoder {
                     .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
                 orders[index] = Some(object.order);
                 render_geometries[index] = render_geometry_identity(frame, index);
+                composed_sources[index] = composed::published_source(frame, index, &object.content);
                 Ok(object)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -836,6 +889,7 @@ impl RetainedExecutionDeltaEncoder {
         self.initialized = true;
         self.snapshot_orders = orders;
         self.published_render_geometries = render_geometries;
+        self.published_composed_sources = composed_sources;
         Ok(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
@@ -922,10 +976,7 @@ impl RetainedExecutionDeltaEncoder {
             .removed_indices()
             .iter()
             .copied()
-            .map(|index| {
-                self.transport_object(frame, index, true)
-                    .map(|object| (index, object.slot))
-            })
+            .map(|index| transport_slot(frame, index).map(|slot| (index, slot)))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|(index, _)| !final_live_indices.contains(index))
@@ -969,8 +1020,7 @@ impl RetainedExecutionDeltaEncoder {
                                 RetainedExecutionTransportError::InvalidObjectIndex(index)
                             })?;
                             updates.push((index, rank));
-                            self.transport_object(frame, index, true)
-                                .map(|object| object.slot)
+                            transport_slot(frame, index)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok::<_, RetainedExecutionTransportError>((
@@ -1011,6 +1061,7 @@ impl RetainedExecutionDeltaEncoder {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
+        self.commit_composed_sources(frame, &objects, &excluded_indices);
         for (index, _) in &removed_rows {
             if let Some(order) = self.snapshot_orders.get_mut(*index) {
                 *order = None;
@@ -1076,6 +1127,11 @@ pub struct RetainedExecutionFrameMirror {
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     geometry_handles:
         HashMap<crate::TransportGeometryResourceHandle, noon_core::GeometryResourceHandle>,
+    composed_sources: HashMap<crate::TransportComposedSourceHandle, Arc<noon_core::ComposedSource>>,
+    composed_dependencies: noon_compile::ComposedDependencies,
+    composed_handles: HashMap<ObjectId, crate::TransportComposedSourceHandle>,
+    #[cfg(test)]
+    last_composed_validation: noon_compile::ComposedValidationStats,
     camera: Camera2DState,
     publication_context: PublicationContext,
     inset_2d_views: Vec<Inset2DViewState>,
@@ -1088,6 +1144,12 @@ struct PreparedPainterOrder {
     range: std::ops::Range<usize>,
     old_end: usize,
     segment: Vec<u32>,
+}
+
+impl noon_runtime::ObjectIndexLookup for RetainedExecutionFrameMirror {
+    fn object_index(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
 }
 
 impl RetainedExecutionFrameMirror {
@@ -1185,6 +1247,14 @@ impl RetainedExecutionFrameMirror {
         content: &TransportObjectContent,
     ) -> Result<ObjectContentRef, RetainedExecutionTransportError> {
         match content {
+            TransportObjectContent::Composed { source } => self
+                .composed_sources
+                .get(source)
+                .cloned()
+                .map(ObjectContentRef::Composed)
+                .ok_or(RetainedExecutionTransportError::UnknownComposedSource(
+                    *source,
+                )),
             TransportObjectContent::Image { image, sampling } => self
                 .image_handles
                 .get(image)
@@ -1247,6 +1317,11 @@ impl RetainedExecutionFrameMirror {
 
     pub fn frame_index_for_slot(&self, slot: TransportSlotId) -> Option<usize> {
         self.slot_indices.get(&slot).copied()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn has_composed_source_rows(&self) -> bool {
+        !self.composed_handles.is_empty()
     }
 
     pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
@@ -1334,6 +1409,7 @@ impl RetainedExecutionFrameMirror {
         }
 
         self.validate_inset_2d_views(&delta)?;
+        self.validate_composed_handles(&delta)?;
 
         let next_sequence = delta
             .sequence
@@ -1353,6 +1429,7 @@ impl RetainedExecutionFrameMirror {
         } else {
             self.apply_incremental(&delta)?
         };
+        self.commit_composed_handles(&delta);
         self.session = Some(delta.session);
         self.next_sequence = next_sequence;
         self.publication_context = delta.publication_context;
@@ -1482,6 +1559,7 @@ impl RetainedExecutionFrameMirror {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let composed_dependencies = self.preflight_composed_snapshot(&frame_objects, &objects)?;
         let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
         let slot_indices = slots
             .iter()
@@ -1497,6 +1575,7 @@ impl RetainedExecutionFrameMirror {
         self.slots = slots;
         self.slot_indices = slot_indices;
         self.object_indices = object_indices;
+        self.composed_dependencies = composed_dependencies;
         self.painter_order = (0..objects.len() as u32).collect();
         self.painter_ranks = (0..objects.len() as u32).map(Some).collect();
         self.frame = Some(FrameState {
@@ -1581,7 +1660,13 @@ impl RetainedExecutionFrameMirror {
                 self.resolve_render_geometry(object, delta.session)?
             };
             let fill_paint = self.resolve_fill_paint(object.fill_paint.as_ref())?;
-            updates.push((index, added, object, geometry, content, fill_paint));
+            updates.push(composed::ResolvedRow {
+                index,
+                added,
+                wire: object,
+                geometry,
+                state: frame_object(object, content, fill_paint)?,
+            });
         }
         let mut seen_removed = HashSet::with_capacity(delta.removed_slots.len());
         let _validated_removed_indices = delta
@@ -1613,6 +1698,23 @@ impl RetainedExecutionFrameMirror {
                 return Err(RetainedExecutionTransportError::SlotIdentityChanged(
                     patch.slot,
                 ));
+            }
+            if frame.objects[index].content.composed_source().is_some()
+                && (patch
+                    .transform
+                    .is_some_and(|transform| transform != Transform2D::IDENTITY)
+                    || patch.style.is_some_and(|style| {
+                        style.fill.is_some()
+                            || style.stroke.is_some()
+                            || !style.opacity.is_finite()
+                            || !(0.0..=1.0).contains(&style.opacity)
+                    })
+                    || patch.morph.is_some_and(|morph| morph != 0.0)
+                    || patch.render_translation.is_some())
+            {
+                return Err(
+                    RetainedExecutionTransportError::InvalidComposedSourceHandle(patch.slot),
+                );
             }
             if patch.transform.is_none()
                 && patch.style.is_none()
@@ -1649,6 +1751,11 @@ impl RetainedExecutionFrameMirror {
             &seen_removed,
             &seen_slots,
         )?;
+        let composed_update = self.preflight_composed_incremental(
+            &updates,
+            &_validated_removed_indices,
+            painter_update.as_ref(),
+        )?;
         let mut camera_rows = frame
             .objects
             .iter()
@@ -1676,30 +1783,41 @@ impl RetainedExecutionFrameMirror {
         validate_single_camera(camera_rows)?;
         let added_indices = updates
             .iter()
-            .filter_map(|(index, added, _, _, _, _)| {
-                (*added || self.painter_ranks.get(*index).copied().flatten().is_none())
-                    .then_some(*index)
+            .filter_map(|row| {
+                (row.added
+                    || self
+                        .painter_ranks
+                        .get(row.index)
+                        .copied()
+                        .flatten()
+                        .is_none())
+                .then_some(row.index)
             })
             .collect::<Vec<_>>();
         let removed_indices = _validated_removed_indices;
         let frame = self.frame.as_mut().expect("validated retained frame");
         let mut changed = Vec::with_capacity(updates.len() + patch_updates.len());
-        for (index, is_added, object, geometry, content, fill_paint) in updates {
+        for composed::ResolvedRow {
+            index,
+            added: is_added,
+            wire: object,
+            geometry,
+            state,
+        } in updates
+        {
             if is_added {
                 debug_assert_eq!(index, frame.objects.len());
                 self.slots.push(object.slot);
                 self.slot_indices.insert(object.slot, index);
                 self.object_indices.insert(object.object, index);
-                frame
-                    .objects
-                    .push(frame_object(object, content, fill_paint)?);
+                frame.objects.push(state);
                 frame.presences.push(object.presence);
                 frame.reveals.push(object.reveal);
                 frame.morphs.push(object.morph);
                 frame.render_geometries.push(geometry);
                 frame.render_transforms.push(object.render_transform);
             } else {
-                frame.objects[index] = frame_object(object, content, fill_paint)?;
+                frame.objects[index] = state;
                 frame.presences[index] = object.presence;
                 frame.reveals[index] = object.reveal;
                 frame.morphs[index] = object.morph;
@@ -1727,6 +1845,12 @@ impl RetainedExecutionFrameMirror {
             changed.push(index);
         }
         for &index in &removed_indices {
+            if frame.objects[index].content.composed_source().is_some() {
+                // A retired row retains its identity for re-entry, but must not
+                // retain the immutable member allocation after its last root.
+                frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(0.0));
+                frame.objects[index].effects = None;
+            }
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
             frame.render_transforms[index] = None;
@@ -1755,6 +1879,11 @@ impl RetainedExecutionFrameMirror {
         if let Some(range) = painter_range {
             changes = changes.with_painter_order(range);
         }
+        #[cfg(test)]
+        {
+            self.last_composed_validation = composed_update.stats;
+        }
+        composed_update.commit(&mut self.composed_dependencies);
         Ok(changes)
     }
 
@@ -1881,10 +2010,25 @@ fn render_geometry_identity(frame: &FrameState, index: usize) -> Option<Arc<Geom
     frame.render_geometries.get(index).cloned().flatten()
 }
 
+fn transport_slot(
+    frame: &FrameState,
+    index: usize,
+) -> Result<TransportSlotId, RetainedExecutionTransportError> {
+    if index >= frame.objects.len() {
+        return Err(RetainedExecutionTransportError::InvalidObjectIndex(index));
+    }
+    Ok(TransportSlotId {
+        slot: u32::try_from(index)
+            .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?,
+        generation: 0,
+    })
+}
+
 fn transport_object(
     frame: &FrameState,
     index: usize,
     render_geometry_resource: Option<u64>,
+    composed_source: Option<crate::TransportComposedSourceHandle>,
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
     let object = frame
         .objects
@@ -1901,6 +2045,11 @@ fn transport_object(
         },
         order: slot_index,
         object: object.id,
+        visibility: object
+            .effects
+            .as_ref()
+            .and_then(|stack| stack.visibility())
+            .map(|effect| effect.attachment),
         effects: object
             .effects
             .as_ref()
@@ -1912,7 +2061,10 @@ fn transport_object(
             })
             .unwrap_or_default(),
         z_index: object.z_index,
-        content: (&object.content).into(),
+        content: match composed_source {
+            Some(source) => TransportObjectContent::Composed { source },
+            None => (&object.content).try_into()?,
+        },
         transform: object.transform,
         spatial: object
             .spatial
@@ -1958,6 +2110,7 @@ fn validate_object_state(
 fn validate_object_fields(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
+    composed::validate_owner_fields(object)?;
     noon_compile::validate_fill_paint(object.object, object.fill_paint.as_deref())
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectPatch(object.slot))?;
     if let Some(hatch) = object
@@ -2059,6 +2212,7 @@ fn validate_object_fields(
 
 fn glow_content_is_supported(content: &TransportObjectContent) -> bool {
     match content {
+        TransportObjectContent::Composed { .. } => true,
         TransportObjectContent::Geometry { geometry, resource } => match geometry {
             GeometryRef::Circle { radius } => {
                 resource.is_none() && radius.is_finite() && *radius > 0.0
@@ -2165,6 +2319,11 @@ fn frame_object(
         fill_paint,
         draw_enabled: object.draw_enabled,
         effects: if object.effects.is_empty() {
+            if object.visibility.is_some() {
+                return Err(RetainedExecutionTransportError::InvalidEffectState(
+                    object.slot,
+                ));
+            }
             None
         } else {
             let bindings =
@@ -2178,9 +2337,10 @@ fn frame_object(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
             Some(Arc::new(
-                noon_compile::CompiledEffectStack::new(bindings).map_err(|_| {
-                    RetainedExecutionTransportError::InvalidEffectState(object.slot)
-                })?,
+                noon_compile::CompiledEffectStack::new_with_visibility(bindings, object.visibility)
+                    .map_err(|_| {
+                        RetainedExecutionTransportError::InvalidEffectState(object.slot)
+                    })?,
             ))
         },
         spatial: spatial.map(Box::new),
@@ -2291,6 +2451,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn invalid_composed_owner_rejects_without_consuming_sequence_or_snapshot_state() {
+        let frame = mixed_frame();
+        let camera = Camera2DState::default();
+        let context = PublicationContext::default();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(73);
+        let first = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        assert_eq!(first.sequence, 0);
+        let orders = encoder.snapshot_orders.clone();
+        let geometries = encoder.published_render_geometries.clone();
+        let mut unsupported = frame.clone();
+        let member = unsupported.objects[0].id;
+        unsupported.objects[1].content = ObjectContentRef::Composed(Arc::new(
+            noon_core::ComposedSource::new([member], None).unwrap(),
+        ));
+        unsupported.objects[1].draw_enabled = false;
+        assert_eq!(
+            TransportObjectContent::try_from(&unsupported.objects[1].content),
+            Err(RetainedExecutionTransportError::UnsupportedComposedSource)
+        );
+        assert_eq!(
+            encoder.encode_snapshot_with_context(&unsupported, camera, context),
+            Err(
+                RetainedExecutionTransportError::InvalidComposedSourceHandle(TransportSlotId {
+                    slot: 1,
+                    generation: 0
+                })
+            )
+        );
+        assert_eq!(encoder.snapshot_orders, orders);
+        assert_eq!(encoder.published_render_geometries, geometries);
+        let next = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        assert_eq!(next.sequence, 1);
+        let mut mirror = test_mirror();
+        mirror.apply(first).unwrap();
+        mirror.apply(next).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &frame);
+    }
+
     fn effect_stack(
         effect: &noon_compile::CompiledEffect,
     ) -> Arc<noon_compile::CompiledEffectStack> {
@@ -2361,7 +2564,7 @@ mod tests {
         let bindings: Vec<_> = (0..noon_core::MAX_EFFECT_STACK_LEN)
             .map(|index| CompiledEffect {
                 attachment: SemanticNodeId::new(90 + index as u32, u32::MAX - index as u32),
-                definition: match index % 3 {
+                definition: match index % 4 {
                     0 => noon_core::Blur::new(
                         EffectUpdate::default().radius(noon_core::Pixels(1.25 + index as f64)),
                     )
@@ -2374,12 +2577,17 @@ mod tests {
                     )
                     .unwrap()
                     .into(),
-                    _ => noon_core::Shadow::new(
+                    2 => noon_core::Shadow::new(
                         EffectUpdate::default()
                             .offset(noon_core::EffectOffset::Pixels([-2.25, 3.75])),
                     )
                     .unwrap()
                     .into(),
+                    _ => noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
+                        .unwrap()
+                        .with_progress(0.6250000000000123)
+                        .unwrap()
+                        .into(),
                 },
             })
             .collect();
@@ -2431,7 +2639,7 @@ mod tests {
         let before = mirror.frame().unwrap().clone();
         let sequence = mirror.next_sequence;
         let context = mirror.publication_context;
-        for failure in 0..3 {
+        for failure in 0..9 {
             let mut bad = delta.clone();
             // A valid first row must not publish before a bad later binding.
             let mut suffix = snapshot.objects[1].clone();
@@ -2443,9 +2651,26 @@ mod tests {
                 1 => {
                     suffix.effects.push(suffix.effects[0]);
                 }
-                _ => {
+                2 => {
                     suffix.effects[7].definition = TransportEffectDefinition::Blur {
                         radius: EffectRadius::Pixels(-1.0),
+                    };
+                }
+                _ => {
+                    suffix.effects[7].definition = TransportEffectDefinition::NoiseDissolve {
+                        seed: u32::MAX,
+                        progress: match failure {
+                            3 => -0.1,
+                            4 => 1.1,
+                            5 => f64::NAN,
+                            _ => 0.5,
+                        },
+                        softness: match failure {
+                            6 => -0.1,
+                            7 => 1.1,
+                            8 => f64::INFINITY,
+                            _ => 0.08,
+                        },
                     };
                 }
             }
@@ -2466,6 +2691,194 @@ mod tests {
             frame.objects[0].effects
         );
         assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
+    }
+
+    #[test]
+    fn private_visibility_role_roundtrips_and_invalid_suffix_is_atomic() {
+        let mut frame = mixed_frame();
+        let attachment = SemanticNodeId::new(77, 3);
+        frame.objects[0].effects = Some(Arc::new(
+            noon_compile::CompiledEffectStack::new_with_visibility(
+                [noon_compile::CompiledEffect {
+                    attachment,
+                    definition: noon_core::NoiseDissolve::new(7, 0.2)
+                        .unwrap()
+                        .with_progress(0.5)
+                        .unwrap()
+                        .into(),
+                }],
+                Some(attachment),
+            )
+            .unwrap(),
+        ));
+        let snapshot = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            json["objects"][0]["visibility"],
+            serde_json::to_value(attachment).unwrap()
+        );
+        let mut mirror = test_mirror();
+        for invalid in [SemanticNodeId::new(77, 4), SemanticNodeId::new(78, 3)] {
+            let mut bad = snapshot.clone();
+            bad.objects[0].visibility = Some(invalid);
+            assert!(matches!(
+                mirror.apply(bad),
+                Err(RetainedExecutionTransportError::InvalidEffectState(_))
+            ));
+            assert!(mirror.frame().is_none());
+        }
+        mirror.apply(serde_json::from_value(json).unwrap()).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+        let before = mirror.frame().unwrap().clone();
+        let mut bad = snapshot.clone();
+        bad.snapshot = false;
+        bad.sequence = 1;
+        bad.objects[0].style.opacity = 0.25;
+        bad.objects[1].visibility = Some(attachment);
+        assert!(matches!(
+            mirror.apply(bad),
+            Err(RetainedExecutionTransportError::InvalidEffectState(_))
+        ));
+        assert_eq!(*mirror.frame().unwrap(), before);
+        let mut next = snapshot;
+        next.snapshot = false;
+        next.sequence = 1;
+        mirror.apply(next).unwrap();
+    }
+
+    #[test]
+    fn tagged_mask_preserves_seed_and_precision_and_rejects_foreign_fields() {
+        let mut frame = mixed_frame();
+        let definition = noon_core::NoiseDissolve::new(u32::MAX, 0.0800000000000123)
+            .unwrap()
+            .with_progress(0.6250000000000123)
+            .unwrap();
+        let effect = Arc::new(noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(77, u32::MAX),
+            definition: definition.into(),
+        });
+        frame.objects[0].effects = Some(effect_stack(&effect));
+        let snapshot = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["protocol_version"], 27);
+        let mask = &value["objects"][0]["effects"][0];
+        assert_eq!(mask["kind"], "noise_dissolve");
+        assert_eq!(mask["seed"], u32::MAX);
+        for (field, bad) in [
+            ("radius", serde_json::json!(1.0)),
+            ("seed", serde_json::json!(1.5)),
+            ("seed", serde_json::json!(-1)),
+            ("seed", serde_json::json!(4294967296u64)),
+        ] {
+            let mut invalid = value.clone();
+            invalid["objects"][0]["effects"][0][field] = bad;
+            assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(invalid).is_err());
+        }
+        let mut mirror = test_mirror();
+        mirror
+            .apply(serde_json::from_value(value).unwrap())
+            .unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].effects,
+            frame.objects[0].effects
+        );
+    }
+
+    #[test]
+    fn hatch_and_ordered_effects_share_current_schema_and_reject_both_v24_layouts_atomically() {
+        let mut frame = mixed_frame();
+        let paint = Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
+            noon_core::HatchPaint::new(Color::RED, Color::BLUE, Default::default()).unwrap(),
+        )));
+        frame.objects[0].fill_paint = Some(paint.clone());
+        frame.objects[0].effects = Some(Arc::new(
+            noon_compile::CompiledEffectStack::new([
+                noon_compile::CompiledEffect {
+                    attachment: SemanticNodeId::new(111, 3),
+                    definition: Glow::default().into(),
+                },
+                noon_compile::CompiledEffect {
+                    attachment: SemanticNodeId::new(112, 5),
+                    definition: noon_core::Blur::new(
+                        EffectUpdate::default().radius(noon_core::Pixels(1.5)),
+                    )
+                    .unwrap()
+                    .into(),
+                },
+            ])
+            .unwrap(),
+        ));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        assert_eq!(snapshot.protocol_version, 27);
+        let encoded = serde_json::to_value(&snapshot).unwrap();
+        let decoded: RetainedExecutionDeltaEnvelope =
+            serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded.objects[0].effects.len(), 2);
+        assert_eq!(decoded.objects[0].fill_paint.as_ref(), Some(&paint));
+        let mut mirror = test_mirror();
+        mirror.apply(decoded).unwrap();
+        let coherent = mirror.frame().unwrap().clone();
+        let mut legacy = encoded.clone();
+        legacy["protocol_version"] = serde_json::json!(24);
+        legacy["sequence"] = serde_json::json!(1);
+        let object = legacy["objects"][0].as_object_mut().unwrap();
+        let effects = object.remove("effects").unwrap();
+        object.insert("effect".into(), effects[0].clone());
+        // Preserve the existing closed object schema as well as the version
+        // gate. A legacy single-effect field must never be ignored.
+        assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(legacy).is_err());
+        assert_eq!(mirror.frame(), Some(&coherent));
+        assert_eq!(mirror.applied_sequence(), Some(0));
+        for hatch in [false, true] {
+            let mut legacy = encoded.clone();
+            legacy["protocol_version"] = serde_json::json!(24);
+            legacy["sequence"] = serde_json::json!(1);
+            let object = legacy["objects"][0].as_object_mut().unwrap();
+            // The ordered V24 profile has no Hatch value. The Hatch V24
+            // profile may omit its single optional effect altogether.
+            object.remove(if hatch { "effects" } else { "fill_paint" });
+            let legacy: RetainedExecutionDeltaEnvelope = serde_json::from_value(legacy).unwrap();
+            assert_eq!(
+                mirror.apply(legacy),
+                Err(RetainedExecutionTransportError::UnsupportedVersion(24))
+            );
+            assert_eq!(mirror.frame(), Some(&coherent));
+            assert_eq!(mirror.applied_sequence(), Some(0));
+        }
+        let mut next = snapshot;
+        next.sequence = 1;
+        mirror.apply(next).unwrap();
+        assert_eq!(mirror.applied_sequence(), Some(1));
+        assert_eq!(
+            mirror.frame().unwrap().objects[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -2549,88 +2962,6 @@ mod tests {
         mirror.apply(delta).unwrap();
         assert!(mirror.frame().unwrap().objects[0].fill_paint.is_none());
         assert_eq!(mirror.applied_sequence(), Some(1));
-    }
-
-    #[test]
-    fn hatch_and_ordered_effects_share_v25_and_reject_both_v24_layouts_atomically() {
-        let mut frame = mixed_frame();
-        let paint = Arc::new(noon_core::SemanticPaint::Hatch(Arc::new(
-            noon_core::HatchPaint::new(Color::RED, Color::BLUE, Default::default()).unwrap(),
-        )));
-        frame.objects[0].fill_paint = Some(paint.clone());
-        frame.objects[0].effects = Some(Arc::new(
-            noon_compile::CompiledEffectStack::new([
-                noon_compile::CompiledEffect {
-                    attachment: SemanticNodeId::new(111, 3),
-                    definition: Glow::default().into(),
-                },
-                noon_compile::CompiledEffect {
-                    attachment: SemanticNodeId::new(112, 5),
-                    definition: noon_core::Blur::new(
-                        EffectUpdate::default().radius(noon_core::Pixels(1.5)),
-                    )
-                    .unwrap()
-                    .into(),
-                },
-            ])
-            .unwrap(),
-        ));
-        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
-        let snapshot = encoder
-            .encode_snapshot_with_context(
-                &frame,
-                Camera2DState::default(),
-                PublicationContext::default(),
-            )
-            .unwrap();
-        assert_eq!(snapshot.protocol_version, 25);
-        let encoded = serde_json::to_value(&snapshot).unwrap();
-        let decoded: RetainedExecutionDeltaEnvelope =
-            serde_json::from_value(encoded.clone()).unwrap();
-        assert_eq!(decoded.objects[0].effects.len(), 2);
-        assert_eq!(decoded.objects[0].fill_paint.as_ref(), Some(&paint));
-        let mut mirror = test_mirror();
-        mirror.apply(decoded).unwrap();
-        let coherent = mirror.frame().unwrap().clone();
-        let mut legacy = encoded.clone();
-        legacy["protocol_version"] = serde_json::json!(24);
-        legacy["sequence"] = serde_json::json!(1);
-        let object = legacy["objects"][0].as_object_mut().unwrap();
-        let effects = object.remove("effects").unwrap();
-        object.insert("effect".into(), effects[0].clone());
-        // Preserve the existing closed object schema as well as the version
-        // gate. A legacy single-effect field must never be ignored.
-        assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(legacy).is_err());
-        assert_eq!(mirror.frame(), Some(&coherent));
-        assert_eq!(mirror.applied_sequence(), Some(0));
-        for hatch in [false, true] {
-            let mut legacy = encoded.clone();
-            legacy["protocol_version"] = serde_json::json!(24);
-            legacy["sequence"] = serde_json::json!(1);
-            let object = legacy["objects"][0].as_object_mut().unwrap();
-            // The ordered V24 profile has no Hatch value. The Hatch V24
-            // profile may omit its single optional effect altogether.
-            object.remove(if hatch { "effects" } else { "fill_paint" });
-            let legacy: RetainedExecutionDeltaEnvelope = serde_json::from_value(legacy).unwrap();
-            assert_eq!(
-                mirror.apply(legacy),
-                Err(RetainedExecutionTransportError::UnsupportedVersion(24))
-            );
-            assert_eq!(mirror.frame(), Some(&coherent));
-            assert_eq!(mirror.applied_sequence(), Some(0));
-        }
-        let mut next = snapshot;
-        next.sequence = 1;
-        mirror.apply(next).unwrap();
-        assert_eq!(mirror.applied_sequence(), Some(1));
-        assert_eq!(
-            mirror.frame().unwrap().objects[0]
-                .effects
-                .as_ref()
-                .unwrap()
-                .len(),
-            2
-        );
     }
 
     #[test]
@@ -2735,7 +3066,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 25);
+        assert_eq!(snapshot.protocol_version, 27);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -2808,7 +3139,7 @@ mod tests {
         // Every predecessor, including the former single-binding schema,
         // rejects rather than silently discarding ordered effects.
         let next_sequence = mirror.next_sequence;
-        for version in 14..25 {
+        for version in 14..27 {
             let mut old = snapshot.clone();
             old.protocol_version = version;
             assert_eq!(

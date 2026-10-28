@@ -276,6 +276,13 @@ pub enum AnimationCompositionRequest<'a> {
         intensity: f64,
         options: AnimationOptions,
     },
+    /// Mask one object or composed family after its authored effect stack.
+    Dissolve {
+        target: MobjectTarget<'a>,
+        direction: noon_core::DissolveDirection,
+        style: noon_core::DissolveStyle,
+        options: AnimationOptions,
+    },
     FamilyIndicate {
         target: &'a MobjectFamily,
         indication: IndicateOptions,
@@ -980,6 +987,10 @@ impl<'a> LiveSession<'a> {
                     graph_row,
                 )
                 .map_err(LiveSessionError::from)
+            },
+            |store, source, style| {
+                crate::effective_capture::capture_family_style(store, self.session, source, style)
+                    .map_err(LiveSessionError::from)
             },
             |store, source, target, transaction| {
                 crate::effective_capture::stage_effect_copy(
@@ -1738,7 +1749,7 @@ impl<'a> LiveSession<'a> {
             .map_err(|error| LiveSessionError::Animation(error.to_string()))?
             .options();
         self.session
-            .activate_animation_segment(&mut store, animation.node_id(), options)
+            .activate_animation_in_scene(&mut store, self.root, animation.node_id(), options)
             .map_err(Into::into)
     }
 
@@ -2447,6 +2458,20 @@ impl<'a> LiveSession<'a> {
                 Request::GlowPulse {
                     target: target.node_id(),
                     intensity: *intensity,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::Dissolve {
+                target,
+                direction,
+                style,
+                options,
+            } => {
+                self.require_membership_root(*target)?;
+                Request::Dissolve {
+                    target: target.node_id(),
+                    direction: *direction,
+                    style: *style,
                     options: *options,
                 }
             }
@@ -3425,6 +3450,18 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(family.own_style_transaction(update)?)
+    }
+
+    /// Publish one final family-composite multiplier through the shared source
+    /// plan and ordinary style publication, without rewriting child styles.
+    pub fn set_family_object_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.object_opacity_transaction(opacity)?)
     }
 
     /// Interpolate only a VGroup root's authored style and background stroke.

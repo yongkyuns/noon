@@ -8,6 +8,12 @@ use order_index::{move_order_row, reposition_order_row};
 mod audio;
 pub use audio::CompiledAudioClip;
 mod compaction;
+mod composed_dependencies;
+pub use composed_dependencies::{
+    validate_composed_sources, CompiledComposedSourceError, CompiledComposedSourceErrorKind,
+    ComposedDependencies, ComposedDependencyChanges, ComposedSourceGraphView,
+    ComposedValidationStats,
+};
 mod effect_attachment;
 pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};
 mod execution_patch;
@@ -83,7 +89,10 @@ impl DynamicProperties {
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
-            | Property::EffectOffset => self.effect = true,
+            | Property::EffectOffset
+            | Property::EffectProgress
+            | Property::EffectSoftness
+            | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
@@ -156,11 +165,14 @@ pub struct CompiledEffect {
 
 impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 4] = [
+    pub const PARAMETER_PROPERTIES: [Property; 7] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
         Property::EffectOffset,
+        Property::EffectProgress,
+        Property::EffectSoftness,
+        Property::EffectSeed,
     ];
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -175,13 +187,17 @@ impl CompiledEffect {
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
             + usize::from(update.intensity.is_some())
-            + usize::from(update.offset.is_some());
+            + usize::from(update.offset.is_some())
+            + usize::from(update.progress.is_some())
+            + usize::from(update.softness.is_some());
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
             (update.color.is_some(), Property::EffectColor),
             (update.radius.is_some(), Property::EffectRadius),
             (update.intensity.is_some(), Property::EffectIntensity),
             (update.offset.is_some(), Property::EffectOffset),
+            (update.progress.is_some(), Property::EffectProgress),
+            (update.softness.is_some(), Property::EffectSoftness),
         ] {
             if requested {
                 channels.push((
@@ -898,6 +914,7 @@ pub struct CompiledPatchStats {
 /// Existing geometry/track payloads are never cloned for staging.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CompiledTransactionPreflightStats {
+    pub composed: ComposedValidationStats,
     /// Existing object identities resolved through the sparse transaction overlay.
     pub objects_indexed: usize,
     /// Existing track identities resolved through the sparse transaction overlay.
@@ -1078,6 +1095,7 @@ pub struct CompiledScene {
     // Keyed by stable identity, so compaction needs no row remapping. Ordinary
     // scenes allocate no entries and ordinary frame rows carry no view payload.
     inset_2d_views: BTreeMap<ObjectId, CompiledInset2DView>,
+    composed_dependencies: composed_dependencies::ComposedDependencies,
     /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
     family_order: Vec<u32>,
     family_ranks: Vec<Option<u32>>,
@@ -1159,6 +1177,7 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
+    InvalidComposedSource(CompiledComposedSourceError),
     InvalidZIndex(ObjectId),
     TooManyObjects(usize),
     DuplicateObject(ObjectId),
@@ -1174,6 +1193,7 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidZIndex(id) => {
                 write!(formatter, "object {} has non-finite z-index", id.get())
             }
@@ -1226,6 +1246,7 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    InvalidComposedSource(CompiledComposedSourceError),
     InvalidEffectAttachmentChange {
         object: ObjectId,
     },
@@ -1286,6 +1307,7 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidInset2DView(object) => write!(formatter, "inset display {} cannot capture itself as its camera", object.get()),
             Self::ReplaySealed => formatter
                 .write_str("sealed replay is read-only; discard its retention before editing"),
@@ -1444,17 +1466,17 @@ impl CompiledScene {
         &self,
         tracks: &[TrackDefinition],
     ) -> Result<(), CompilePatchError> {
-        self.preflight_reconcilable_track_additions_with_staged_glow(tracks, &BTreeMap::new())
+        self.preflight_reconcilable_track_additions_with_staged_effects(tracks, &BTreeMap::new())
     }
 
     /// Validate completion/overlap admission when the *same prepared semantic
     /// transaction* installs a fresh attachment immediately before its tracks.
     /// This is not an alternate publication path: the complete patch sequence
     /// still requires strict compiler/runtime preflight before semantic commit.
-    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+    pub fn preflight_reconcilable_track_additions_with_staged_effects(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &BTreeMap<ObjectId, CompiledEffect>,
+        staged_effects: &BTreeMap<ObjectId, CompiledEffectStack>,
     ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
@@ -1479,6 +1501,9 @@ impl CompiledScene {
                         | Property::EffectRadius
                         | Property::EffectIntensity
                         | Property::EffectOffset
+                        | Property::EffectProgress
+                        | Property::EffectSoftness
+                        | Property::EffectSeed
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1486,10 +1511,15 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
-            let resident_glow = self.objects[object_index as usize].effects.as_deref();
-            let staged = staged_glow.get(&track.object);
+            let resident_effects = self.objects[object_index as usize].effects.as_deref();
+            let staged = staged_effects.get(&track.object);
             if staged.is_some_and(|staged| {
-                resident_glow.is_some_and(|stack| stack.get(staged.attachment).is_some())
+                resident_effects.is_some_and(|stack| {
+                    staged
+                        .attachments()
+                        .iter()
+                        .any(|id| stack.get(*id).is_some())
+                })
             }) {
                 return Err(CompilePatchError::InvalidEffectAttachmentChange {
                     object: track.object,
@@ -1497,9 +1527,8 @@ impl CompiledScene {
             }
             let effect = if let TrackValues::Effect { attachment, .. } = track.values {
                 staged
-                    .copied()
-                    .filter(|effect| effect.attachment == attachment)
-                    .or_else(|| resident_glow.and_then(|stack| stack.get(attachment)))
+                    .and_then(|stack| stack.get(attachment))
+                    .or_else(|| resident_effects.and_then(|stack| stack.get(attachment)))
             } else {
                 None
             };
@@ -1644,9 +1673,16 @@ impl CompiledScene {
         let mut painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
         painter_order.sort_by(|&a, &b| {
             objects[a as usize]
-                .base_z_index
-                .partial_cmp(&objects[b as usize].base_z_index)
-                .unwrap()
+                .content
+                .composed_source()
+                .is_some()
+                .cmp(&objects[b as usize].content.composed_source().is_some())
+                .then_with(|| {
+                    objects[a as usize]
+                        .base_z_index
+                        .partial_cmp(&objects[b as usize].base_z_index)
+                        .unwrap()
+                })
         });
         let mut painter_ranks = vec![None; objects.len()];
         for (rank, &index) in painter_order.iter().enumerate() {
@@ -1666,6 +1702,7 @@ impl CompiledScene {
             object_indices,
             retired_object_indices: BTreeMap::new(),
             inset_2d_views: BTreeMap::new(),
+            composed_dependencies: Default::default(),
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
@@ -1687,6 +1724,9 @@ impl CompiledScene {
             resources: CompiledResources::default(),
         };
         compiled.rebuild_spatial_anchor_groups();
+        compiled
+            .rebuild_composed_dependencies()
+            .map_err(CompileError::InvalidComposedSource)?;
         Ok(compiled)
     }
 
@@ -1760,9 +1800,16 @@ impl CompiledScene {
             index,
             |a, b| {
                 self.objects[a as usize]
-                    .base_z_index
-                    .partial_cmp(&self.objects[b as usize].base_z_index)
-                    .expect("validated finite priorities")
+                    .content
+                    .composed_source()
+                    .is_some()
+                    .cmp(&self.objects[b as usize].content.composed_source().is_some())
+                    .then_with(|| {
+                        self.objects[a as usize]
+                            .base_z_index
+                            .partial_cmp(&self.objects[b as usize].base_z_index)
+                            .expect("validated finite priorities")
+                    })
                     .then_with(|| self.family_ranks[a as usize].cmp(&self.family_ranks[b as usize]))
             },
         );
@@ -2160,6 +2207,37 @@ impl CompiledScene {
     }
 
     pub fn apply_execution_patch_with_stats(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
+        self.preflight_composed_mutations(std::slice::from_ref(patch))?;
+        self.commit_preflighted_execution_patch_with_stats(patch)
+    }
+
+    /// Internal commit lane after the caller validated the complete transaction.
+    /// In particular, composed references may name rows installed later in that
+    /// same atomic publication. Ordinary per-patch payload checks still apply.
+    #[doc(hidden)]
+    pub fn commit_preflighted_execution_patch_with_stats(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
+        let owner = match patch {
+            ExecutionPatch::CreateObject(row) => Some(row.id),
+            ExecutionPatch::RemoveObject(id) | ExecutionPatch::SetContent { object: id, .. } => {
+                Some(*id)
+            }
+            _ => None,
+        };
+        let previous = owner.and_then(|id| self.composed_plan(id));
+        let stats = self.apply_execution_patch_inner(patch)?;
+        if let Some(owner) = owner {
+            self.update_composed_dependency(owner, previous);
+        }
+        Ok(stats)
+    }
+
+    fn apply_execution_patch_inner(
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<CompiledPatchStats, CompilePatchError> {
@@ -2697,6 +2775,9 @@ impl CompiledScene {
                             | Property::EffectRadius
                             | Property::EffectIntensity
                             | Property::EffectOffset
+                            | Property::EffectProgress
+                            | Property::EffectSoftness
+                            | Property::EffectSeed
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -2933,6 +3014,17 @@ pub(crate) fn validate_effect_track_attachment(
                 attachment,
             });
         };
+        if let (noon_core::EffectTrackValue::Seed(a), noon_core::EffectTrackValue::Seed(b)) =
+            (from, to)
+        {
+            return if a == b && effect.definition.as_noise_dissolve().is_some() {
+                Ok(())
+            } else {
+                Err(noon_core::TimelineError::InvalidEffectValues(
+                    track.property,
+                ))
+            };
+        }
         if from.update().prepare(effect.definition).is_err()
             || to.update().prepare(effect.definition).is_err()
         {
@@ -3005,6 +3097,11 @@ fn validate_execution_content(
     text_bounds: Option<Rect>,
 ) -> Result<(), CompilePatchError> {
     match content {
+        ObjectContentRef::Composed(source) => (text_bounds.is_none()
+            && !source.members().contains(&object)
+            && source.parent_scope() != Some(object))
+        .then_some(())
+        .ok_or(CompilePatchError::InvalidContentBounds(object)),
         ObjectContentRef::Geometry(geometry) => {
             if text_bounds.is_some() {
                 return Err(CompilePatchError::InvalidContentBounds(object));
@@ -3474,6 +3571,9 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectRadius => 16,
         Property::EffectIntensity => 17,
         Property::EffectOffset => 18,
+        Property::EffectProgress => 19,
+        Property::EffectSoftness => 20,
+        Property::EffectSeed => 21,
     }
 }
 

@@ -2707,6 +2707,42 @@ def _build_canonical_composition_candidate(
                         str(reservation.object.id), member._semantic_handle
                     )
             return
+        from _noon_effects import Dissolve
+        if isinstance(animation, Dissolve):
+            target = animation.mobject
+            family = _semantic_handles._is_shared_family(target)
+            leaves = _compat._leaf_mobjects(target) if family else [target]
+            if not leaves or any(getattr(member, "_semantic_handle", None) is None for member in leaves):
+                raise NotImplementedError("Dissolve requires shared semantic handles")
+            if any(member._scene not in (None, self) for member in leaves):
+                raise ValueError("Dissolve target belongs to another Scene")
+            child = _options.resolve_transform(
+                builder_args=_options.builder_args(animation), default_lag_ratio=0.0,
+                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
+                play_easing=child_kwargs.get("easing"), play_rate_func=child_kwargs.get("rate_func"),
+                play_lag_ratio=child_kwargs.get("lag_ratio"), play_path_arc=child_kwargs.get("path_arc"),
+            )
+            if child.path_arc != 0.0 or child.lag_ratio != 0.0:
+                raise NotImplementedError("Dissolve supports a single scope clock without path arcs or member lag")
+            parameters = (animation.direction, animation.seed, animation.softness,
+                animation.introducer, animation.remover, float(child.run_time), str(child.rate_func),
+                float(child.lag_ratio), bool(child.reverse_rate_function))
+            detached = [member for member in leaves if member._scene is None]
+            if family:
+                builder.appendDissolveFamily(target._semantic_family_handle, *parameters)
+                if detached:
+                    family_registrations.append(target)
+                for member in detached:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendDissolveFamilyEntering(str(reservation.object.id), member._semantic_handle)
+            else:
+                reservation = reserve(target) if detached else None
+                builder.appendDissolveMobject("" if reservation is None else str(reservation.object.id), target._semantic_handle, *parameters)
+            removes = animation.remover if animation.remover is not None else animation.direction == "out"
+            if removes:
+                removals.extend(leaves)
+            return
         pulse = _canonical_glow_pulse_animation(self, animation)
         if pulse is not None:
             builder.appendGlowPulseMobject(
@@ -2735,10 +2771,9 @@ def _build_canonical_composition_candidate(
             )
             if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
-            if child.rate_func not in ("linear", "smooth"):
-                raise NotImplementedError(
-                    "canonical family Transform requires linear or smooth easing"
-                )
+            # The shared Rust Transform policy resolves supported rate IDs and
+            # validates their trajectories; forward that result without a second
+            # Python easing profile.
             destination = builder
             if matching:
                 if any(child_kwargs.get(name) not in (None, 0.0)

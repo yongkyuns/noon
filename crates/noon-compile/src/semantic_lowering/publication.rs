@@ -1,4 +1,5 @@
 //! Local lowering for an exclusively prepared authored transaction.
+mod composed;
 mod effect;
 use std::collections::{HashMap, HashSet};
 
@@ -706,10 +707,23 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         }
     }
 
+    composed::prepare(
+        prepared,
+        reachability,
+        &mut values,
+        &mut possible_entry_refs,
+        &mut possible_exit_nodes,
+    )?;
     let entries = possible_entry_refs
         .into_iter()
         .map(|object| {
-            lower_prepared_entry(prepared, object, &inset_updates, &mut resource_additions)
+            lower_prepared_entry(
+                prepared,
+                reachability,
+                object,
+                &inset_updates,
+                &mut resource_additions,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -1210,7 +1224,17 @@ fn collect_prepared_entry_leaves(
             | SemanticTransactionReadError::Existing(
                 noon_core::SemanticSceneOperationError::NotSemanticObject(_),
             ),
-        ) => {}
+        ) => {
+            if (!prepared.animation_effect_snapshot(node)?.is_empty()
+                || prepared.family_style(node)?.object_opacity != 1.0
+                || prepared.has_family_appearance_target(node))
+                && node
+                    .existing()
+                    .is_none_or(|id| !reachability.is_object_reachable(id))
+            {
+                leaves.push(node);
+            }
+        }
         Err(error) => return Err(error.into()),
     }
     for member in prepared.family_members(node)? {
@@ -1272,10 +1296,14 @@ fn collect_existing_exit_leaves(
 
 fn lower_prepared_entry(
     prepared: &PreparedSemanticMutationTransaction<'_>,
+    reachability: &SemanticExecutionReachability,
     object: SemanticTransactionNodeRef,
     inset_updates: &HashMap<SemanticTransactionNodeRef, Option<CompiledInset2DView>>,
     resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
+    if composed::unrendered_family(prepared, object)? {
+        return composed::entry(prepared, reachability, object);
+    }
     let state = prepared.proposed_object_state(object)?;
     let semantic_id = prepared
         .planned_node_id(object)

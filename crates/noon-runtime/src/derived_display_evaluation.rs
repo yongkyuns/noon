@@ -320,6 +320,9 @@ fn apply_derived_track(
         | Property::EffectRadius
         | Property::EffectIntensity
         | Property::EffectOffset
+        | Property::EffectProgress
+        | Property::EffectSoftness
+        | Property::EffectSeed
         | Property::Presence
         | Property::ZIndex
         | Property::Transform

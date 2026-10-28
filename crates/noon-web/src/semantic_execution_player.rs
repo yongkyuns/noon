@@ -1866,6 +1866,15 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_object_opacity(
+        &mut self,
+        source: &noon::MobjectFamily,
+        opacity: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_object_opacity(source, opacity))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_background_stroke_opacity(
         &mut self,
         source: &noon::MobjectFamily,

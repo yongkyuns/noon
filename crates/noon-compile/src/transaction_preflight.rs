@@ -895,6 +895,9 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectRadius
                             | Property::EffectIntensity
                             | Property::EffectOffset
+                            | Property::EffectProgress
+                            | Property::EffectSoftness
+                            | Property::EffectSeed
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -919,6 +922,7 @@ pub(super) fn preflight_transaction_with_resources(
     }
 
     Ok(CompiledTransactionPreflightStats {
+        composed: scene.preflight_composed_mutations(transaction.mutations())?,
         objects_indexed: overlay.seen_objects.len(),
         tracks_indexed: overlay.seen_tracks.len(),
         track_metadata_visits: overlay.track_metadata_visits,

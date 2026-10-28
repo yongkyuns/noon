@@ -14,6 +14,7 @@ use crate::{
 pub struct CompiledEffectStack {
     attachments: Box<[SemanticNodeId]>,
     definitions: Box<[noon_core::EffectDefinition]>,
+    visibility: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub enum CompiledEffectStackError {
     Empty,
     DuplicateAttachment(SemanticNodeId),
     ExceedsProfile,
+    InvalidVisibilityRole,
 }
 impl std::fmt::Display for CompiledEffectStackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,6 +34,14 @@ impl std::error::Error for CompiledEffectStackError {}
 impl CompiledEffectStack {
     pub fn new(
         effects: impl IntoIterator<Item = CompiledEffect>,
+    ) -> Result<Self, CompiledEffectStackError> {
+        Self::new_with_visibility(effects, None)
+    }
+    /// Preserve the semantic private Visibility role in the same immutable
+    /// attachment column. The role must identify its trailing dissolve binding.
+    pub fn new_with_visibility(
+        effects: impl IntoIterator<Item = CompiledEffect>,
+        visibility: Option<SemanticNodeId>,
     ) -> Result<Self, CompiledEffectStackError> {
         let mut attachments = Vec::new();
         let mut definitions = Vec::new();
@@ -50,7 +60,16 @@ impl CompiledEffectStack {
         if attachments.is_empty() {
             return Err(CompiledEffectStackError::Empty);
         }
+        if visibility.is_some_and(|id| {
+            attachments.last() != Some(&id)
+                || definitions
+                    .last()
+                    .is_none_or(|definition| definition.as_noise_dissolve().is_none())
+        }) {
+            return Err(CompiledEffectStackError::InvalidVisibilityRole);
+        }
         Ok(Self {
+            visibility: visibility.is_some(),
             attachments: attachments.into_boxed_slice(),
             definitions: definitions.into_boxed_slice(),
         })
@@ -66,6 +85,10 @@ impl CompiledEffectStack {
     }
     pub fn definitions(&self) -> &[noon_core::EffectDefinition] {
         &self.definitions
+    }
+    pub fn visibility(&self) -> Option<CompiledEffect> {
+        self.visibility
+            .then(|| self.iter().next_back().expect("nonempty visibility column"))
     }
     pub fn get(&self, attachment: SemanticNodeId) -> Option<CompiledEffect> {
         let index = self.attachments.iter().position(|&id| id == attachment)?;
@@ -92,6 +115,12 @@ impl CompiledEffectStack {
         else {
             return false;
         };
+        if self.visibility
+            && index + 1 == self.len()
+            && effect.definition.as_noise_dissolve().is_none()
+        {
+            return false;
+        }
         self.definitions[index] = effect.definition;
         true
     }
@@ -111,7 +140,12 @@ pub(crate) fn validate_change(
     if let (Some(previous), Some(next)) = (previous, next) {
         for effect in next.iter() {
             if let Some(old) = previous.get(effect.attachment) {
-                noon_core::EffectValue::validate_effect_transition(
+                if (previous.visibility().map(|value| value.attachment) == Some(effect.attachment))
+                    != (next.visibility().map(|value| value.attachment) == Some(effect.attachment))
+                {
+                    return Err(CompilePatchError::InvalidEffectAttachmentChange { object });
+                }
+                noon_core::EffectValue::validate_effect_value_update(
                     old.definition,
                     effect.definition,
                 )
@@ -172,5 +206,64 @@ impl CompiledScene {
         // motion channels or move retained object/track slots.
         row.dynamic.effect = dynamic;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    #[test]
+    fn visibility_role_is_trailing_typed_generational_and_immutable() {
+        let object = ObjectId::new(1);
+        let id = SemanticNodeId::new(9, 3);
+        let mask = CompiledEffect {
+            attachment: id,
+            definition: noon_core::NoiseDissolve::default().into(),
+        };
+        let named = CompiledEffect {
+            attachment: SemanticNodeId::new(10, 4),
+            ..mask
+        };
+        let mut private = CompiledEffectStack::new_with_visibility([mask], Some(id)).unwrap();
+        let ordinary = CompiledEffectStack::new([mask]).unwrap();
+        assert_eq!(private.visibility(), Some(mask));
+        assert!(ordinary.visibility().is_none());
+        for (effects, role) in [
+            (vec![mask], SemanticNodeId::new(9, 4)),
+            (vec![mask, named], id),
+            (
+                vec![CompiledEffect {
+                    definition: noon_core::Glow::default().into(),
+                    ..mask
+                }],
+                id,
+            ),
+        ] {
+            assert_eq!(
+                CompiledEffectStack::new_with_visibility(effects, Some(role)),
+                Err(CompiledEffectStackError::InvalidVisibilityRole)
+            );
+        }
+        assert!(
+            crate::execution_patch::validate_effect_values(object, Some(&private), &ordinary)
+                .is_err()
+        );
+        let forged = CompiledEffectStack::new([mask, named]).unwrap();
+        assert!(validate_change(object, Some(&private), &[id], Some(&forged)).is_err());
+        assert!(!private.replace(CompiledEffect {
+            definition: noon_core::Glow::default().into(),
+            ..mask
+        }));
+        let updated = CompiledEffect {
+            definition: noon_core::NoiseDissolve::default()
+                .with_progress(0.5)
+                .unwrap()
+                .into(),
+            ..mask
+        };
+        assert!(private.replace(updated));
+        assert_eq!(private.visibility(), Some(updated));
+        let same_role = CompiledEffectStack::new_with_visibility([updated], Some(id)).unwrap();
+        crate::execution_patch::validate_effect_values(object, Some(&private), &same_role).unwrap();
     }
 }

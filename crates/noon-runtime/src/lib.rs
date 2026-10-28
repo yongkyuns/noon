@@ -357,13 +357,16 @@ impl SceneInstance {
     /// A staged, allocator-owned new attachment may be the source of a track
     /// in this one atomic semantic/runtime commit. The final transaction still
     /// proves that the attachment precedes the track before publication.
-    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+    pub fn preflight_reconcilable_track_additions_with_staged_effects(
         &self,
         tracks: &[TrackDefinition],
-        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledEffect>,
+        staged_effects: &std::collections::BTreeMap<
+            noon_core::ObjectId,
+            noon_compile::CompiledEffectStack,
+        >,
     ) -> Result<(), CompilePatchError> {
         self.compiled
-            .preflight_reconcilable_track_additions_with_staged_glow(tracks, staged_glow)
+            .preflight_reconcilable_track_additions_with_staged_effects(tracks, staged_effects)
     }
 
     pub fn new(compiled: CompiledScene) -> Self {
@@ -543,6 +546,7 @@ impl SceneInstance {
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
+            self,
         )
     }
 
@@ -569,6 +573,7 @@ impl SceneInstance {
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
+            self,
         )
     }
 
@@ -768,6 +773,8 @@ impl SceneInstance {
             self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
         }
+        self.compiled
+            .preflight_composed_mutations(std::slice::from_ref(patch))?;
         self.apply_patch_unpublished(patch)?;
         self.publish_execution_change();
         Ok(&self.frame)
@@ -990,7 +997,9 @@ impl SceneInstance {
             _ => unreachable!("structural patch helper accepts only create/remove"),
         };
 
-        let compiled_stats = self.compiled.apply_execution_patch_with_stats(patch)?;
+        let compiled_stats = self
+            .compiled
+            .commit_preflighted_execution_patch_with_stats(patch)?;
         let mut patch_stats = RuntimePatchStats {
             object_slots_appended: compiled_stats.object_slots_appended,
             object_slots_reactivated: compiled_stats.object_slots_reactivated,
@@ -1149,13 +1158,7 @@ impl SceneInstance {
                 groups_evaluated: evaluation.groups_evaluated,
                 ..RuntimePatchStats::default()
             };
-            if matches!(
-                channel.property,
-                Property::EffectColor
-                    | Property::EffectRadius
-                    | Property::EffectIntensity
-                    | Property::EffectOffset
-            ) {
+            if channel.property.is_effect() {
                 self.changes.insert(channel.object_index as usize);
             } else {
                 self.mark_changed(channel.object_index as usize);
@@ -1295,7 +1298,8 @@ impl SceneInstance {
         };
         let style_spatial_before = matches!(patch, ExecutionPatch::SetStyle { .. })
             .then(|| FrameRowState::from_frame(&self.frame, index));
-        self.compiled.apply_execution_patch(patch)?;
+        self.compiled
+            .commit_preflighted_execution_patch_with_stats(patch)?;
 
         match patch {
             ExecutionPatch::SetContent { .. } => {
@@ -1469,7 +1473,10 @@ impl SceneInstance {
                 Property::EffectColor
                 | Property::EffectRadius
                 | Property::EffectIntensity
-                | Property::EffectOffset => {
+                | Property::EffectOffset
+                | Property::EffectProgress
+                | Property::EffectSoftness
+                | Property::EffectSeed => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
                     if let (Some(base), Some(stack), Some(attachment)) = (
@@ -1631,9 +1638,21 @@ impl SceneInstance {
         self.painter_order = self.compiled.painter_order().to_vec();
         self.painter_order.sort_by(|&a, &b| {
             self.frame.objects[a as usize]
-                .z_index
-                .partial_cmp(&self.frame.objects[b as usize].z_index)
-                .expect("finite priorities")
+                .content
+                .composed_source()
+                .is_some()
+                .cmp(
+                    &self.frame.objects[b as usize]
+                        .content
+                        .composed_source()
+                        .is_some(),
+                )
+                .then_with(|| {
+                    self.frame.objects[a as usize]
+                        .z_index
+                        .partial_cmp(&self.frame.objects[b as usize].z_index)
+                        .expect("finite priorities")
+                })
                 .then_with(|| {
                     self.compiled
                         .family_rank(a)
@@ -1654,9 +1673,21 @@ impl SceneInstance {
             index as u32,
             |a, b| {
                 self.frame.objects[a as usize]
-                    .z_index
-                    .partial_cmp(&self.frame.objects[b as usize].z_index)
-                    .expect("finite priorities")
+                    .content
+                    .composed_source()
+                    .is_some()
+                    .cmp(
+                        &self.frame.objects[b as usize]
+                            .content
+                            .composed_source()
+                            .is_some(),
+                    )
+                    .then_with(|| {
+                        self.frame.objects[a as usize]
+                            .z_index
+                            .partial_cmp(&self.frame.objects[b as usize].z_index)
+                            .expect("finite priorities")
+                    })
                     .then_with(|| {
                         self.compiled
                             .family_rank(a)
@@ -1984,7 +2015,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 19] = [
+const PROPERTY_ORDER: [Property; 22] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -2004,6 +2035,9 @@ const PROPERTY_ORDER: [Property; 19] = [
     Property::EffectRadius,
     Property::EffectIntensity,
     Property::EffectOffset,
+    Property::EffectProgress,
+    Property::EffectSoftness,
+    Property::EffectSeed,
 ];
 
 /// Ordinary channels can have derived drivers without explicit tracks (camera
@@ -2013,14 +2047,9 @@ fn evaluation_property_channels(
     object_index: u32,
     property: Property,
 ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
-    let attachments = matches!(
-        property,
-        Property::EffectColor
-            | Property::EffectRadius
-            | Property::EffectIntensity
-            | Property::EffectOffset
-    )
-    .then(|| compiled.channels_for_object_property(object_index, property));
+    let attachments = property
+        .is_effect()
+        .then(|| compiled.channels_for_object_property(object_index, property));
     std::iter::once(CompiledChannelKey::new(object_index, property))
         .chain(attachments.into_iter().flatten())
 }
@@ -2464,13 +2493,7 @@ fn apply_group_to_row(
     base_style: Style,
     path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
 ) -> bool {
-    if matches!(
-        group.channel.property,
-        Property::EffectColor
-            | Property::EffectRadius
-            | Property::EffectIntensity
-            | Property::EffectOffset
-    ) {
+    if group.channel.property.is_effect() {
         let Some(attachment) = group.channel.attachment() else {
             return false;
         };
@@ -2735,6 +2758,9 @@ fn apply_group_to_row(
             | Property::EffectRadius
             | Property::EffectIntensity
             | Property::EffectOffset
+            | Property::EffectProgress
+            | Property::EffectSoftness
+            | Property::EffectSeed
             | Property::Presence
             | Property::ZIndex
             | Property::Transform => None,

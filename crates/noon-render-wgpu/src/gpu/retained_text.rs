@@ -280,6 +280,17 @@ pub enum RetainedPreparedObjectOutcome {
 }
 
 impl PreparedRetainedGpuFrame<'_> {
+    pub(super) fn capture_index(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
+
+    pub(super) fn capture_rank(&self, object: ObjectId) -> Option<usize> {
+        self.painter_ranks
+            .get(*self.object_indices.get(&object)?)
+            .copied()
+            .filter(|rank| *rank != usize::MAX)
+    }
+
     pub(super) fn capture_items(&self, object: ObjectId) -> Option<&[RetainedRenderItem]> {
         if let Some(item) = self
             .object_indices
@@ -1692,9 +1703,15 @@ impl RetainedFramePreparer {
                 device.limits().max_texture_dimension_2d,
             )
             .map_err(RetainedPrepareError::Image)?;
+        // A new/recovering consumer can receive an otherwise empty runtime
+        // delta. Its image draw index must reset with the image rows, using the
+        // staged proof rather than assuming the source's delta was initial.
+        let reset_changes = rows.reset.then(FrameChanges::all);
+        let eligibility =
+            self.stage_image_draw_eligibility(frame, reset_changes.as_ref().unwrap_or(changes));
         Ok(PreparedImagePublication {
             rows,
-            eligibility: self.stage_image_draw_eligibility(frame, changes),
+            eligibility,
             object_count: frame.objects.len(),
         })
     }
@@ -2206,7 +2223,8 @@ impl RetainedFramePreparer {
         if self.geometry_only_classification != Some(false)
             || !self.scratch_ready
             || !self.prepared_generation_ready
-            || self.snapshot_metrics != Some(metrics)
+            || (self.snapshot_metrics != Some(metrics)
+                && self.snapshot_text_stats.text_objects != 0)
             || changes.is_all()
             || changes.is_structural()
             || changes.is_empty()
@@ -2225,6 +2243,13 @@ impl RetainedFramePreparer {
             let Some(object) = frame.objects.get(index) else {
                 return false;
             };
+            if object.content.composed_source().is_some() {
+                // An effect controller contributes no geometry/text scratch.
+                // Its ordinary parameter row must not rebuild every child.
+                return !frame.is_drawable(index)
+                    && self.scratch_slots.get(index).is_some_and(Option::is_none)
+                    && !self.fast_text_only.get(index).copied().unwrap_or(false);
+            }
             if object.content.image().is_some() {
                 // Image-only updates have no geometry/text scratch rows. A
                 // cross-kind replacement must rebuild those rows before reuse.
@@ -2716,6 +2741,9 @@ impl RetainedFramePreparer {
             }
 
             match &object.content {
+                ObjectContentRef::Composed(_) => {
+                    geometry_only = false;
+                }
                 ObjectContentRef::Image(_) => {
                     unreachable!("images bypass the geometry/text stream")
                 }
@@ -4036,6 +4064,9 @@ impl GpuRenderer {
                 .is_some_and(|(image_rank, _)| **image_rank < item_rank)
             {
                 let (_, image) = images.next().expect("peeked image draw item");
+                if self.skip_composed_source(image.object_id()) {
+                    continue;
+                }
                 if !excluded.contains(&image.object_id())
                     && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
                 {
@@ -4061,7 +4092,7 @@ impl GpuRenderer {
                     }
                 }
             }
-            if excluded.contains(&item.object_id()) {
+            if excluded.contains(&item.object_id()) || self.skip_composed_source(item.object_id()) {
                 continue;
             }
             if self.draw_source_effect(pass, item.object_id(), sample_count == 1) {
@@ -4146,6 +4177,9 @@ impl GpuRenderer {
             }
         }
         for (_, image) in images {
+            if self.skip_composed_source(image.object_id()) {
+                continue;
+            }
             if !excluded.contains(&image.object_id())
                 && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
             {
@@ -6784,6 +6818,7 @@ pub use family_plan_set_prepare::*;
 /// Mixed-content draw failures preserve their source domain.
 #[derive(Debug)]
 pub enum RetainedDrawError {
+    EffectNotPrepared,
     Text(TextGpuDrawError),
     Image(RasterImageDrawError),
     GradientNotUploaded,
@@ -6804,6 +6839,7 @@ impl From<RasterImageDrawError> for RetainedDrawError {
 impl std::fmt::Display for RetainedDrawError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EffectNotPrepared => formatter.write_str("nested effect input was not prepared"),
             Self::Text(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
             Self::GradientNotUploaded => formatter.write_str("gradient source was not uploaded"),

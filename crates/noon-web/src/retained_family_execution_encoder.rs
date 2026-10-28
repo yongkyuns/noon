@@ -230,10 +230,12 @@ impl RetainedFamilyExecutionDeltaEncoder {
             let previous = self.published_rows.get(&row.slot);
             let stable = previous.is_some_and(|previous| {
                 previous.order == row.order
+                    && previous.draw_enabled == row.draw_enabled
                     && previous.fill_paint == row.fill_paint
                     && previous.object == row.object
                     && previous.z_index == row.z_index
                     && previous.content == row.content
+                    && previous.effects == row.effects
                     && previous.spatial == row.spatial
                     && previous.appearance == row.appearance
                     && previous.text_bounds == row.text_bounds
@@ -385,6 +387,27 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 )
             })
             .collect::<std::collections::BTreeSet<_>>();
+        let new_sources = envelope
+            .retained
+            .objects
+            .iter()
+            .filter_map(|row| {
+                if let crate::TransportObjectContent::Composed { source } = row.content {
+                    (!self.resources.contains_composed_source(source)).then_some((row.slot, source))
+                } else {
+                    None
+                }
+            })
+            .map(|(slot, handle)| {
+                self.retained
+                    .published_composed_source(slot, handle)
+                    .map(|source| (handle, source))
+                    .ok_or_else(|| RetainedResourceTransportError::InvalidComposedSource {
+                        handle,
+                        reason: "published source cache is unavailable".into(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // The retained encoder emits a changed immutable geometry inline. Convert
         // only those changes into generation-qualified reusable arena slots.
@@ -438,6 +461,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let staged_roots = self.resource_roots.stage(&envelope.retained);
         let retirements = self.resource_roots.retirements(&staged_roots);
         if new_texts.is_empty()
+            && new_sources.is_empty()
             && new_images.is_empty()
             && mesh_geometry_handles.is_empty()
             && updates.is_empty()
@@ -456,6 +480,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             fonts,
             &self.resources,
         )?;
+        additions = additions.with_composed_sources(new_sources)?;
         additions.capture_images(new_images, images)?;
         let closures = additions.text_closures().collect::<Vec<_>>();
         additions.retain_additions(&mut self.resources);
@@ -1575,7 +1600,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(encoder.resources.counts(), [0; 4]);
+        assert_eq!(encoder.resources.counts(), [0; 5]);
         assert!(encoder.text_closures.is_empty());
         assert!(encoder.geometry_references.is_empty());
         assert!(encoder.font_references.is_empty());
@@ -1606,7 +1631,7 @@ mod tests {
                     &images,
                 )
                 .is_err());
-            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert_eq!(encoder.resources.counts(), [0; 5]);
             assert!(encoder.resource_roots.is_empty());
             encoder
                 .attach_resource_additions(
@@ -1653,7 +1678,7 @@ mod tests {
                     &images,
                 )
                 .unwrap();
-            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert_eq!(encoder.resources.counts(), [0; 5]);
             assert!(encoder.text_closures.is_empty());
             assert!(encoder.geometry_references.is_empty());
             assert!(encoder.font_references.is_empty());
