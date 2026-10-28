@@ -63,7 +63,7 @@ export class WorkerAudioDevice {
   // Called synchronously by the gesture handler before any worker round trip.
   unlock() { return this.#output?.unlock() ?? Promise.resolve(); }
 
-  applyAnchor(anchor, session) {
+  applyAnchor(anchor, session, bracket = null) {
     if (this.#output === null || anchor === undefined) return;
     if (!anchor || anchor.session !== session || typeof anchor.playing !== "boolean") {
       throw new Error("worker audio anchor belongs to a different playback session");
@@ -73,8 +73,40 @@ export class WorkerAudioDevice {
       return;
     }
     if (!this.ready) throw new Error("Play with sound to enable audio output");
-    this.#output.start(session, anchor.time, anchor.sampledEpochMs,
-      performance.timeOrigin + performance.now());
+    // Diagnostic-only: read the same Window clock ONCE at the existing native
+    // Start boundary. Neither the strict Rust guard nor its four arguments change.
+    const origin = performance.timeOrigin;
+    const appliedMs = performance.now();
+    const receivedEpochMs = origin + appliedMs;
+    const trace = () => bracket === null ? null : ({
+      schema: 1, requestId: bracket.requestId, requestType: bracket.type,
+      session: bracket.session, lifecycle: bracket.lifecycle,
+      sentMs: bracket.sentMs, receivedMs: bracket.receivedMs, appliedMs,
+      observableAgeLowerMs: appliedMs - bracket.receivedMs,
+      observableAgeUpperMs: appliedMs - bracket.sentMs,
+      authoredTime: anchor.time, sampledEpochMs: anchor.sampledEpochMs,
+      receivedEpochMs, reconstructedEpochAgeMs: receivedEpochMs - anchor.sampledEpochMs,
+    });
+    try {
+      this.#output.start(session, anchor.time, anchor.sampledEpochMs, receivedEpochMs);
+    } catch (error) {
+      // Retain the exact rejected call and bracket in the unchanged fixture's
+      // captured console-error evidence, without changing the thrown value.
+      try { console.error("[Noon #2300 Window bracket]", JSON.stringify(trace()), String(error)); }
+      catch { /* Diagnostic collection may not replace the native rejection. */ }
+      throw error;
+    }
+    // The existing unchanged smoke fixture records each successful Start in
+    // audioQualification. Attach optional diagnostic data only when that
+    // fixture is present; no production scheduling state is retained.
+    try {
+      const last = globalThis.audioQualification?.anchors?.at(-1);
+      if (last && last.session === session && last.time === anchor.time &&
+          last.sampledEpochMs === anchor.sampledEpochMs &&
+          last.receivedEpochMs === receivedEpochMs) {
+        last.windowClockBracket = trace();
+      }
+    } catch { /* Instrumentation must not affect successful playback. */ }
     this.#started = true;
   }
 
