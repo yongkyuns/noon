@@ -296,6 +296,14 @@ fn retained_image_assets_decode_per_tap_before_filtering_and_reuse_residency() {
                         let actual = read(&device, &queue, &target);
                         if opacity == 0.5 {
                             assert_eq!(actual, pixels, "exact asset opacity restoration");
+                        } else {
+                            let neutral = self::expected(kind, reverse, clear, 0.0);
+                            for (a, e) in decode(&actual).iter().zip(neutral.iter().flatten()) {
+                                assert!(
+                                    (a - e).abs() <= 0.002,
+                                    "zero-opacity asset must leave only the background"
+                                );
+                            }
                         }
                     }
                     if let Some(dir) = &artifact {
