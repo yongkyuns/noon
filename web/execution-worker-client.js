@@ -15,6 +15,9 @@ import {
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
+// Diagnostic-only metadata on an existing correlated worker response.
+// It never enters the wire protocol or authorizes output.
+const AUDIO_CLOCK_BRACKET = Symbol("noon-audio-window-bracket");
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const WORKER_OWNERS = Object.freeze(["engine", "render"]);
@@ -695,7 +698,7 @@ export class ExecutionWorkerClient {
     const result = await this.#requestEngine(type, payload);
     if (generation === this.#audioControlGeneration && commandGeneration === this.#audioCommandGeneration &&
         lifecycle === this.#lifecycleGeneration && session === this.#session) {
-      try { this.#audioDevice.applyAnchor(result.audioAnchor, session); }
+      try { this.#audioDevice.applyAnchor(result.audioAnchor, session, result[AUDIO_CLOCK_BRACKET]); }
       catch (error) {
         this.#audioDevice.stop();
         await this.#requestEngine("pause", {});
@@ -858,7 +861,8 @@ export class ExecutionWorkerClient {
       }
       if (this.#pendingSceneControl === pending) this.#pendingSceneControl = null;
       return this.#applySceneControlResult({ ...result, ...completed,
-        type: result.type, pointerInputAccepted: result.pointerInputAccepted });
+        type: result.type, pointerInputAccepted: result.pointerInputAccepted },
+        completed[AUDIO_CLOCK_BRACKET]);
     } finally {
       if (this.#pendingSceneControl === pending) this.#pendingSceneControl = null;
     }
@@ -889,13 +893,13 @@ export class ExecutionWorkerClient {
     }
   }
 
-  async #applySceneControlResult(result) {
+  async #applySceneControlResult(result, bracket = result?.[AUDIO_CLOCK_BRACKET] ?? null) {
     if (result.sceneControlApplied !== true) return this.#audioState(result);
     this.#audioCommandGeneration += 1;
     if (result.sceneControlAction === "toggle_audio_muted") {
       this.#audioDevice.setMuted(!this.#audioDevice.muted);
     } else {
-      try { this.#audioDevice.applyAnchor(result.audioAnchor, this.#session); }
+      try { this.#audioDevice.applyAnchor(result.audioAnchor, this.#session, bracket); }
       catch (error) {
         this.#audioDevice.stop();
         await this.#requestEngine("pause", {});
@@ -1125,11 +1129,23 @@ export class ExecutionWorkerClient {
     }
     const requestId = this.#nextRequestIds[owner];
     this.#nextRequestIds[owner] = checkedNextRequestId(requestId);
+    // Research-only: a sample taken in the matching worker request must lie
+    // between this Window send and its correlated Window response receipt.
+    // Keep the observation on the existing bounded pending-request entry.
+    const observeAudio = owner === "engine" &&
+      (["pause", "resume", "seek", "seek_section", "restart_playback", "scene_control"].includes(type) ||
+        (type === "browser_pointer_input" && payload?.input?.kind === "release"));
     return new Promise((resolve, reject) => {
       const key = `${owner}:${requestId}`;
-      this.#pending.set(key, { resolve, reject });
+      const pending = { resolve, reject };
+      this.#pending.set(key, pending);
       try {
-        worker.postMessage(envelopeFactory(type, { ...payload, requestId }), transfer);
+        const envelope = envelopeFactory(type, { ...payload, requestId });
+        if (observeAudio) {
+          pending.audioClock = { sentMs: performance.now(), session: this.#session,
+            lifecycle: this.#lifecycleGeneration, worker, requestId, type };
+        }
+        worker.postMessage(envelope, transfer);
       } catch (error) {
         this.#pending.delete(key);
         reject(error);
@@ -1227,7 +1243,12 @@ export class ExecutionWorkerClient {
           return;
         }
         if (message.requestId !== undefined) {
-          this.#settle(owner, message.requestId, ({ resolve: resolvePending }) => {
+          this.#settle(owner, message.requestId, ({ resolve: resolvePending, audioClock }) => {
+            if (audioClock && message.audioAnchor?.playing === true) {
+              Object.defineProperty(message, AUDIO_CLOCK_BRACKET, {
+                value: Object.freeze(audioClock), enumerable: false,
+              });
+            }
             resolvePending(message);
           });
         }
@@ -1326,6 +1347,9 @@ export class ExecutionWorkerClient {
       throw new Error(`${owner} worker returned unissued request ID ${requestId}`);
     }
     this.#pending.delete(key);
+    // One Window reading at the authenticated matched response, not at a
+    // later Promise continuation. No worker timestamp comparison is made.
+    if (pending.audioClock) pending.audioClock.receivedMs = performance.now();
     settle(pending);
     return true;
   }
