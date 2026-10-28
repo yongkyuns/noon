@@ -1669,3 +1669,12 @@ pub async fn create_direct_camera_bloom_renderer(
     let program = noon::example_scenes::camera_bloom::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
+
+/// The same finite authored steps through the ordinary seekable session host.
+#[wasm_bindgen(js_name = createDirectCameraBloomSessionRenderer)]
+pub async fn create_direct_camera_bloom_session_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let execution = noon::example_scenes::camera_bloom::execution().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
+}

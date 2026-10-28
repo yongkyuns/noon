@@ -55,7 +55,7 @@ impl LiveContinuation for CameraBloom {
         Ok(ContinuationStep::Await(segment))
     }
 }
-pub fn program() -> Result<LiveProgram<CameraBloom>, String> {
+fn setup() -> Result<(Scene, CameraBloom), String> {
     let mut scene = Scene::new();
     let mut camera = scene.camera_frame().map_err(message)?;
     camera
@@ -77,13 +77,39 @@ pub fn program() -> Result<LiveProgram<CameraBloom>, String> {
     panel.set_fill(0.2, 0.4, 0.8, 1.0).map_err(message)?;
     panel.disable_stroke().map_err(message)?;
     scene.add(&panel).map_err(message)?;
-    scene
-        .into_live_program(CameraBloom {
+    Ok((
+        scene,
+        CameraBloom {
             camera,
             panel,
             stage: 0,
-        })
-        .map_err(message)
+        },
+    ))
+}
+pub fn program() -> Result<LiveProgram<CameraBloom>, String> {
+    let (scene, continuation) = setup()?;
+    scene.into_live_program(continuation).map_err(message)
+}
+/// Pre-author the same finite steps for normal seek/export playback.
+pub fn execution() -> Result<crate::SceneExecution, String> {
+    let (scene, mut continuation) = setup()?;
+    let mut session = scene.execution_session().map_err(message)?;
+    loop {
+        match continuation.resume(&mut scene.live(&mut session))? {
+            ContinuationStep::Finished => break,
+            ContinuationStep::Await(segment) => {
+                session
+                    .advance_segment_to(segment, segment.end_time())
+                    .map_err(message)?;
+                scene
+                    .live(&mut session)
+                    .complete_segment(segment)
+                    .map_err(message)?;
+            }
+        }
+    }
+    session.seek(0.0).map_err(message)?;
+    scene.into_execution_with_session(session).map_err(message)
 }
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
