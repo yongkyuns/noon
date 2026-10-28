@@ -1,0 +1,282 @@
+name: Audio 2296 pinned 5b38 reconciliation
+
+# Temporary #2296 qualification only. Never merge this workflow or helper.
+on:
+  push:
+    branches: [codex/audio-2296-5b38-reconcile-workbench]
+    paths: [.github/workflows/audio-2296-5b38-reconcile.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-2296-5b38-reconcile
+  cancel-in-progress: false
+
+env:
+  SOURCE: 0cb1b7dabaed0df82567794c09fff17327256d05
+  MASTER: 5b38eab85a86f4cc9019e8179e263c7b29771827
+  COMMON: bc25e92bb741607f678f6adea528c9e894c6335c
+
+jobs:
+  reconcile:
+    name: Reconcile only the shared-authoring test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      candidate: ${{ steps.publish.outputs.candidate }}
+      tree: ${{ steps.publish.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 0cb1b7dabaed0df82567794c09fff17327256d05
+          fetch-depth: 0
+      - name: Verify inputs and resolve the sole expected conflict
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/noon-2296-integration"
+          mkdir -p "$evidence"
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = bae7f61f423344788ff2bcdc5101ad337c51d088
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git fetch origin "$MASTER" c4aed655a19a5551fda449910f225d284da9a9d7
+          test "$(git merge-base "$SOURCE" "$MASTER")" = "$COMMON"
+          test "$(git diff --name-only "$COMMON" "$MASTER")" = scripts/shared-authoring-smoke.mjs
+          git config user.name "Noon integration workbench"
+          git config user.email "noreply@example.invalid"
+          merge_status=0
+          git merge --no-ff --no-commit "$MASTER" > "$evidence/merge.log" 2>&1 || merge_status=$?
+          cat "$evidence/merge.log"
+          test "$merge_status" -le 1
+          unresolved=$(git diff --name-only --diff-filter=U)
+          test -z "$unresolved" || test "$unresolved" = scripts/shared-authoring-smoke.mjs
+          test "$(git rev-parse MERGE_HEAD)" = "$MASTER"
+          helper_ref=c4aed655a19a5551fda449910f225d284da9a9d7
+          helper_path=.github/ci/audio-2296-5b38-resolve.py
+          test "$(git rev-parse "$helper_ref:$helper_path")" = 9251ac2dfb3d3f9c9bb64a87c15158b4a2160d97
+          git show "$helper_ref:$helper_path" > "$RUNNER_TEMP/noon-2296-resolve.py"
+          python3 -S "$RUNNER_TEMP/noon-2296-resolve.py" | tee "$evidence/resolution.json"
+          git add scripts/shared-authoring-smoke.mjs
+          test -z "$(git diff --name-only --diff-filter=U)"
+          test "$(git diff --cached --name-only "$SOURCE")" = scripts/shared-authoring-smoke.mjs
+          git diff --cached --check
+          git diff --cached "$SOURCE" > "$evidence/resolution.patch"
+          cp scripts/shared-authoring-smoke.mjs "$evidence/resolved-shared-authoring-smoke.mjs"
+          test "$(sha256sum scripts/python-background-audio-smoke.mjs | cut -d' ' -f1)" = 7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a
+          test "$(git rev-parse :web/worker-audio-device.js)" = 27effe9441745f3c2f82157306e95d212edc4cb3
+          test "$(git rev-parse :web/worker-audio-device.test.mjs)" = a52baf962a15d4111fc40c465dddf060ca156cf1
+      - name: Check resolved syntax and existing lifecycle regressions
+        run: |
+          set -euo pipefail
+          node --check scripts/shared-authoring-smoke.mjs
+          node --test web/execution-worker-client.test.mjs web/semantic-engine-endpoint.test.mjs scripts/playground-preload.test.mjs web/worker-audio-device.test.mjs 2>&1 | tee "$RUNNER_TEMP/noon-2296-integration/focused-tests.log"
+      - name: Publish only to the isolated candidate branch
+        id: publish
+        run: |
+          set -euo pipefail
+          git commit -m "Merge pinned master into finite audio controls; retain both shared-authoring proofs"
+          candidate=$(git rev-parse HEAD)
+          tree=$(git rev-parse HEAD^{tree})
+          test "$(git rev-list --parents -n 1 HEAD)" = "$candidate $SOURCE $MASTER"
+          test "$(git diff --name-only "$SOURCE" HEAD)" = scripts/shared-authoring-smoke.mjs
+          test -z "$(git status --porcelain --untracked-files=all)"
+          branch=codex/audio-2296-5b38-candidate
+          test "$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)" = "$SOURCE"
+          git push origin "HEAD:refs/heads/$branch"
+          printf 'candidate=%s\ntree=%s\nsource=%s\nmaster=%s\n' "$candidate" "$tree" "$SOURCE" "$MASTER" | tee "$RUNNER_TEMP/noon-2296-integration/source.txt"
+          printf 'candidate=%s\ntree=%s\n' "$candidate" "$tree" >> "$GITHUB_OUTPUT"
+      - name: Retain reconciliation evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-5b38-reconciliation
+          path: ${{ runner.temp }}/noon-2296-integration/
+          if-no-files-found: warn
+          retention-days: 7
+
+  qualify:
+    name: Exact candidate full gate and clean browser build
+    needs: reconcile
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+      CANDIDATE: ${{ needs.reconcile.outputs.candidate }}
+      CANDIDATE_TREE: ${{ needs.reconcile.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.reconcile.outputs.candidate }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate and clean working tree
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          mkdir -p "$RUNNER_TEMP/noon-2296-qualification"
+          printf 'candidate=%s\ntree=%s\n' "$CANDIDATE" "$CANDIDATE_TREE" > "$RUNNER_TEMP/noon-2296-qualification/source.txt"
+      - name: Install repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustup show active-toolchain
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install native audio build prerequisites
+        run: bash scripts/ci-install-reference-deps.sh libasound2-dev pkg-config
+      - name: Complete repository gate on the exact candidate
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh full "$MASTER" 2>&1 | tee "$RUNNER_TEMP/noon-2296-qualification/full-gate.log"
+          printf 'passed\n' > "$RUNNER_TEMP/noon-2296-qualification/full-gate.result"
+      - name: Build the existing browser matrix profile
+        env:
+          NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+          bash scripts/build-web-demo.sh 2>&1 | tee "$RUNNER_TEMP/noon-2296-qualification/browser-build.log"
+      - name: Validate clean source and runtime byte identity
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+          import { createRuntimeBuildIdentity } from "./scripts/build-runtime-identity.mjs";
+          const declared = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
+          assert.equal(declared.sourceRevision, process.env.CANDIDATE);
+          assert.deepEqual(declared, await createRuntimeBuildIdentity());
+          console.log(JSON.stringify(declared));
+          NODE
+          cp web/runtime-build-identity.json "$RUNNER_TEMP/noon-2296-qualification/browser-identity.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-5b38-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/runtime-build-identity.json
+            web/python/compat-bundle.*.json
+          if-no-files-found: error
+          retention-days: 3
+      - name: Retain full gate and build evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-5b38-full-gate
+          path: ${{ runner.temp }}/noon-2296-qualification/
+          if-no-files-found: warn
+          retention-days: 7
+
+  browser:
+    name: ${{ matrix.browser }} / ${{ matrix.backend }} / DPR1 audio
+    needs: [reconcile, qualify]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            backend: webgpu
+            host: auto
+            os: ubuntu-latest
+            display: "xvfb-run -a"
+          - browser: firefox
+            backend: webgl
+            host: auto
+            os: ubuntu-latest
+            display: "xvfb-run -a"
+          - browser: webkit
+            backend: webgl
+            host: main-thread
+            os: macos-latest
+            display: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.reconcile.outputs.candidate }}
+          persist-credentials: false
+      - name: Verify original audio fixture and exact source
+        env:
+          CANDIDATE: ${{ needs.reconcile.outputs.candidate }}
+          CANDIDATE_TREE: ${{ needs.reconcile.outputs.tree }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git rev-parse HEAD:scripts/python-background-audio-smoke.mjs)" = 7a422f88420bd64e68526e3680da49d457ff4108
+      - uses: actions/download-artifact@v8
+        with:
+          name: audio-2296-5b38-runtime
+          path: web
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
+      - name: Install pinned browser dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install browser and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
+      - name: Exercise the reconciled shared-authoring test in a real browser
+        if: matrix.browser == 'chromium'
+        run: |
+          set -euo pipefail
+          node scripts/shared-authoring-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/shared-authoring.log"
+      - name: Retain shared-authoring log
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-5b38-shared-authoring
+          path: ${{ runner.temp }}/shared-authoring.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Install native Linux audio prerequisites
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: bash scripts/ci-install-reference-deps.sh pulseaudio pulseaudio-utils libasound2-plugins
+      - name: Run unchanged original 15-case audio fixture
+        timeout-minutes: 5
+        env:
+          NOON_PYTHON_AUDIO_BROWSER: ${{ matrix.browser }}
+          NOON_PYTHON_AUDIO_BACKEND: ${{ matrix.backend }}
+          NOON_PLAYGROUND_RENDER_HOST: ${{ matrix.host }}
+          NOON_PYTHON_AUDIO_ARTIFACTS: browser-smoke-artifacts/audio-2296-5b38/${{ matrix.browser }}
+        run: bash scripts/ci-python-audio-smoke.sh ${{ matrix.display }}
+      - name: Retain original audio reports and provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audio-2296-5b38-${{ matrix.browser }}
+          path: browser-smoke-artifacts/audio-2296-5b38/${{ matrix.browser }}
+          if-no-files-found: warn
+          retention-days: 7
