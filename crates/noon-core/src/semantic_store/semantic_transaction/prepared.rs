@@ -674,6 +674,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 | SemanticMutation::SetClickAction { object, .. }
                 | SemanticMutation::SetSpatialCompositionDomain { object, .. }
                 | SemanticMutation::SetCameraProfile { object, .. }
+                | SemanticMutation::SetViewColorProfile { object, .. }
                 | SemanticMutation::SetCameraMotions { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
                 | SemanticMutation::ReplaceContent { object, .. }
@@ -1711,6 +1712,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .set_bar_metadata(metadata);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::BarMetadata { object });
+                }
+                SemanticMutation::SetViewColorProfile { object, profile } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic camera remains live")
+                        .set_view_color_profile(profile);
+                    written_slots.insert(object);
+                    // This is camera-role configuration; the role and identity
+                    // themselves remain on the same semantic object.
+                    impacts.push(SemanticMutationImpact::ObjectRole { object });
                 }
                 SemanticMutation::SetInset2DView {
                     object,

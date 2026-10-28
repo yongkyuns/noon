@@ -538,6 +538,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
+                | SemanticMutation::SetViewColorProfile { .. }
                 | SemanticMutation::SetAngleValue { .. }
                 | SemanticMutation::AddUpdater { .. }
                 | SemanticMutation::RemoveUpdater { .. }
@@ -1352,6 +1353,7 @@ fn lower_prepared_entry(
         lowered.base_transform,
         lowered.base_style,
     );
+    compiled.view_color_profile = lowered.view_color_profile;
     compiled.effects = effect::lower_prepared_attachment(prepared, object)?;
     if let Some(paint) = lowered.fill_paint.as_deref() {
         resource_additions
@@ -1385,6 +1387,7 @@ fn lower_prepared_entry(
 
 #[derive(Default)]
 struct PublicationDomains {
+    view_color_profile: bool,
     transform: bool,
     style: bool,
     content: bool,
@@ -1426,6 +1429,11 @@ fn lower_semantic_publication(
                     | SemanticObjectProperty::Scale
                     | SemanticObjectProperty::RotationZ => flags.transform = true,
                     _ => flags.style = true,
+                }
+            }
+            SemanticMutation::SetViewColorProfile { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().view_color_profile = true;
                 }
             }
             SemanticMutation::SetObjectTransform { object, .. } => {
@@ -1620,6 +1628,12 @@ fn lower_semantic_publication(
                     transform: lower_semantic_transform(node, &state)?,
                 });
             }
+        }
+        if flags.view_color_profile {
+            mutations.push(ExecutionPatch::SetViewColorProfile {
+                object,
+                profile: state.view_color_profile(),
+            });
         }
         if flags.style {
             if let Some(paint) = state.style.fill.as_ref() {

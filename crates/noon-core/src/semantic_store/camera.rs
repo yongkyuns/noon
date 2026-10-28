@@ -1,3 +1,17 @@
+/// Authored color/energy contract of one existing 2D camera controller.
+/// This selects shared scene processing, not a host surface format. LinearHdr
+/// uses linear-light radiance with explicit emission and one final SDR resolve;
+/// compatibility output retains its established encoded-space behavior.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewColorProfile {
+    #[default]
+    Compatibility,
+    LinearHdr,
+}
+
 use crate::{Camera2DState, GeometryRef, Rect, Transform2D, Vec2};
 
 impl Camera2DState {

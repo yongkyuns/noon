@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod color_profile;
 mod gpu;
 mod mega_mesh;
 mod paint;
@@ -21,6 +22,7 @@ pub use path_residency::{PathMeshPreload, PathMeshPreloadError, PathMeshPreloadS
 pub use render_order::*;
 
 use bytemuck::{Pod, Zeroable};
+use color_profile::WithColorProfile;
 use noon_core::{
     Color, GeometryRef, ObjectId, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode, Style,
     Transform2D, Vec2, VectorPath,
@@ -651,6 +653,7 @@ struct PathGroup {
 
 #[derive(Debug, Default)]
 pub struct FramePreparer {
+    color_profile: noon_core::ViewColorProfile,
     fill_paints: HashMap<ObjectId, paint::PreparedPaint>,
     paint_changes: Vec<ObjectId>,
     paint_order_changes: Vec<usize>,
@@ -756,8 +759,25 @@ impl FramePreparer {
         }
     }
 
+    /// Prepare raw raster inputs with the ordinary packing contract. Float
+    /// targets may use this entry point for explicitly already-linear values.
     pub fn prepare<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
+        self.color_profile = noon_core::ViewColorProfile::Compatibility;
         self.rebuild(frame)
+    }
+
+    /// Decode authored colors according to the view in this same coherent
+    /// publication. A profile change invalidates all derived color records once;
+    /// otherwise preparation follows the Runtime's local change set.
+    pub fn prepare_publication<'a>(
+        &'a mut self,
+        publication: &noon_runtime::RendererPublication<'_>,
+    ) -> PreparedFrame<'a> {
+        self.prepare_with_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        )
     }
 
     /// Updates cached instance records using the runtime's consumed change set.
@@ -772,7 +792,22 @@ impl FramePreparer {
         frame: &FrameState,
         changes: &FrameChanges,
     ) -> PreparedFrame<'a> {
-        if !self.initialized || changes.is_all() || frame.objects.len() < self.slots.len() {
+        self.prepare_with_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)
+    }
+
+    fn prepare_with_color_profile<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        profile: noon_core::ViewColorProfile,
+    ) -> PreparedFrame<'a> {
+        let profile_changed = self.color_profile != profile;
+        self.color_profile = profile;
+        if profile_changed
+            || !self.initialized
+            || changes.is_all()
+            || frame.objects.len() < self.slots.len()
+        {
             return self.rebuild(frame);
         }
 
@@ -961,7 +996,8 @@ impl FramePreparer {
             match self.slots[object_index] {
                 PreparedSlot::Absent => {}
                 PreparedSlot::Circle(index) => {
-                    let packed = pack_circle(object, frame.reveal(object_index));
+                    let packed = pack_circle(object, frame.reveal(object_index))
+                        .with_color_profile(self.color_profile);
                     instances_repacked += 1;
                     if self.circles[index] != packed {
                         self.circles[index] = packed;
@@ -969,7 +1005,7 @@ impl FramePreparer {
                     }
                 }
                 PreparedSlot::Rectangle(index) => {
-                    let packed = pack_rectangle(object);
+                    let packed = pack_rectangle(object).with_color_profile(self.color_profile);
                     instances_repacked += 1;
                     if self.rectangles[index] != packed {
                         self.rectangles[index] = packed;
@@ -977,7 +1013,8 @@ impl FramePreparer {
                     }
                 }
                 PreparedSlot::Line(index) => {
-                    let packed = pack_line(object, frame.reveal(object_index));
+                    let packed = pack_line(object, frame.reveal(object_index))
+                        .with_color_profile(self.color_profile);
                     instances_repacked += 1;
                     if self.lines[index] != packed {
                         self.lines[index] = packed;
@@ -996,6 +1033,7 @@ impl FramePreparer {
                         // The temporary geometry already *is* Manim's partial VMobject.
                         // Never apply the legacy path shader reveal a second time.
                         pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
+                            .with_color_profile(self.color_profile)
                     } else {
                         pack_path(
                             object,
@@ -1003,6 +1041,7 @@ impl FramePreparer {
                             reveal,
                             frame.morph(object_index),
                         )
+                        .with_color_profile(self.color_profile)
                     };
                     instances_repacked += 1;
                     if self.paths[index] != packed {
@@ -1018,7 +1057,8 @@ impl FramePreparer {
                             &self.path_mesh_cache[cache_index].mesh,
                             reveal,
                             frame.morph(object_index),
-                        );
+                        )
+                        .with_color_profile(self.color_profile);
                         // Analytic partial geometry already contains its endpoint.
                         if partial_reveal_bits.is_some() {
                             packed_head.style.opacity = 0.0;
@@ -1156,21 +1196,24 @@ impl FramePreparer {
             GeometryRef::Circle { .. } => {
                 let index = self.circles.len();
                 self.circle_ids.push(object.id);
-                self.circles.push(pack_circle(object, reveal));
+                self.circles
+                    .push(pack_circle(object, reveal).with_color_profile(self.color_profile));
                 push_dirty_range(&mut self.circle_dirty_ranges, index);
                 PreparedSlot::Circle(index)
             }
             GeometryRef::Rectangle { .. } => {
                 let index = self.rectangles.len();
                 self.rectangle_ids.push(object.id);
-                self.rectangles.push(pack_rectangle(object));
+                self.rectangles
+                    .push(pack_rectangle(object).with_color_profile(self.color_profile));
                 push_dirty_range(&mut self.rectangle_dirty_ranges, index);
                 PreparedSlot::Rectangle(index)
             }
             GeometryRef::Line { .. } => {
                 let index = self.lines.len();
                 self.line_ids.push(object.id);
-                self.lines.push(pack_line(object, reveal));
+                self.lines
+                    .push(pack_line(object, reveal).with_color_profile(self.color_profile));
                 push_dirty_range(&mut self.line_dirty_ranges, index);
                 PreparedSlot::Line(index)
             }
@@ -1220,6 +1263,7 @@ impl FramePreparer {
 
         let packed = if partial_reveal_bits.is_some() {
             pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
+                .with_color_profile(self.color_profile)
         } else {
             pack_path(
                 object,
@@ -1227,6 +1271,7 @@ impl FramePreparer {
                 reveal,
                 frame.morph(object_index),
             )
+            .with_color_profile(self.color_profile)
         };
         let path_index = self.paths.len();
         self.path_ids.push(object.id);
@@ -1235,13 +1280,16 @@ impl FramePreparer {
 
         let reveal_head_instance =
             if partial_reveal_bits.is_none() && should_create_path_reveal_head(object, reveal) {
-                Some(pack_path_reveal_head(
-                    object,
-                    frame.render_transform(object_index),
-                    &self.path_mesh_cache[cache_index].mesh,
-                    reveal,
-                    frame.morph(object_index),
-                ))
+                Some(
+                    pack_path_reveal_head(
+                        object,
+                        frame.render_transform(object_index),
+                        &self.path_mesh_cache[cache_index].mesh,
+                        reveal,
+                        frame.morph(object_index),
+                    )
+                    .with_color_profile(self.color_profile),
+                )
             } else {
                 None
             };
@@ -1552,13 +1600,16 @@ impl FramePreparer {
             }
             let index = self.lines.len();
             self.line_ids.push(object.id);
-            self.lines.push(pack_path_reveal_head(
-                object,
-                frame.render_transform(object_index),
-                &self.path_mesh_cache[cache_index].mesh,
-                reveal,
-                frame.morph(object_index),
-            ));
+            self.lines.push(
+                pack_path_reveal_head(
+                    object,
+                    frame.render_transform(object_index),
+                    &self.path_mesh_cache[cache_index].mesh,
+                    reveal,
+                    frame.morph(object_index),
+                )
+                .with_color_profile(self.color_profile),
+            );
             push_dirty_range(&mut self.line_dirty_ranges, index);
             Some(index)
         });
@@ -1688,6 +1739,7 @@ impl FramePreparer {
                     .instances
                     .push(if partial_reveal_bits.is_some() {
                         pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
+                            .with_color_profile(self.color_profile)
                     } else {
                         pack_path(
                             object,
@@ -1695,19 +1747,23 @@ impl FramePreparer {
                             reveal,
                             frame.morph(object_index),
                         )
+                        .with_color_profile(self.color_profile)
                     });
                 let reveal_head = if partial_reveal_bits.is_none()
                     && should_create_path_reveal_head(object, reveal)
                 {
                     let head_index = self.lines.len();
                     self.line_ids.push(object.id);
-                    self.lines.push(pack_path_reveal_head(
-                        object,
-                        frame.render_transform(object_index),
-                        &self.path_mesh_cache[cache_index].mesh,
-                        reveal,
-                        frame.morph(object_index),
-                    ));
+                    self.lines.push(
+                        pack_path_reveal_head(
+                            object,
+                            frame.render_transform(object_index),
+                            &self.path_mesh_cache[cache_index].mesh,
+                            reveal,
+                            frame.morph(object_index),
+                        )
+                        .with_color_profile(self.color_profile),
+                    );
                     Some(head_index)
                 } else {
                     None
@@ -1728,22 +1784,27 @@ impl FramePreparer {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
                     self.slot_presences.push(true);
                     self.circle_ids.push(object.id);
-                    self.circles
-                        .push(pack_circle(object, frame.reveal(object_index)));
+                    self.circles.push(
+                        pack_circle(object, frame.reveal(object_index))
+                            .with_color_profile(self.color_profile),
+                    );
                 }
                 GeometryRef::Rectangle { .. } => {
                     self.slots
                         .push(PreparedSlot::Rectangle(self.rectangles.len()));
                     self.slot_presences.push(true);
                     self.rectangle_ids.push(object.id);
-                    self.rectangles.push(pack_rectangle(object));
+                    self.rectangles
+                        .push(pack_rectangle(object).with_color_profile(self.color_profile));
                 }
                 GeometryRef::Line { .. } => {
                     self.slots.push(PreparedSlot::Line(self.lines.len()));
                     self.slot_presences.push(true);
                     self.line_ids.push(object.id);
-                    self.lines
-                        .push(pack_line(object, frame.reveal(object_index)));
+                    self.lines.push(
+                        pack_line(object, frame.reveal(object_index))
+                            .with_color_profile(self.color_profile),
+                    );
                 }
                 GeometryRef::VectorPath(_) => {
                     unreachable!("vector path must enter the path preparation branch")

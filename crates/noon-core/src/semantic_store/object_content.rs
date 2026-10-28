@@ -391,6 +391,7 @@ pub struct SemanticObjectState {
     pub sheen_direction: crate::SemanticSheenDirection,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
+    view_color_profile: crate::ViewColorProfile,
     // Numeric inputs are only present on DecimalNumber objects. Keep ordinary
     // semantic objects to one optional pointer rather than embedding the
     // metadata payload in every authored object state.
@@ -558,6 +559,7 @@ impl SemanticObjectState {
             sheen_direction: crate::SemanticSheenDirection::DEFAULT,
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
+            view_color_profile: crate::ViewColorProfile::Compatibility,
             decimal_number: None,
             text_presentation_baseline: None,
             bar_metadata: None,
@@ -582,6 +584,8 @@ impl SemanticObjectState {
             sheen_direction: target.sheen_direction,
             presentation: self.presentation,
             role: self.role,
+            // Camera/view meaning stays with the receiver, like its role.
+            view_color_profile: self.view_color_profile,
             // Manim become replaces geometry and paint, not the receiver's
             // number or formatting inputs. Explicit set_value changes those.
             decimal_number: self.decimal_number.clone(),
@@ -623,12 +627,23 @@ impl SemanticObjectState {
         self.presentation.insertion_order
     }
 
+    pub const fn view_color_profile(&self) -> crate::ViewColorProfile {
+        self.view_color_profile
+    }
+
+    pub(crate) fn set_view_color_profile(&mut self, profile: crate::ViewColorProfile) {
+        self.view_color_profile = profile;
+    }
+
     pub const fn role(&self) -> SemanticObjectRole {
         self.role
     }
 
     pub fn set_role(&mut self, role: SemanticObjectRole) {
         self.role = role;
+        if role != SemanticObjectRole::Camera2D {
+            self.view_color_profile = crate::ViewColorProfile::Compatibility;
+        }
     }
 
     pub fn camera_projection(&self) -> Option<SemanticProjection3D> {

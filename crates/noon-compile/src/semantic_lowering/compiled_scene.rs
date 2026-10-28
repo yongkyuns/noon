@@ -249,6 +249,7 @@ fn materialize_semantic_projection(
             }
         }
         objects.push(CompiledObject {
+            view_color_profile: object.view_color_profile,
             fill_paint: object.fill_paint.clone(),
             draw_enabled: object.presentation.draw_enabled,
             effects: object.effects.clone(),

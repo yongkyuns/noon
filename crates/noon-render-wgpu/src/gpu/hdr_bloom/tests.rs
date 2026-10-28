@@ -338,7 +338,11 @@ fn upload(queue: &wgpu::Queue, texture: &wgpu::Texture, values: &[[f64; 4]]) {
         texture.size(),
     );
 }
-fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+pub(in crate::gpu) fn read(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+) -> Vec<u8> {
     let bytes_per_pixel = if texture.format() == HDR { 8 } else { 4 };
     let row = texture.width() * bytes_per_pixel;
     let stride = row.div_ceil(256) * 256;
@@ -377,7 +381,7 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> 
     buffer.unmap();
     bytes
 }
-fn decode(bytes: &[u8]) -> Vec<f64> {
+pub(in crate::gpu) fn decode(bytes: &[u8]) -> Vec<f64> {
     bytes
         .as_chunks::<2>()
         .0
@@ -405,7 +409,7 @@ fn fixture(size: [u32; 2], kind: u32) -> Vec<[f64; 4]> {
 }
 // Independent f64 full 2-D convolution. No production kernel, extraction
 // helper, intermediate readback or separable implementation supplies this oracle.
-fn reference(
+pub(in crate::gpu) fn reference(
     input: &[[f64; 4]],
     size: [u32; 2],
     p: HdrBloomParameters,

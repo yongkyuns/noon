@@ -4,6 +4,18 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
+/// Source-color specialization follows the derived raster target contract.
+/// Float scene inputs are linear radiance; compatibility UNORM inputs retain
+/// their established encoded-space/Cairo quantization. Neither path transfers
+/// output here; HDR display resolution is a distinct final operator.
+fn source_color_shader(format: wgpu::TextureFormat) -> &'static str {
+    if format == wgpu::TextureFormat::Rgba16Float {
+        include_str!("../linear_color.wgsl")
+    } else {
+        include_str!("../cairo_color.wgsl")
+    }
+}
+
 mod analytic_glow;
 mod backdrop_composite;
 pub use backdrop_composite::{
@@ -20,6 +32,8 @@ pub use source_capture::{
 mod effect_stack;
 mod gaussian_blur;
 mod hdr_bloom;
+#[cfg(test)]
+mod hdr_scene_raster_tests;
 pub use hdr_bloom::{
     HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomPrepareError, HdrBloomScope,
     HdrBloomStats,
@@ -639,6 +653,11 @@ impl<'a> FramePassOptions<'a> {
 }
 
 impl GpuRenderer {
+    /// Planar draws to a `Rgba16Float` target consume unassociated linear radiance in packed
+    /// source colors and blends in linear light without compatibility clipping.
+    /// The producer owns color decoding/emission; final HDR display resolution
+    /// must happen once after scene composition. Other targets retain the
+    /// established encoded-premultiplied compatibility contract.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -699,7 +718,7 @@ impl GpuRenderer {
             }],
         });
         let polygon_coverage = include_str!("../polygon_coverage.wgsl");
-        let cairo_color = include_str!("../cairo_color.wgsl");
+        let cairo_color = source_color_shader(target_format);
         let analytic_source = format!(
             "{}\n{}\n{}",
             include_str!("../analytic.wgsl"),
@@ -796,7 +815,7 @@ impl GpuRenderer {
         let path_source = format!(
             "{}\n{}\n{}",
             include_str!("../path.wgsl"),
-            include_str!("../cairo_color.wgsl"),
+            cairo_color,
             polygon_coverage
         );
         let path_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

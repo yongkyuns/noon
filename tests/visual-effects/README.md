@@ -1691,3 +1691,76 @@ mappings/resources must retire, the surviving capture must remain coherent, and
 a clean follow-up must do no work. Browser showcase replay separately exercises
 the actual source-completion/restart path; successful first-pass playback is not
 accepted as evidence that arbitrary-order replay succeeds.
+
+The planar `Rgba16Float` draw path now specializes the existing source-color
+helper to linear radiance: associate by effective alpha exactly once, preserve
+RGB above one, and skip compatibility UNORM/Cairo source quantization. Analytic,
+path and continuous-paint pipelines choose the same specialization. Other target
+formats retain the original helper. An offscreen float scene target must never
+inherit the WebGL drawing buffer's presentation decode; display transfer still
+belongs after HDR resolution. This target contract expects **already-linear
+packed source values**. Authored Color decoding, checked emission and semantic
+view/Bloom controls still require integration; this is not a public scene HDR
+feature or a claim of spatial/image/text/profile support.
+
+The native float-draw oracle uses the ordinary frame preparer, uploads and painter
+submission, with two pixel-aligned rectangle/path layers. Sixteen profiles vary
+path/analytic routing, solid/continuous-paint programs, painter order and
+transparent/nonblack clears. Independent
+f64 source-over arithmetic accounts for color alpha, object opacity and appearance
+before comparing every float channel. The produced float image then feeds the
+real bloom operator; display expectations come from the independent 2D bloom
+reference applied to the mathematical scene expectation. The actual previous
+clamping shader is compiled into an otherwise identical float render pipeline
+and must fail the linear oracle. A clean same-frame upload must remain zero.
+This numerical raster-input proof does not substitute for the required paired
+public Rust/Python authoring, authored-time/seek/export or browser HDR gates.
+
+The in-progress authored view contract uses `ViewColorProfile` on the existing
+semantic 2D camera. Compatibility is the default; LinearHdr declares the shared
+linear-radiance/display contract. The ordinary semantic transaction validates the
+camera role and supports transaction-local creation, staged reads and atomic
+rollback. Profile selection lowers to the camera's existing compiled execution
+slot. A static live edit uses the ordinary execution transaction, changes only
+that slot's metadata/publication and leaves effective object rows untouched.
+The Runtime publication borrows this metadata from its current compiled revision;
+it introduces no second state map, scene, identity allocator or clock. Retained
+replay exchanges the same compiled revisions, so profile queries follow authored
+time without a renderer-owned history. Repeating an identical edit is a no-op.
+Ordinary object creation allocates no view-profile shadow entries. Visual become
+preserves the receiver's camera/view meaning; explicitly removing its camera role
+clears the profile to compatibility.
+
+Native Rust tests exercise initial/live lowering, pending camera creation,
+compiled transaction staging, mixed valid/invalid rollback, receiver ownership,
+clean no-op publications, unchanged unrelated frame rows and repeated replay.
+The same publication now carries the compiler-derived primary camera identity.
+`FramePreparer::prepare_publication` reads that view's current profile and decodes
+authored sRGB RGB channels before linear association/blending. Alpha, appearance
+and object opacity retain their existing meanings. Solid fill/stroke, path
+background stroke and reveal-head packing use the same conversion; continuous
+paint stops are decoded before premultiplied interpolation. Compatibility and raw
+already-linear raster entry points preserve their existing packing contract.
+A global profile change repacks derived colors once; subsequent clean frames
+repack/upload nothing and an ordinary local color edit changes only its row.
+
+`cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture`
+qualifies the typed native Rust Scene -> compiler -> Runtime publication -> planar
+float draw -> real Bloom -> SDR path. Sixteen cases vary analytic/path sources,
+solid/varying-gradient paint, painter order and transparent/nonblack linear
+clears. Independently computed f64 sRGB decoding, premultiplied interpolation and
+source-over provide the scene expectation; the separate full-2D Bloom reference
+consumes that mathematical expectation rather than GPU readback. Every linear
+channel must differ by at most 0.002; every display channel by at most 2 bytes.
+An actual draw omitting the profile consumer must fail the linear oracle by more
+than 0.05. A clean same-publication repeat must upload zero bytes. Raw pixels,
+mathematical expectations and a manifest can be retained with
+`NOON_AUTHORED_VIEW_ARTIFACT_DIR` and are collected by native CI.
+
+This is a finite planar color-preparation proof, not a public HDR creator surface.
+The canonical mixed-content retained preparer, image/text color inputs, composed
+filter captures and native/browser/export hosts still need profile integration.
+Checked emission, Bloom view attachment/animation, explicit view-ambiguity and
+capability admission, paired Python/direct-WASM/export evidence and the remaining
+M4/M5 gates are open. The authored test does not yet claim radiance above one,
+physical-device performance, or browser HDR execution.

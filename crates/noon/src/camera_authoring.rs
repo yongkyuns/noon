@@ -282,3 +282,6 @@ mod tests {
         assert_eq!(frame.state().unwrap().transform.translation.x, -2.0);
     }
 }
+
+#[cfg(test)]
+mod view_color_profile_tests;

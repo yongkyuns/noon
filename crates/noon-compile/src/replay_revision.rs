@@ -122,6 +122,7 @@ impl CompiledScene {
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetClickIndicate { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetViewColorProfile { object, .. }
             | ExecutionPatch::SetEffects { object, .. } => {
                 rows.insert(index(*object)?);
             }

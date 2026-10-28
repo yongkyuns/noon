@@ -848,6 +848,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::ClickAction(object)
         | SemanticMutationKey::ObjectBarMetadata(object)
         | SemanticMutationKey::ObjectRole(object)
+        | SemanticMutationKey::ViewColorProfile(object)
         | SemanticMutationKey::SpatialCompositionDomain(object)
         | SemanticMutationKey::CameraMotions(object)
         | SemanticMutationKey::DecimalNumber(object)
