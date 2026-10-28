@@ -48,7 +48,10 @@ jobs:
           import hashlib,io,json,os,subprocess,tarfile
           from pathlib import Path
           env=os.environ; root=Path(env['WORK']); e=Path(env['EVIDENCE'])
-          pre=e/'incoming/preflight'; browser=e/'incoming/browser'
+          pre=e/'incoming/preflight'
+          browser_sources=sorted((e/'incoming/browser').rglob('browser-source.json'))
+          assert len(browser_sources)==1,('expected exactly one authenticated browser receipt',browser_sources)
+          browser=browser_sources[0].parent
           proof=json.loads((pre/'source-proof.json').read_text())
           assert proof['resolved_tree_before_format']==env['SOURCE_TREE']
           assert proof['new_master']==env['OLD_MASTER']
