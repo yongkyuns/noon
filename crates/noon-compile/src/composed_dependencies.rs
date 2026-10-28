@@ -1,7 +1,7 @@
 //! Sparse derived dependencies of immutable composed-source execution plans.
 //! The object column owns plans; this index contains only existing identities.
 use crate::{CompiledScene, ExecutionPatch};
-use noon_core::{ComposedSource, ObjectId};
+use noon_core::{ComposedSource, EffectInputRole, ObjectId};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod projection;
@@ -19,6 +19,7 @@ pub trait ComposedSourceGraphView {
     fn owner_valid(&self, owner: ObjectId) -> bool;
     fn input_valid(&self, input: ObjectId) -> Option<bool>;
     fn rank(&self, input: ObjectId) -> Option<usize>;
+    fn input_role(&self, owner: ObjectId) -> Option<EffectInputRole>;
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId>;
 }
 
@@ -43,6 +44,8 @@ pub enum CompiledComposedSourceErrorKind {
     ParentCycle,
     CrossingOrAliasedScopes,
     ScopeRoleChanged,
+    InvalidBackdropSource,
+    NestedBackdrop(ObjectId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,15 +72,30 @@ impl std::error::Error for CompiledComposedSourceError {}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComposedDependencies {
     owners: BTreeSet<ObjectId>,
+    prefix_owners: BTreeSet<ObjectId>,
     members: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
     children: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
 }
 impl ComposedDependencies {
     pub fn is_empty(&self) -> bool {
-        self.owners.is_empty()
+        self.owners.is_empty() && self.prefix_owners.is_empty()
     }
     pub fn owners(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.owners.iter().copied()
+    }
+    /// Existing rows whose checked stack consumes the earlier painter prefix.
+    pub fn prefix_owners(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.prefix_owners.iter().copied()
+    }
+    pub fn validation_owners(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.owners.union(&self.prefix_owners).copied()
+    }
+    pub fn set_input_role(&mut self, owner: ObjectId, role: Option<EffectInputRole>) {
+        if role == Some(EffectInputRole::PainterPrefix) {
+            self.prefix_owners.insert(owner);
+        } else {
+            self.prefix_owners.remove(&owner);
+        }
     }
     pub fn children(&self, parent: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
         self.children.get(&parent).into_iter().flatten().copied()
@@ -173,7 +191,9 @@ impl<'a> ComposedDependencyChanges<'a> {
     ) -> BTreeSet<ObjectId> {
         let mut result = BTreeSet::new();
         for id in changed.into_iter().chain(self.replaced.iter().copied()) {
-            if view.source(id).is_some() {
+            if view.source(id).is_some()
+                || view.input_role(id) == Some(EffectInputRole::PainterPrefix)
+            {
                 result.insert(id);
             }
             result.extend(self.base.dependents(id));
@@ -240,6 +260,13 @@ impl CompiledScene {
         owner: ObjectId,
         previous: Option<std::sync::Arc<ComposedSource>>,
     ) {
+        let role = self.object_index(owner).map(|index| {
+            self.objects[index as usize]
+                .effects
+                .as_ref()
+                .map_or(EffectInputRole::Painted, |stack| stack.input_role())
+        });
+        self.composed_dependencies.set_input_role(owner, role);
         let next = self.composed_plan(owner);
         if previous
             .as_ref()
@@ -256,12 +283,20 @@ impl CompiledScene {
     ) -> Result<(), CompiledComposedSourceError> {
         let mut index = ComposedDependencies::default();
         for row in self.objects.iter().filter(|row| row.live) {
+            index.set_input_role(
+                row.id,
+                Some(
+                    row.effects
+                        .as_ref()
+                        .map_or(EffectInputRole::Painted, |stack| stack.input_role()),
+                ),
+            );
             if let Some(source) = row.content.composed_source() {
                 index.insert(row.id, source);
             }
         }
         let view = projection::Projection::with_index(self, &index);
-        validate_composed_sources(&view, &index.owners)?;
+        validate_composed_sources(&view, &index.validation_owners().collect())?;
         self.composed_dependencies = index;
         Ok(())
     }
@@ -276,7 +311,7 @@ impl CompiledScene {
         if !patches.iter().any(projection::affects_source_graph) {
             return Ok(ComposedValidationStats::default());
         }
-        if self.composed_dependencies.owners.is_empty()
+        if self.composed_dependencies.is_empty()
             && !patches.iter().any(projection::introduces_scope)
         {
             return Ok(ComposedValidationStats::default());

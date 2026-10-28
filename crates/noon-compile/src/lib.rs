@@ -2229,9 +2229,10 @@ impl CompiledScene {
     ) -> Result<CompiledPatchStats, CompilePatchError> {
         let owner = match patch {
             ExecutionPatch::CreateObject(row) => Some(row.id),
-            ExecutionPatch::RemoveObject(id) | ExecutionPatch::SetContent { object: id, .. } => {
-                Some(*id)
-            }
+            ExecutionPatch::RemoveObject(id)
+            | ExecutionPatch::SetContent { object: id, .. }
+            | ExecutionPatch::SetEffects { object: id, .. }
+            | ExecutionPatch::SetEffectStack { object: id, .. } => Some(*id),
             _ => None,
         };
         let previous = owner.and_then(|id| self.composed_plan(id));

@@ -370,6 +370,15 @@ impl GpuRenderer {
         demand: super::glow_filter::CaptureDemand,
         visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        // Prefix roles must enter through the explicit backdrop coordinator;
+        // ordinary object/group capture must never reinterpret their input.
+        if request
+            .definitions
+            .iter()
+            .any(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix)
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
             RenderPrimitive::Rectangle => 1,
@@ -455,6 +464,15 @@ impl GpuRenderer {
         demand: super::glow_filter::CaptureDemand,
         visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        // Prefix roles must enter through the explicit backdrop coordinator;
+        // ordinary object/group capture must never reinterpret their input.
+        if request
+            .definitions
+            .iter()
+            .any(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix)
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
         if !matches!(
             self.target_format,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm

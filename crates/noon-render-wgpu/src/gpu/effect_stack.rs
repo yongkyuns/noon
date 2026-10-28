@@ -63,7 +63,9 @@ impl PassFilter {
     fn new(definition: EffectDefinition) -> Self {
         match definition {
             EffectDefinition::Glow(_) => Self::Glow(Box::default()),
-            EffectDefinition::Blur(_) => Self::Blur(Box::default()),
+            EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_) => {
+                Self::Blur(Box::default())
+            }
             EffectDefinition::Shadow(_) => Self::Shadow(Box::default()),
             EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_) => {
                 Self::Sample(Box::default())
@@ -74,7 +76,10 @@ impl PassFilter {
         matches!(
             (self, definition),
             (Self::Glow(_), EffectDefinition::Glow(_))
-                | (Self::Blur(_), EffectDefinition::Blur(_))
+                | (
+                    Self::Blur(_),
+                    EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_)
+                )
                 | (Self::Shadow(_), EffectDefinition::Shadow(_))
                 | (
                     Self::Sample(_),
@@ -355,9 +360,13 @@ impl EffectStackFilter {
                             ..upload
                         }
                     }
-                    (PassFilter::Blur(filter), EffectDefinition::Blur(definition)) => {
+                    (PassFilter::Blur(filter), definition)
+                        if definition.as_blur().is_some()
+                            || definition.as_backdrop_blur().is_some() =>
+                    {
                         let sigma_pixels = definition
                             .radius()
+                            .expect("Gaussian radius")
                             .to_output_pixels(
                                 parameters.output_height,
                                 parameters.world_view_height,

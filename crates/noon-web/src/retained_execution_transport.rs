@@ -23,10 +23,10 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V28 adds finite Pixelate cell sampling to V27's ordered bindings, composed source plans, seeded masks, HatchPaint
+// V29 adds explicit BackdropBlur input roles; V28 added finite Pixelate cell sampling to V27's ordered bindings, composed source plans, seeded masks, HatchPaint
 // and exact private Visibility roles across the genuine worker boundary. Older
 // envelopes reject; native and direct Rust/WASM execution remain typed in process.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 28;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 29;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,6 +77,9 @@ pub enum TransportEffectDefinition {
     Blur {
         radius: EffectRadius,
     },
+    BackdropBlur {
+        radius: EffectRadius,
+    },
     Shadow {
         color: Color,
         radius: EffectRadius,
@@ -108,6 +111,11 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
             noon_core::EffectDefinition::Blur(blur) => TransportEffectDefinition::Blur {
                 radius: blur.radius(),
             },
+            noon_core::EffectDefinition::BackdropBlur(blur) => {
+                TransportEffectDefinition::BackdropBlur {
+                    radius: blur.radius(),
+                }
+            }
             noon_core::EffectDefinition::NoiseDissolve(value) => {
                 TransportEffectDefinition::NoiseDissolve {
                     seed: value.seed(),
@@ -158,6 +166,11 @@ impl TransportEffectState {
             .into(),
             TransportEffectDefinition::Blur { radius } => {
                 noon_core::Blur::new(EffectUpdate::default().radius(radius))
+                    .ok()?
+                    .into()
+            }
+            TransportEffectDefinition::BackdropBlur { radius } => {
+                noon_core::BackdropBlur::new(EffectUpdate::default().radius(radius))
                     .ok()?
                     .into()
             }
@@ -2512,6 +2525,111 @@ mod tests {
     }
 
     #[test]
+    fn backdrop_worker_values_retain_source_role_precision_and_reject_bad_suffix_atomically() {
+        let mut frame = mixed_frame();
+        let effect = noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(96, 17),
+            definition: noon_core::BackdropBlur::new(
+                EffectUpdate::default().radius(noon_core::Pixels(3.500000000000123)),
+            )
+            .unwrap()
+            .into(),
+        };
+        frame.objects[0].effects = Some(effect_stack(&effect));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(29);
+        let snapshot = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["protocol_version"], 29);
+        assert_eq!(json["objects"][0]["effects"][0]["kind"], "backdrop_blur");
+        let mut mirror = test_mirror();
+        mirror.apply(serde_json::from_value(json).unwrap()).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &frame);
+        assert_eq!(
+            mirror
+                .composed_dependencies
+                .prefix_owners()
+                .collect::<Vec<_>>(),
+            [frame.objects[0].id]
+        );
+        frame.objects[0].effects = Some(effect_stack(&noon_compile::CompiledEffect {
+            definition: EffectUpdate::default()
+                .radius(noon_core::Pixels(6.500000000000123))
+                .apply_to(effect.definition)
+                .unwrap(),
+            ..effect
+        }));
+        let good = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let before = mirror.frame().unwrap().clone();
+        for failure in 0..5 {
+            let mut bad = good.clone();
+            let mut suffix = snapshot.objects[1].clone();
+            suffix.effects = snapshot.objects[0].effects.clone();
+            match failure {
+                0 => {
+                    suffix.effects[0].definition = TransportEffectDefinition::BackdropBlur {
+                        radius: EffectRadius::Pixels(-1.0),
+                    }
+                }
+                1 => suffix.effects.push(TransportEffectState {
+                    attachment: SemanticNodeId::new(97, 18),
+                    definition: TransportEffectDefinition::Blur {
+                        radius: EffectRadius::Pixels(2.0),
+                    },
+                }),
+                2 => suffix.effects.push(TransportEffectState {
+                    attachment: SemanticNodeId::new(97, 18),
+                    definition: suffix.effects[0].definition,
+                }),
+                3 => bad.protocol_version = 28,
+                _ => {
+                    suffix.effects[0].definition = TransportEffectDefinition::BackdropBlur {
+                        radius: EffectRadius::Scene(f64::INFINITY),
+                    }
+                }
+            }
+            bad.objects.push(suffix);
+            assert!(mirror.apply(bad).is_err());
+            assert_eq!(mirror.frame().unwrap(), &before);
+            assert_eq!(mirror.applied_sequence(), Some(0));
+            assert_eq!(
+                mirror
+                    .composed_dependencies
+                    .prefix_owners()
+                    .collect::<Vec<_>>(),
+                [frame.objects[0].id]
+            );
+        }
+        mirror.apply(good).unwrap();
+        assert_eq!(mirror.frame().unwrap(), &frame);
+        frame.objects[0].effects = None;
+        let remove = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        mirror.apply(remove).unwrap();
+        assert!(mirror.composed_dependencies.is_empty());
+    }
+
+    #[test]
     fn checked_gradient_survives_snapshot_replacement_and_removal_at_worker_boundary() {
         let gradient = Arc::new(
             noon_core::LinearGradient::new(
@@ -2786,7 +2904,7 @@ mod tests {
             )
             .unwrap();
         let json = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(json["protocol_version"], 28);
+        assert_eq!(json["protocol_version"], 29);
         assert_eq!(json["objects"][0]["effects"][0]["kind"], "pixelate");
         let mut mirror = test_mirror();
         let mut older = snapshot.clone();
@@ -2840,7 +2958,7 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(value["protocol_version"], 28);
+        assert_eq!(value["protocol_version"], 29);
         let mask = &value["objects"][0]["effects"][0];
         assert_eq!(mask["kind"], "noise_dissolve");
         assert_eq!(mask["seed"], u32::MAX);
@@ -2896,7 +3014,7 @@ mod tests {
                 PublicationContext::default(),
             )
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 28);
+        assert_eq!(snapshot.protocol_version, 29);
         let encoded = serde_json::to_value(&snapshot).unwrap();
         let decoded: RetainedExecutionDeltaEnvelope =
             serde_json::from_value(encoded.clone()).unwrap();
@@ -3131,7 +3249,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 28);
+        assert_eq!(snapshot.protocol_version, 29);
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();

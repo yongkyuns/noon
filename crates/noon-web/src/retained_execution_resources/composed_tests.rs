@@ -720,3 +720,57 @@ fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_pa
     assert_eq!(plan(&mirror, inner_id).parent_scope(), Some(outer_id));
     assert_coherent(&mut session, &mirror);
 }
+
+#[test]
+fn forged_backdrop_input_roles_reject_before_worker_frame_or_sequence_publication() {
+    use crate::retained_execution_transport::TransportEffectDefinition;
+    let mut f = Fixture::new();
+    let good = f.parameter();
+    let before = f.mirror.frame().unwrap().clone();
+    let context = f.mirror.publication_context();
+    for owner in [
+        f.inner_id,
+        f.session
+            .execution_object_id(f.leaves[0].node_id())
+            .unwrap(),
+    ] {
+        let mut bad = good.clone();
+        let index = bad
+            .retained
+            .objects
+            .iter()
+            .position(|row| row.object == owner);
+        let row = if let Some(index) = index {
+            &mut bad.retained.objects[index]
+        } else {
+            let row = f
+                .snapshot
+                .retained
+                .objects
+                .iter()
+                .find(|row| row.object == owner)
+                .unwrap()
+                .clone();
+            bad.retained.objects.push(row);
+            bad.retained.objects.last_mut().unwrap()
+        };
+        row.effects = vec![crate::retained_execution_transport::TransportEffectState {
+            attachment: SemanticNodeId::new(981, 3),
+            definition: TransportEffectDefinition::BackdropBlur {
+                radius: noon_core::EffectRadius::Pixels(3.500000000000123),
+            },
+        }];
+        assert!(matches!(
+            apply(&mut f.mirror, &bad),
+            Err(InstalledExecutionError::Transport(
+                RetainedExecutionTransportError::InvalidComposedSource(_)
+            ))
+        ));
+        assert_eq!(f.mirror.frame().unwrap(), &before);
+        assert_eq!(f.mirror.publication_context(), context);
+        assert_eq!(f.mirror.wire.applied_sequence(), Some(0));
+        assert_eq!(f.mirror.resources().composed_source_count(), 2);
+    }
+    apply(&mut f.mirror, &good).unwrap();
+    assert_coherent(&mut f.session, &f.mirror);
+}

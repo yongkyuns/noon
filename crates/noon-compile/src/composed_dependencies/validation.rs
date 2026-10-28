@@ -8,6 +8,41 @@ pub(super) fn validate(
     view: &impl ComposedSourceGraphView,
     affected: &BTreeSet<ObjectId>,
 ) -> Result<ComposedValidationStats, CompiledComposedSourceError> {
+    // Prefix inputs are implicit strict-earlier dependencies. The initial
+    // finite profile permits root planar leaves and root isolated families;
+    // nesting a prefix consumer in an isolated input needs separate semantics.
+    for &owner in affected {
+        if view.input_role(owner) != Some(EffectInputRole::PainterPrefix) {
+            continue;
+        }
+        if let Some(source) = view.source(owner) {
+            if !view.owner_valid(owner) {
+                return Err(error(
+                    owner,
+                    CompiledComposedSourceErrorKind::InvalidBackdropSource,
+                ));
+            }
+            if let Some(parent) = source.parent_scope() {
+                return Err(error(
+                    owner,
+                    CompiledComposedSourceErrorKind::NestedBackdrop(parent),
+                ));
+            }
+        } else {
+            if view.input_valid(owner) != Some(true) || view.rank(owner).is_none() {
+                return Err(error(
+                    owner,
+                    CompiledComposedSourceErrorKind::InvalidBackdropSource,
+                ));
+            }
+            if let Some(parent) = view.overlapping(owner).next() {
+                return Err(error(
+                    owner,
+                    CompiledComposedSourceErrorKind::NestedBackdrop(parent),
+                ));
+            }
+        }
+    }
     let mut candidates = affected
         .iter()
         .copied()
@@ -81,6 +116,12 @@ pub(super) fn validate(
         if affected.contains(&owner) {
             for (offset, &input) in source.members().iter().enumerate() {
                 stats.members_examined += 1;
+                if view.input_role(input) == Some(EffectInputRole::PainterPrefix) {
+                    return Err(error(
+                        owner,
+                        CompiledComposedSourceErrorKind::NestedBackdrop(input),
+                    ));
+                }
                 match view.input_valid(input) {
                     None => {
                         return Err(error(

@@ -446,7 +446,9 @@ impl EffectCaptureParameters {
             noon_core::EffectDefinition::NoiseDissolve(_)
             | noon_core::EffectDefinition::Pixelate(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
-            noon_core::EffectDefinition::Blur(_) => 28,
+            noon_core::EffectDefinition::Blur(_) | noon_core::EffectDefinition::BackdropBlur(_) => {
+                28
+            }
             noon_core::EffectDefinition::Shadow(_) => 32,
         }
     }

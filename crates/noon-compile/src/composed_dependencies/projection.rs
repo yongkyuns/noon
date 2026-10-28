@@ -14,6 +14,7 @@ struct Row<'a> {
     painted: bool,
     text_bounds: bool,
     z: f64,
+    input_role: EffectInputRole,
 }
 impl<'a> Row<'a> {
     fn from_object(row: &'a crate::CompiledObject) -> Self {
@@ -31,6 +32,10 @@ impl<'a> Row<'a> {
                 || row.fill_paint.is_some(),
             text_bounds: row.text_bounds.is_some(),
             z: row.base_z_index,
+            input_role: row
+                .effects
+                .as_ref()
+                .map_or(EffectInputRole::Painted, |stack| stack.input_role()),
         }
     }
 }
@@ -120,6 +125,12 @@ impl<'a> Projection<'a> {
                 .then_with(|| family.rank(a).cmp(&family.rank(b)))
         });
     }
+    fn stage_input_role(&mut self, id: ObjectId, input_role: EffectInputRole) {
+        if self.row(id).is_some_and(|row| row.input_role != input_role) {
+            self.edit(id, |row| row.input_role = input_role);
+            self.changed.insert(id);
+        }
+    }
     pub(super) fn stage(
         &mut self,
         patches: &'a [ExecutionPatch],
@@ -176,6 +187,19 @@ impl<'a> Projection<'a> {
                         self.changed.insert(*object);
                         self.replaced.insert(*object);
                     }
+                }
+                ExecutionPatch::SetEffects { object, effects } => {
+                    self.stage_input_role(*object, effects.input_role());
+                }
+                ExecutionPatch::SetEffectStack {
+                    object, effects, ..
+                } => {
+                    self.stage_input_role(
+                        *object,
+                        effects
+                            .as_ref()
+                            .map_or(EffectInputRole::Painted, |stack| stack.input_role()),
+                    );
                 }
                 ExecutionPatch::SetZIndex { object, value } => {
                     self.edit(*object, |row| row.z = *value);
@@ -292,6 +316,9 @@ impl ComposedSourceGraphView for Projection<'_> {
     fn rank(&self, input: ObjectId) -> Option<usize> {
         self.rank(input)
     }
+    fn input_role(&self, owner: ObjectId) -> Option<EffectInputRole> {
+        self.row(owner).map(|row| row.input_role)
+    }
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
         self.dependencies.overlapping(input)
     }
@@ -299,8 +326,20 @@ impl ComposedSourceGraphView for Projection<'_> {
 
 pub(super) fn introduces_scope(patch: &ExecutionPatch) -> bool {
     match patch {
-        ExecutionPatch::CreateObject(row) => row.content.composed_source().is_some(),
+        ExecutionPatch::CreateObject(row) => {
+            row.content.composed_source().is_some()
+                || row
+                    .effects
+                    .as_ref()
+                    .is_some_and(|stack| stack.input_role() == EffectInputRole::PainterPrefix)
+        }
         ExecutionPatch::SetContent { content, .. } => content.composed_source().is_some(),
+        ExecutionPatch::SetEffects { effects, .. } => {
+            effects.input_role() == EffectInputRole::PainterPrefix
+        }
+        ExecutionPatch::SetEffectStack { effects, .. } => effects
+            .as_ref()
+            .is_some_and(|stack| stack.input_role() == EffectInputRole::PainterPrefix),
         _ => false,
     }
 }
@@ -312,6 +351,8 @@ pub(super) fn affects_source_graph(patch: &ExecutionPatch) -> bool {
             | ExecutionPatch::ReorderObject { .. }
             | ExecutionPatch::SetZIndex { .. }
             | ExecutionPatch::SetContent { .. }
+            | ExecutionPatch::SetEffects { .. }
+            | ExecutionPatch::SetEffectStack { .. }
             | ExecutionPatch::SetSpatialState { .. }
             | ExecutionPatch::SetSemanticTransform { .. }
             | ExecutionPatch::SetTransform { .. }

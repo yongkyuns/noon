@@ -107,6 +107,9 @@ impl ComposedSourceGraphView for View<'_> {
             .flatten()
             .map(|rank| rank as usize)
     }
+    fn input_role(&self, owner: ObjectId) -> Option<noon_core::EffectInputRole> {
+        self.row(owner).map(|row| input_role(row.state))
+    }
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
         self.dependencies.overlapping(input)
     }
@@ -116,6 +119,13 @@ fn graph_error(owner: ObjectId, kind: Kind) -> RetainedExecutionTransportError {
         owner,
         kind,
     })
+}
+fn input_role(row: &FrameObjectState) -> noon_core::EffectInputRole {
+    row.effects
+        .as_ref()
+        .map_or(noon_core::EffectInputRole::Painted, |stack| {
+            stack.input_role()
+        })
 }
 fn source_arc(content: &ObjectContentRef) -> Option<&Arc<ComposedSource>> {
     if let ObjectContentRef::Composed(source) = content {
@@ -135,6 +145,7 @@ struct SourceReplacement {
     owner: ObjectId,
     previous: Option<Arc<ComposedSource>>,
     next: Option<Arc<ComposedSource>>,
+    role: Option<noon_core::EffectInputRole>,
 }
 impl PreparedComposedChanges {
     pub(in crate::retained_execution_transport) fn commit(self, index: &mut ComposedDependencies) {
@@ -142,9 +153,11 @@ impl PreparedComposedChanges {
             owner,
             previous,
             next,
+            role,
         } in self.replacements
         {
             index.replace(owner, previous.as_deref(), next.as_deref());
+            index.set_input_role(owner, role);
         }
     }
 }
@@ -157,6 +170,7 @@ impl RetainedExecutionFrameMirror {
         let mut index = ComposedDependencies::default();
         for row in rows {
             index.replace(row.id, None, row.content.composed_source());
+            index.set_input_role(row.id, Some(input_role(row)));
         }
         if index.is_empty() {
             return Ok(index);
@@ -184,7 +198,7 @@ impl RetainedExecutionFrameMirror {
                 .collect(),
             dependencies: ComposedDependencyChanges::new(&index),
         };
-        view.validate(&index.owners().collect())?;
+        view.validate(&index.validation_owners().collect())?;
         Ok(index)
     }
     pub(in crate::retained_execution_transport) fn preflight_composed_incremental(
@@ -194,9 +208,10 @@ impl RetainedExecutionFrameMirror {
         order: Option<&PreparedPainterOrder>,
     ) -> Result<PreparedComposedChanges, RetainedExecutionTransportError> {
         if self.composed_dependencies.is_empty()
-            && !rows
-                .iter()
-                .any(|row| row.state.content.composed_source().is_some())
+            && !rows.iter().any(|row| {
+                row.state.content.composed_source().is_some()
+                    || input_role(&row.state) == noon_core::EffectInputRole::PainterPrefix
+            })
         {
             return Ok(PreparedComposedChanges::default());
         }
@@ -212,12 +227,17 @@ impl RetainedExecutionFrameMirror {
         let mut changed = BTreeSet::new();
         for &index in removed {
             let old = &frame.objects[index];
-            if let Some(source) = source_arc(&old.content) {
-                view.dependencies.replace(old.id, Some(source), None);
+            if old.content.composed_source().is_some()
+                || input_role(old) == noon_core::EffectInputRole::PainterPrefix
+            {
+                let source = source_arc(&old.content);
+                view.dependencies
+                    .replace(old.id, source.map(AsRef::as_ref), None);
                 prepared.replacements.push(SourceReplacement {
                     owner: old.id,
-                    previous: Some(source.clone()),
+                    previous: source.cloned(),
                     next: None,
+                    role: None,
                 });
             }
             view.rows.insert(old.id, None);
@@ -243,7 +263,7 @@ impl RetainedExecutionFrameMirror {
                 (None, None) => true,
                 _ => false,
             };
-            if !same {
+            if !same || old.is_none_or(|old| input_role(old) != input_role(&row.state)) {
                 view.dependencies.replace(
                     row.state.id,
                     previous.map(AsRef::as_ref),
@@ -253,6 +273,7 @@ impl RetainedExecutionFrameMirror {
                     owner: row.state.id,
                     previous: previous.cloned(),
                     next: next.cloned(),
+                    role: Some(input_role(&row.state)),
                 });
             }
             if old.is_none_or(|old| {
@@ -260,6 +281,7 @@ impl RetainedExecutionFrameMirror {
                     || old.draw_enabled != row.state.draw_enabled
                     || frame.presences[row.index] != row.wire.presence
                     || old.effects.is_some() != row.state.effects.is_some()
+                    || input_role(old) != input_role(&row.state)
                     || (old.style.opacity != 1.0) != (row.state.style.opacity != 1.0)
             }) {
                 changed.insert(row.state.id);

@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
 use crate::{
-    Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue, Glow,
-    NoiseDissolve, Pixelate, Shadow,
+    BackdropBlur, Blur, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate,
+    EffectValue, Glow, NoiseDissolve, Pixelate, Shadow,
 };
 
 /// Maximum attachment count in the qualified finite planar execution profile.
@@ -18,9 +18,25 @@ pub const MAX_EFFECT_STACK_LEN: usize = 8;
 pub enum EffectDefinition {
     Glow(Glow),
     Blur(Blur),
+    BackdropBlur(BackdropBlur),
     Shadow(Shadow),
     NoiseDissolve(NoiseDissolve),
     Pixelate(Pixelate),
+}
+
+/// Explicit high-level input role; an ordinary painted filter never implicitly
+/// samples content behind its owner. These are source roles, not new scopes,
+/// identities, clocks or renderer-owned scene state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectInputRole {
+    Painted,
+    PainterPrefix,
+}
+
+impl From<BackdropBlur> for EffectDefinition {
+    fn from(value: BackdropBlur) -> Self {
+        Self::BackdropBlur(value)
+    }
 }
 
 impl From<Pixelate> for EffectDefinition {
@@ -54,10 +70,24 @@ impl From<Glow> for EffectDefinition {
 }
 
 impl EffectDefinition {
+    pub const fn input_role(self) -> EffectInputRole {
+        match self {
+            Self::BackdropBlur(_) => EffectInputRole::PainterPrefix,
+            _ => EffectInputRole::Painted,
+        }
+    }
+    pub const fn as_backdrop_blur(self) -> Option<BackdropBlur> {
+        if let Self::BackdropBlur(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
     pub const fn radius(self) -> Option<EffectRadius> {
         match self {
             Self::Glow(v) => Some(v.radius()),
             Self::Blur(v) => Some(v.radius()),
+            Self::BackdropBlur(v) => Some(v.radius()),
             Self::Shadow(v) => Some(v.radius()),
             Self::NoiseDissolve(_) | Self::Pixelate(_) => None,
         }
@@ -66,6 +96,7 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => v.is_neutral(),
             Self::Blur(v) => v.is_neutral(),
+            Self::BackdropBlur(v) => v.is_neutral(),
             Self::Shadow(v) => v.is_neutral(),
             Self::NoiseDissolve(v) => v.is_neutral(),
             Self::Pixelate(v) => v.is_neutral(),
@@ -82,7 +113,9 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => Some(v.color()),
             Self::Shadow(v) => Some(v.color()),
-            Self::Blur(_) | Self::NoiseDissolve(_) | Self::Pixelate(_) => None,
+            Self::Blur(_) | Self::BackdropBlur(_) | Self::NoiseDissolve(_) | Self::Pixelate(_) => {
+                None
+            }
         }
     }
     pub const fn as_glow(self) -> Option<Glow> {
@@ -132,6 +165,9 @@ impl EffectDefinition {
             (Self::Blur(previous), Self::Blur(next)) => {
                 parameter == EffectParameter::Radius && previous.radius() != next.radius()
             }
+            (Self::BackdropBlur(previous), Self::BackdropBlur(next)) => {
+                parameter == EffectParameter::Radius && previous.radius() != next.radius()
+            }
             (Self::NoiseDissolve(previous), Self::NoiseDissolve(next)) => match parameter {
                 EffectParameter::Progress => previous.progress() != next.progress(),
                 EffectParameter::Softness => previous.softness() != next.softness(),
@@ -154,7 +190,9 @@ impl EffectDefinition {
         match self {
             Self::Glow(value) => EffectUpdate::default().source(value.source()),
             Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
-            Self::Blur(_) | Self::Shadow(_) | Self::Pixelate(_) => EffectUpdate::default(),
+            Self::Blur(_) | Self::BackdropBlur(_) | Self::Shadow(_) | Self::Pixelate(_) => {
+                EffectUpdate::default()
+            }
         }
     }
 }
@@ -165,6 +203,7 @@ impl EffectValue for EffectDefinition {
         match self {
             Self::Glow(v) => update.apply_to(v).map(Self::Glow),
             Self::Blur(v) => update.apply_to(v).map(Self::Blur),
+            Self::BackdropBlur(v) => update.apply_to(v).map(Self::BackdropBlur),
             Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
             Self::NoiseDissolve(v) => update.apply_to(v).map(Self::NoiseDissolve),
             Self::Pixelate(v) => update.apply_to(v).map(Self::Pixelate),
@@ -181,6 +220,7 @@ impl EffectValue for EffectDefinition {
         match (self, target) {
             (Self::Glow(a), Self::Glow(b)) => a.validate_effect_transition(b),
             (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
+            (Self::BackdropBlur(a), Self::BackdropBlur(b)) => a.validate_effect_transition(b),
             (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_transition(b),
             (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_transition(b),
@@ -196,6 +236,9 @@ impl EffectValue for EffectDefinition {
         match (self, target) {
             (Self::Glow(a), Self::Glow(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Blur(a), Self::Blur(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::BackdropBlur(a), Self::BackdropBlur(b)) => {
+                a.sample_effect_parameters(b, request, alpha)
+            }
             (Self::Shadow(a), Self::Shadow(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => {
                 a.sample_effect_parameters(b, request, alpha)
