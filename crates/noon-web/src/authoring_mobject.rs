@@ -2228,6 +2228,13 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setEmission)]
+        pub fn set_emission(&self, strength: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_emission(strength)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setObjectOpacity)]
         pub fn set_object_opacity(&self, opacity: f64) -> Result<(), JsValue> {
             self.semantic_family()?
@@ -4129,6 +4136,11 @@ mod wasm {
         #[wasm_bindgen(js_name = setStrokeCap)]
         pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
             self.handle.set_stroke_cap(cap).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setEmission)]
+        pub fn set_emission(&mut self, strength: f64) -> Result<(), JsValue> {
+            self.handle.set_emission(strength).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setObjectOpacity)]

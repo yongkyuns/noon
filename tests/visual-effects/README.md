@@ -2018,6 +2018,10 @@ before the first track and authored values after reconciliation.
 
 This candidate does **not** complete emission authoring. Native scalar-graph
 bindings and per-frame effective callback writes are not supported for emission.
-Family authoring, equivalent Python scripts, cross-host execution, composed
-captures and remaining publication/recovery/performance gates are still required
-before promotion.
+Family material edits reuse the atomic style transaction and ordinary method
+targets; non-rendered roots retain metadata without multiplying leaf radiance.
+Python setters forward through the Rust/WASM bindings and reject callback use.
+Equivalent executable Python scripts, cross-host execution, composed captures,
+publication/recovery/performance gates and Bloom/emission gallery examples remain
+required before promotion; wrapper dispatch tests and WASM compilation alone do
+not qualify a Python rendering path.

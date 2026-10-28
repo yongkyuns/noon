@@ -2218,6 +2218,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_emission(
+        &mut self,
+        mobject: &noon::Mobject,
+        strength: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_emission(mobject, strength))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_object_opacity(
         &mut self,
         mobject: &noon::Mobject,

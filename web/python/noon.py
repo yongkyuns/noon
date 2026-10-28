@@ -1217,6 +1217,10 @@ class Mobject:
         """Interpolate this object's color toward ``color`` by ``alpha``."""
         return _callback_operations()._canonical_fade_to(self, color, alpha, family)
 
+    def set_emission(self, strength: float) -> Mobject:
+        """Set checked linear-HDR material strength (0–63), independently of alpha."""
+        return _semantic_operations()._set_emission(self, strength)
+
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""
         return _callback_operations()._canonical_set_opacity(self, opacity)

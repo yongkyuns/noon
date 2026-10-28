@@ -2324,6 +2324,31 @@ def _set_opacity(
     return self
 
 
+def _set_emission(self: _base.Mobject, strength: float) -> _base.Mobject:
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError("effective callback emission writes are not supported")
+    strength = _ir._finite_number("emission", strength)
+    is_family = _is_shared_family(self)
+    handle = self._semantic_family_handle if is_family else _handle_for(self)
+    if handle is None:
+        raise RuntimeError("set_emission requires the shared Rust authoring handle")
+    context = _live_mutation_context(self)
+    if is_family and context is None:
+        context = _live_constructor_context("family emission")
+    try:
+        if context is None:
+            engine_call(handle.setEmission, strength)
+        elif is_family:
+            engine_call(context.liveSetFamilyEmission, handle, strength)
+        else:
+            engine_call(context.liveSetEmission, handle, strength)
+    except Exception as error:
+        raise_engine_error(error)
+    return self
+
+
 def _set_object_opacity(
     self: _base.Mobject,
     opacity: float,
