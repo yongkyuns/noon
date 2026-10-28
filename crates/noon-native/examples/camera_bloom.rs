@@ -31,6 +31,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .run_time(3.0)
             .rate_func(RateFunction::Linear),
     )?;
-    noon_native::run(scene.into_execution_with_animation_root(&animation)?)?;
+    noon_native::run_live_program(scene.into_live_program(BloomAnimation {
+        animation,
+        started: false,
+    })?)?;
     Ok(())
+}
+struct BloomAnimation {
+    animation: noon::DeclaredAnimation,
+    started: bool,
+}
+impl noon::LiveContinuation for BloomAnimation {
+    type Error = String;
+    fn resume(
+        &mut self,
+        live: &mut noon::LiveSession<'_>,
+    ) -> Result<noon::ContinuationStep, String> {
+        if self.started {
+            return Ok(noon::ContinuationStep::Finished);
+        }
+        self.started = true;
+        live.play_animation(&self.animation)
+            .map(noon::ContinuationStep::Await)
+            .map_err(|e| e.to_string())
+    }
 }

@@ -569,11 +569,27 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
     eprintln!("native HDR view: 13 phases, native/capture equivalence, overlay negative, resize, target/device recreation; display max={maximum}, float max={maximum_float}");
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires an X11 display and a working native float adapter"]
-fn native_surface_smoke_presents_authored_camera_bloom() {
-    use winit::platform::x11::EventLoopBuilderExtX11;
+struct BloomAnimation {
+    animation: noon::DeclaredAnimation,
+    started: bool,
+}
+impl noon::LiveContinuation for BloomAnimation {
+    type Error = String;
+    fn resume(
+        &mut self,
+        live: &mut noon::LiveSession<'_>,
+    ) -> Result<noon::ContinuationStep, String> {
+        if self.started {
+            return Ok(noon::ContinuationStep::Finished);
+        }
+        self.started = true;
+        live.play_animation(&self.animation)
+            .map(noon::ContinuationStep::Await)
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn bloom_program() -> noon::LiveProgram<BloomAnimation> {
     let (scene, camera, _) = scene();
     let mut target = camera.target_editor().unwrap();
     target
@@ -588,14 +604,30 @@ fn native_surface_smoke_presents_authored_camera_bloom() {
                 .rate_func(noon::RateFunction::Linear),
         )
         .unwrap();
+    scene
+        .into_live_program(BloomAnimation {
+            animation,
+            started: false,
+        })
+        .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an X11 display and a working native float adapter"]
+fn native_surface_smoke_presents_authored_camera_bloom() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    let source = super::super::LiveProgramExecutionSource::new(
+        bloom_program(),
+        noon::RustHostCallbackTable::new(),
+    )
+    .unwrap();
     let mut builder = winit::event_loop::EventLoop::builder();
     builder.with_any_thread(true);
     let event_loop = builder.build().unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-    let mut app = super::super::NativeApp::new(
-        scene
-            .into_execution_with_animation_root(&animation)
-            .unwrap(),
+    let mut app = super::super::NativeApp::from_source(
+        Box::new(source),
         super::super::NativeViewportConfig {
             width: 320,
             height: 180,
@@ -613,4 +645,27 @@ fn native_surface_smoke_presents_authored_camera_bloom() {
     assert_eq!(app.presented_frame_time, Some(0.2));
     assert!(app.last_geometry_draw_calls > 0);
     assert_eq!(app.last_bloom_passes, [1; 5]);
+}
+
+#[test]
+fn native_camera_bloom_program_reaches_exact_authored_endpoint() {
+    let mut program = bloom_program();
+    program.resume().unwrap();
+    let mut callbacks = noon::RustHostCallbackTable::new();
+    for (time, expected) in [(0.0, 1.0), (0.1, 1.5), (0.2, 2.0)] {
+        program.drive_to(&mut callbacks, time).unwrap();
+        let publication = program.take_renderer_publication();
+        assert_eq!(
+            publication.view_effects().unwrap().definitions()[0]
+                .as_bloom()
+                .unwrap()
+                .intensity(),
+            expected
+        );
+    }
+    let noon::LiveProgramStatus::PublicationPending(context) = program.status() else {
+        panic!("exact endpoint must wait for host admission");
+    };
+    program.admit_publication(context).unwrap();
+    assert_eq!(program.resume().unwrap(), noon::LiveProgramStatus::Finished);
 }
