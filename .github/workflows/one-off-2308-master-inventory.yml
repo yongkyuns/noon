@@ -1,0 +1,116 @@
+name: One-off 2308 latest-master merge inventory
+
+on:
+  push:
+    branches: [agent/2308-master-5b38-inventory-20261027]
+    paths: [.github/workflows/one-off-2308-master-inventory.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PIN_RUN: "40594768816"
+      PIN_SOURCE_SHA256: "8a14e43e1d60ec82587d586080724a48939d03b9036557d2b0b4fa6b114c8f1f"
+      PIN_SOURCE_TREE: "e25761096604fbae14fb4479a67476f0844f1f03"
+      PIN_OLD_MASTER: "bc25e92bb741607f678f6adea528c9e894c6335c"
+      PIN_NEW_MASTER: "5b38eab85a86f4cc9019e8179e263c7b29771827"
+      PIN_FEATURE: "b3a4b7f484e607a4b14bc57e70f4947f8520ca42"
+      PIN_MEMORY: "472a61fadfdabba44756b75caaa184cee8c4be57"
+    steps:
+      - name: Checkout read-only diagnostics branch
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Authenticate source and attempt latest-master merge without writing refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export EVIDENCE="$RUNNER_TEMP/noon2308-master-inventory"
+          export CANDIDATE="$RUNNER_TEMP/noon2308-master-candidate"
+          mkdir -p "$EVIDENCE/incoming" "$CANDIDATE"
+          printf 'EVIDENCE=%s\nCANDIDATE=%s\n' "$EVIDENCE" "$CANDIDATE" >> "$GITHUB_ENV"
+          gh run download "$PIN_RUN" --repo "$GITHUB_REPOSITORY" \
+            -n noon2308-ordered-effects-combined-qualification -D "$EVIDENCE/incoming"
+          python3 - <<'PY'
+          import hashlib,io,json,os,subprocess,tarfile
+          from pathlib import Path
+          incoming=Path(os.environ['EVIDENCE'])/'incoming'
+          out=Path(os.environ['EVIDENCE'])
+          work=Path(os.environ['CANDIDATE'])
+          manifest=json.loads((incoming/'manifest.json').read_text())
+          source=(incoming/'combined-source.tar.gz').read_bytes()
+          digest=hashlib.sha256(source).hexdigest()
+          assert digest==os.environ['PIN_SOURCE_SHA256']==manifest['source_archive_sha256'],digest
+          assert manifest['tested_tree']==os.environ['PIN_SOURCE_TREE']
+          assert manifest['tracked_source_unchanged'] is True
+          assert all(manifest['command_exit_codes'][k]==0 for k in ('fast','prepared','controls','wasm','web'))
+          with tarfile.open(fileobj=io.BytesIO(source),mode='r:gz') as archive:
+              archive.extractall(work,filter='data')
+          def git(*args,check=True):
+              cp=subprocess.run(['git',*args],cwd=work,check=check,capture_output=True,text=True)
+              return cp
+          git('init','-q','--initial-branch=candidate')
+          git('config','user.name','Noon merge inventory')
+          git('config','user.email','inventory@example.invalid')
+          git('add','--all')
+          tree=git('write-tree').stdout.strip()
+          assert tree==os.environ['PIN_SOURCE_TREE'],('tree mismatch',tree)
+          refs={k:os.environ['PIN_'+k] for k in ('OLD_MASTER','NEW_MASTER','FEATURE','MEMORY')}
+          fetch=git('fetch','--no-tags','--depth=256',
+                    'https://github.com/'+os.environ['GITHUB_REPOSITORY']+'.git',
+                    *refs.values())
+          (out/'fetch.log').write_text(fetch.stdout+fetch.stderr)
+          for name,rev in refs.items():
+              assert git('rev-parse',rev+'^{commit}').stdout.strip()==rev,name
+          changed=git('diff','--name-only',refs['OLD_MASTER'],refs['NEW_MASTER']).stdout.splitlines()
+          assert changed==['scripts/shared-authoring-smoke.mjs'],('unexpected master delta',changed)
+          # Build local-only ancestry for the authenticated source tree.
+          local=git('commit-tree',tree,'-p',refs['OLD_MASTER'],'-p',refs['FEATURE'],
+                    '-p',refs['MEMORY']).stdout.strip()
+          git('update-ref','refs/heads/candidate',local)
+          git('reset','--hard',local)
+          oldbase=git('merge-base','HEAD',refs['NEW_MASTER']).stdout.strip()
+          assert oldbase==refs['OLD_MASTER'],('unexpected merge base',oldbase)
+          merge=git('merge','--no-commit','--no-ff',refs['NEW_MASTER'],check=False)
+          (out/'merge.log').write_text(merge.stdout+merge.stderr)
+          files=git('diff','--name-only','--diff-filter=U').stdout.splitlines()
+          (out/'unmerged-index.txt').write_text(git('ls-files','-u').stdout)
+          (out/'combined-conflicts.diff').write_text(git('diff','--cc').stdout)
+          (out/'staged-patch.diff').write_text(git('diff','--cached','--binary',refs['OLD_MASTER']).stdout)
+          for revision,label in [(refs['OLD_MASTER'],'old-master'),
+                                 (refs['NEW_MASTER'],'latest-master'),(local,'candidate')]:
+              file=git('show',revision+':scripts/shared-authoring-smoke.mjs').stdout.encode()
+              (out/(label+'-shared-authoring-smoke.mjs')).write_bytes(file)
+          report={
+              'scope':'read-only merge inventory; no repository branch or PR updated',
+              'source_run':int(os.environ['PIN_RUN']),
+              'source_tree':tree,'source_archive_sha256':digest,'local_commit':local,
+              'old_master':refs['OLD_MASTER'],'latest_master':refs['NEW_MASTER'],
+              'feature':refs['FEATURE'],'memory':refs['MEMORY'],
+              'merge_base':oldbase,'master_changed_paths':changed,
+              'merge_exit':merge.returncode,'actual_unmerged_files':files,
+              'actual_unmerged_index_entries':len((out/'unmerged-index.txt').read_text().splitlines()),
+              'cleanly_merged':merge.returncode==0 and not files}
+          if not files and merge.returncode==0:
+              report['merged_tree']=git('write-tree').stdout.strip()
+          else:
+              assert merge.returncode==1 and files==['scripts/shared-authoring-smoke.mjs'],report
+          (out/'inventory.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Preserve source-bound real merge evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-master-5b38-merge-inventory
+          path: ${{ runner.temp }}/noon2308-master-inventory
+          if-no-files-found: error
+          retention-days: 3
