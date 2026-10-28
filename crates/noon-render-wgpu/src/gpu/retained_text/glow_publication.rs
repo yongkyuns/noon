@@ -726,6 +726,10 @@ impl GpuRenderer {
                 self.retained_effects.packed.remove(index);
             }
         }
+        // Retired captures above have no current painter position. A restored
+        // or compacted publication may have fewer rows than their old slots;
+        // only live mappings participate in dependency sorting and encoding.
+        sources.retain(|(_, mapped)| mapped.is_some());
         let mut stats = RetainedEffectStats::default();
         if sources.iter().any(|(_, mapped)| {
             mapped

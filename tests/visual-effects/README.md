@@ -1681,3 +1681,13 @@ must fail the same display oracle. CI retains actual float16 bytes, independent
 f64 expectations, actual/reference display bytes, profile metadata, adapter
 capabilities and negative-control captures. Native evidence does not establish
 WebGPU/WebGL2 support or physical-device performance.
+
+Retained capture retirement must precede painter-dependency sorting when a
+publication shrinks after replay restoration or explicit runtime row reclamation.
+Retired execution slots have no rank in the current publication. The structural
+regression test grows five tail glow sources, publishes them, removes/reclaims
+those rows before renderer publication, and repeats the cycle. Old capture
+mappings/resources must retire, the surviving capture must remain coherent, and
+a clean follow-up must do no work. Browser showcase replay separately exercises
+the actual source-completion/restart path; successful first-pass playback is not
+accepted as evidence that arbitrary-order replay succeeds.
