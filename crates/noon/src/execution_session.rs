@@ -1630,6 +1630,7 @@ impl ExecutionSession {
         } else {
             self.runtime.take_renderer_publication()
         };
+        let publication = publication.with_primary_view(self.camera_object);
         let publication = if prefix_queries {
             publication.with_spatial_index(&self.spatial_index)
         } else {

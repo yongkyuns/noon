@@ -108,6 +108,7 @@ on:
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/authored_view_color_raster.rs"
       - "crates/noon/tests/pixelate.rs"
       - "crates/noon/tests/composed/**"
       - "crates/noon/tests/composed_effects.rs"
@@ -256,6 +257,13 @@ jobs:
         env:
           NOON_HDR_BLOOM_ARTIFACT_DIR: ${{ github.workspace }}/hdr-bloom-raster-artifacts
         run: cargo test -p noon-render-wgpu --lib gpu::hdr_bloom::tests -- --include-ignored --nocapture
+      - name: Qualify raw and authored linear scene draws
+        env:
+          NOON_HDR_SCENE_ARTIFACT_DIR: ${{ github.workspace }}/hdr-scene-linear-raster-artifacts
+          NOON_AUTHORED_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/authored-view-color-raster-artifacts
+        run: |
+          cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture
+          cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify grouped glyph original coverage and paint alpha
@@ -329,6 +337,16 @@ jobs:
         with:
           name: hdr-bloom-raster-correctness
           path: hdr-bloom-raster-artifacts
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve native linear scene color evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linear-scene-color-raster-correctness
+          path: |
+            hdr-scene-linear-raster-artifacts
+            authored-view-color-raster-artifacts
           if-no-files-found: error
           retention-days: 3
       - name: Preserve native glyph coverage evidence

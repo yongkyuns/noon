@@ -1734,9 +1734,33 @@ clears the profile to compatibility.
 Native Rust tests exercise initial/live lowering, pending camera creation,
 compiled transaction staging, mixed valid/invalid rollback, receiver ownership,
 clean no-op publications, unchanged unrelated frame rows and repeated replay.
-This metadata path is not yet connected to rendered authored colors or a public
-HDR creator surface. Required work still includes renderer selection/input color
-decoding, checked emission, Bloom attachment/animation, explicit view-ambiguity
-and capability admission, paired Python/direct-WASM/export evidence and the full
-M4/M5 gates. A successful profile metadata update alone is not an HDR rendering
-qualification.
+The same publication now carries the compiler-derived primary camera identity.
+`FramePreparer::prepare_publication` reads that view's current profile and decodes
+authored sRGB RGB channels before linear association/blending. Alpha, appearance
+and object opacity retain their existing meanings. Solid fill/stroke, path
+background stroke and reveal-head packing use the same conversion; continuous
+paint stops are decoded before premultiplied interpolation. Compatibility and raw
+already-linear raster entry points preserve their existing packing contract.
+A global profile change repacks derived colors once; subsequent clean frames
+repack/upload nothing and an ordinary local color edit changes only its row.
+
+`cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture`
+qualifies the typed native Rust Scene -> compiler -> Runtime publication -> planar
+float draw -> real Bloom -> SDR path. Sixteen cases vary analytic/path sources,
+solid/varying-gradient paint, painter order and transparent/nonblack linear
+clears. Independently computed f64 sRGB decoding, premultiplied interpolation and
+source-over provide the scene expectation; the separate full-2D Bloom reference
+consumes that mathematical expectation rather than GPU readback. Every linear
+channel must differ by at most 0.002; every display channel by at most 2 bytes.
+An actual draw omitting the profile consumer must fail the linear oracle by more
+than 0.05. A clean same-publication repeat must upload zero bytes. Raw pixels,
+mathematical expectations and a manifest can be retained with
+`NOON_AUTHORED_VIEW_ARTIFACT_DIR` and are collected by native CI.
+
+This is a finite planar color-preparation proof, not a public HDR creator surface.
+The canonical mixed-content retained preparer, image/text color inputs, composed
+filter captures and native/browser/export hosts still need profile integration.
+Checked emission, Bloom view attachment/animation, explicit view-ambiguity and
+capability admission, paired Python/direct-WASM/export evidence and the remaining
+M4/M5 gates are open. The authored test does not yet claim radiance above one,
+physical-device performance, or browser HDR execution.

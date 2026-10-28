@@ -26,6 +26,7 @@ fn authored_camera_profile_reaches_initial_and_live_runtime_publications_atomica
         Some(ViewColorProfile::LinearHdr)
     );
     assert_eq!(initial.view_color_profile(circle_id), None);
+    assert_eq!(initial.color_profile(), ViewColorProfile::LinearHdr);
     let initial_context = initial.context();
     drop(initial);
     let before_rows = session.frame().objects.clone();
@@ -43,6 +44,7 @@ fn authored_camera_profile_reaches_initial_and_live_runtime_publications_atomica
         changed.view_color_profile(execution_id),
         Some(ViewColorProfile::Compatibility)
     );
+    assert_eq!(changed.color_profile(), ViewColorProfile::Compatibility);
     assert_ne!(changed.context(), initial_context);
     assert_eq!(changed.changes().object_indices().len(), 1);
     let context = changed.context();
@@ -227,5 +229,88 @@ fn compiled_view_profile_preflight_is_atomic_and_accepts_a_staged_camera() {
             .take_renderer_publication()
             .view_color_profile(camera_id),
         Some(ViewColorProfile::LinearHdr)
+    );
+}
+
+#[test]
+fn authored_profile_color_repack_is_once_per_view_change_and_other_edits_stay_local() {
+    use noon_render_wgpu::FramePreparer;
+    let mut scene = Scene::new();
+    let camera = scene.camera_frame().unwrap();
+    let mut circles = Vec::new();
+    for _ in 0..64 {
+        let mut circle = scene.circle(0.5).unwrap();
+        circle.set_fill(0.5, 0.04, 0.75, 0.5).unwrap();
+        circle.set_object_opacity(0.5).unwrap();
+        scene.add(&circle).unwrap();
+        circles.push(circle);
+    }
+    let mut session = scene.execution_session().unwrap();
+    let mut preparer = FramePreparer::new();
+    let publication = session.take_renderer_publication();
+    let compatibility = preparer.prepare_publication(&publication).circles.to_vec();
+    assert_eq!(compatibility[0].style.fill, [0.5, 0.04, 0.75, 0.5]);
+    drop(publication);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
+    scene.live(&mut session).apply(tx).unwrap();
+    let publication = session.take_renderer_publication();
+    let prepared = preparer.prepare_publication(&publication);
+    assert_eq!(prepared.circles.len(), 64);
+    let fill = prepared.circles[0].style.fill;
+    for (actual, expected) in fill.into_iter().zip([
+        0.21404114048223255,
+        0.0030959752321981426,
+        0.5225215539683921,
+        0.5,
+    ]) {
+        assert!((f64::from(actual) - expected).abs() < 1e-6);
+    }
+    assert_eq!(prepared.circles[0].style.opacity, 0.5);
+    assert_eq!(
+        prepared.stats.instances_repacked,
+        publication.frame().objects.len()
+    );
+    let linear = prepared.circles.to_vec();
+    drop(publication);
+    let publication = session.take_renderer_publication();
+    let clean = preparer.prepare_publication(&publication);
+    assert_eq!(clean.stats.instances_repacked, 0);
+    assert!(clean.circle_dirty_ranges.is_empty());
+    drop(publication);
+    scene
+        .live(&mut session)
+        .set_fill(&circles[17], 0.75, 0.04, 0.5, 0.5)
+        .unwrap();
+    let publication = session.take_renderer_publication();
+    let changed = preparer.prepare_publication(&publication);
+    assert_eq!(changed.stats.instances_repacked, 1);
+    assert_eq!(changed.circle_dirty_ranges.len(), 1);
+    assert_eq!(changed.circle_dirty_ranges[0], 17..18);
+    for (index, (before, after)) in linear.iter().zip(changed.circles).enumerate() {
+        if index != 17 {
+            assert_eq!(before, after);
+        }
+    }
+    drop(publication);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_view_color_profile(camera.node_id(), ViewColorProfile::Compatibility);
+    scene.live(&mut session).apply(tx).unwrap();
+    let publication = session.take_renderer_publication();
+    let restored = preparer.prepare_publication(&publication);
+    for (index, (before, after)) in compatibility.iter().zip(restored.circles).enumerate() {
+        if index != 17 {
+            assert_eq!(before, after);
+        }
+    }
+    assert_eq!(restored.circles[17].style.fill, [0.75, 0.04, 0.5, 0.5]);
+    drop(publication);
+    let publication = session.take_renderer_publication();
+    assert_eq!(
+        preparer
+            .prepare_publication(&publication)
+            .stats
+            .instances_repacked,
+        0
     );
 }
