@@ -18,6 +18,22 @@ class _CameraFrame(_compat.Rectangle):
         self.height_value = float(_base.DEFAULT_FRAME_HEIGHT)
         scene._bind_camera_frame(self)
 
+    def set_view_color_profile(self, profile: str) -> _CameraFrame:
+        """Select compatibility output or explicit linear HDR on this camera."""
+        from _manim_updaters import canonical_callback_phase_active
+        from _noon_errors import engine_call
+        if canonical_callback_phase_active():
+            raise NotImplementedError("callback view profile edits require staged publication")
+        if not isinstance(profile, str):
+            raise TypeError("view color profile must be a string")
+        handle = _semantic_handles._handle_for(self)
+        context = _semantic_handles._live_mutation_context(self)
+        if context is None:
+            engine_call(handle.setViewColorProfile, profile)
+        else:
+            engine_call(context.setViewColorProfile, handle, profile)
+        return self
+
     def move_to(self, point: object) -> _CameraFrame:
         if isinstance(point, (_base.Mobject, _compat.Group)):
             point = point.get_center()

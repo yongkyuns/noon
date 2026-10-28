@@ -23,10 +23,9 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V29 adds explicit BackdropBlur input roles; V28 added finite Pixelate cell sampling to V27's ordered bindings, composed source plans, seeded masks, HatchPaint
-// and exact private Visibility roles across the genuine worker boundary. Older
-// envelopes reject; native and direct Rust/WASM execution remain typed in process.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 29;
+// V30 transports the selected authored camera profile and checked Bloom.
+// Older envelopes reject; direct native/WASM boundaries remain typed in process.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -143,9 +142,18 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
 impl TransportEffectState {
     fn to_compiled(self) -> Option<noon_compile::CompiledEffect> {
         let definition = match self.definition {
-            // Cross-worker HDR profile/view metadata has a separate qualification
-            // gate. Do not silently render a view effect as ordinary RGBA8.
-            TransportEffectDefinition::Bloom { .. } => return None,
+            TransportEffectDefinition::Bloom {
+                radius,
+                threshold,
+                intensity,
+            } => noon_core::Bloom::new(
+                EffectUpdate::default()
+                    .radius(radius)
+                    .threshold(threshold)
+                    .intensity(intensity),
+            )
+            .ok()?
+            .into(),
             TransportEffectDefinition::Pixelate { size } => {
                 noon_core::Pixelate::new(EffectUpdate::default().size(size))
                     .ok()?
@@ -549,8 +557,18 @@ pub struct RetainedPainterOrderDelta {
     pub slots: Vec<TransportSlotId>,
 }
 
+/// Derived view selection at a genuine worker boundary; effects stay on the
+/// camera's ordinary frame row, with their exact attachment identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportPrimaryView {
+    pub camera: ObjectId,
+    pub color_profile: noon_core::ViewColorProfile,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedExecutionDeltaEnvelope {
+    pub primary_view: Option<TransportPrimaryView>,
     pub channel: String,
     pub protocol_version: u32,
     pub session: u32,
@@ -618,6 +636,7 @@ pub enum RetainedExecutionTransportError {
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
     InvalidInset2DView(ObjectId),
+    InvalidPrimaryView,
     StalePublicationContext {
         received: PublicationContext,
         installed: PublicationContext,
@@ -630,6 +649,7 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPrimaryView => write!(formatter, "invalid or unsupported retained primary view"),
             Self::UnknownComposedSource(handle) => write!(formatter, "unknown immutable composed source {handle:?}"),
             Self::InvalidComposedSourceHandle(slot) => write!(formatter, "invalid composed source provenance or owner profile at {slot:?}"),
             Self::InvalidComposedSource(error) => error.fmt(formatter),
@@ -928,6 +948,7 @@ impl RetainedExecutionDeltaEncoder {
         self.published_render_geometries = render_geometries;
         self.published_composed_sources = composed_sources;
         Ok(RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: self.session,
@@ -1125,6 +1146,7 @@ impl RetainedExecutionDeltaEncoder {
             }
         }
         Ok(Some(RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: self.session,
@@ -1172,6 +1194,7 @@ pub struct RetainedExecutionFrameMirror {
     #[cfg(test)]
     last_composed_validation: noon_compile::ComposedValidationStats,
     camera: Camera2DState,
+    primary_view: Option<TransportPrimaryView>,
     publication_context: PublicationContext,
     inset_2d_views: Vec<Inset2DViewState>,
     frame: Option<FrameState>,
@@ -1183,6 +1206,14 @@ struct PreparedPainterOrder {
     range: std::ops::Range<usize>,
     old_end: usize,
     segment: Vec<u32>,
+}
+
+impl noon_runtime::ViewColorProfileLookup for RetainedExecutionFrameMirror {
+    fn view_color_profile(&self, object: ObjectId) -> Option<noon_core::ViewColorProfile> {
+        self.primary_view
+            .filter(|view| view.camera == object)
+            .map(|view| view.color_profile)
+    }
 }
 
 impl noon_runtime::ObjectIndexLookup for RetainedExecutionFrameMirror {
@@ -1396,6 +1427,10 @@ impl RetainedExecutionFrameMirror {
         self.publication_context
     }
 
+    pub fn primary_view(&self) -> Option<TransportPrimaryView> {
+        self.primary_view
+    }
+
     pub fn inset_2d_views(&self) -> &[Inset2DViewState] {
         &self.inset_2d_views
     }
@@ -1462,6 +1497,7 @@ impl RetainedExecutionFrameMirror {
             Some(_) => {}
         }
 
+        self.validate_primary_view(&delta)?;
         self.validate_inset_2d_views(&delta)?;
         self.validate_composed_handles(&delta)?;
 
@@ -1488,11 +1524,125 @@ impl RetainedExecutionFrameMirror {
         self.next_sequence = next_sequence;
         self.publication_context = delta.publication_context;
         self.camera = delta.camera;
+        self.primary_view = delta.primary_view;
         self.inset_2d_views = delta.inset_2d_views.clone();
         if let Some(frame) = &mut self.frame {
             frame.time = delta.time;
         }
         Ok((RetainedTransportApplyOutcome::Applied, changes))
+    }
+
+    fn validate_primary_view(
+        &self,
+        delta: &RetainedExecutionDeltaEnvelope,
+    ) -> Result<(), RetainedExecutionTransportError> {
+        let invalid = || RetainedExecutionTransportError::InvalidPrimaryView;
+        let hdr = delta
+            .primary_view
+            .is_some_and(|v| v.color_profile == noon_core::ViewColorProfile::LinearHdr);
+        if hdr && !delta.inset_2d_views.is_empty() {
+            return Err(invalid());
+        }
+        if hdr {
+            if delta.objects.iter().any(|row| row.spatial.is_some()) {
+                return Err(invalid());
+            }
+            if !delta.snapshot
+                && self
+                    .primary_view
+                    .is_none_or(|view| view.color_profile != noon_core::ViewColorProfile::LinearHdr)
+            {
+                // Admission into the planar HDR profile checks unchanged live rows
+                // once; later sparse frames only validate their incoming suffix.
+                let replaced: HashSet<_> = delta.objects.iter().map(|row| row.object).collect();
+                let removed: HashSet<_> = delta.removed_slots.iter().copied().collect();
+                for (&object, &index) in &self.object_indices {
+                    if !removed.contains(&self.slots[index])
+                        && !replaced.contains(&object)
+                        && self.frame.as_ref().unwrap().objects[index]
+                            .spatial
+                            .is_some()
+                    {
+                        return Err(invalid());
+                    }
+                }
+            }
+        }
+        let has_bloom = |effects: &[TransportEffectState]| {
+            effects
+                .iter()
+                .any(|e| matches!(e.definition, TransportEffectDefinition::Bloom { .. }))
+        };
+        for row in &delta.objects {
+            if has_bloom(&row.effects)
+                && (!hdr || delta.primary_view.map(|v| v.camera) != Some(row.object))
+            {
+                return Err(invalid());
+            }
+        }
+        // A view change must not strand a previously admitted Bloom as an object filter.
+        // Ordinary parameter frames only inspect their sparse incoming rows.
+        if !delta.snapshot && self.primary_view != delta.primary_view {
+            if let Some(old) = self.primary_view {
+                if let Some(&index) = self.object_indices.get(&old.camera) {
+                    if !delta.removed_slots.contains(&self.slots[index]) {
+                        let effects = delta
+                            .objects
+                            .iter()
+                            .find(|row| row.object == old.camera)
+                            .map(|row| row.effects.as_slice());
+                        let old_bloom = self.frame.as_ref().unwrap().objects[index]
+                            .effects
+                            .as_ref()
+                            .is_some_and(|stack| {
+                                stack.iter().any(|e| {
+                                    matches!(e.definition, noon_core::EffectDefinition::Bloom(_))
+                                })
+                            });
+                        if effects.map(has_bloom).unwrap_or(old_bloom)
+                            && (!hdr || delta.primary_view.map(|v| v.camera) != Some(old.camera))
+                        {
+                            return Err(invalid());
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(view) = delta.primary_view {
+            let incoming = delta.objects.iter().find(|row| row.object == view.camera);
+            let installed = (!delta.snapshot)
+                .then(|| self.object_indices.get(&view.camera))
+                .flatten()
+                .copied()
+                .filter(|&i| !delta.removed_slots.contains(&self.slots[i]));
+            let valid = incoming
+                .map(|row| {
+                    row.spatial.is_none()
+                        && row.effects.len() <= 1
+                        && row.effects.iter().all(|e| {
+                            hdr && matches!(e.definition, TransportEffectDefinition::Bloom { .. })
+                        })
+                })
+                .or_else(|| {
+                    installed.map(|i| {
+                        let row = &self.frame.as_ref().unwrap().objects[i];
+                        row.spatial.is_none()
+                            && row.effects.as_ref().is_none_or(|stack| {
+                                stack.len() <= 1
+                                    && stack.iter().all(|e| {
+                                        hdr && matches!(
+                                            e.definition,
+                                            noon_core::EffectDefinition::Bloom(_)
+                                        )
+                                    })
+                            })
+                    })
+                });
+            if valid != Some(true) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
     }
 
     fn validate_inset_2d_views(
@@ -2459,6 +2609,7 @@ mod tests {
     }
 
     mod prefix_admission;
+    mod view_output;
 
     fn mixed_frame() -> FrameState {
         let text = TextResourceHandle {
@@ -2579,7 +2730,10 @@ mod tests {
             )
             .unwrap();
         let json = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(json["protocol_version"], 29);
+        assert_eq!(
+            json["protocol_version"],
+            RETAINED_EXECUTION_TRANSPORT_VERSION
+        );
         assert_eq!(json["objects"][0]["effects"][0]["kind"], "backdrop_blur");
         let mut mirror = test_mirror();
         mirror.apply(serde_json::from_value(json).unwrap()).unwrap();
@@ -2938,7 +3092,10 @@ mod tests {
             )
             .unwrap();
         let json = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(json["protocol_version"], 29);
+        assert_eq!(
+            json["protocol_version"],
+            RETAINED_EXECUTION_TRANSPORT_VERSION
+        );
         assert_eq!(json["objects"][0]["effects"][0]["kind"], "pixelate");
         let mut mirror = test_mirror();
         let mut older = snapshot.clone();
@@ -2992,7 +3149,10 @@ mod tests {
             )
             .unwrap();
         let value = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(value["protocol_version"], 29);
+        assert_eq!(
+            value["protocol_version"],
+            RETAINED_EXECUTION_TRANSPORT_VERSION
+        );
         let mask = &value["objects"][0]["effects"][0];
         assert_eq!(mask["kind"], "noise_dissolve");
         assert_eq!(mask["seed"], u32::MAX);
@@ -3048,7 +3208,10 @@ mod tests {
                 PublicationContext::default(),
             )
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 29);
+        assert_eq!(
+            snapshot.protocol_version,
+            RETAINED_EXECUTION_TRANSPORT_VERSION
+        );
         let encoded = serde_json::to_value(&snapshot).unwrap();
         let decoded: RetainedExecutionDeltaEnvelope =
             serde_json::from_value(encoded.clone()).unwrap();
@@ -3283,7 +3446,10 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 29);
+        assert_eq!(
+            snapshot.protocol_version,
+            RETAINED_EXECUTION_TRANSPORT_VERSION
+        );
         assert_eq!(snapshot.objects[0].effects[0].attachment, effect.attachment);
         assert!(snapshot.objects[1].effects.is_empty());
         let json = serde_json::to_string(&snapshot).unwrap();

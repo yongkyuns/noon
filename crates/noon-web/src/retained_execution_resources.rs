@@ -112,7 +112,9 @@ impl InstalledRetainedExecutionMirror {
             self.family.active_indices(),
             self.wire.painter_order(),
             &self.wire,
-        );
+        )
+        .with_primary_view(self.wire.primary_view().map(|view| view.camera))
+        .with_view_color_profiles(&self.wire);
         Ok(if let Some(index) = &self.spatial_index {
             publication.with_spatial_index(index)
         } else {
@@ -1067,6 +1069,7 @@ mod tests {
         };
         let context = noon_core::PublicationContext::default();
         let retained = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
             protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 82,
@@ -1285,6 +1288,7 @@ mod tests {
                 noon_core::FrameEpoch::new(7),
             );
             let delta = RetainedExecutionDeltaEnvelope {
+                primary_view: None,
                 channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
                 protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
                 session: 77,
@@ -1467,6 +1471,7 @@ mod tests {
 
             let replacement = RetainedFamilyExecutionDeltaEnvelope {
                 retained: RetainedExecutionDeltaEnvelope {
+                    primary_view: None,
                     channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
                     protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
                     session: 77,
@@ -1552,6 +1557,7 @@ mod tests {
 
             let path_replacement = RetainedFamilyExecutionDeltaEnvelope {
                 retained: RetainedExecutionDeltaEnvelope {
+                    primary_view: None,
                     channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
                     protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
                     session: 77,
@@ -2021,6 +2027,7 @@ mod tests {
         let changed = initial.objects[0].clone();
         let invalid = RetainedFamilyExecutionDeltaEnvelope {
             retained: RetainedExecutionDeltaEnvelope {
+                primary_view: None,
                 channel: initial.channel,
                 protocol_version: initial.protocol_version,
                 session: initial.session,
@@ -2075,6 +2082,7 @@ mod tests {
         let mut changed = initial.objects[0].clone();
         changed.transform.translation = Vec2::new(2.0, -1.0);
         let delta = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: initial.channel,
             protocol_version: initial.protocol_version,
             session: initial.session,

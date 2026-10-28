@@ -4138,6 +4138,16 @@ mod wasm {
             self.handle.set_stroke_cap(cap).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setViewColorProfile)]
+        pub fn set_view_color_profile(&mut self, value: &str) -> Result<(), JsValue> {
+            self.handle
+                .set_view_color_profile(
+                    crate::canonical_authoring_scene::camera_profile::view_color_profile(value)
+                        .map_err(js_error)?,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setEmission)]
         pub fn set_emission(&mut self, strength: f64) -> Result<(), JsValue> {
             self.handle.set_emission(strength).map_err(js_error)

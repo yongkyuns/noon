@@ -4422,6 +4422,14 @@ impl SemanticExecutionPlayer {
         };
         debug_assert_eq!(delta.retained.publication_context, publication_context);
         delta.retained.inset_2d_views = inset_2d_views;
+        delta.retained.primary_view = publication.primary_view().and_then(|camera| {
+            publication.view_color_profile(camera).map(|color_profile| {
+                crate::TransportPrimaryView {
+                    camera,
+                    color_profile,
+                }
+            })
+        });
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;

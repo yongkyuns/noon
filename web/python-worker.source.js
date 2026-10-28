@@ -207,6 +207,7 @@ async function initializePyodide() {
   self.noonEffectUpdate = (...args) => new WasmEffectUpdate(...args);
   self.noonGlow = (update) => WasmEffectDefinition.glow(update);
   self.noonBlur = (update) => WasmEffectDefinition.blur(update);
+  self.noonBloom = (update) => WasmEffectDefinition.bloom(update);
   self.noonBackdropBlur = (update) => WasmEffectDefinition.backdropBlur(update);
   self.noonShadow = (update) => WasmEffectDefinition.shadow(update);
   self.noonNoiseDissolve = (update) => WasmEffectDefinition.noiseDissolve(update);
