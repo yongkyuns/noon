@@ -1,0 +1,180 @@
+name: One-off 2308 authenticated source object import
+on:
+  push:
+    branches: [agent/2308-source-import-20261028]
+    paths: [.github/workflows/one-off-2308-source-import.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  import:
+    name: Import immutable source objects only (no ref writes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Authenticate sealed source and import Git objects
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYIMPORT'
+          import base64, hashlib, io, json, os, subprocess, tarfile, zipfile
+          from pathlib import Path
+          
+          repo = os.environ['GITHUB_REPOSITORY']
+          assert repo == 'yongkyuns/noon'
+          run_id = 40659664007
+          artifact_id = 12803462610
+          workflow_head = 'affa9a70698fb72b4dde050e4d204c56d50bd607'
+          archive_sha = '96be52b33c796d508e5468707e3d61cac23aaab91af8e9e9c7bfcc562accfc38'
+          source_sha = 'd4c437b5cf5669a0e2d470d2a56220e32d690af4a0a9ace76422c33b38e8a7eb'
+          previous_tree = 'bec14e0f22d8be668e6e4f38f5c0e982bf2b953f'
+          target_tree = '13f654450728458c8dd153741522b789b1133193'
+          master = 'fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86'
+          feature = 'b3a4b7f484e607a4b14bc57e70f4947f8520ca42'
+          memory = '472a61fadfdabba44756b75caaa184cee8c4be57'
+          branch = 'codex/prepared-playback-integration-review-2211'
+          root = Path(os.environ['RUNNER_TEMP']) / 'noon2308-import'
+          root.mkdir()
+          evidence = root / 'evidence'
+          evidence.mkdir()
+          source = root / 'source'
+          source.mkdir()
+          
+          def api(path, payload=None):
+              # Only immutable object creation is permitted here. Ref/commit/PR writes
+              # belong to the separately authorized connector, never this job token.
+              args = ['gh', 'api', f'repos/{repo}/{path}']
+              if payload is not None:
+                  assert path in ('git/blobs', 'git/trees'), path
+                  args += ['--method', 'POST', '--input', '-']
+              result = subprocess.run(args, input=None if payload is None else json.dumps(payload).encode(),
+                                      capture_output=True, check=True)
+              return json.loads(result.stdout)
+          
+          def git(*args):
+              return subprocess.check_output(['git', *args], cwd=source)
+          
+          def require_pins():
+              assert api('git/ref/heads/master')['object']['sha'] == master
+              assert api('git/ref/heads/' + branch)['object']['sha'] == feature
+              pr = api('pulls/2308')
+              assert pr['state'] == 'open' and pr['draft'] and not pr['merged']
+              assert pr['head']['sha'] == feature and pr['base']['ref'] == 'master'
+              assert api('pulls/2317')['head']['sha'] == memory
+          
+          require_pins()
+          run = api(f'actions/runs/{run_id}')
+          assert (run['id'], run['run_attempt'], run['status'], run['conclusion'], run['head_sha']) == (
+              run_id, 1, 'completed', 'success', workflow_head)
+          jobs = api(f'actions/runs/{run_id}/attempts/1/jobs?per_page=100')
+          assert jobs['total_count'] == 1 and len(jobs['jobs']) == 1
+          job = jobs['jobs'][0]
+          assert job['id'] == 122719221907 and job['conclusion'] == 'success'
+          required = {'Verify previous source-bound gates and perform actual local Git merge',
+                      'Format and verify sealed tracked source', 'Rust workspace and family tests',
+                      'Native glyph capture opacity exact pixels', 'Prepared-prefix WASM compile',
+                      'JS and Python web static preflight', 'Final source integrity'}
+          steps = {s['name']: s['conclusion'] for s in job['steps']}
+          assert all(steps.get(name) == 'success' for name in required)
+          meta = api(f'actions/artifacts/{artifact_id}')
+          assert not meta['expired'] and meta['workflow_run']['id'] == run_id
+          assert meta['name'] == 'noon2308-master-fd1e-readonly-qualification'
+          assert meta['digest'] == 'sha256:' + archive_sha
+          payload = subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/artifacts/{artifact_id}/zip'])
+          assert hashlib.sha256(payload).hexdigest() == archive_sha
+          with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+              proof = json.loads(archive.read('source-proof.json'))
+              assert proof['new_master'] == master and proof['source_branch'] == feature
+              assert proof['memory_branch'] == memory and proof['previous_source_tree'] == previous_tree
+              assert proof['merged_tree_before_format'] == target_tree
+              assert proof['git_merge_return_code'] == 0 and proof['unmerged_paths'] == []
+              assert archive.read('candidate-tree.txt').decode().strip() == target_tree
+              assert not archive.read('unstaged-postqualification.txt').strip()
+              assert not archive.read('unmerged-index.txt').strip()
+              source_bytes = archive.read('incoming/preflight/combined-source-latest.tar.gz')
+              merge_patch = archive.read('local-merge-source.patch')
+          assert hashlib.sha256(source_bytes).hexdigest() == source_sha
+          with tarfile.open(fileobj=io.BytesIO(source_bytes), mode='r:gz') as archive:
+              assert all('.git' not in Path(m.name).parts for m in archive.getmembers())
+              archive.extractall(source, filter='data')
+          git('init', '-q')
+          git('config', 'core.autocrlf', 'false')
+          git('add', '--all')
+          assert git('write-tree').decode().strip() == previous_tree
+          patch_path = root / 'merge.patch'
+          patch_path.write_bytes(merge_patch)
+          git('apply', '--check', '--index', str(patch_path))
+          git('apply', '--index', str(patch_path))
+          assert git('write-tree').decode().strip() == target_tree
+          git('diff', '--check')
+          assert not git('diff', '--name-only').strip()
+          assert 'default = ["renderer"]' in (source / 'crates/noon-web/Cargo.toml').read_text()
+          assert not list((source / '.github/workflows').glob('one-off-2308*'))
+          assert not list((source / '.github/ci').glob('one-off-2308*'))
+          
+          known = set()
+          def remote_tree(ref):
+              result = api('git/trees/' + ref + '?recursive=1')
+              assert not result.get('truncated'), ref
+              entries = {e['path']: e for e in result['tree'] if e['type'] != 'tree'}
+              known.update(e['sha'] for e in entries.values() if e['type'] == 'blob')
+              return result['sha'], entries
+          
+          base_tree, base = remote_tree(master)
+          for ref in (feature, memory, '87cb42b53885c192e539fdddf3ddcf970e67bee4'):
+              remote_tree(ref)
+          local = {}
+          for item in git('ls-files', '--stage', '-z').split(b'\0'):
+              if not item:
+                  continue
+              header, path = item.split(b'\t', 1)
+              mode, sha, stage = header.decode().split()
+              assert stage == '0' and mode in ('100644', '100755', '120000')
+              local[path.decode()] = {'mode': mode, 'sha': sha, 'type': 'blob'}
+          entries = []
+          for path in sorted(set(base) | set(local)):
+              old, new = base.get(path), local.get(path)
+              if new is None:
+                  entries.append({'path': path, 'mode': old['mode'], 'type': old['type'], 'sha': None})
+              elif old is None or any(old[k] != new[k] for k in ('mode', 'sha', 'type')):
+                  entries.append({'path': path, **new})
+          assert entries and all(not e['path'].startswith('.github/workflows/one-off-2308') for e in entries)
+          require_pins()
+          uploaded = []
+          for entry in entries:
+              sha = entry['sha']
+              if sha is None or sha in known:
+                  continue
+              content = git('cat-file', 'blob', sha)
+              digest = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+              assert digest == sha
+              result = api('git/blobs', {'encoding': 'base64', 'content': base64.b64encode(content).decode()})
+              assert result['sha'] == sha
+              known.add(sha)
+              uploaded.append({'path': entry['path'], 'sha': sha, 'bytes': len(content)})
+              print('Stored immutable blob', entry['path'], sha, flush=True)
+          result = api('git/trees', {'base_tree': base_tree, 'tree': entries})
+          assert result['sha'] == target_tree, result['sha']
+          assert api('git/trees/' + target_tree)['sha'] == target_tree
+          require_pins()
+          receipt = {'source_run': run_id, 'source_attempt': 1, 'source_workflow_head': workflow_head,
+                     'artifact_id': artifact_id, 'artifact_sha256': archive_sha, 'source_tar_sha256': source_sha,
+                     'tree': target_tree, 'master': master, 'feature': feature, 'memory': memory,
+                     'base_tree': base_tree, 'changed_paths': len(entries), 'uploaded_blobs': uploaded,
+                     'refs_unchanged': True, 'commits_created': False, 'published': False,
+                     'coverage': 'Current-tree Rust library/family, native glyph pixels, renderer WASM check, web preflight; normal exact-head PR CI still required'}
+          (evidence / 'import-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          (evidence / 'tree-elements.json').write_text(json.dumps(entries, indent=2) + '\n')
+          (evidence / 'source-proof.json').write_text(json.dumps(proof, indent=2) + '\n')
+          print(json.dumps(receipt, indent=2))
+          PYIMPORT
+      - name: Preserve object-only import receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon2308-source-object-import
+          path: ${{ runner.temp }}/noon2308-import/evidence
+          retention-days: 7
+          if-no-files-found: warn
