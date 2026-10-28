@@ -1,6 +1,7 @@
 // Installed only by this harness, before the unmodified product page loads.
 export function observeAudio() {
   const NativeAudioContext = window.AudioContext;
+  let eventOrder = 0;
   const contexts = [], starts = [], stops = [], buffers = [], parameters = [];
   const nodes = [], connections = [], disconnects = [], ended = [], parameterRefs = [];
   const contextIds = new WeakMap(), sourceIds = new WeakMap(), bufferIds = new WeakMap();
@@ -32,7 +33,7 @@ export function observeAudio() {
   };
   const parameterEvent = (parameter, method, args) =>
     parameters[parameterId(parameter)].events.push({ method, args: Array.from(args),
-      observedAt: parameterContexts.get(parameter)?.currentTime });
+      observedAt: parameterContexts.get(parameter)?.currentTime, order: eventOrder++ });
   for (const method of ["setValueAtTime", "linearRampToValueAtTime", "cancelScheduledValues", "cancelAndHoldAtTime"]) {
     const native = AudioParam.prototype[method];
     AudioParam.prototype[method] = function (...args) {
@@ -68,7 +69,8 @@ export function observeAudio() {
   };
   AudioNode.prototype.disconnect = function (...args) {
     const value = disconnect.apply(this, args);
-    disconnects.push({ node: nodeId(this), observedAt: this.context.currentTime });
+    disconnects.push({ node: nodeId(this), context: contextId(this.context),
+      observedAt: this.context.currentTime, order: eventOrder++ });
     return value;
   };
   AudioBufferSourceNode.prototype.start = function (...args) {
@@ -89,7 +91,7 @@ export function observeAudio() {
   AudioBufferSourceNode.prototype.stop = function (...args) {
     const value = stop.apply(this, args);
     stops.push({ context: contextId(this.context), source: sourceIds.get(this),
-      node: nodeId(this), args, observedAt: this.context.currentTime });
+      node: nodeId(this), args, observedAt: this.context.currentTime, order: eventOrder++ });
     return value;
   };
   class ObservedAudioContext extends NativeAudioContext {
@@ -114,8 +116,9 @@ export function observeAudio() {
     createBufferSource(...args) {
       const source = super.createBufferSource(...args);
       sourceIds.set(source, this.nextObservedSource = (this.nextObservedSource ?? 0) + 1);
-      source.addEventListener("ended", () => ended.push({ context: contextId(this),
-        source: sourceIds.get(source), node: nodeId(source), observedAt: this.currentTime }));
+      source.addEventListener("ended", event => ended.push({ context: contextId(this),
+        source: sourceIds.get(source), node: nodeId(source), observedAt: this.currentTime,
+        trusted: event.isTrusted, order: eventOrder++ }));
       return source;
     }
     createGain(...args) {

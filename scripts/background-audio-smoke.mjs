@@ -12,6 +12,7 @@ import pngjs from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { observeAudio } from "./browser-audio-observation.mjs";
+import { releaseRetirementWitness } from "./audio-retirement-reference.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifacts = path.resolve(process.env.NOON_AUDIO_ARTIFACTS ??
@@ -27,7 +28,7 @@ const report = {
 await mkdir(artifacts, { recursive: true });
 for (const source of ["web/pkg/noon_web_bg.wasm", "web/pkg/noon_web.js", "web/background-audio.js",
   "web/native-inputs.js", "web/browser-pointer-input.js", "web/browser-wheel-units.js",
-  "web/background-audio.html", "web/background-audio.css", "scripts/background-audio-smoke.mjs", "scripts/browser-audio-observation.mjs"]) {
+  "web/background-audio.html", "web/background-audio.css", "scripts/background-audio-smoke.mjs", "scripts/browser-audio-observation.mjs", "scripts/audio-retirement-reference.mjs"]) {
   report[source] = createHash("sha256").update(await readFile(path.join(root, source))).digest("hex");
 }
 
@@ -240,10 +241,9 @@ try {
     const settled = await state();
     near(settled.transport.time, pausedTime, "paused time", 0);
     assert.equal(settled.transport.voices, 0, "native ended cleanup releases the paused graph");
-    assert.ok(settled.ended.some(event => event.node === source.node));
-    assert.ok(settled.disconnects.some(event => event.node === source.busNode
-      && event.observedAt >= release.ramp.args[1]), "releasing bus disconnects after its envelope finishes");
-    return { paused, release, stop, silence, settled };
+    const retirement = releaseRetirementWitness(settled, source, release.ramp.args[1]);
+    assert.ok(retirement, "release retires after the exact native stop or completed device time");
+    return { paused, release, stop, silence, settled, retirement };
   });
   await record("resume preserves the PCM phase and immutable buffer", async () => {
     await page.locator("#play").click();
