@@ -30,8 +30,7 @@ fn check(source: &PreparedSource, index: u32, expected: f32) {
     }
     assert!(count > 0, "the real prepared glyph lane must be exercised");
 }
-#[test]
-fn grouped_glyph_coverage_preserves_child_opacity_independently_of_zero_paint_alpha() {
+fn compiled_scene() -> CompiledScene {
     let artifact =
         noon_typst::compile_typst_resource("Noon", noon_typst::TypstMode::Markup).unwrap();
     let mut texts = TextResourceArena::new();
@@ -64,7 +63,15 @@ fn grouped_glyph_coverage_preserves_child_opacity_independently_of_zero_paint_al
         .collect();
     let mut compiled = CompiledScene::compile_objects(rows, &[]).unwrap();
     compiled.merge_prepared_resources(resources);
-    let mut runtime = SceneInstance::new(compiled);
+    compiled
+}
+
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+mod pixels;
+
+#[test]
+fn grouped_glyph_coverage_preserves_child_opacity_independently_of_zero_paint_alpha() {
+    let mut runtime = SceneInstance::new(compiled_scene());
     let (device, _queue) = wgpu::Device::noop(&Default::default());
     let mut preparer = RetainedFramePreparer::new();
     let alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
