@@ -93,10 +93,12 @@ jobs:
               assert kind=='blob',kind
               items.append({'path':path.decode(),'mode':mode,'type':kind,'sha':sha})
           assert not any('/one-off-2308' in row['path'] for row in items)
-          master=api('/git/trees/fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86?recursive=1')
+          master_commit=api('/git/commits/fd1e76cf6845ac2c9ec30d96b8c5e90c2bce0c86')
+          assert master_commit['tree']['sha']=='62b94b2e32ac0dd1f5edd304986425736dad7d67'
+          master=api('/git/trees/62b94b2e32ac0dd1f5edd304986425736dad7d67?recursive=1')
           prior=api('/git/trees/87cb42b53885c192e539fdddf3ddcf970e67bee4?recursive=1')
           assert not master['truncated'] and not prior['truncated']
-          assert master['sha']=='b78f6a139248e346cf1c62bc3a9435324ad0840b5'
+          assert master['sha']=='62b94b2e32ac0dd1f5edd304986425736dad7d67'
           assert prior['sha']=='87cb42b53885c192e539fdddf3ddcf970e67bee4'
           known={row['sha'] for tree in (master,prior) for row in tree['tree'] if row['type']=='blob'}
           uploaded=[]
