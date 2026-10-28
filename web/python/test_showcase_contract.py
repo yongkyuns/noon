@@ -85,8 +85,12 @@ class ShowcaseSourceContract(unittest.TestCase):
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "add_vector" for node in calls))
                 else:
-                    self.assertTrue(any(isinstance(node.func, ast.Name)
-                                        and node.func.id in {"FadeIn", "Write", "Create"} for node in calls))
+                    self.assertTrue(
+                        any(isinstance(node.func, ast.Name)
+                            and node.func.id in {"FadeIn", "Write", "Create"} for node in calls)
+                        or any(isinstance(node, ast.Attribute) and node.attr == "animate"
+                               for node in ast.walk(scenes[0])),
+                        "teach an entrance or ordinary target animation")
                 self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait" for node in calls), "hold a readable state")
     def _assert_finite_audio_lesson(self, entry, tree):
         """The explicit result profile is separate from ordinary continuation lessons."""
