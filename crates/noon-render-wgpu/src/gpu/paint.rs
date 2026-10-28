@@ -200,7 +200,7 @@ impl PaintGpu {
         let source = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../analytic.wgsl"),
-            include_str!("../cairo_color.wgsl"),
+            super::source_color_shader(format),
             include_str!("../polygon_coverage.wgsl"),
             include_str!("raster_sampling.wgsl"),
             include_str!("../paint.wgsl"),
@@ -233,7 +233,7 @@ impl PaintGpu {
         let path_source = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../path.wgsl"),
-            include_str!("../cairo_color.wgsl"),
+            super::source_color_shader(format),
             include_str!("../polygon_coverage.wgsl"),
             include_str!("raster_sampling.wgsl"),
             include_str!("../paint.wgsl"),

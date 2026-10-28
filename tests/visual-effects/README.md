@@ -1691,3 +1691,27 @@ mappings/resources must retire, the surviving capture must remain coherent, and
 a clean follow-up must do no work. Browser showcase replay separately exercises
 the actual source-completion/restart path; successful first-pass playback is not
 accepted as evidence that arbitrary-order replay succeeds.
+
+The planar `Rgba16Float` draw path now specializes the existing source-color
+helper to linear radiance: associate by effective alpha exactly once, preserve
+RGB above one, and skip compatibility UNORM/Cairo source quantization. Analytic,
+path and continuous-paint pipelines choose the same specialization. Other target
+formats retain the original helper. An offscreen float scene target must never
+inherit the WebGL drawing buffer's presentation decode; display transfer still
+belongs after HDR resolution. This target contract expects **already-linear
+packed source values**. Authored Color decoding, checked emission and semantic
+view/Bloom controls still require integration; this is not a public scene HDR
+feature or a claim of spatial/image/text/profile support.
+
+The native float-draw oracle uses the ordinary frame preparer, uploads and painter
+submission, with two pixel-aligned rectangle/path layers. Sixteen profiles vary
+path/analytic routing, solid/continuous-paint programs, painter order and
+transparent/nonblack clears. Independent
+f64 source-over arithmetic accounts for color alpha, object opacity and appearance
+before comparing every float channel. The produced float image then feeds the
+real bloom operator; display expectations come from the independent 2D bloom
+reference applied to the mathematical scene expectation. The actual previous
+clamping shader is compiled into an otherwise identical float render pipeline
+and must fail the linear oracle. A clean same-frame upload must remain zero.
+This numerical raster-input proof does not substitute for the required paired
+public Rust/Python authoring, authored-time/seek/export or browser HDR gates.
