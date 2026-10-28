@@ -655,6 +655,7 @@ class _PhaseStyle:
     stroke_join: str
     stroke_cap: str
     opacity: float
+    emission: float = 0.0
 
     @classmethod
     def from_wire(cls, value: object) -> "_PhaseStyle":
@@ -679,10 +680,11 @@ class _PhaseStyle:
             value["stroke_join"],
             value["stroke_cap"],
             _phase_number("style.opacity", value.get("opacity")),
+            _phase_number("style.emission", value.get("emission", 0.0)),
         )
 
     def to_wire(self) -> dict[str, object]:
-        return {
+        result = {
             "fill": _phase_color_wire(self.fill),
             "stroke": _phase_color_wire(self.stroke),
             "stroke_width": self.stroke_width,
@@ -691,6 +693,9 @@ class _PhaseStyle:
             "stroke_cap": self.stroke_cap,
             "opacity": self.opacity,
         }
+        if self.emission != 0.0:
+            result["emission"] = self.emission
+        return result
 
 
 @dataclass(slots=True)
@@ -1427,10 +1432,10 @@ class _CanonicalCallbackContext:
     ) -> None:
         old, new = before.to_wire(), row.style.to_wire()
         self._require_writes_open()
-        for channel in ("fill", "stroke", "stroke_width", "opacity"):
-            if old[channel] != new[channel]:
+        for channel in ("fill", "stroke", "stroke_width", "opacity", "emission"):
+            if old.get(channel, 0.0) != new.get(channel, 0.0):
                 self._writes.append({"kind": channel, "object": _phase_node_json(key),
-                                     channel: new[channel]})
+                                     channel: new.get(channel, 0.0)})
 
     def effective_batch(self) -> dict[str, Any]:
         if self._content_write_count is not None and len(self._writes) != self._content_write_count:
@@ -1904,6 +1909,21 @@ def _canonical_set_stroke(
     row.style = style
     if (row.style.stroke is None) != (before.stroke is None):
         row.invalidate_bounds()
+    context.style_changed(key, before, row)
+    return self
+
+
+def _canonical_set_emission(self: _base.Mobject, strength: float) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _base._semantic_operations()._set_emission(self, strength)
+    from _noon_errors import engine_call
+    context, key, row = value
+    context._require_writes_open()
+    emission = engine_call(context._operations.callbackEmission,
+                          _phase_number("emission", strength), operation="Mobject.set_emission")
+    before = row.style
+    row.style = replace(row.style, emission=float(emission))
     context.style_changed(key, before, row)
     return self
 

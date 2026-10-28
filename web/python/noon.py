@@ -1219,7 +1219,7 @@ class Mobject:
 
     def set_emission(self, strength: float) -> Mobject:
         """Set checked linear-HDR material strength (0–63), independently of alpha."""
-        return _semantic_operations()._set_emission(self, strength)
+        return _callback_operations()._canonical_set_emission(self, strength)
 
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""

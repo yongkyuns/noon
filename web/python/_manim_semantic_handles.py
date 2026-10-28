@@ -2328,7 +2328,7 @@ def _set_emission(self: _base.Mobject, strength: float) -> _base.Mobject:
     from _manim_updaters import canonical_callback_phase_active
 
     if canonical_callback_phase_active():
-        raise NotImplementedError("effective callback emission writes are not supported")
+        raise NotImplementedError("callback emission on family or provisional targets requires staged publication")
     strength = _ir._finite_number("emission", strength)
     is_family = _is_shared_family(self)
     handle = self._semantic_family_handle if is_family else _handle_for(self)

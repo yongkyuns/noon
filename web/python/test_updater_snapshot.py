@@ -359,6 +359,33 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             ["color", "fill"],
         )
 
+    def test_emission_callback_uses_checked_rust_value_and_keeps_other_channels(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        strength = 7.000000000000001
+        context._operations.callbackEmission = Mock(return_value=strength)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(mobject.set_emission(strength), mobject)
+            _, row = context.row(mobject)
+            self.assertEqual(row.style.emission, strength)
+            self.assertEqual(row.style.opacity, 1.0)
+            self.assertEqual(context.effective_batch()["writes"], [{
+                "kind":"emission", "object":{"slot":11,"generation":3}, "emission":strength,
+            }])
+            before, writes = row.style, list(context.effective_batch()["writes"])
+            context._operations.callbackEmission.side_effect = ValueError("checked Rust range")
+            with self.assertRaises(ValueError):
+                mobject.set_emission(64)
+            self.assertEqual(row.style, before)
+            self.assertEqual(context.effective_batch()["writes"], writes)
+            context._operations.callbackEmission.side_effect = None
+            context._operations.callbackEmission.return_value = 0.0
+            mobject.set_emission(0)
+            self.assertEqual(context.effective_batch()["writes"][-1]["emission"], 0.0)
+            self.assertNotIn("emission", row.style.to_wire())
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     def test_vmobject_callback_opacity_uses_shared_paint_and_preserves_composite(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         updaters._ACTIVE_CONTEXTS[id(scene)] = context

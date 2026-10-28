@@ -4177,6 +4177,7 @@ mod tests {
         let mut style = overlay.object(circle.node_id()).unwrap().style;
         style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.25));
         style.opacity = 0.5;
+        style.emission = noon_core::Emission::new(7.000000000000001).unwrap();
         overlay.set_style(circle.node_id(), style).unwrap();
         live.session
             .commit_required_callback_phase(overlay.finish())
@@ -4187,6 +4188,8 @@ mod tests {
         assert_eq!(live.effective(&circle).unwrap().fill_opacity(), 0.25);
         assert_eq!(target.fill_opacity().unwrap(), 0.25);
         assert_eq!(target.stroke_opacity().unwrap(), 1.0);
+        assert_eq!(target.emission().unwrap(), style.emission.strength());
+        assert_eq!(circle.emission().unwrap(), 0.0);
         let target_state = live.authored(&target).unwrap();
         assert_eq!(
             target_state.transform.translation,
@@ -4215,6 +4218,7 @@ mod tests {
                 stroke_join: style.stroke_join,
                 stroke_cap: style.stroke_cap,
                 object_opacity: f64::from(style.opacity),
+                emission: style.emission,
                 ..SemanticStyle::default()
             }
         );

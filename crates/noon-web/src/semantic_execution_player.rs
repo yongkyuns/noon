@@ -4694,6 +4694,10 @@ enum CallbackWriteWire {
         object: CallbackNodeWire,
         stroke_width: f32,
     },
+    Emission {
+        object: CallbackNodeWire,
+        emission: noon_core::Emission,
+    },
     Opacity {
         object: CallbackNodeWire,
         opacity: f32,
@@ -4942,6 +4946,12 @@ fn decode_callback_batch(
                 object: object.into(),
                 stroke_width,
             }),
+            CallbackWriteWire::Emission { object, emission } => {
+                Ok(EffectiveSemanticPropertyWrite::Emission {
+                    object: object.into(),
+                    emission,
+                })
+            }
             CallbackWriteWire::Opacity { object, opacity } => {
                 Ok(EffectiveSemanticPropertyWrite::Opacity {
                     object: object.into(),

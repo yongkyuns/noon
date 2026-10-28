@@ -347,3 +347,34 @@ fn callback_and_advancement_share_settled_nested_error_projection() {
     assert_eq!(player.drain_delta_json().unwrap(), None);
     finish(&mut player, Some(&phase));
 }
+
+#[test]
+fn checked_callback_emission_keeps_f64_and_rejects_invalid_batches_atomically() {
+    let (mut player, _) = player();
+    let phase = phase(&mut player);
+    player.initial_delta_json().unwrap();
+    let before = state(&player);
+    let before_frame = player.session.frame().clone();
+    let strength = 7.000000000000001_f64;
+    let valid = json!({"kind":"emission","object":phase["objects"][0]["node"],"emission":strength});
+    for invalid in [json!(-0.1), json!(64.0), json!("NaN")] {
+        let invalid =
+            json!({"kind":"emission","object":phase["objects"][0]["node"],"emission":invalid});
+        assert!(player
+            .commit_callback_phase_json(
+                &json!({"token":phase["token"],"writes":[valid,invalid]}).to_string()
+            )
+            .is_err());
+        assert_eq!(state(&player), before);
+        assert_eq!(player.session.frame(), &before_frame);
+        assert_eq!(player.drain_delta_json().unwrap(), None);
+    }
+    player
+        .commit_callback_phase_json(&json!({"token":phase["token"],"writes":[valid]}).to_string())
+        .unwrap();
+    assert_eq!(
+        player.session.frame().objects[0].style.emission.strength(),
+        strength
+    );
+    finish(&mut player, None);
+}

@@ -2016,11 +2016,13 @@ f64 material values independently of opacity. Completion combines material and
 other style endpoints in one transaction; seeks recover captured source values
 before the first track and authored values after reconciliation.
 
-This candidate does **not** complete emission authoring. Native scalar-graph
-bindings and per-frame effective callback writes are not supported for emission.
-Family material edits reuse the atomic style transaction and ordinary method
-targets; non-rendered roots retain metadata without multiplying leaf radiance.
-Python setters forward through the Rust/WASM bindings and reject callback use.
+This candidate does **not** complete emission authoring. Leaf callback writes use
+checked f64 values through the existing effective-write vocabulary and ownership
+receipt; completion preserves continuing callback domains independently of opacity.
+Native scalar-graph bindings and family/provisional callback emission remain
+unsupported. Family material edits reuse the atomic style transaction and ordinary
+method targets; non-rendered roots retain metadata without multiplying leaf radiance.
+Python ordinary and leaf callback setters forward through shared Rust/WASM operations.
 Equivalent executable Python scripts, cross-host execution, composed captures,
 publication/recovery/performance gates and Bloom/emission gallery examples remain
 required before promotion; wrapper dispatch tests and WASM compilation alone do

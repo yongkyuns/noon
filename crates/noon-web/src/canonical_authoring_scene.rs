@@ -7020,6 +7020,15 @@ mod wasm {
         }
 
         /// Apply shared paint opacity while leaving whole-object opacity with its owner.
+        /// Validate one callback material value without changing authored state.
+        #[wasm_bindgen(js_name = callbackEmission)]
+        pub fn callback_emission(&self, strength: f64) -> Result<f64, JsValue> {
+            noon_core::Emission::new(strength)
+                .map(noon_core::Emission::strength)
+                .map_err(noon::AuthoringError::Emission)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = callbackPaintSetOpacity)]
         #[allow(clippy::too_many_arguments)]
         pub fn callback_paint_set_opacity(
