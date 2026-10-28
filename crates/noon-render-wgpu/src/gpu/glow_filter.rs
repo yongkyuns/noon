@@ -482,6 +482,7 @@ pub enum EffectPrepareError {
     Blur(super::gaussian_blur::GaussianBlurPrepareError),
     Parameter(EffectParameterError),
     InvalidScopeOpacity,
+    InvalidCaptureClearColor,
     RadiusExceedsProfile,
     UnsupportedCapture,
     MissingSilhouette,

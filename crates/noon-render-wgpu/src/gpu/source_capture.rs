@@ -19,6 +19,10 @@ use crate::{
 use noon_core::{RasterImageResourceHandle, Rect, Vec2};
 
 mod filtered;
+mod prefix;
+pub use prefix::{
+    PainterPrefixCaptureFilter, PainterPrefixCaptureRequest, PainterPrefixCaptureScope,
+};
 
 /// A versioned disposable renderer output, consumed without resampling it.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,7 +41,7 @@ pub(super) struct SourceReplacement {
     pub capture: FilteredCapture,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct FilteredBinding {
     texture: wgpu::Texture,
     offset: u64,
@@ -77,6 +81,7 @@ pub(super) struct PreparedSource {
     capture_origin: [i32; 2],
     capture_viewport: [u32; 2],
     has_filtered: bool,
+    clear_color: wgpu::Color,
 }
 
 impl PreparedSource {
@@ -102,7 +107,48 @@ impl PreparedSource {
         uniform_alignment: usize,
         replacements: &[SourceReplacement],
     ) -> Option<Self> {
-        if objects.is_empty() || !uniform_alignment.is_power_of_two() {
+        Self::prepare_selected(
+            frame,
+            objects,
+            silhouette,
+            uniform_alignment,
+            replacements,
+            None,
+        )
+    }
+
+    /// A spatially selected, strictly earlier painter prefix is distinct from
+    /// an isolated family interval. The selection is never sorted or widened.
+    fn prepare_prefix(
+        frame: &PreparedRetainedGpuFrame<'_>,
+        objects: &[(noon_core::ObjectId, f32)],
+        uniform_alignment: usize,
+        replacements: &[SourceReplacement],
+        anchor: noon_core::ObjectId,
+        clear_color: wgpu::Color,
+    ) -> Option<Self> {
+        let rank = frame.capture_rank(anchor)?;
+        let mut source = Self::prepare_selected(
+            frame,
+            objects,
+            false,
+            uniform_alignment,
+            replacements,
+            Some(rank),
+        )?;
+        source.clear_color = clear_color;
+        Some(source)
+    }
+
+    fn prepare_selected(
+        frame: &PreparedRetainedGpuFrame<'_>,
+        objects: &[(noon_core::ObjectId, f32)],
+        silhouette: bool,
+        uniform_alignment: usize,
+        replacements: &[SourceReplacement],
+        prefix_end: Option<usize>,
+    ) -> Option<Self> {
+        if (objects.is_empty() && prefix_end.is_none()) || !uniform_alignment.is_power_of_two() {
             return None;
         }
         let mut source = Self {
@@ -112,6 +158,7 @@ impl PreparedSource {
             capture_origin: [0; 2],
             capture_viewport: [0; 2],
             has_filtered: false,
+            clear_color: wgpu::Color::TRANSPARENT,
         };
         let mut previous_rank = None;
         for &(object, opacity) in objects {
@@ -119,9 +166,14 @@ impl PreparedSource {
                 return None;
             }
             let rank = frame.capture_rank(object)?;
-            // Capture exactly one contiguous, unique painter interval. Never
-            // sort an aliased/interleaved request into a convenient group.
-            if previous_rank.is_some_and(|previous| rank != previous + 1) {
+            // Isolated groups require one contiguous interval. Explicit prefix
+            // selections permit spatial gaps but only strictly earlier ranks.
+            // Neither mode may sort away duplicates, reversal or interleaving.
+            if let Some(end) = prefix_end {
+                if rank >= end || previous_rank.is_some_and(|previous| rank <= previous) {
+                    return None;
+                }
+            } else if previous_rank.is_some_and(|previous| rank != previous + 1) {
                 return None;
             }
             previous_rank = Some(rank);
@@ -443,7 +495,7 @@ impl PreparedSource {
             depth_slice: None,
             resolve_target: Some(target),
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                load: wgpu::LoadOp::Clear(self.clear_color),
                 store: wgpu::StoreOp::Discard,
             },
         })];

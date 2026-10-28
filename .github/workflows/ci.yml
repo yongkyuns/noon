@@ -252,7 +252,7 @@ jobs:
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
       - name: Qualify public composed group pixels and lifecycle
-        run: cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture
+        run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
       - name: Qualify authored cell sampling and export
@@ -263,6 +263,10 @@ jobs:
         env:
           NOON_BACKDROP_ARTIFACT_DIR: backdrop-raster-artifacts
         run: cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests -- --include-ignored --nocapture
+      - name: Qualify painter-prefix capture against independent layer references
+        env:
+          NOON_PREFIX_ARTIFACT_DIR: prefix-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests -- --include-ignored --nocapture
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
@@ -308,6 +312,7 @@ jobs:
           path: |
             glow-raster-artifacts
             backdrop-raster-artifacts
+            prefix-raster-artifacts
           if-no-files-found: warn
           retention-days: 3
 

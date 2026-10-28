@@ -14,7 +14,7 @@ mod composed_publication;
 const SIZE: [u32; 2] = [80, 60];
 const IMAGE_SIZE: [usize; 2] = [16, 12];
 
-fn fixture() -> (SceneInstance, [Vec<u8>; 2]) {
+pub(super) fn fixture() -> (SceneInstance, [Vec<u8>; 2]) {
     let pixels = std::array::from_fn(|image| {
         (0..IMAGE_SIZE[1])
             .flat_map(|y| {
@@ -111,7 +111,7 @@ fn target(device: &wgpu::Device, samples: u32) -> wgpu::Texture {
     })
 }
 
-fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+pub(super) fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
     let stride = (SIZE[0] * 4).div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -156,7 +156,7 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> 
     bytes
 }
 
-fn over(destination: &mut [u8], source: [f64; 4]) {
+pub(super) fn over(destination: &mut [u8], source: [f64; 4]) {
     for channel in 0..4 {
         destination[channel] = (255.0 * source[channel]
             + f64::from(destination[channel]) * (1.0 - source[3]))
@@ -167,7 +167,7 @@ fn over(destination: &mut [u8], source: [f64; 4]) {
 
 // Literal integer pixel placement and straight-byte source-over, independent of
 // packed uniforms, source draw lists, GPU intermediates and shader helpers.
-fn reference_layers(images: &[Vec<u8>; 2], silhouette: bool) -> [Vec<u8>; 3] {
+pub(super) fn reference_layers(images: &[Vec<u8>; 2], silhouette: bool) -> [Vec<u8>; 3] {
     let mut layers = std::array::from_fn(|_| vec![0; SIZE[0] as usize * SIZE[1] as usize * 4]);
     for image in 0..2 {
         let left = if image == 0 { 27 } else { 37 };
@@ -215,7 +215,7 @@ fn reference_layers(images: &[Vec<u8>; 2], silhouette: bool) -> [Vec<u8>; 3] {
     layers
 }
 
-fn compose(layers: &[Vec<u8>; 3]) -> Vec<u8> {
+pub(super) fn compose(layers: &[Vec<u8>; 3]) -> Vec<u8> {
     let mut output = vec![0; layers[0].len()];
     for layer in layers {
         for (out, pixel) in output
@@ -234,7 +234,7 @@ fn blur(source: &[u8]) -> Vec<u8> {
     blur_with_opacity(source, 0.5)
 }
 
-fn blur_with_opacity(source: &[u8], opacity: f64) -> Vec<u8> {
+pub(super) fn blur_with_opacity(source: &[u8], opacity: f64) -> Vec<u8> {
     let mut output = vec![0; source.len()];
     let mut taps = Vec::new();
     let mut mass = 0.0;
@@ -269,7 +269,7 @@ fn blur_with_opacity(source: &[u8], opacity: f64) -> Vec<u8> {
     output
 }
 
-fn maximum_error(actual: &[u8], expected: &[u8]) -> u8 {
+pub(super) fn maximum_error(actual: &[u8], expected: &[u8]) -> u8 {
     assert_eq!(actual.len(), expected.len());
     actual
         .iter()

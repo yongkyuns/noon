@@ -1499,3 +1499,63 @@ prefix dependency/bounds invalidation, capture ordering/clear color, nested
 isolation, radius-zero exact bypass, paired Rust/Python scripts, WebGPU/WebGL2
 and export qualification remain required before claiming `BackdropBlur` support
 under #1897. Ordinary object/group filters keep their existing input roles.
+
+
+### Painter-prefix capture prerequisite
+
+`PainterPrefixCaptureFilter` records a bounded, explicitly selected painter
+prefix into an input texture. It uses the same retained geometry, text, images,
+original draw order and source-capture encoder as ordinary isolated effects. Its
+request names an existing target painter anchor, an immutable candidate list,
+physical capture origin/size, source-content revision and the consuming view's
+encoded-premultiplied clear color. Prefix output is a separate input; preparing
+it does not replace or repaint the target.
+
+Candidates must be unique, strictly increasing in current painter order, and
+strictly before the anchor. Spatial gaps and an empty prefix are valid here;
+ordinary isolated groups still require their complete contiguous intervals.
+Previously prepared leaf filters and outermost earlier isolated groups contribute
+their actual retained results, including each group's final opacity once. A
+selected group replacement must contain every member of its interval in order;
+a missing member cannot consume a different following candidate. Stale child
+outputs reject before committing a new prefix image.
+
+The execution/publication caller owns dependency discovery and must supply the
+complete expanded-window closure, including needed offscreen content and whole
+isolated intervals. It advances the source revision for selected content, order,
+mesh or text changes. The operator validates the supplied selection; it does not
+prove that an incomplete spatial query selected every required dependency. It
+owns no scene membership, identity allocator, semantic values or clock.
+
+This RGBA8/BGRA8 unorm profile captures an exact physical window using a
+four-sample source attachment and a resolved image: twenty retained texture bytes
+per pixel. Prefixes keep the same view clear color through transparent gaps and
+outside the viewport. Warm fixed-window work reuses textures, buffers and image
+bindings; clean preparation with the same immutable selection/revision performs
+no uploads, allocations or passes and checks only its retained key. Parameter
+changes remain local to this selected capture. Retiring or recreating a scope
+releases its derived resources. Hosts own submission and in-flight budgets;
+abandoned preparation requires invalidation before retry. An existing GPU resource
+identity binds each scope to its renderer; replacement requires a fresh/cleared
+scope, and a new device also requires a new filter. Old renderer image bindings
+cannot silently follow a new context.
+
+`cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests --
+--include-ignored --nocapture` checks order/admission, atomic failures, reuse,
+resize, revision exhaustion, earlier filtered inputs and stale-input rejection.
+Actual RGBA/BGRA captures compare against literal independent image/rectangle
+layers on transparent, opaque and translucent nonblack backgrounds, including
+negative origins and windows outside the viewport. The accepted byte bound is
+two per channel; empty or fully offscreen captures are exact. A real wrong-clear
+capture proves the same reference rejects a transparent-clear substitution and
+recovers through normal invalidation. `NOON_PREFIX_ARTIFACT_DIR` retains complete
+actual/reference RGBA buffers and exact fixture profiles; CI runs and retains the
+corpus. These are capture/filter composition proofs over an independently defined
+fixture, not proof of arbitrary source rasterization or physical frame pacing.
+
+Shared semantic backdrop admission and indexed painter-prefix dependencies,
+complete expanded visibility, dependency-ordered preparation, target coverage
+and replacement placement, exact neutral bypass, and equivalent creator-facing
+Rust/Python scripts still remain under #1897. No creator-facing backdrop API is
+exported by this renderer prerequisite. WebGPU/WebGL2 and authored export
+qualification of that complete path also remain required.

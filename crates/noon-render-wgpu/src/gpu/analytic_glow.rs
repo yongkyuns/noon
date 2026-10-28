@@ -217,10 +217,10 @@ struct ResidentEffect {
 }
 
 #[derive(Debug)]
-struct PlacementPrograms {
-    layout: wgpu::BindGroupLayout,
+pub(super) struct PlacementPrograms {
+    pub(super) layout: wgpu::BindGroupLayout,
     single: wgpu::RenderPipeline,
-    multisampled: wgpu::RenderPipeline,
+    pub(super) multisampled: wgpu::RenderPipeline,
 }
 
 #[derive(Debug, Default)]
@@ -1404,25 +1404,32 @@ fn tile_camera(
     viewport: [u32; 2],
     tile: EffectCaptureTile,
 ) -> Result<Camera2D, EffectPrepareError> {
+    capture_camera(camera, viewport, tile.origin, tile.size)
+}
+
+pub(super) fn capture_camera(
+    camera: Camera2D,
+    viewport: [u32; 2],
+    origin: [i32; 2],
+    size: [u32; 2],
+) -> Result<Camera2D, EffectPrepareError> {
     let pixel = [
         f64::from(camera.world_size.x) / f64::from(viewport[0]),
         f64::from(camera.world_size.y) / f64::from(viewport[1]),
     ];
     let center = [
         f64::from(camera.center.x)
-            + (f64::from(tile.origin[0]) + f64::from(tile.size[0]) * 0.5
-                - f64::from(viewport[0]) * 0.5)
+            + (f64::from(origin[0]) + f64::from(size[0]) * 0.5 - f64::from(viewport[0]) * 0.5)
                 * pixel[0],
         f64::from(camera.center.y)
-            - (f64::from(tile.origin[1]) + f64::from(tile.size[1]) * 0.5
-                - f64::from(viewport[1]) * 0.5)
+            - (f64::from(origin[1]) + f64::from(size[1]) * 0.5 - f64::from(viewport[1]) * 0.5)
                 * pixel[1],
     ];
     Camera2D::new(
         Vec2::new(center[0] as f32, center[1] as f32),
         Vec2::new(
-            (f64::from(tile.size[0]) * pixel[0]) as f32,
-            (f64::from(tile.size[1]) * pixel[1]) as f32,
+            (f64::from(size[0]) * pixel[0]) as f32,
+            (f64::from(size[1]) * pixel[1]) as f32,
         ),
     )
     .map_err(|_| EffectPrepareError::InvalidProjection)
@@ -1474,7 +1481,7 @@ fn capture_source(
 }
 
 impl PlacementPrograms {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon glow tile placement layout"),
             entries: &[

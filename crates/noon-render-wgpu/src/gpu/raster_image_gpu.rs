@@ -55,7 +55,7 @@ struct ObjectResidency {
 
 /// An isolated source reuses the immutable resident texture and ordinary image
 /// shader, with a separately normalized uniform in the source's retained buffer.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct CapturedImageBinding {
     pub resource: RasterImageResourceHandle,
     pub offset: u64,

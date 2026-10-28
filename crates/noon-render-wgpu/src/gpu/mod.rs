@@ -14,6 +14,9 @@ mod derived_display;
 mod paint;
 mod source_capture;
 pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
+pub use source_capture::{
+    PainterPrefixCaptureFilter, PainterPrefixCaptureRequest, PainterPrefixCaptureScope,
+};
 mod effect_stack;
 mod gaussian_blur;
 mod glow_filter;
