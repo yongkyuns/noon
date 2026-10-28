@@ -47,6 +47,7 @@ struct Fixture {
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
     target: wgpu::Texture,
+    source_bounds_override: Option<noon_core::Rect>,
 }
 impl Fixture {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -76,6 +77,7 @@ impl Fixture {
             preparer: RetainedFramePreparer::new(),
             text,
             target,
+            source_bounds_override: None,
         }
     }
     fn render(
@@ -94,6 +96,9 @@ impl Fixture {
                 .iter()
                 .map(|&i| (ExecutionSlotId::new(i, 0), i as usize)),
         );
+        if let Some(bounds) = self.source_bounds_override {
+            index.upsert_bounds(ExecutionSlotId::new(0, 0), ObjectId::new(10), bounds, 0);
+        }
         let publication = runtime
             .take_renderer_publication()
             .with_spatial_index(&index);
@@ -532,4 +537,133 @@ fn backdrop_normal_renderer_matches_independent_convolution_and_neutral_ordinary
     );
     eprintln!("two ordered backdrops: maximum error {error}");
     eprintln!("backdrop coordinator: 27 profiles, {checked} independent channels, maximum error {maximum}, 27 exact neutral comparisons");
+}
+
+#[test]
+#[ignore = "requires a real raster adapter; background-stroke input bounds and actual omitted-source control"]
+fn backdrop_prefix_includes_screen_space_background_stroke_outside_its_geometry_box() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let path = noon_core::VectorPath::new()
+        .move_to(Vec2::new(-1.0, -1.0))
+        .line_to(Vec2::new(1.0, -1.0))
+        .line_to(Vec2::new(1.0, 1.0));
+    let source = CompiledObject::new(
+        ObjectId::new(10),
+        GeometryRef::path(path),
+        Transform2D {
+            scale: Vec2::new(0.1, 0.1),
+            ..Transform2D::IDENTITY
+        },
+        Style {
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            background_stroke: Some(Color::rgba(1.0, 0.0, 0.0, 1.0)),
+            background_stroke_width: 3.0,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        },
+    );
+    let mut panel = row(20, 1.3, [0.4, 0.8], Color::rgba(0.1, 0.6, 0.9, 0.27));
+    let clear = wgpu::Color::TRANSPARENT;
+    let prefix = ordinary(&device, &queue, vec![source.clone()], clear);
+    let paint = ordinary(&device, &queue, vec![panel.clone()], clear);
+    let mut white = panel.clone();
+    white.base_style.fill = Some(Color::WHITE);
+    let coverage = ordinary(&device, &queue, vec![white], clear);
+    let reference = expected(&prefix, &paint, &coverage, 1.0, 0.6);
+    panel.effects = Some(panel_effect(1.0));
+    panel.base_style.opacity = 0.6;
+    let objects = vec![source, panel];
+    let mut fixture = Fixture::new(&device, &queue);
+    fixture.render(&device, &queue, &mut runtime(objects.clone()), clear);
+    let actual = read(&device, &queue, &fixture.target);
+    let maximum = actual
+        .iter()
+        .zip(&reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain("stroke-background-input",&actual,&reference,&[("prefix",&prefix),("paint",&paint),("coverage",&coverage)],
+        r#"{"width":80,"height":60,"bound":2,"profile":"scene-width background stroke invariant under object scale"}"#.to_owned());
+    assert!(
+        maximum <= 2,
+        "screen-space background stroke maximum error {maximum}"
+    );
+    // Run the production selection/capture/composite path with the exact old
+    // geometry-only bounds: the target's expanded prefix window misses them.
+    let mut broken = Fixture::new(&device, &queue);
+    broken.source_bounds_override = Some(noon_core::Rect::new(
+        Vec2::new(-0.1, -0.1),
+        Vec2::new(0.1, 0.1),
+    ));
+    broken.render(&device, &queue, &mut runtime(objects.clone()), clear);
+    let wrong = read(&device, &queue, &broken.target);
+    let error = wrong
+        .iter()
+        .zip(&reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain(
+        "negative-geometry-only-stroke-bounds",
+        &wrong,
+        &reference,
+        &[],
+        r#"{"width":80,"height":60,"bound":2,"negativeControl":true}"#.to_owned(),
+    );
+    assert!(
+        error > 2,
+        "omitted background stroke must fail the same comparator"
+    );
+    eprintln!("stroked prefix: maximum byte error {maximum}; actual old-bounds negative control {error}, accepted bound 2");
+    // A background-only target needs original geometric coverage independent
+    // of its translucent background paint. This exercises the separate M stream.
+    let mut target = objects[0].clone();
+    target.id = ObjectId::new(20);
+    target.base_style.background_stroke = Some(Color::rgba(0.1, 0.6, 0.9, 0.27));
+    let source = row(10, -0.7, [2.0, 2.4], Color::rgba(0.9, 0.1, 0.2, 0.65));
+    let prefix = ordinary(&device, &queue, vec![source.clone()], clear);
+    let paint = ordinary(&device, &queue, vec![target.clone()], clear);
+    let mut mask = target.clone();
+    mask.base_style.background_stroke = Some(Color::WHITE);
+    let coverage = ordinary(&device, &queue, vec![mask], clear);
+    let reference = expected(&prefix, &paint, &coverage, 1.0, 0.6);
+    let mut ordinary_target = target.clone();
+    ordinary_target.base_style.opacity = 0.6;
+    target.effects = Some(panel_effect(1.0));
+    target.base_style.opacity = 0.6;
+    let mut scene = runtime(vec![source.clone(), target]);
+    let mut fixture = Fixture::new(&device, &queue);
+    fixture.render(&device, &queue, &mut scene, clear);
+    let actual = read(&device, &queue, &fixture.target);
+    let error = actual
+        .iter()
+        .zip(&reference)
+        .map(|(&a, &b)| a.abs_diff(b))
+        .max()
+        .unwrap();
+    retain("stroke-background-target",&actual,&reference,&[("prefix",&prefix),("paint",&paint),("coverage",&coverage)],
+        r#"{"width":80,"height":60,"bound":2,"profile":"original background-stroke coverage independent of translucent target paint"}"#.to_owned());
+    assert!(
+        error <= 2,
+        "original background target coverage: maximum error {error}"
+    );
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffects {
+            object: ObjectId::new(20),
+            effects: panel_effect(0.0),
+        })
+        .unwrap();
+    fixture.render(&device, &queue, &mut scene, clear);
+    assert_eq!(
+        read(&device, &queue, &fixture.target),
+        ordinary(&device, &queue, vec![source, ordinary_target], clear),
+        "background target neutral bypass remains exact"
+    );
+    eprintln!(
+        "stroked target original coverage: maximum error {error}; neutral ordinary output exact"
+    );
 }

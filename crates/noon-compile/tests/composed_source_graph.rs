@@ -81,6 +81,18 @@ impl ComposedSourceGraphView for View<'_> {
     fn input_role(&self, owner: ObjectId) -> Option<noon_core::EffectInputRole> {
         self.row(owner).map(|row| row.input_role)
     }
+    fn prefix_input_unsupported(&self, input: ObjectId) -> bool {
+        self.row(input)
+            .is_some_and(|row| row.source.is_none() && !row.valid)
+    }
+    fn prefix_conflict(&self) -> Option<(ObjectId, ObjectId)> {
+        let changes = self.dependencies.prepare_prefix_admission(
+            self,
+            self.edits.keys().copied(),
+            std::iter::empty(),
+        );
+        self.dependencies.prefix_conflict(&changes)
+    }
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
         self.dependencies.overlapping(input)
     }
@@ -361,4 +373,47 @@ fn backdrop_role_changes_check_only_the_actual_isolation_closure_and_reject_miss
         view.reads.get(),
         rows.len()
     );
+}
+
+#[test]
+fn borrowed_prefix_capability_validation_uses_only_the_staged_rows_and_canonical_ranks() {
+    let (rows, dependencies, mut ranks) = fixture();
+    let mut input = leaf();
+    input.valid = false;
+    let mut glass = leaf();
+    glass.input_role = noon_core::EffectInputRole::PainterPrefix;
+    let edits = BTreeMap::from([(id(1000), Some(input)), (id(20_000), Some(glass))]);
+    let staged = ComposedDependencyChanges::new(&dependencies);
+    ranks.insert(id(1000), Some(42));
+    ranks.insert(id(20_000), Some(19_999));
+    {
+        let view = View {
+            rows: &rows,
+            edits: &edits,
+            ranks: &ranks,
+            dependencies: &staged,
+            reads: Cell::new(0),
+        };
+        let affected = staged.affected_scopes(&view, [id(1000), id(20_000)], []);
+        let error = validate_composed_sources(&view, &affected).unwrap_err();
+        assert_eq!(error.owner, id(20_000));
+        assert_eq!(error.kind, ErrorKind::UnsupportedBackdropInput(id(1000)));
+        assert!(
+            view.reads.get() < 100,
+            "borrowed {} of {} rows",
+            view.reads.get(),
+            rows.len()
+        );
+    }
+    ranks.insert(id(1000), Some(20_001));
+    let view = View {
+        rows: &rows,
+        edits: &edits,
+        ranks: &ranks,
+        dependencies: &staged,
+        reads: Cell::new(0),
+    };
+    let affected = staged.affected_scopes(&view, [id(1000), id(20_000)], []);
+    validate_composed_sources(&view, &affected).unwrap();
+    assert!(view.reads.get() < 100);
 }

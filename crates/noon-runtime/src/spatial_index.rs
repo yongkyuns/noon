@@ -470,13 +470,39 @@ fn effective_object_conservative_bounds_with_external(
         Some(geometry) => transform_rect(geometry_local_bounds(geometry)?, render_transform),
         None => transform_rect(text_bounds?, render_transform),
     };
-    if style.stroke.is_some() && style.stroke_width.is_finite() {
-        let scale = render_transform
-            .scale
-            .x
-            .abs()
-            .max(render_transform.scale.y.abs());
-        let expansion = style.stroke_width.abs() * scale * 0.5;
+    let foreground = style
+        .stroke
+        .filter(|_| style.stroke_width.is_finite())
+        .map_or(0.0, |_| style.stroke_width.abs());
+    let background = style
+        .background_stroke
+        .filter(|_| style.background_stroke_width.is_finite())
+        .map_or(0.0, |_| style.background_stroke_width.abs());
+    let width = foreground.max(background);
+    if width > 0.0 {
+        let scale = match style.stroke_width_mode {
+            noon_core::StrokeWidthMode::ScaleWithObject => render_transform
+                .scale
+                .x
+                .abs()
+                .max(render_transform.scale.y.abs()),
+            // ScreenSpace keeps a scene-space width invariant under object
+            // transforms. Camera projection is applied later, like geometry.
+            noon_core::StrokeWidthMode::ScreenSpace => 1.0,
+        };
+        let join = if style.stroke_join == noon_core::StrokeJoin::Miter {
+            noon_geometry::STROKE_MITER_LIMIT
+        } else {
+            1.0
+        };
+        // A square cap can extend one half-width in both the tangent and
+        // normal directions. Its radial envelope is sqrt(2) half-widths.
+        let cap = if style.stroke_cap == noon_core::StrokeCap::Square {
+            std::f32::consts::SQRT_2
+        } else {
+            1.0
+        };
+        let expansion = width * scale * 0.5 * join.max(cap);
         world.min.x -= expansion;
         world.min.y -= expansion;
         world.max.x += expansion;
@@ -700,6 +726,156 @@ mod tests {
         assert!((bounds.max.x - (-4.0 + half.x + stroke_expansion)).abs() < 1e-5);
         assert!((bounds.min.y - (5.0 - half.y - stroke_expansion)).abs() < 1e-5);
         assert!((bounds.max.y - (5.0 + half.y + stroke_expansion)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn screen_space_and_background_strokes_reach_the_shared_spatial_index() {
+        let style = Style {
+            fill: None,
+            stroke: Some(noon_core::Color::WHITE),
+            stroke_width: 0.4,
+            background_stroke: Some(noon_core::Color::BLACK),
+            background_stroke_width: 0.8,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let frame = single_object_frame(
+            GeometryRef::circle(1.0),
+            Transform2D {
+                scale: Vec2::new(0.1, 0.1),
+                ..Transform2D::IDENTITY
+            },
+            style,
+        );
+        let bounds = frame_object_conservative_bounds(&frame, 0).unwrap();
+        assert_eq!(
+            bounds,
+            Rect::new(Vec2::new(-0.5, -0.5), Vec2::new(0.5, 0.5))
+        );
+        let mut index = ExecutionSpatialIndex::default();
+        index.upsert_frame_slot(
+            &frame,
+            &noon_core::GeometryResourceArena::new(),
+            ExecutionSlotId::new(0, 0),
+            0,
+            0,
+        );
+        let query = index.query_rect(Rect::new(Vec2::new(0.4, -0.01), Vec2::new(0.42, 0.01)));
+        assert_eq!(query.slots(), &[ExecutionSlotId::new(0, 0)]);
+        // The old foreground-only, object-scaled radius was 0.12 and would
+        // omit this visible background stroke from a backdrop prefix query.
+        let old_radius = 0.1 + style.stroke_width * frame.objects[0].transform.scale.x * 0.5;
+        assert!(old_radius < 0.4);
+    }
+
+    #[test]
+    fn stroke_bounds_contain_tessellated_vertices_across_modes_joins_caps_and_transforms() {
+        use noon_core::{StrokeCap, StrokeJoin, StrokeWidthMode, VectorPath};
+        let points = [Vec2::new(-1.0, -0.2), Vec2::ZERO, Vec2::new(-1.0, 0.4)];
+        let path = VectorPath::new()
+            .move_to(points[0])
+            .line_to(points[1])
+            .line_to(points[2]);
+        let mut profiles = 0;
+        let mut old_omissions = 0;
+        for mode in [
+            StrokeWidthMode::ScaleWithObject,
+            StrokeWidthMode::ScreenSpace,
+        ] {
+            for join in [StrokeJoin::Round, StrokeJoin::Bevel, StrokeJoin::Miter] {
+                for cap in [StrokeCap::Round, StrokeCap::Butt, StrokeCap::Square] {
+                    for scale in [
+                        Vec2::new(0.1, 0.3),
+                        Vec2::new(2.0, 0.5),
+                        Vec2::new(-0.7, 1.4),
+                    ] {
+                        for rotation in [0.0, 0.3, 1.2] {
+                            for background in [false, true] {
+                                let transform = Transform2D {
+                                    translation: Vec2::new(1.3, -0.8),
+                                    scale,
+                                    rotation,
+                                };
+                                let style = Style {
+                                    fill: None,
+                                    stroke: (!background).then_some(noon_core::Color::WHITE),
+                                    stroke_width: if background { 0.0 } else { 0.6 },
+                                    background_stroke: background
+                                        .then_some(noon_core::Color::BLACK),
+                                    background_stroke_width: if background { 0.6 } else { 0.0 },
+                                    stroke_width_mode: mode,
+                                    stroke_join: join,
+                                    stroke_cap: cap,
+                                    ..Style::default()
+                                };
+                                let frame = single_object_frame(
+                                    GeometryRef::path(path.clone()),
+                                    transform,
+                                    style,
+                                );
+                                let bounds = frame_object_conservative_bounds(&frame, 0).unwrap();
+                                // Independently tessellate the actual geometry. In
+                                // ScreenSpace the renderer transforms the path
+                                // before stroke extrusion; ordinary strokes
+                                // transform the already extruded mesh instead.
+                                let transformed = points.map(|p| transform.transform_point(p));
+                                let world_path = VectorPath::new()
+                                    .move_to(transformed[0])
+                                    .line_to(transformed[1])
+                                    .line_to(transformed[2]);
+                                let mesh = noon_geometry::tessellate_styled_with_background_stroke(
+                                    if mode == StrokeWidthMode::ScreenSpace {
+                                        &world_path
+                                    } else {
+                                        &path
+                                    },
+                                    style.stroke_width,
+                                    style.background_stroke_width,
+                                    join,
+                                    cap,
+                                    false,
+                                )
+                                .unwrap();
+                                let raw =
+                                    transform_rect(path.conservative_bounds().unwrap(), transform);
+                                let old_expansion = if background {
+                                    0.0
+                                } else {
+                                    0.6 * scale.x.abs().max(scale.y.abs()) * 0.5
+                                };
+                                for vertex in mesh.vertices {
+                                    let p = if mode == StrokeWidthMode::ScreenSpace {
+                                        vertex.position
+                                    } else {
+                                        transform.transform_point(vertex.position)
+                                    };
+                                    assert!(
+                                        p.x >= bounds.min.x - 1e-5
+                                            && p.x <= bounds.max.x + 1e-5
+                                            && p.y >= bounds.min.y - 1e-5
+                                            && p.y <= bounds.max.y + 1e-5,
+                                        "profile {profiles}: point {p:?} outside {bounds:?}"
+                                    );
+                                    if p.x < raw.min.x - old_expansion - 1e-5
+                                        || p.x > raw.max.x + old_expansion + 1e-5
+                                        || p.y < raw.min.y - old_expansion - 1e-5
+                                        || p.y > raw.max.y + old_expansion + 1e-5
+                                    {
+                                        old_omissions += 1;
+                                    }
+                                }
+                                profiles += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(profiles, 324);
+        assert!(
+            old_omissions > 0,
+            "the old bounds must fail real geometry witnesses"
+        );
     }
 
     #[test]

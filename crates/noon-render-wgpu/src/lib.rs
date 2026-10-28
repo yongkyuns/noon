@@ -149,6 +149,16 @@ pub struct PathInstance {
     pub background_stroke: [f32; 4],
 }
 
+impl PathInstance {
+    /// Background stroke is a separately packed path surface. Its alpha must
+    /// participate in the same exact dirty-row eligibility as fill and stroke.
+    pub(crate) fn may_contribute_color(self) -> bool {
+        self.style.may_contribute_color()
+            || !self.background_stroke.iter().all(|v| v.is_finite())
+            || (self.style.opacity != 0.0 && self.background_stroke[3] != 0.0)
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PathVertex {
@@ -559,8 +569,7 @@ impl PreparedSlot {
             Self::Path {
                 index, reveal_head, ..
             } => {
-                paths[index].style.may_contribute_color()
-                    || (paths[index].background_stroke[3] > 0.0 && paths[index].style.opacity > 0.0)
+                paths[index].may_contribute_color()
                     || reveal_head.is_some_and(|head| lines[head].style.may_contribute_color())
             }
         }

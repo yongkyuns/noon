@@ -542,3 +542,5 @@ fn backdrop_parameter_edits_replay_and_retirement_keep_the_sparse_role_index_coh
     scene.compact_retired_object_slots().unwrap();
     assert!(scene.composed_dependencies.is_empty());
 }
+
+mod prefix_admission;

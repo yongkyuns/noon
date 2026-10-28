@@ -10,9 +10,9 @@ pub use audio::CompiledAudioClip;
 mod compaction;
 mod composed_dependencies;
 pub use composed_dependencies::{
-    validate_composed_sources, CompiledComposedSourceError, CompiledComposedSourceErrorKind,
-    ComposedDependencies, ComposedDependencyChanges, ComposedSourceGraphView,
-    ComposedValidationStats,
+    unsupported_prefix_input, validate_composed_sources, CompiledComposedSourceError,
+    CompiledComposedSourceErrorKind, ComposedDependencies, ComposedDependencyChanges,
+    ComposedSourceGraphView, ComposedValidationStats, PrefixAdmissionChanges,
 };
 mod effect_attachment;
 pub use effect_attachment::{CompiledEffectStack, CompiledEffectStackError};
@@ -1799,7 +1799,7 @@ impl CompiledScene {
     }
 
     fn reposition_painter_row(&mut self, index: u32) {
-        reposition_order_row(
+        let range = reposition_order_row(
             &mut self.painter_order,
             &mut self.painter_ranks,
             index,
@@ -1818,6 +1818,10 @@ impl CompiledScene {
                     .then_with(|| self.family_ranks[a as usize].cmp(&self.family_ranks[b as usize]))
             },
         );
+        for rank in range {
+            let id = self.objects[self.painter_order[rank] as usize].id;
+            self.refresh_prefix_rank(id, Some(rank));
+        }
     }
 
     pub const fn resources(&self) -> &CompiledResources {
@@ -2232,7 +2236,10 @@ impl CompiledScene {
             ExecutionPatch::RemoveObject(id)
             | ExecutionPatch::SetContent { object: id, .. }
             | ExecutionPatch::SetEffects { object: id, .. }
-            | ExecutionPatch::SetEffectStack { object: id, .. } => Some(*id),
+            | ExecutionPatch::SetEffectStack { object: id, .. }
+            | ExecutionPatch::SetSpatialState { object: id, .. }
+            | ExecutionPatch::SetSemanticTransform { object: id, .. }
+            | ExecutionPatch::SetDrawEnabled { object: id, .. } => Some(*id),
             _ => None,
         };
         let previous = owner.and_then(|id| self.composed_plan(id));
@@ -2336,6 +2343,10 @@ impl CompiledScene {
                 self.painter_order.remove(painter_position);
                 for rank in painter_position..self.painter_order.len() {
                     self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                    self.refresh_prefix_rank(
+                        self.objects[self.painter_order[rank] as usize].id,
+                        Some(rank),
+                    );
                 }
                 let family_position = self.family_ranks[index as usize]
                     .take()

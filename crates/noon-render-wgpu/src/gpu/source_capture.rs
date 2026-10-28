@@ -288,8 +288,12 @@ impl PreparedSource {
                                         continue;
                                     };
                                     // Cached tessellation bounds already include stroke joins/caps.
+                                    let mut value = frame.geometry.paths[at];
+                                    if silhouette {
+                                        value.background_stroke = [1.0; 4];
+                                    }
                                     pack!(
-                                        frame.geometry.paths[at],
+                                        value,
                                         Rect::new(
                                             Vec2::new(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
                                             Vec2::new(a.max.x.max(b.max.x), a.max.y.max(b.max.y))

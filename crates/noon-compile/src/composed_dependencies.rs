@@ -4,7 +4,10 @@ use crate::{CompiledScene, ExecutionPatch};
 use noon_core::{ComposedSource, EffectInputRole, ObjectId};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod prefix_admission;
 mod projection;
+use prefix_admission::PrefixAdmission;
+pub use prefix_admission::{unsupported_prefix_input, PrefixAdmissionChanges};
 mod validation;
 
 /// Borrowed final execution state used to validate composed source dependencies.
@@ -20,6 +23,8 @@ pub trait ComposedSourceGraphView {
     fn input_valid(&self, input: ObjectId) -> Option<bool>;
     fn rank(&self, input: ObjectId) -> Option<usize>;
     fn input_role(&self, owner: ObjectId) -> Option<EffectInputRole>;
+    fn prefix_input_unsupported(&self, input: ObjectId) -> bool;
+    fn prefix_conflict(&self) -> Option<(ObjectId, ObjectId)>;
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId>;
 }
 
@@ -45,6 +50,7 @@ pub enum CompiledComposedSourceErrorKind {
     CrossingOrAliasedScopes,
     ScopeRoleChanged,
     InvalidBackdropSource,
+    UnsupportedBackdropInput(ObjectId),
     NestedBackdrop(ObjectId),
 }
 
@@ -73,6 +79,7 @@ impl std::error::Error for CompiledComposedSourceError {}
 pub struct ComposedDependencies {
     owners: BTreeSet<ObjectId>,
     prefix_owners: BTreeSet<ObjectId>,
+    prefix_admission: PrefixAdmission,
     members: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
     children: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
 }
@@ -175,6 +182,20 @@ impl<'a> ComposedDependencyChanges<'a> {
             self.added.replace(owner, previous, next);
         }
     }
+    pub fn prepare_prefix_admission(
+        &self,
+        view: &impl ComposedSourceGraphView,
+        changed: impl IntoIterator<Item = ObjectId>,
+        painter: impl IntoIterator<Item = ObjectId>,
+    ) -> PrefixAdmissionChanges {
+        self.base.prepare_prefix_admission(view, changed, painter)
+    }
+    pub fn prefix_conflict(
+        &self,
+        changes: &PrefixAdmissionChanges,
+    ) -> Option<(ObjectId, ObjectId)> {
+        self.base.prefix_conflict(changes)
+    }
     pub fn overlapping(&self, member: ObjectId) -> impl Iterator<Item = ObjectId> + '_ {
         self.base
             .dependents(member)
@@ -244,6 +265,7 @@ pub struct ComposedValidationStats {
     pub members_examined: usize,
     /// Only shifted positions are staged; existing scene payloads are borrowed.
     pub painter_rows_staged: usize,
+    pub prefix_rows_examined: usize,
 }
 
 impl CompiledScene {
@@ -272,6 +294,7 @@ impl CompiledScene {
                 .map_or(EffectInputRole::Painted, |stack| stack.input_role())
         });
         self.composed_dependencies.set_input_role(owner, role);
+        self.refresh_prefix_admission(owner);
         let next = self.composed_plan(owner);
         if previous
             .as_ref()
@@ -282,6 +305,47 @@ impl CompiledScene {
         }
         self.composed_dependencies
             .replace(owner, previous.as_deref(), next.as_deref());
+    }
+    pub(crate) fn refresh_prefix_admission(&mut self, object: ObjectId) {
+        let index = self.object_index(object);
+        let rank = index
+            .and_then(|index| self.painter_rank(index))
+            .map(|rank| rank as usize);
+        let unsupported = index.is_some_and(|index| {
+            let row = &self.objects[index as usize];
+            unsupported_prefix_input(&row.content, row.spatial.is_some(), row.draw_enabled)
+        });
+        let owner = index.and_then(|index| {
+            let row = &self.objects[index as usize];
+            row.effects
+                .as_ref()
+                .filter(|stack| stack.input_role() == EffectInputRole::PainterPrefix)
+                .map(|_| {
+                    let anchor = row
+                        .content
+                        .composed_source()
+                        .map_or(object, |source| source.members()[0]);
+                    let rank = self
+                        .object_index(anchor)
+                        .and_then(|i| self.painter_rank(i))
+                        .map(|rank| rank as usize);
+                    (anchor, rank)
+                })
+        });
+        self.composed_dependencies
+            .prefix_admission
+            .set_input(object, unsupported, rank);
+        self.composed_dependencies
+            .prefix_admission
+            .set_owner(object, owner);
+        self.composed_dependencies
+            .prefix_admission
+            .rank(object, rank);
+    }
+    pub(crate) fn refresh_prefix_rank(&mut self, object: ObjectId, rank: Option<usize>) {
+        self.composed_dependencies
+            .prefix_admission
+            .rank(object, rank);
     }
     pub(crate) fn rebuild_composed_dependencies(
         &mut self,
@@ -298,6 +362,34 @@ impl CompiledScene {
             );
             if let Some(source) = row.content.composed_source() {
                 index.insert(row.id, source);
+            }
+        }
+        for row in self.objects.iter().filter(|row| row.live) {
+            let rank = self
+                .object_index(row.id)
+                .and_then(|i| self.painter_rank(i))
+                .map(|rank| rank as usize);
+            index.prefix_admission.set_input(
+                row.id,
+                unsupported_prefix_input(&row.content, row.spatial.is_some(), row.draw_enabled),
+                rank,
+            );
+            if row
+                .effects
+                .as_ref()
+                .is_some_and(|stack| stack.input_role() == EffectInputRole::PainterPrefix)
+            {
+                let anchor = row
+                    .content
+                    .composed_source()
+                    .map_or(row.id, |source| source.members()[0]);
+                let rank = self
+                    .object_index(anchor)
+                    .and_then(|i| self.painter_rank(i))
+                    .map(|rank| rank as usize);
+                index
+                    .prefix_admission
+                    .set_owner(row.id, Some((anchor, rank)));
             }
         }
         let view = projection::Projection::with_index(self, &index);
@@ -328,6 +420,7 @@ impl CompiledScene {
         let mut stats = validate_composed_sources(&view, &affected)
             .map_err(crate::CompilePatchError::InvalidComposedSource)?;
         stats.painter_rows_staged = view.painter_rows_staged();
+        stats.prefix_rows_examined = view.prefix_rows_examined();
         Ok(stats)
     }
 }

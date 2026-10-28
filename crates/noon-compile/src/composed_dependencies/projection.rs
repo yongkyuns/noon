@@ -15,10 +15,15 @@ struct Row<'a> {
     text_bounds: bool,
     z: f64,
     input_role: EffectInputRole,
+    unresolved_geometry: bool,
 }
 impl<'a> Row<'a> {
     fn from_object(row: &'a crate::CompiledObject) -> Self {
         Self {
+            unresolved_geometry: matches!(
+                row.content.geometry(),
+                Some(noon_core::GeometryRef::External(_))
+            ),
             source: if let ObjectContentRef::Composed(source) = &row.content {
                 Some(source)
             } else {
@@ -47,6 +52,7 @@ pub(super) struct Projection<'a> {
     dependencies: ComposedDependencyChanges<'a>,
     family: ProjectedOrder<'a>,
     painter: ProjectedOrder<'a>,
+    prefix: PrefixAdmissionChanges,
 }
 impl<'a> Projection<'a> {
     pub(super) fn new(scene: &'a CompiledScene) -> Self {
@@ -61,6 +67,7 @@ impl<'a> Projection<'a> {
             dependencies: ComposedDependencyChanges::new(base),
             family: ProjectedOrder::new(scene, true),
             painter: ProjectedOrder::new(scene, false),
+            prefix: PrefixAdmissionChanges::default(),
         }
     }
     fn row(&self, id: ObjectId) -> Option<Row<'a>> {
@@ -179,10 +186,24 @@ impl<'a> Projection<'a> {
                         .and_then(|row| row.source)
                         .zip(source)
                         .is_some_and(|(old, new)| !Arc::ptr_eq(old, new));
+                    let capability_changed = self.row(*object).is_some_and(|row| {
+                        row.unresolved_geometry
+                            != matches!(
+                                content.geometry(),
+                                Some(noon_core::GeometryRef::External(_))
+                            )
+                    });
                     self.edit(*object, |row| {
+                        row.unresolved_geometry = matches!(
+                            content.geometry(),
+                            Some(noon_core::GeometryRef::External(_))
+                        );
                         row.source = source;
                         row.text_bounds = text_bounds.is_some();
                     });
+                    if capability_changed {
+                        self.changed.insert(*object);
+                    }
                     if replaces_plan {
                         self.changed.insert(*object);
                         self.replaced.insert(*object);
@@ -273,9 +294,10 @@ impl<'a> Projection<'a> {
                             style.fill.is_some() || style.stroke.is_some() || fill_paint.is_some()
                     });
                 }
-                ExecutionPatch::SetDrawEnabled { object, enabled }
-                    if self.source(*object).is_some() =>
-                {
+                ExecutionPatch::SetDrawEnabled { object, enabled } => {
+                    if self.row(*object).is_some_and(|row| row.draw != *enabled) {
+                        self.changed.insert(*object);
+                    }
                     self.edit(*object, |row| row.draw = *enabled);
                 }
                 _ => {}
@@ -289,10 +311,18 @@ impl<'a> Projection<'a> {
                 });
             }
         }
+        self.prefix = self.dependencies.prepare_prefix_admission(
+            self,
+            self.changed.iter().copied(),
+            self.painter.touched(),
+        );
         for &id in &self.replaced {
             self.dependencies.replace(id, None, self.source(id));
         }
         Ok(())
+    }
+    pub(super) fn prefix_rows_examined(&self) -> usize {
+        self.prefix.rows_examined
     }
     pub(super) fn affected_scopes(&self) -> BTreeSet<ObjectId> {
         self.dependencies.affected_scopes(
@@ -318,6 +348,13 @@ impl ComposedSourceGraphView for Projection<'_> {
     }
     fn input_role(&self, owner: ObjectId) -> Option<EffectInputRole> {
         self.row(owner).map(|row| row.input_role)
+    }
+    fn prefix_input_unsupported(&self, input: ObjectId) -> bool {
+        self.row(input)
+            .is_some_and(|row| row.draw && (row.spatial.is_some() || row.unresolved_geometry))
+    }
+    fn prefix_conflict(&self) -> Option<(ObjectId, ObjectId)> {
+        self.dependencies.prefix_conflict(&self.prefix)
     }
     fn overlapping(&self, input: ObjectId) -> impl Iterator<Item = ObjectId> {
         self.dependencies.overlapping(input)

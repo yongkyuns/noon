@@ -29,7 +29,10 @@ pub(super) fn validate(
                 ));
             }
         } else {
-            if view.input_valid(owner) != Some(true) || view.rank(owner).is_none() {
+            if view.input_valid(owner) != Some(true)
+                || view.prefix_input_unsupported(owner)
+                || view.rank(owner).is_none()
+            {
                 return Err(error(
                     owner,
                     CompiledComposedSourceErrorKind::InvalidBackdropSource,
@@ -42,6 +45,12 @@ pub(super) fn validate(
                 ));
             }
         }
+    }
+    if let Some((owner, input)) = view.prefix_conflict() {
+        return Err(error(
+            owner,
+            CompiledComposedSourceErrorKind::UnsupportedBackdropInput(input),
+        ));
     }
     let mut candidates = affected
         .iter()
@@ -120,6 +129,14 @@ pub(super) fn validate(
                     return Err(error(
                         owner,
                         CompiledComposedSourceErrorKind::NestedBackdrop(input),
+                    ));
+                }
+                if view.input_role(owner) == Some(EffectInputRole::PainterPrefix)
+                    && view.prefix_input_unsupported(input)
+                {
+                    return Err(error(
+                        owner,
+                        CompiledComposedSourceErrorKind::UnsupportedBackdropInput(input),
                     ));
                 }
                 match view.input_valid(input) {

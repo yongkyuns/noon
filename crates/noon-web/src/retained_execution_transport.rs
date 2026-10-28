@@ -2445,6 +2445,8 @@ mod tests {
         mirror
     }
 
+    mod prefix_admission;
+
     fn mixed_frame() -> FrameState {
         let text = TextResourceHandle {
             arena: 0,
