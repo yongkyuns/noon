@@ -1493,12 +1493,10 @@ and double scope opacity. Set `NOON_BACKDROP_ARTIFACT_DIR` to retain every
 input, actual/reference RGBA buffer and exact profile, including seeded defects.
 CI runs these tests on its raster adapter and retains these raw artifacts.
 
-This operator does not select or validate painter-prefix dependencies and does
-not expose a creator-facing backdrop attachment. Semantic admission, local
-prefix dependency/bounds invalidation, capture ordering/clear color, nested
-isolation, radius-zero exact bypass, paired Rust/Python scripts, WebGPU/WebGL2
-and export qualification remain required before claiming `BackdropBlur` support
-under #1897. Ordinary object/group filters keep their existing input roles.
+This operator alone does not select or validate painter-prefix dependencies or
+expose a creator-facing attachment. The finite integrated profile below supplies
+shared admission, local invalidation, capture ordering and creator-facing
+execution. Ordinary object/group filters keep their existing input roles.
 
 
 ### Painter-prefix capture prerequisite
@@ -1553,9 +1551,65 @@ actual/reference RGBA buffers and exact fixture profiles; CI runs and retains th
 corpus. These are capture/filter composition proofs over an independently defined
 fixture, not proof of arbitrary source rasterization or physical frame pacing.
 
-Shared semantic backdrop admission and indexed painter-prefix dependencies,
-complete expanded visibility, dependency-ordered preparation, target coverage
-and replacement placement, exact neutral bypass, and equivalent creator-facing
-Rust/Python scripts still remain under #1897. No creator-facing backdrop API is
-exported by this renderer prerequisite. WebGPU/WebGL2 and authored export
-qualification of that complete path also remain required.
+This capture prerequisite is used by the integrated finite `BackdropBlur` profile
+below. Its resource identities remain derived GPU identities, never semantic
+membership or an alternative clock.
+
+### Finite painter-prefix glass profile
+
+`BackdropBlur(radius=Pixels(12))` processes the earlier painter content beneath
+an object or one isolated composed family. Attach it with
+`card.add_effect(..., name="glass")` and animate it with
+`card.animate.set_effect("glass", radius=Pixels(18))`. Rust uses the same checked
+`BackdropBlur` value, generic named attachment and family method-target operation.
+A plain radius uses scene units; `Pixels` uses final output pixels. Radius is the
+Gaussian standard deviation under the existing finite Blur kernel profile.
+
+The target's original coverage masks the background treatment, independently
+of target paint alpha. Preserve child object opacity in that coverage; apply the
+owning scope's final opacity once. Its own path, image and text paint stays sharp.
+A trailing private Visibility mask treats both the paint and original coverage,
+so a complete dissolve removes the background treatment too. Radius zero bypasses
+exactly to ordinary output; removing a neutral attachment is also exact.
+The mathematical replacement/color profile above remains authoritative: this is
+encoded-premultiplied RGBA8/BGRA8 unorm composition, not the later linear HDR/bloom
+profile.
+
+Admission uses the shared semantic/compiled dependencies and Runtime spatial
+index. Prefixes use physical painter anchors, include required offscreen inputs
+and earlier qualified filtered contributions, and prepare in dependency order.
+Unsupported spatial/external prefix inputs, noncontiguous/aliased isolation,
+nested backdrops, earlier backdrop prefix inputs and mixed ordinary-filter/backdrop stacks fail the finite
+profile's checks. The checked authored stack is one backdrop plus optional
+private Visibility. Effective animated prefix-capability failures reject GPU
+preparation without replacing the retained output/resources; the Runtime frame
+can already have advanced. This is not a Runtime rollback guarantee.
+
+The paired `glass_lens` Rust/Python examples move a mixed path/image/text card
+over a prepared checker image, animate radius, neutralize/remove/reattach, and
+dissolve out/in through ordinary authored segments. Native `noon-export` captures
+that same Rust live program. `scripts/glass-lens-qualification.mjs` compares all
+pixels at 22 authored times on each of WebGPU and WebGL2; exact neutral/removal
+and dissolve restoration supplement a literal full-out background oracle.
+These are frontend/composition checks, not independent source-raster proofs.
+The native coordinator corpus separately checks padded direct 2D Gaussian
+references, opacity/masks, offscreen inputs, camera/physical resize, resource
+plateaus and real wrong-input/bounds/sampling controls at a two-byte bound.
+
+`scripts/glass-lens-recovery-qualification.mjs` uses actual browser device
+or context destruction. Direct Rust/WASM survives repeated viewport churn,
+a zero-sized surface and GPU replacement at the same authored state. Completed
+Python source replay agrees with forward Rust output, including resized views.
+WebGL workers recover in place; WebGPU workers use an explicit host `restart()`
+after confirmed device loss. Idle WebGPU worker loss does not currently emit a
+callback diagnostic in this profile: automatic idle-loss notification/recovery
+is not qualified. Recreation must retain the current shared scene/time without
+a repair seek, retire old workers and reproduce the previous pixels exactly.
+A paused nonneutral backdrop is observed for 150 ms with no extra presentations
+or pending updates; that bounded observation is not a physical latency or
+performance claim. Direct live-program hosts retain their existing monotonic
+source progression contract; this test does not add backward live-source seek.
+
+These finite correctness/recovery profiles do not close #1897. Remaining host,
+physical-device performance and failure/capability qualification, scene HDR/bloom,
+public typed WGSL extensions and creator support documentation remain required.
