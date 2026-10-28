@@ -18,20 +18,25 @@ test("every showcase card has a retained, source-bound real capture", async () =
   for (const entry of manifest.entries) {
     // CUDA has a separate fidelity contract, checked below.
     if (entry.id === "showcase-cuda-transpose") continue;
-    let capture;
+    const source = await read(entry.path), png = await read(entry.thumbnail);
+    const sha = bytes => createHash("sha256").update(bytes).digest("hex");
+    const candidates = [evidence];
     try {
-      capture = JSON.parse(await read(`thumbnails/showcase/${entry.id}-evidence.json`));
+      candidates.unshift(JSON.parse(await read(`thumbnails/showcase/${entry.id}-evidence.json`)));
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      capture = evidence;
     }
+    // A targeted refresh and a later full refresh may supersede one another.
+    // Select evidence for the current bytes, then enforce its complete contract.
+    const capture = candidates.find(capture => capture.posters.some(record =>
+      record.id === entry.id && record.sourceSha256 === sha(source) && record.image.pngSha256 === sha(png)));
+    assert.ok(capture, `${entry.id}: missing current source/image capture`);
     assert.equal(capture.schema, 1);
     assert.equal(capture.publication, "captured-preview");
     assert.match(capture.captureRevision, /^[a-f0-9]{40}$/);
     assert.equal(capture.captureRevision, capture.runtimeBuildIdentity.sourceRevision);
     const record = capture.posters.find(record => record.id === entry.id);
-    assert.ok(record, `${entry.id}: missing source-bound capture`);
-    assertRetainedPoster(entry, record, await read(entry.path), await read(entry.thumbnail), capture.runtimeBuildIdentity);
+    assertRetainedPoster(entry, record, source, png, capture.runtimeBuildIdentity);
   }
 });
 

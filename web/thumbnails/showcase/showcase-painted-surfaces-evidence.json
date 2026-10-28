@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "4702222686d9ee05b41dd7805ddde21bc8dd3d82",
-  "backend": "webgpu",
+  "captureRevision": "029ca0966efda0be4b3164a8eabd4bb1eeb952c1",
+  "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "4702222686d9ee05b41dd7805ddde21bc8dd3d82",
+    "sourceRevision": "029ca0966efda0be4b3164a8eabd4bb1eeb952c1",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -24,20 +24,20 @@
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "05fef6b0611e8dd46487a9231aab7106a8d2dcff4be69b4f0530f7db18b24f17"
+    "buildId": "141b4c53bbda010c86ce0cebefe78251b50e28dbfbf2b5d69df1f3cbca4d190f"
   },
   "posters": [
     {
       "id": "showcase-painted-surfaces",
-      "captureBuildId": "05fef6b0611e8dd46487a9231aab7106a8d2dcff4be69b4f0530f7db18b24f17",
+      "captureBuildId": "141b4c53bbda010c86ce0cebefe78251b50e28dbfbf2b5d69df1f3cbca4d190f",
       "sourceSha256": "ba191918aefbdc28ea4e9991b938d5ed46548bf45cdcfc79c7488865f0e26f80",
       "thumbnailTime": 3.6,
       "image": {
         "width": 960,
         "height": 540,
         "foregroundPixels": 171416,
-        "pngSha256": "97aebcd0fc05acac4c886ba33dc728d07372d9e4111bccdf32b84e8f67a2976f",
-        "pixelSha256": "76fd7d7bc24ba6a04cc2a0864ee44d504ace371418e349f5ac45c8ef87c674dd"
+        "pngSha256": "a9037222cd450a47d7468bc7c9f283f6bbdcf7eda998d9eb5253ba3cec559324",
+        "pixelSha256": "8ad1140d14f4e04152f71fc7d948a1ba05d03ff941282e3b14ea330ceb653193"
       },
       "sample": {
         "requestedTime": 3.6,
