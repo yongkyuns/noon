@@ -64,7 +64,7 @@ fn retained_resources_reuse_and_invalid_preparation_preserves_coherent_scope() {
         .prepare(&device, &queue, &mut scope, capture, parameters(0.0))
         .unwrap();
     assert_eq!(neutral, GaussianBlurStats::default());
-    assert!(filter.programs.is_none());
+    assert!(filter.programs.iter().all(Option::is_none));
     assert!(scope.output().is_none());
     let initial = filter
         .prepare(&device, &queue, &mut scope, capture, parameters(3.25))
@@ -270,8 +270,10 @@ fn rgba_gaussian_pixels_match_independent_reference_and_retained_revisions() {
             queue.submit([encoder.finish()]);
             let expected = reference(&input, size, sigma);
             let resources = scope.resources.as_ref().unwrap();
-            let packed = resources
-                .vertical
+            let ReconstructionImages::Packed(images) = &resources.vertical else {
+                panic!("expected packed compatibility storage")
+            };
+            let packed = images
                 .each_ref()
                 .map(|image| read(&device, &queue, &image.texture));
             for (at, value) in expected.iter().flatten().enumerate() {
@@ -342,11 +344,10 @@ fn rgba_gaussian_pixels_match_independent_reference_and_retained_revisions() {
     filter.encode(&mut encoder, &mut scope);
     queue.submit([encoder.finish()]);
     let expected = reference(&input, [1, 1], 64.0);
-    let packed = scope
-        .resources
-        .as_ref()
-        .unwrap()
-        .vertical
+    let ReconstructionImages::Packed(images) = &scope.resources.as_ref().unwrap().vertical else {
+        panic!("expected packed compatibility storage")
+    };
+    let packed = images
         .each_ref()
         .map(|image| read(&device, &queue, &image.texture));
     for channel in 0..4 {
@@ -364,3 +365,5 @@ fn rgba_gaussian_pixels_match_independent_reference_and_retained_revisions() {
     profiles += 1;
     eprintln!("RGBA Gaussian: {profiles} profiles / max operator error={max_operator_error} / max RGBA byte error={max_byte_error}");
 }
+
+mod hdr;

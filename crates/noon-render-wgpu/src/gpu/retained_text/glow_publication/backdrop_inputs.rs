@@ -193,6 +193,7 @@ impl BackdropInputs {
                 viewport,
                 definitions,
                 EffectStackParameters {
+                    working_format: wgpu::TextureFormat::Rgba8Unorm,
                     output_height: viewport[1],
                     world_view_height: f64::from(camera.world_size.y),
                     scope_opacity: opacity,
@@ -542,6 +543,7 @@ impl BackdropInputs {
                 viewport,
                 &[effect.definition],
                 EffectStackParameters {
+                    working_format: wgpu::TextureFormat::Rgba8Unorm,
                     output_height: viewport[1],
                     world_view_height: f64::from(camera.world_size.y),
                     scope_opacity: crate::pack_style(row).opacity,
