@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "970f80a5a676b156e74fd911369ab85d3c168490",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "970f80a5a676b156e74fd911369ab85d3c168490",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "6db2b89a4a10c276e4a9cfd0a4ba217584adf5ce917ca4a2902ed8410977875a"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "5841164dc3a304b3757e30dc968c85b0dfe502c22899c6b1246d6e17bcd86ea2"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "f925c5ce11aaf7b26e809e0a9a5e6eb83949a63ab5b633ef554fdaa8e2b38b51"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "f51f959745b91b2b6e3f611815a966af305a6bf8ce399e2b29dfb08c27490f15"
+  },
+  "posters": [
+    {
+      "id": "showcase-shader-material",
+      "captureBuildId": "f51f959745b91b2b6e3f611815a966af305a6bf8ce399e2b29dfb08c27490f15",
+      "sourceSha256": "32d07989861e07a1fda59f1cc8a8e49827ac615c596e20947bdd331ac3acf537",
+      "thumbnailTime": 1.5,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 118613,
+        "pngSha256": "2fe298b611332c5b28eeeb709bdb507f29fb91fef6173262c6b4c9ae95e70090",
+        "pixelSha256": "80949c8a2d61dee2e5ae916f7ed8a737fa5729cd713ca639bbc5c3634ef9665f"
+      },
+      "sample": {
+        "requestedTime": 1.5,
+        "publishedTime": 1.5,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
