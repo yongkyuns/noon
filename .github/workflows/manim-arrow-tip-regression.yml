@@ -87,7 +87,7 @@ jobs:
         run: bash scripts/check.sh fast "$BASE_SHA"
       - name: Test native Rust arrow geometry without Python or browser features
         run: cargo test -p noon --no-default-features --test arrow_tip_regression
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: wasm-pack@0.15.0
           fallback: none
