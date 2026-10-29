@@ -176,8 +176,14 @@ impl SampleFilter {
         let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let shader_source = wrapper(source);
+        #[cfg(test)]
+        let shader_source = match self.test_shader_source {
+            Some(mutate) => mutate(shader_source),
+            None => shader_source,
+        };
         let program =
-            Program::from_source(device, &wrapper(source), size_of::<ShaderUniform>() as u64);
+            Program::from_source(device, &shader_source, size_of::<ShaderUniform>() as u64);
         // Pop every guard synchronously before awaiting, so an unrelated caller's
         // device operations cannot become part of this preparation's scope.
         let validation = validation.pop();

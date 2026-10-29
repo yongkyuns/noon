@@ -354,9 +354,11 @@ fn typed_shader_pixels_coordinates_time_alpha_and_program_lifetime() {
     let cache = filter.shader_programs.len();
     let bad = program(
         ShaderCoordinates::Scene,
-        &format!("{SOURCE}\nfn fs_sample() -> f32 {{ return 1.0; }}"),
+        &format!("{SOURCE}\n// fresh program"),
     );
+    filter.test_shader_source = Some(|source| format!("{source}\ninvalid generated WGSL"));
     assert!(pollster::block_on(filter.prepare_shader_program(&device, &bad)).is_err());
+    filter.test_shader_source = None;
     assert_eq!(filter.shader_programs.len(), cache);
     assert_eq!(scope.output(), Some(&output));
     assert_eq!(read(&device, &queue, scope.output().unwrap()), input);

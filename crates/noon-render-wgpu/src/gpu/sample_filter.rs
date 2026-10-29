@@ -74,6 +74,10 @@ struct Program {
 pub struct SampleFilter {
     shader_programs: Vec<Weak<PreparedShaderProgram>>,
     program: Option<Program>,
+    // Real backend-failure tests corrupt generated WGSL after Core validation.
+    // This hook and its storage are absent from production builds.
+    #[cfg(test)]
+    pub(in crate::gpu) test_shader_source: Option<fn(String) -> String>,
 }
 pub(super) fn checked_domain(
     size: [u32; 2],

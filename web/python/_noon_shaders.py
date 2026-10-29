@@ -92,6 +92,8 @@ class WgslEffectProgram(_Immutable):
     shade(NoonShaderInput, NoonShaderParameters) returns straight encoded RGB
     and a coverage multiplier. Coordinates: local (+Y up normalized bounds),
     scene (+Y up), or pixels (top-left origin). Optional time is authored seconds.
+    Module globals NoonGpuUniform, noon_uniform, noon_source, noon_unit,
+    vs_fullscreen and fs_sample are reserved by this ABI.
     """
     __slots__ = ("_program",)
 

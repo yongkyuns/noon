@@ -194,6 +194,38 @@ fn checked_wgsl_rejects_undeclared_inputs_bad_abi_and_external_resources() {
 }
 
 #[test]
+fn pointwise_abi_rejects_global_collisions_before_an_edit_can_publish() {
+    let program = WgslEffectProgram::prepare(schema(), SCAN).unwrap();
+    let value = ShaderEffect::new(program.clone());
+    for declaration in [
+        "fn fs_sample() {}",
+        "fn vs_fullscreen() {}",
+        "fn noon_unit(x: f32) -> f32 { return x; }",
+        "const noon_source: u32 = 0u;",
+        "const noon_uniform: u32 = 0u;",
+        "struct NoonGpuUniform { value: f32 }",
+        "alias fs_sample = NoonShaderInput;",
+        "alias noon_unit = vec4<f32>;",
+    ] {
+        assert!(
+            matches!(
+                WgslEffectProgram::prepare(schema(), format!("{SCAN}\n{declaration}")),
+                Err(ShaderProgramError::Schema(_))
+            ),
+            "{declaration}"
+        );
+    }
+    // Comments and independent local scopes do not claim a module ABI name.
+    WgslEffectProgram::prepare(schema(), format!("{SCAN}\n/* fs_sample /* noon_source */ */\nfn helper() {{ let fs_sample = 1u; }} // noon_uniform")).unwrap();
+    assert!(
+        WgslEffectProgram::prepare(schema(), SCAN.replace("p.phase", "f32(noon_uniform)")).is_err(),
+        "reservation sentinels must not create inputs"
+    );
+    assert_eq!(value.program(), &program);
+    assert_eq!(value.values()[1], ShaderValue::Scalar(0.5));
+}
+
+#[test]
 fn shader_values_use_normal_transactions_and_reject_entire_invalid_patches() {
     use crate::{
         EffectParameter, EffectUpdate, SemanticMutationTransaction, SemanticNodeCreation,

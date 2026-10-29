@@ -193,6 +193,8 @@ struct Program {
 /// Checked immutable source/schema shared by attachment copies. GPU residency
 /// is derived separately. Validating WGSL does not bound arbitrary shader cost;
 /// this extension accepts trusted source, not sandboxed untrusted programs.
+/// Module globals NoonGpuUniform, noon_uniform, noon_source, noon_unit,
+/// vs_fullscreen and fs_sample are reserved by the pointwise ABI.
 #[derive(Clone, Debug)]
 pub struct WgslEffectProgram(Arc<Program>);
 impl PartialEq for WgslEffectProgram {
@@ -327,6 +329,14 @@ fn validate_wgsl(source: &str) -> Result<(), ShaderProgramError> {
     {
         return Err(ShaderProgramError::Signature);
     }
+    // Check module-scope ABI names with the same parser, including aliases
+    // that Naga resolves away in its IR. Validate the original first so these
+    // sentinels cannot accidentally admit an undeclared input. They never enter
+    // the stored program/GPU source, and parameter updates do not parse WGSL.
+    let reserved = format!("{source}\nconst NoonGpuUniform: u32 = 0u;\nconst noon_uniform: u32 = 0u;\nconst noon_source: u32 = 0u;\nconst noon_unit: u32 = 0u;\nconst vs_fullscreen: u32 = 0u;\nconst fs_sample: u32 = 0u;\n");
+    naga::front::wgsl::parse_str(&reserved).map_err(|_| {
+        ShaderProgramError::Schema("module-scope name conflicts with the Noon pointwise ABI")
+    })?;
     Ok(())
 }
 
