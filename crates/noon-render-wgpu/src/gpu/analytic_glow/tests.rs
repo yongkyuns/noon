@@ -92,7 +92,7 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
     );
     let runtime = runtime();
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(runtime.frame());
+    let prepared = preparer.prepare(runtime.frame()).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let target = CaptureImage::new(&device, wgpu::TextureFormat::Rgba8Unorm, [80, 60]);
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -146,7 +146,9 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
         .source
         .texture
         .clone();
-    let prepared = preparer.prepare_incremental(runtime.frame(), &FrameChanges::default());
+    let prepared = preparer
+        .prepare_incremental(runtime.frame(), &FrameChanges::default())
+        .unwrap();
     let mut encoder = device.create_command_encoder(&Default::default());
     let clean = renderer
         .prepare_effect_capture(
@@ -239,7 +241,7 @@ fn truncating_a_warm_stack_rebinds_the_final_output_and_retires_neutral_suffix()
     );
     let runtime = runtime();
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(runtime.frame());
+    let prepared = preparer.prepare(runtime.frame()).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let definitions = [
         effect(1.0),
@@ -354,7 +356,7 @@ fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
         .unwrap()
         .into();
     let normal = make_runtime(0.4);
-    let prepared = preparer.prepare(normal.frame());
+    let prepared = preparer.prepare(normal.frame()).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
@@ -417,7 +419,7 @@ fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
         .clone();
     let revision = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)].output_revision;
     let tiny = make_runtime(1e-6);
-    let prepared = preparer.prepare(tiny.frame());
+    let prepared = preparer.prepare(tiny.frame()).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     assert_eq!(
@@ -451,7 +453,7 @@ fn budget_rejection_is_atomic_and_accounts_for_other_scopes() {
     );
     let runtime = runtime();
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(runtime.frame());
+    let prepared = preparer.prepare(runtime.frame()).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     assert_eq!(
@@ -523,7 +525,7 @@ fn transparent_paint_does_not_suppress_silhouette_and_abort_is_recoverable() {
     let mut frame = runtime().frame().clone();
     frame.objects[1].style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.0));
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     renderer.upload(&device, &queue, &prepared);
     assert_eq!(
         prepared.observe_object(1).unwrap().submission_membership,
@@ -586,7 +588,7 @@ fn repacked_source_retires_old_slot_and_does_not_double_count_memory() {
     );
     let mut frame = runtime().frame().clone();
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
@@ -601,7 +603,7 @@ fn repacked_source_retires_old_slot_and_does_not_double_count_memory() {
     queue.submit([encoder.finish()]);
     let cost = renderer.effect_capture_texture_bytes();
     frame.objects.swap(0, 1);
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     renderer.upload(&device, &queue, &prepared);
     // A neutral request after repacking must disable the source's old cache
     // identity before ordinary batching, even before an active reprepare moves it.
@@ -686,7 +688,7 @@ fn fractional_translation_reuses_warmed_capture_capacity() {
     );
     let mut frame = runtime().frame().clone();
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
@@ -702,7 +704,9 @@ fn fractional_translation_reuses_warmed_capture_capacity() {
     let bytes = renderer.effect_capture_texture_bytes();
     for step in 1..=100 {
         frame.objects[1].transform.translation.x = step as f32 * 0.003;
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         let stats = renderer
@@ -760,7 +764,7 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
     let mut runtime = runtime_for(object());
     let publication = runtime.take_renderer_publication();
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(publication.frame());
+    let prepared = preparer.prepare(publication.frame()).unwrap();
     renderer.upload(&device, &queue, &prepared);
     let request = PublishedEffectCaptureRequest {
         object_index: 0,

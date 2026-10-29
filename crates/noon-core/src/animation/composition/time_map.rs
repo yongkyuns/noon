@@ -370,7 +370,7 @@ pub fn mapped_continuous_progress(
     sample.begun.then(|| timing.evaluate_progress(sample.alpha))
 }
 
-/// f64-preserving variant for spatial values whose timeline cannot be rounded to shader precision.
+/// f64-preserving variant for authored values whose timeline cannot be rounded to shader precision.
 pub fn mapped_continuous_progress_f64(
     timing: TrackTiming,
     time_map: &CompositionTimeMap,

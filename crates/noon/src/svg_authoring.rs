@@ -828,6 +828,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
         stroke_join,
         stroke_cap,
         object_opacity: 1.0,
+        emission: noon_core::Emission::NONE,
     })
 }
 

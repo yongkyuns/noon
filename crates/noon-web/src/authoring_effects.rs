@@ -114,6 +114,16 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmEffectUpdate {
+        #[wasm_bindgen(js_name = setThreshold)]
+        pub fn set_threshold(&mut self, threshold: f64) -> Result<(), JsValue> {
+            let update = self.value.threshold(threshold);
+            update
+                .validate()
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)?;
+            self.value = update;
+            Ok(())
+        }
         #[wasm_bindgen(js_name = setSize)]
         pub fn set_size(&mut self, size: f64, pixels: bool) -> Result<(), JsValue> {
             let value = self.value.size(if pixels {
@@ -213,6 +223,28 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmEffectDefinition {
+        #[wasm_bindgen(js_name = bloom)]
+        pub fn bloom(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
+            noon_core::Bloom::new(update.value)
+                .map(|value| Self {
+                    value: value.into(),
+                })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(getter)]
+        pub fn threshold(&self) -> Result<f64, JsValue> {
+            self.value
+                .as_bloom()
+                .map(|value| value.threshold())
+                .ok_or_else(|| {
+                    js_error(noon::AuthoringError::from(
+                        EffectParameterError::UnsupportedParameter(
+                            noon_core::EffectParameter::Threshold,
+                        ),
+                    ))
+                })
+        }
         #[wasm_bindgen(js_name = glow)]
         pub fn glow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
             Glow::new(update.value)
@@ -344,6 +376,9 @@ mod wasm {
         }
         #[wasm_bindgen(getter)]
         pub fn intensity(&self) -> Result<f64, JsValue> {
+            if let Some(bloom) = self.value.as_bloom() {
+                return Ok(bloom.intensity());
+            }
             Ok(self.glow_value()?.intensity())
         }
         #[wasm_bindgen(getter)]

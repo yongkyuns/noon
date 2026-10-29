@@ -51,6 +51,24 @@ class EffectFacadeTests(unittest.TestCase):
         self.addCleanup(context.__exit__, None, None, None)
         return value
 
+    def test_bloom_keeps_camera_parameters_in_rust_and_reuses_effect_routing(self):
+        definition = types.SimpleNamespace(kind="bloom", radius=4.0, pixels=True, threshold=0.15, intensity=3.0)
+        with patch.object(sys.modules["js"], "noonBloom", return_value=definition, create=True) as make:
+            value = noon.Bloom(radius=noon.Pixels(4), threshold=0.15, intensity=3)
+        self.request.setThreshold.assert_called_once_with(0.15)
+        make.assert_called_once_with(self.request)
+        self.assertEqual((value.radius, value.threshold, value.intensity), (noon.Pixels(4), 0.15, 3.0))
+        self.assertIs(copy.deepcopy(value), value)
+        self.object.add_effect(value, name="bloom")
+        self.handle.addEffect.assert_called_once_with(definition, "bloom")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = definition
+        self.assertIsInstance(self.object.get_effect("bloom").authored_definition, noon.Bloom)
+        self.object.set_effect("bloom", threshold=0.25, intensity=0)
+        self.handle.setEffect.assert_called_once_with("bloom", self.request)
+        self.assertEqual(self.request.setThreshold.call_args.args, (0.25,))
+        with self.assertRaises(TypeError):
+            self.object.set_effect("bloom", threshold=True)
+
     def test_pixelate_keeps_checked_size_units_and_ordinary_shared_effect_routing(self):
         value = noon.Pixelate(size=noon.Pixels(12))
         self.request.setSize.assert_called_once_with(12.0, True)

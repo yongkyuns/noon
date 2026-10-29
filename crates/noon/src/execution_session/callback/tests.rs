@@ -859,7 +859,24 @@ fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
             opacity: 0.25,
         })
         .unwrap();
+    let emission = noon_core::Emission::new(7.000000000000001).unwrap();
+    overlay
+        .write(EffectiveSemanticPropertyWrite::Emission { object, emission })
+        .unwrap();
+    assert_eq!(
+        session.frame().objects[0].style.emission,
+        noon_core::Emission::NONE
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(object)
+            .unwrap()
+            .style
+            .emission,
+        noon_core::Emission::NONE
+    );
     let read = overlay.object(object).unwrap();
+    assert_eq!(read.style.emission, emission);
     assert_eq!(read.transform.rotation, transform.rotation);
     assert_eq!(read.transform.scale, transform.scale);
     assert_eq!(read.transform.translation, Vec2::new(4.0, 5.0));
@@ -885,7 +902,11 @@ fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
     let receipt = session.last_callback_receipt.as_ref().unwrap();
     assert_eq!(
         receipt.domains[&object],
-        CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE | CALLBACK_OPACITY
+        CALLBACK_TRANSLATION
+            | CALLBACK_ROTATION
+            | CALLBACK_SCALE
+            | CALLBACK_OPACITY
+            | CALLBACK_EMISSION
     );
     let mut next = session
         .begin_required_callback_phase(1.0, [object])
@@ -900,6 +921,7 @@ fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
         .commit_required_callback_phase(next.finish())
         .unwrap();
     assert_eq!(session.frame().objects[0].transform, transform);
+    assert_eq!(session.frame().objects[0].style.emission, emission);
 }
 
 #[test]

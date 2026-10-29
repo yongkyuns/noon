@@ -2,7 +2,44 @@
 
 use super::{CanonicalAuthoringScene, PlayerOwnership};
 
+pub(crate) fn view_color_profile(
+    value: &str,
+) -> Result<noon_core::ViewColorProfile, crate::AuthoringFailure> {
+    match value {
+        "compatibility" => Ok(noon_core::ViewColorProfile::Compatibility),
+        "linear_hdr" => Ok(noon_core::ViewColorProfile::LinearHdr),
+        _ => Err(crate::AuthoringFailure::new(
+            "invalid_input",
+            "camera.color_profile",
+            "view color profile must be compatibility or linear_hdr",
+        )),
+    }
+}
+
 impl CanonicalAuthoringScene {
+    pub(crate) fn set_view_color_profile(
+        &mut self,
+        camera: &noon::Mobject,
+        profile: noon_core::ViewColorProfile,
+    ) -> Result<(), crate::AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), camera.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        camera.validate()?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => self
+                .scene
+                .set_view_color_profile(camera, profile)
+                .map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_set_view_color_profile(camera, profile),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     pub(crate) fn effective_camera_profile(
         &mut self,
         object: &noon::Mobject,
@@ -236,6 +273,51 @@ mod tests {
         AnimationOptions, CameraRotationAxis, ManimCamera3DProfile, SemanticAnimationIntent,
         SemanticVec3,
     };
+
+    #[test]
+    fn color_profile_uses_the_same_scene_and_live_player() {
+        use noon_core::{ObjectId, ViewColorProfile};
+        assert!(view_color_profile("HDR").is_err());
+        let mut context = CanonicalAuthoringScene::default();
+        let camera = context.create_camera_frame(ObjectId::new(31)).unwrap();
+        context
+            .set_view_color_profile(&camera, view_color_profile("linear_hdr").unwrap())
+            .unwrap();
+        assert_eq!(
+            camera.state().unwrap().view_color_profile(),
+            ViewColorProfile::LinearHdr
+        );
+        context.ordinary_wait(0.25).unwrap();
+        let identity = context.active_live_player().unwrap().ownership_identity();
+        context
+            .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
+            .unwrap();
+        let wire: crate::RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(
+            &context
+                .active_live_player()
+                .unwrap()
+                .initial_delta_json()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            wire.retained.primary_view.unwrap().color_profile,
+            ViewColorProfile::Compatibility
+        );
+        assert_eq!(
+            context.active_live_player().unwrap().ownership_identity(),
+            identity
+        );
+        let mut foreign = noon::Scene::new();
+        let foreign_camera = foreign.camera_frame().unwrap();
+        assert!(context
+            .set_view_color_profile(&foreign_camera, ViewColorProfile::LinearHdr)
+            .is_err());
+        assert_eq!(
+            camera.state().unwrap().view_color_profile(),
+            ViewColorProfile::Compatibility
+        );
+    }
 
     fn profile() -> ManimCamera3DProfile {
         ManimCamera3DProfile {

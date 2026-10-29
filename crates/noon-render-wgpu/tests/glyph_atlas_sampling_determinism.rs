@@ -19,8 +19,8 @@ fn render_offsets(source: &str, color: bool) -> Option<Vec<Vec<u8>>> {
         vertex: wgpu::VertexState {
             module: &shader, entry_point: Some("vs_glyph"), compilation_options: Default::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 56, step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x2,3=>Float32x2,4=>Float32x2,5=>Float32x4],
+                array_stride: 60, step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x2,3=>Float32x2,4=>Float32x2,5=>Float32x4,6=>Float32],
             })],
         },
         fragment: Some(wgpu::FragmentState {
@@ -71,7 +71,7 @@ fn render_offsets(source: &str, color: bool) -> Option<Vec<Vec<u8>>> {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: if color {
-                wgpu::TextureFormat::Rgba8UnormSrgb
+                wgpu::TextureFormat::Rgba8Unorm
             } else {
                 wgpu::TextureFormat::R8Unorm
             },
@@ -122,6 +122,7 @@ fn render_offsets(source: &str, color: bool) -> Option<Vec<Vec<u8>>> {
             0.42,
             0.15,
             0.89,
+            0.0, // Neutral material emission, matching the ordinary glyph instance.
         ];
         let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,

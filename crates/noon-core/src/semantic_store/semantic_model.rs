@@ -345,6 +345,8 @@ pub struct SemanticStyle {
     #[serde(default)]
     pub stroke_cap: StrokeCap,
     pub object_opacity: f64,
+    #[serde(default, skip_serializing_if = "crate::Emission::is_neutral")]
+    pub emission: crate::Emission,
 }
 
 impl Default for SemanticStyle {
@@ -362,6 +364,7 @@ impl Default for SemanticStyle {
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
             object_opacity: 1.0,
+            emission: crate::Emission::NONE,
         }
     }
 }
@@ -487,6 +490,7 @@ impl SemanticStyle {
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
             object_opacity: style.opacity as f64,
+            emission: style.emission,
         }
     }
 
@@ -510,6 +514,7 @@ impl SemanticStyle {
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Auto,
             object_opacity: 1.0,
+            emission: crate::Emission::NONE,
         }
     }
 

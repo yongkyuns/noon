@@ -1184,9 +1184,9 @@ class Mobject:
         from _noon_effects import get_effect
         return get_effect(self, name)
 
-    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None) -> Mobject:
+    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, threshold=None) -> Mobject:
         from _noon_effects import set_effect
-        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size)
+        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, threshold=threshold)
 
     def remove_effect(self, selector) -> Mobject:
         from _noon_effects import remove_effect
@@ -1216,6 +1216,10 @@ class Mobject:
     def fade_to(self, color: Color, alpha: float, family: bool = True) -> Mobject:
         """Interpolate this object's color toward ``color`` by ``alpha``."""
         return _callback_operations()._canonical_fade_to(self, color, alpha, family)
+
+    def set_emission(self, strength: float) -> Mobject:
+        """Set checked linear-HDR material strength (0–63), independently of alpha."""
+        return _callback_operations()._canonical_set_emission(self, strength)
 
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""
@@ -1945,6 +1949,7 @@ _PUBLIC_EXPORTS = {
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
     "Blur": "_noon_effects",
+    "Bloom": "_noon_effects",
     "BackdropBlur": "_noon_effects",
     "Shadow": "_noon_effects",
     "NoiseDissolve": "_noon_effects",

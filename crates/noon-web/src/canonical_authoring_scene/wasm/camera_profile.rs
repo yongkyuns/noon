@@ -47,6 +47,20 @@ fn profile_values(profile: ManimCamera3DProfile) -> Vec<f64> {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = setViewColorProfile)]
+    pub fn set_view_color_profile(
+        &mut self,
+        camera: &WasmAuthoringMobjectHandle,
+        value: &str,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .set_view_color_profile(
+                camera.semantic_mobject(),
+                super::super::camera_profile::view_color_profile(value).map_err(js_error)?,
+            )
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = createCamera3DProfile)]
     pub fn create_camera_3d_profile(
         &mut self,

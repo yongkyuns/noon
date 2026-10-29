@@ -126,6 +126,8 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
+        self.admit_color_profile(frame.retained, changes, self.color_profile)
+            .map_err(RetainedPrepareError::from)?;
         let images =
             self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         self.prepare_canonical_mixed_baseline(
@@ -148,7 +150,11 @@ impl RetainedFramePreparer {
             return Err(error);
         }
 
-        let geometry = self.geometry.prepare(&self.scratch);
+        let geometry = self.geometry.prepare_with_color_profile(
+            &self.scratch,
+            &FrameChanges::all(),
+            self.color_profile,
+        );
         self.render_items.clear();
         rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
         reorder_mixed_items(
@@ -576,6 +582,7 @@ pub(super) fn draw_border_style(
             stroke_join: StrokeJoin::Miter,
             stroke_cap: StrokeCap::Butt,
             opacity: object_style.opacity,
+            emission: object_style.emission,
         },
         RetainedDrawBorderThenFillPhase::Fill { progress } => {
             let progress = progress.clamp(0.0, 1.0);
@@ -625,6 +632,7 @@ pub(super) fn draw_border_style(
                 stroke_join,
                 stroke_cap,
                 opacity: object_style.opacity,
+                emission: object_style.emission,
             }
         }
     }

@@ -2223,6 +2223,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_emission(
+        &mut self,
+        mobject: &noon::Mobject,
+        strength: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_emission(mobject, strength))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_object_opacity(
         &mut self,
         mobject: &noon::Mobject,
@@ -4599,6 +4609,10 @@ enum CallbackWriteWire {
         object: CallbackNodeWire,
         stroke_width: f32,
     },
+    Emission {
+        object: CallbackNodeWire,
+        emission: noon_core::Emission,
+    },
     Opacity {
         object: CallbackNodeWire,
         opacity: f32,
@@ -4847,6 +4861,12 @@ fn decode_callback_batch(
                 object: object.into(),
                 stroke_width,
             }),
+            CallbackWriteWire::Emission { object, emission } => {
+                Ok(EffectiveSemanticPropertyWrite::Emission {
+                    object: object.into(),
+                    emission,
+                })
+            }
             CallbackWriteWire::Opacity { object, opacity } => {
                 Ok(EffectiveSemanticPropertyWrite::Opacity {
                     object: object.into(),

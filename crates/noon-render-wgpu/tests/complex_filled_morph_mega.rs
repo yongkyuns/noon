@@ -124,13 +124,15 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
 fn sampled_fill_paint_does_not_dirty_unowned_mega_attributes() {
     let mut preparer = FramePreparer::new();
     let initial = mixed_frame(0.5, false);
-    let prepared = preparer.prepare(&initial);
+    let prepared = preparer.prepare(&initial).unwrap();
     assert_eq!(prepared.stats.unsupported_count, 0);
     assert_eq!(prepared.stats.mega_path_count, 1);
 
     let mut changed = initial;
     changed.objects[0].style.opacity = 0.4;
-    let prepared = preparer.prepare_incremental(&changed, &FrameChanges::objects(vec![0]));
+    let prepared = preparer
+        .prepare_incremental(&changed, &FrameChanges::objects(vec![0]))
+        .unwrap();
     assert!(prepared.mega_path_instance_dirty_ranges.is_empty());
 }
 
@@ -138,13 +140,15 @@ fn sampled_fill_paint_does_not_dirty_unowned_mega_attributes() {
 fn growing_sampled_fill_does_not_index_the_fixed_mega_attribute_buffer() {
     let mut preparer = FramePreparer::new();
     let initial = mixed_frame(0.0, true);
-    let prepared = preparer.prepare(&initial);
+    let prepared = preparer.prepare(&initial).unwrap();
     assert_eq!(prepared.stats.unsupported_count, 0);
     assert_eq!(prepared.stats.mega_path_count, 1);
 
     for progress in [0.1, 0.25, 0.5, 0.75, 1.0] {
         let current = mixed_frame(progress, true);
-        let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(prepared.stats.unsupported_count, 0);
         assert!(prepared.mega_path_instance_dirty_ranges.is_empty());
     }

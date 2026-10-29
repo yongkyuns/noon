@@ -63,6 +63,10 @@ pub enum EffectivePropertyWrite<I = ObjectId> {
         object: I,
         opacity: f32,
     },
+    Emission {
+        object: I,
+        emission: noon_core::Emission,
+    },
     /// One exact attachment's intensity. Other glow parameters remain owned by
     /// their ordinary authored/timeline drivers.
     EffectIntensity {
@@ -86,6 +90,7 @@ impl<I: Copy> EffectivePropertyWrite<I> {
             | Self::Stroke { object, .. }
             | Self::StrokeWidth { object, .. }
             | Self::Opacity { object, .. }
+            | Self::Emission { object, .. }
             | Self::EffectIntensity { object, .. } => object,
         }
     }
@@ -120,6 +125,9 @@ impl<I: Copy> EffectivePropertyWrite<I> {
                 stroke_width,
             },
             Self::Opacity { opacity, .. } => EffectivePropertyWrite::Opacity { object, opacity },
+            Self::Emission { emission, .. } => {
+                EffectivePropertyWrite::Emission { object, emission }
+            }
             Self::EffectIntensity {
                 attachment,
                 intensity,
@@ -231,6 +239,14 @@ impl EffectivePropertyWrite {
                     ..Style::default()
                 },
             },
+            Self::Emission { object, emission } => ExecutionPatch::SetStyle {
+                fill_paint: None,
+                object,
+                style: Style {
+                    emission,
+                    ..Style::default()
+                },
+            },
             Self::Opacity { object, opacity } => ExecutionPatch::SetStyle {
                 fill_paint: None,
                 object,
@@ -307,6 +323,9 @@ pub(crate) fn apply_effective_property_to_row(
         }
         EffectivePropertyWrite::StrokeWidth { stroke_width, .. } => {
             (Property::StrokeWidth, EvaluatedValue::Scalar(stroke_width))
+        }
+        EffectivePropertyWrite::Emission { emission, .. } => {
+            (Property::Emission, EvaluatedValue::Emission(emission))
         }
         EffectivePropertyWrite::Opacity { opacity, .. } => {
             (Property::Opacity, EvaluatedValue::Scalar(opacity))

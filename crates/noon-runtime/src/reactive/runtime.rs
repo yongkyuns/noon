@@ -613,6 +613,7 @@ const fn property_slot(property: Property) -> u8 {
         Property::EffectSeed => 21,
         Property::EffectSize => 22,
         Property::EffectThreshold => 23,
+        Property::Emission => 24,
     }
 }
 

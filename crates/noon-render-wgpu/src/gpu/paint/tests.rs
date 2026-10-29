@@ -79,7 +79,7 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
         .collect();
     let mut runtime = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
     let mut preparer = FramePreparer::new();
-    preparer.prepare(runtime.frame());
+    preparer.prepare(runtime.frame()).unwrap();
     runtime.take_frame_changes();
     runtime
         .apply_execution_patch(&ExecutionPatch::SetStyle {
@@ -89,7 +89,9 @@ fn one_gradient_in_100k_circles_has_one_sparse_draw_route() {
         })
         .unwrap();
     let changes = runtime.take_frame_changes();
-    let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+    let prepared = preparer
+        .prepare_incremental(runtime.frame(), &changes)
+        .unwrap();
     let routes = prepared
         .paint_indices(RenderPrimitive::Circle, 0..100_000)
         .unwrap()
@@ -127,7 +129,7 @@ fn path_paint_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
         .collect();
     let mut runtime = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
     let mut preparer = FramePreparer::new();
-    preparer.prepare(runtime.frame());
+    preparer.prepare(runtime.frame()).unwrap();
     runtime.take_frame_changes();
     for paint in [
         Some(gradient(Color::rgb(1.0, 0.0, 0.0))),
@@ -148,7 +150,9 @@ fn path_paint_keeps_meshes_and_rebuilds_only_its_painter_chunk() {
             })
             .unwrap();
         let changes = runtime.take_frame_changes();
-        let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+        let prepared = preparer
+            .prepare_incremental(runtime.frame(), &changes)
+            .unwrap();
         assert_eq!(prepared.paint_changes, &[ObjectId::new(500)]);
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
@@ -174,7 +178,7 @@ fn hatch_parameters_update_one_uniform_among_100k_rows_then_settle_and_retire() 
     let mut runtime = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
     let mut preparer = FramePreparer::new();
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()));
+    renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()).unwrap());
     runtime.take_frame_changes();
     assert!(renderer.fill_paints.is_none());
     let id = ObjectId::new(50_000);
@@ -203,7 +207,9 @@ fn hatch_parameters_update_one_uniform_among_100k_rows_then_settle_and_retire() 
             .unwrap();
         let changes = runtime.take_frame_changes();
         assert_eq!(changes.object_indices(), &[50_000]);
-        let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+        let prepared = preparer
+            .prepare_incremental(runtime.frame(), &changes)
+            .unwrap();
         assert_eq!(prepared.paint_changes, &[id]);
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.dirty_instance_count, 0);
@@ -233,7 +239,9 @@ fn hatch_parameters_update_one_uniform_among_100k_rows_then_settle_and_retire() 
         } else {
             assert_eq!(std::ptr::from_ref(program), first_program);
         }
-        let prepared = preparer.prepare_incremental(runtime.frame(), &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(runtime.frame(), &FrameChanges::default())
+            .unwrap();
         assert!(prepared.paint_changes.is_empty());
         assert_eq!(
             renderer.upload(&device, &queue, &prepared),
@@ -248,7 +256,9 @@ fn hatch_parameters_update_one_uniform_among_100k_rows_then_settle_and_retire() 
         })
         .unwrap();
     let changes = runtime.take_frame_changes();
-    let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+    let prepared = preparer
+        .prepare_incremental(runtime.frame(), &changes)
+        .unwrap();
     assert!(prepared
         .paint_indices(RenderPrimitive::Circle, 0..100_000)
         .unwrap()
@@ -272,7 +282,7 @@ fn gradient_only_edits_reuse_uniforms_and_clean_frames_upload_nothing() {
     let mut runtime = runtime(GeometryRef::rectangle(2.0, 2.0));
     let mut preparer = FramePreparer::new();
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()));
+    renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()).unwrap());
     assert!(renderer.fill_paints.is_none());
     runtime.take_frame_changes();
     let original_style = runtime.frame().objects[0].style;
@@ -284,13 +294,17 @@ fn gradient_only_edits_reuse_uniforms_and_clean_frames_upload_nothing() {
         assert_eq!(runtime.frame().objects[0].style, original_style);
         let changes = runtime.take_frame_changes();
         assert_eq!(changes.object_indices(), &[0]);
-        let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+        let prepared = preparer
+            .prepare_incremental(runtime.frame(), &changes)
+            .unwrap();
         assert_eq!(prepared.paint_changes, &[ObjectId::new(7)]);
         assert_eq!(prepared.stats.dirty_instance_count, 0);
         let stats = renderer.upload(&device, &queue, &prepared);
         assert_eq!(stats.buffer_reallocations, allocations);
         assert_eq!(stats.bytes_uploaded, size_of::<PaintUniform>());
-        let prepared = preparer.prepare_incremental(runtime.frame(), &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(runtime.frame(), &FrameChanges::default())
+            .unwrap();
         assert!(prepared.paint_changes.is_empty());
         assert_eq!(
             renderer.upload(&device, &queue, &prepared),
@@ -302,7 +316,9 @@ fn gradient_only_edits_reuse_uniforms_and_clean_frames_upload_nothing() {
     renderer.upload(
         &device,
         &queue,
-        &preparer.prepare_incremental(runtime.frame(), &changes),
+        &preparer
+            .prepare_incremental(runtime.frame(), &changes)
+            .unwrap(),
     );
     assert!(renderer.fill_paints.as_ref().unwrap().residents.is_empty());
 }
@@ -361,7 +377,7 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()));
+        renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()).unwrap());
         runtime.take_frame_changes();
         for profile in 0..8 {
             let red = Color::rgb(1.0, 0.0, 0.0);
@@ -427,7 +443,9 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
                     .unwrap();
             }
             let changes = runtime.take_frame_changes();
-            let prepared = preparer.prepare_incremental(runtime.frame(), &changes);
+            let prepared = preparer
+                .prepare_incremental(runtime.frame(), &changes)
+                .unwrap();
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer.encode(

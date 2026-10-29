@@ -64,7 +64,7 @@ fn resident_first_use_phases_upload_instances_only_and_keep_prefix_on_fallback()
                 .map(|(i, g)| styled_object(i as u64, g.clone()))
                 .collect(),
         );
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.path_vertices_repacked, 0);
         assert_eq!(prepared.stats.path_indices_repacked, 0);
@@ -84,7 +84,7 @@ fn resident_first_use_phases_upload_instances_only_and_keep_prefix_on_fallback()
         assert_eq!(prepared.path_indices, prefix_indices);
     }
     let fallback = frame(vec![styled_object(0, path(1000))]);
-    let prepared = preparer.prepare(&fallback);
+    let prepared = preparer.prepare(&fallback).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 1);
     assert!(prepared
         .path_vertex_dirty_ranges
@@ -103,7 +103,7 @@ fn resident_first_use_phases_upload_instances_only_and_keep_prefix_on_fallback()
         prefix_indices
     );
     let back = frame(vec![styled_object(0, geometries[0].clone())]);
-    let prepared = preparer.prepare(&back);
+    let prepared = preparer.prepare(&back).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 0);
     assert!(
         prepared.path_vertex_dirty_ranges.is_empty() && prepared.path_index_dirty_ranges.is_empty()
@@ -133,7 +133,7 @@ fn resident_keys_deduplicate_exact_requests_but_preserve_style_and_transform_var
         let mut state = styled_object(0, geometry.clone());
         state.style = request.style;
         state.transform = request.transform;
-        let prepared = preparer.prepare(&frame(vec![state]));
+        let prepared = preparer.prepare(&frame(vec![state])).unwrap();
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.path_vertices_repacked, 0);
     }
@@ -161,7 +161,7 @@ fn resident_replacement_never_recycles_prefix_ranges() {
         .unwrap();
     let prefix = preparer.path_vertices.clone();
     let mut current = frame(vec![styled_object(0, a)]);
-    preparer.prepare(&current);
+    preparer.prepare(&current).unwrap();
     current.objects[0].content = noon_core::ObjectContentRef::Geometry(path(100));
     preparer.replace_unique_path_geometry(&current, 0).unwrap();
     assert!(preparer.path_batch_vertex_ranges[0].start as usize >= prefix.len());
@@ -184,7 +184,7 @@ fn incremental_replacement_prunes_stale_meshes_without_changing_row_order() {
         styled_object(0, path(0)),
         styled_object(1, path(1000)),
     ]);
-    let initial = preparer.prepare(&current);
+    let initial = preparer.prepare(&current).unwrap();
     let initial_vertex_count = initial.path_vertices.len();
     let initial_index_count = initial.path_indices.len();
     assert_eq!(initial.path_ids, [ObjectId::new(0), ObjectId::new(1)]);
@@ -193,7 +193,9 @@ fn incremental_replacement_prunes_stale_meshes_without_changing_row_order() {
     let mut final_indices = Vec::new();
     for seed in 1..65 {
         current.objects[0].content = noon_core::ObjectContentRef::Geometry(path(seed));
-        let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(prepared.path_ids, [ObjectId::new(0), ObjectId::new(1)]);
         assert_eq!(prepared.path_batches.len(), 2);
         assert_eq!(prepared.path_vertices.len(), initial_vertex_count);
@@ -208,7 +210,7 @@ fn incremental_replacement_prunes_stale_meshes_without_changing_row_order() {
     }
 
     let mut full_rebuild = FramePreparer::for_individual_path_draws();
-    let expected = full_rebuild.prepare(&current);
+    let expected = full_rebuild.prepare(&current).unwrap();
     assert_eq!(final_vertices, expected.path_vertices);
     assert_eq!(final_indices, expected.path_indices);
 }
@@ -222,7 +224,7 @@ fn incremental_prune_remaps_batches_even_when_packed_generation_is_stale() {
         styled_object(1, simple_path(100)),
     ]);
     current.reveals[1] = 0.5;
-    preparer.prepare(&current);
+    preparer.prepare(&current).unwrap();
     assert!(matches!(
         preparer.slots[1],
         PreparedSlot::Path {
@@ -236,7 +238,9 @@ fn incremental_prune_remaps_batches_even_when_packed_generation_is_stale() {
     preparer.path_mesh_cache_generation += 1;
     for seed in 1..=3 {
         current.objects[0].content = noon_core::ObjectContentRef::Geometry(simple_path(seed));
-        preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        preparer
+            .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+            .unwrap();
     }
     assert_ne!(
         preparer.packed_path_mesh_cache_generation,
@@ -257,7 +261,9 @@ fn incremental_prune_remaps_batches_even_when_packed_generation_is_stale() {
     // A subsequent incremental reveal reads the remapped row descriptor to
     // position its round-cap reveal head.
     current.reveals[1] = 0.6;
-    let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![1]));
+    let prepared = preparer
+        .prepare_incremental(&current, &FrameChanges::objects(vec![1]))
+        .unwrap();
     assert!(prepared
         .lines
         .iter()
@@ -274,14 +280,16 @@ fn incremental_cache_pruning_is_amortized_when_live_rows_exceed_lru_limit() {
             .map(|index| styled_object(index as u64, simple_path(index)))
             .collect(),
     );
-    let initial = preparer.prepare(&current);
+    let initial = preparer.prepare(&current).unwrap();
     let initial_vertices = initial.path_vertices.len();
     let initial_indices = initial.path_indices.len();
 
     for seed in 1..=LIVE_ROWS {
         current.objects[0].content =
             noon_core::ObjectContentRef::Geometry(simple_path(seed + 1000));
-        let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(prepared.path_ids.len(), LIVE_ROWS);
         assert_eq!(prepared.path_vertices.len(), initial_vertices);
         assert_eq!(prepared.path_indices.len(), initial_indices);
@@ -289,7 +297,9 @@ fn incremental_cache_pruning_is_amortized_when_live_rows_exceed_lru_limit() {
     }
 
     current.objects[0].content = noon_core::ObjectContentRef::Geometry(simple_path(2000));
-    let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+    let prepared = preparer
+        .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+        .unwrap();
     assert_eq!(prepared.path_ids.len(), LIVE_ROWS);
     assert_eq!(prepared.path_mesh_cache.len(), LIVE_ROWS);
     assert!(prepared
@@ -298,7 +308,7 @@ fn incremental_cache_pruning_is_amortized_when_live_rows_exceed_lru_limit() {
         .all(|&index| index < prepared.path_mesh_cache.len()));
 
     let mut full_rebuild = FramePreparer::for_individual_path_draws();
-    let expected = full_rebuild.prepare(&current);
+    let expected = full_rebuild.prepare(&current).unwrap();
     assert_eq!(prepared.path_ids, expected.path_ids);
     assert_eq!(prepared.path_vertices, expected.path_vertices);
     assert_eq!(prepared.path_indices, expected.path_indices);
@@ -358,7 +368,7 @@ fn submit_compaction_between_submitted_frames(device: &wgpu::Device, queue: &wgp
     });
     let view_a = target_a.create_view(&wgpu::TextureViewDescriptor::default());
     {
-        let prepared_a = old_preparer.prepare(&frame_a);
+        let prepared_a = old_preparer.prepare(&frame_a).unwrap();
         renderer.upload(device, queue, &prepared_a);
         let mut encoder_a = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Submit frame A before resident path compaction"),
@@ -403,7 +413,7 @@ fn submit_compaction_between_submitted_frames(device: &wgpu::Device, queue: &wgp
         view_formats: &[],
     });
     let view_b = target_b.create_view(&wgpu::TextureViewDescriptor::default());
-    let prepared_b = compacted_preparer.prepare(&frame_b);
+    let prepared_b = compacted_preparer.prepare(&frame_b).unwrap();
     assert_eq!(prepared_b.stats.geometry_cache_misses, 0);
     let upload_b = renderer.upload(device, queue, &prepared_b);
     assert_eq!(upload_b.buffer_reallocations, 0);

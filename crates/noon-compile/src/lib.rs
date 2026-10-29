@@ -78,6 +78,7 @@ pub struct DynamicProperties {
     pub fill: bool,
     pub stroke: bool,
     pub stroke_width: bool,
+    pub emission: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -107,6 +108,7 @@ impl DynamicProperties {
             Property::Fill => self.fill = true,
             Property::Stroke => self.stroke = true,
             Property::StrokeWidth => self.stroke_width = true,
+            Property::Emission => self.emission = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -127,6 +129,7 @@ impl DynamicProperties {
             || self.fill
             || self.stroke
             || self.stroke_width
+            || self.emission
             || self.opacity
             || self.appearance
             || self.reveal
@@ -1520,6 +1523,7 @@ impl CompiledScene {
                         | Property::Fill
                         | Property::Stroke
                         | Property::StrokeWidth
+                        | Property::Emission
                         | Property::Opacity
                         | Property::Appearance
                         | Property::Reveal
@@ -2882,6 +2886,7 @@ impl CompiledScene {
                             | Property::Fill
                             | Property::Stroke
                             | Property::StrokeWidth
+                            | Property::Emission
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
@@ -3719,6 +3724,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectSeed => 21,
         Property::EffectSize => 22,
         Property::EffectThreshold => 23,
+        Property::Emission => 24,
     }
 }
 
@@ -4054,6 +4060,7 @@ mod tests {
                 fill: false,
                 stroke: false,
                 stroke_width: false,
+                emission: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -4420,6 +4427,7 @@ mod tests {
                 fill: false,
                 stroke: false,
                 stroke_width: false,
+                emission: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,

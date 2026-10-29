@@ -51,6 +51,7 @@ fn mask_raster(width: u32, height: u32, value: u8) -> GlyphRaster {
 
 fn quad(image: noon_render_wgpu::text::atlas::GlyphAtlasImage) -> GlyphQuadInstance {
     GlyphQuadInstance {
+        emission: 0.0,
         origin: [-0.5, -0.5],
         axis_x: [1.0, 0.0],
         axis_y: [0.0, 1.0],

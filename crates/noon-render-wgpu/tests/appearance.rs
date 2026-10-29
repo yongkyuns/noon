@@ -32,7 +32,7 @@ fn appearance_multiplies_semantic_opacity_in_packed_instances() {
     let mut instance = SceneInstance::new(compiled);
     instance.seek(1.0).expect("valid time");
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(instance.frame());
+    let prepared = preparer.prepare(instance.frame()).unwrap();
 
     assert_eq!(instance.frame().objects[0].style.opacity, 0.4);
     assert_eq!(instance.frame().objects[0].appearance, 0.5);

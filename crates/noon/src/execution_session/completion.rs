@@ -15,8 +15,8 @@ use crate::execution_session::CallbackTermination;
 use crate::{ExecutionSegment, ExecutionSession, ExecutionSessionPublicationError};
 
 use super::callback::{
-    CALLBACK_FILL, CALLBACK_OPACITY, CALLBACK_ROTATION, CALLBACK_SCALE, CALLBACK_STROKE,
-    CALLBACK_STROKE_WIDTH, CALLBACK_TRANSLATION,
+    CALLBACK_EMISSION, CALLBACK_FILL, CALLBACK_OPACITY, CALLBACK_ROTATION, CALLBACK_SCALE,
+    CALLBACK_STROKE, CALLBACK_STROKE_WIDTH, CALLBACK_TRANSLATION,
 };
 
 /// Failure to atomically release one completed animation segment into authored state.
@@ -416,7 +416,8 @@ impl ExecutionSession {
                     | SemanticAnimationCompletion::Stroke { .. }
                     | SemanticAnimationCompletion::Property {
                         property: SemanticObjectProperty::ObjectOpacity
-                            | SemanticObjectProperty::StrokeWidth,
+                            | SemanticObjectProperty::StrokeWidth
+                            | SemanticObjectProperty::Emission,
                         ..
                     }
             );
@@ -452,6 +453,13 @@ impl ExecutionSession {
                     property: SemanticObjectProperty::StrokeWidth,
                     value: SemanticSignalValue::Scalar(value),
                 } => style.stroke_width = *value,
+                SemanticAnimationCompletion::Property {
+                    property: SemanticObjectProperty::Emission,
+                    value: SemanticSignalValue::Scalar(value),
+                } => {
+                    style.emission =
+                        noon_core::Emission::new(*value).expect("checked material endpoint")
+                }
                 _ => unreachable!("style-domain completion was classified above"),
             };
         }
@@ -555,7 +563,9 @@ impl ExecutionSession {
                 SemanticAnimationCompletion::Property { property, value } => {
                     if !matches!(
                         property,
-                        SemanticObjectProperty::ObjectOpacity | SemanticObjectProperty::StrokeWidth
+                        SemanticObjectProperty::ObjectOpacity
+                            | SemanticObjectProperty::StrokeWidth
+                            | SemanticObjectProperty::Emission
                     ) && final_property_entries.get(&(entry.semantic_object, *property))
                         == Some(&index)
                     {
@@ -683,6 +693,12 @@ impl ExecutionSession {
                 effective.push(EffectivePropertyWrite::StrokeWidth {
                     object: entry.execution_object,
                     stroke_width: object.style.stroke_width,
+                });
+            }
+            if domains & CALLBACK_EMISSION != 0 {
+                effective.push(EffectivePropertyWrite::Emission {
+                    object: entry.execution_object,
+                    emission: object.style.emission,
                 });
             }
             if domains & CALLBACK_OPACITY != 0 {
@@ -1744,6 +1760,7 @@ mod tests {
         let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
         target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
         target_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.75);
+        target_state.style.emission = noon_core::Emission::new(63.0).unwrap();
         let target = store.insert_semantic_object(target_state);
         let animation = store
             .insert_semantic_transform_animation(object, target, AnimationOptions::new())
@@ -1782,6 +1799,12 @@ mod tests {
                 },
             )
             .unwrap();
+        let emission = noon_core::Emission::new(7.000000000000001).unwrap();
+        endpoint
+            .write(
+                crate::integration::EffectiveSemanticPropertyWrite::Emission { object, emission },
+            )
+            .unwrap();
         session
             .commit_required_callback_phase(endpoint.finish())
             .unwrap();
@@ -1800,6 +1823,16 @@ mod tests {
             Vec2::new(5.0, 1.0)
         );
         assert_eq!(session.frame().objects[0].transform.rotation, 0.75);
+        assert_eq!(session.frame().objects[0].style.emission, emission);
+        assert_eq!(
+            store
+                .semantic_object_state_checked(object)
+                .unwrap()
+                .style
+                .emission
+                .strength(),
+            63.0
+        );
         assert!(session.segment_state(segment).is_complete());
         assert!(matches!(
             session.advance_to_callback_barrier(1.0).unwrap(),

@@ -157,7 +157,7 @@ fn background_stroke_raster_is_beneath_fill_and_foreground_for_paths_and_primiti
                 },
             );
             let mut preparer = FramePreparer::new();
-            let prepared = preparer.prepare(scene.frame());
+            let prepared = preparer.prepare(scene.frame()).unwrap();
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
@@ -458,7 +458,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
             },
         );
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(scene.frame());
+        let prepared = preparer.prepare(scene.frame()).unwrap();
 
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
@@ -543,7 +543,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
             },
         );
         let mut path_preparer = FramePreparer::new();
-        let path_prepared = path_preparer.prepare(path_scene.frame());
+        let path_prepared = path_preparer.prepare(path_scene.frame()).unwrap();
 
         let mut encoder = device.create_command_encoder(&Default::default());
         {
@@ -650,7 +650,7 @@ fn line_gpu_coverage_is_stable_at_pixel_phases_and_preserves_caps() {
         let mut preparer = FramePreparer::new();
         let mut render_line = |renderer: &mut GpuRenderer, start: Vec2, end: Vec2| {
             let scene = scene_with_geometry(GeometryRef::line(start, end), style);
-            let prepared = preparer.prepare(scene.frame());
+            let prepared = preparer.prepare(scene.frame()).unwrap();
             renderer.upload(&device, &queue, &prepared);
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -760,7 +760,7 @@ fn line_gpu_coverage_is_stable_at_pixel_phases_and_preserves_caps() {
                             ..style
                         },
                     );
-                    let prepared = preparer.prepare(scene.frame());
+                    let prepared = preparer.prepare(scene.frame()).unwrap();
                     renderer.upload(&device, &queue, &prepared);
                     for phase in [0.0_f32, 0.125, 0.25, 0.4375, 0.5, 0.75, 0.875] {
                         let center = if vertical {
@@ -814,7 +814,7 @@ fn line_gpu_coverage_is_stable_at_pixel_phases_and_preserves_caps() {
                 ..style
             },
         );
-        let prepared = preparer.prepare(round_scene.frame());
+        let prepared = preparer.prepare(round_scene.frame()).unwrap();
         renderer.set_camera(
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(2.0, 1.0)).unwrap(),
@@ -923,7 +923,7 @@ fn zero_contribution_camera_is_pixel_identical_and_visible_strokes_restore() {
             let pixels = submit_and_read(&device, &queue, encoder, &target, &readback);
             (draws, pixels)
         };
-        let (initial_draw, hidden_pixels) = render(&preparer.prepare(&frame));
+        let (initial_draw, hidden_pixels) = render(&preparer.prepare(&frame).unwrap());
         assert_eq!(initial_draw.instances_drawn, 1);
         assert_eq!(initial_draw.draw_calls, 1);
         assert!(
@@ -933,17 +933,20 @@ fn zero_contribution_camera_is_pixel_identical_and_visible_strokes_restore() {
         let mut omitted = frame.clone();
         omitted.presences[0] = false;
         let mut reference_preparer = FramePreparer::new();
-        let (_, omitted_pixels) = render(&reference_preparer.prepare(&omitted));
+        let (_, omitted_pixels) = render(&reference_preparer.prepare(&omitted).unwrap());
         assert_eq!(
             hidden_pixels, omitted_pixels,
             "invisible camera and omitted draw must be byte-identical"
         );
         // Independent reference uploads require a full candidate upload afterward.
-        render(&preparer.prepare(&frame));
+        render(&preparer.prepare(&frame).unwrap());
         for opacity in [0.25, 1.0, 0.0, 0.5] {
             frame.objects[0].style.opacity = opacity;
-            let (draws, pixels) =
-                render(&preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0])));
+            let (draws, pixels) = render(
+                &preparer
+                    .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+                    .unwrap(),
+            );
             assert_eq!(draws.instances_drawn, 1 + usize::from(opacity != 0.0));
             if opacity == 0.0 {
                 assert_eq!(pixels, hidden_pixels);
@@ -955,8 +958,11 @@ fn zero_contribution_camera_is_pixel_identical_and_visible_strokes_restore() {
         frame.objects[0].style.fill = Some(Color::rgba(1.0, 1.0, 1.0, 0.0));
         frame.objects[0].style.stroke = Some(Color::WHITE);
         frame.objects[0].style.stroke_width = 0.1;
-        let (draws, stroked) =
-            render(&preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0])));
+        let (draws, stroked) = render(
+            &preparer
+                .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+                .unwrap(),
+        );
         assert_eq!(draws.instances_drawn, 2);
         assert_ne!(
             stroked, hidden_pixels,

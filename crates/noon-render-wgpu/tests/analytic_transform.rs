@@ -41,13 +41,17 @@ fn analytic_geometry_transform_dirties_only_one_instance_without_path_work() {
     let mut instance = SceneInstance::new(compiled);
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
-    let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
+    let initial = preparer
+        .prepare_incremental(instance.frame(), &initial_changes)
+        .unwrap();
     assert_eq!(initial.stats.geometry_cache_misses, 0);
     assert_eq!(preparer.cached_path_mesh_count(), 0);
 
     instance.advance_to(0.5).unwrap();
     let changes = instance.take_frame_changes();
-    let steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(steady.stats.instances_repacked, 1);
     assert_eq!(steady.stats.dirty_instance_count, 1);
     assert_eq!(steady.circle_dirty_ranges.len(), 1);
@@ -104,11 +108,15 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
-    preparer.prepare_incremental(instance.frame(), &initial_changes);
+    preparer
+        .prepare_incremental(instance.frame(), &initial_changes)
+        .unwrap();
 
     instance.advance_to(0.5).unwrap();
     let changes = instance.take_frame_changes();
-    let steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(steady.stats.instances_repacked, 2);
     assert_eq!(steady.stats.dirty_instance_count, 2);
     assert_eq!(steady.rectangle_dirty_ranges.len(), 1);
@@ -141,7 +149,9 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     let static_before = instance.frame().objects[STATIC_INDEX].clone();
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
-    let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
+    let initial = preparer
+        .prepare_incremental(instance.frame(), &initial_changes)
+        .unwrap();
     assert_eq!(initial.stats.geometry_cache_misses, 0);
     assert_eq!(preparer.cached_path_mesh_count(), 0);
 
@@ -161,7 +171,9 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
 
         let changes = instance.take_frame_changes();
         assert_eq!(changes.object_indices(), &[MOVING_INDEX]);
-        let prepared = preparer.prepare_incremental(instance.frame(), &changes);
+        let prepared = preparer
+            .prepare_incremental(instance.frame(), &changes)
+            .unwrap();
 
         assert_eq!(instance.frame().objects[MOVING_INDEX].transform, transform);
         assert_eq!(instance.frame().objects[STATIC_INDEX], static_before);

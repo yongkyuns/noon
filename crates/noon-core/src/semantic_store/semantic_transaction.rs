@@ -2800,6 +2800,14 @@ impl SemanticMutationTransaction {
                             index, *object, *property, expected, actual,
                         ));
                     }
+                    if *property == SemanticObjectProperty::Emission
+                        && matches!(value, SemanticSignalValue::Scalar(strength) if crate::Emission::new(*strength).is_err())
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidEmissionValue {
+                            index,
+                            object: *object,
+                        });
+                    }
                     if let SemanticTransactionNodeRef::Pending(token) = object {
                         if let Some(path) = staged_pending_paths.get_mut(token) {
                             let did_change = path.property_value(*property) != *value;
@@ -4455,6 +4463,9 @@ fn object_property_value(
         SemanticObjectProperty::StrokeWidth => {
             SemanticSignalValue::Scalar(state.style.stroke_width)
         }
+        SemanticObjectProperty::Emission => {
+            SemanticSignalValue::Scalar(state.style.emission.strength())
+        }
         SemanticObjectProperty::ObjectOpacity => {
             SemanticSignalValue::Scalar(state.style.object_opacity)
         }
@@ -4546,6 +4557,10 @@ fn apply_object_property(
         (SemanticObjectProperty::StrokeWidth, SemanticSignalValue::Scalar(value)) => {
             state.style.stroke_width = value;
         }
+        (SemanticObjectProperty::Emission, SemanticSignalValue::Scalar(value)) => {
+            state.style.emission =
+                crate::Emission::new(value).expect("preflighted material strength");
+        }
         (SemanticObjectProperty::ObjectOpacity, SemanticSignalValue::Scalar(value)) => {
             state.style.object_opacity = value;
         }
@@ -4635,6 +4650,7 @@ fn is_style_property(property: SemanticObjectProperty) -> bool {
         SemanticObjectProperty::FillOpacity
             | SemanticObjectProperty::StrokeOpacity
             | SemanticObjectProperty::StrokeWidth
+            | SemanticObjectProperty::Emission
             | SemanticObjectProperty::ObjectOpacity
     )
 }
@@ -5051,6 +5067,10 @@ pub enum SemanticMutationTransactionError {
     },
     InvalidObjectPropertyTrack {
         index: usize,
+    },
+    InvalidEmissionValue {
+        index: usize,
+        object: SemanticTransactionNodeRef,
     },
     NonFinitePropertyValue {
         index: usize,
@@ -5626,6 +5646,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot add animation with non-finite path_arc"
             ),
+            Self::InvalidEmissionValue { index, object } => write!(formatter, "semantic mutation {index} on {object:?} requires finite emission strength in [0, 63]"),
             Self::InvalidObjectPropertyTrack { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} has an invalid exact object property track"

@@ -14,6 +14,7 @@ pub mod bar_chart;
 pub mod blur;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
+pub mod camera_bloom;
 pub mod circle_surround;
 pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
@@ -2294,6 +2295,7 @@ pub fn ordinary_moving_camera_center_program(
         stroke_join: StrokeJoin::Miter,
         stroke_cap: StrokeCap::Butt,
         object_opacity: 1.0,
+        emission: noon_core::Emission::NONE,
     };
     let mut triangle = scene
         .path(triangle_path, triangle_style)

@@ -912,6 +912,7 @@ mod tests {
 
     fn retained(snapshot: bool, sequence: u64) -> RetainedExecutionDeltaEnvelope {
         RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 1,

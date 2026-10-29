@@ -79,6 +79,9 @@ fn srgb_decode(x: f64) -> f64 {
     }
 }
 fn expected(paint: bool, reverse: bool, clear: [f64; 4]) -> Vec<[f64; 4]> {
+    expected_emission(paint, reverse, clear, 0.0)
+}
+fn expected_emission(paint: bool, reverse: bool, clear: [f64; 4], strength: f64) -> Vec<[f64; 4]> {
     (0..SIZE * SIZE)
         .map(|at| {
             let x = at % SIZE;
@@ -92,6 +95,9 @@ fn expected(paint: bool, reverse: bool, clear: [f64; 4]) -> Vec<[f64; 4]> {
                 } else {
                     srgb_decode(OVER[c])
                 };
+            }
+            for channel in &mut over[..3] {
+                *channel *= 1.0 + strength;
             }
             over[3] *= 0.5;
             let mut layers = [(base, true), (over, x < 8)];
@@ -243,7 +249,12 @@ fn reference(
     }
     (linear, bytes)
 }
-fn qualify_authored_scene(retained: bool, visible: bool) {
+fn qualify_authored_scene(retained: bool, visible: bool, emission: f64) {
+    qualify_material(retained, visible, emission, None);
+}
+
+fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option<f64>) {
+    let emission = strength * sample.unwrap_or(1.0);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
@@ -278,14 +289,17 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
         intensity: 1.5,
         scratch_budget_bytes: 1024 * 1024,
     };
-    let artifact = std::env::var_os(if visible {
+    let artifact = std::env::var_os(if emission > 0.0 || sample.is_some() {
+        "NOON_EMISSION_VIEW_ARTIFACT_DIR"
+    } else if visible {
         "NOON_VISIBLE_VIEW_ARTIFACT_DIR"
     } else if retained {
         "NOON_RETAINED_VIEW_ARTIFACT_DIR"
     } else {
         "NOON_AUTHORED_VIEW_ARTIFACT_DIR"
     })
-    .map(std::path::PathBuf::from);
+    .map(std::path::PathBuf::from)
+    .map(|dir| sample.map_or_else(|| dir.clone(), |time| dir.join(format!("time-{time}"))));
     if let Some(dir) = &artifact {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("adapter.txt"), format!("{:?}", adapter.get_info())).unwrap();
@@ -294,15 +308,51 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
     let mut max_linear_error = 0.0f64;
     let mut max_display_error = 0;
     let mut negative_error = 0.0f64;
+    let mut max_source_radiance = 0.0f64;
+    let mut ignored_emission_error = 0.0f64;
     for paint in [false, true] {
         for path in [false, true] {
             for reverse in [false, true] {
                 for clear in [[0.0; 4], [0.125, 0.0625, 0.03125, 1.0]] {
-                    let (scene, camera, _) = scene(path, paint, reverse);
+                    let (scene, camera, mut material) = scene(path, paint, reverse);
+                    material
+                        .set_emission(if sample.is_some() { 0.0 } else { emission })
+                        .unwrap();
+                    let animation = sample.map(|_| {
+                        let mut target = material.target_editor().unwrap();
+                        target.set_emission(strength).unwrap();
+                        scene
+                            .declare_transform_to(
+                                &material,
+                                &target,
+                                noon::AnimationOptions::new()
+                                    .run_time(1.0)
+                                    .rate_func(noon::RateFunction::Linear),
+                            )
+                            .unwrap()
+                    });
                     let mut session = scene.execution_session().unwrap();
+                    if emission > 0.0 && sample.is_none() {
+                        let initial = session.take_renderer_publication();
+                        let mut unsupported = RetainedFramePreparer::new();
+                        assert!(matches!(
+                            unsupported.prepare_publication(
+                                &device,
+                                &initial,
+                                noon_render_wgpu::text::TextDeviceMetrics::uniform(2.0).unwrap()
+                            ),
+                            Err(noon_render_wgpu::RetainedPrepareError::ColorProfile(
+                                noon_render_wgpu::ColorProfileError::UnsupportedEmission(_)
+                            ))
+                        ));
+                    }
                     let mut tx = SemanticMutationTransaction::new();
                     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
                     scene.live(&mut session).apply(tx).unwrap();
+                    if let Some(animation) = &animation {
+                        scene.live(&mut session).play_animation(animation).unwrap();
+                        session.seek(sample.unwrap()).unwrap();
+                    }
                     let publication = session.take_renderer_publication();
                     assert_eq!(publication.color_profile(), ViewColorProfile::LinearHdr);
                     // The semantic profile selects a linear target; the host does not own
@@ -354,13 +404,18 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                             )
                             .unwrap();
                     } else {
-                        let prepared = preparer.prepare_publication(&publication);
+                        let prepared = preparer.prepare_publication(&publication).unwrap();
                         renderer.upload(&device, &queue, &prepared);
                         renderer.encode(&mut encoder, &view, &prepared, clear_color);
                     }
                     queue.submit([encoder.finish()]);
                     let pixels = read(&device, &queue, &target);
-                    let expected = expected(paint, reverse, clear);
+                    let expected = expected_emission(paint, reverse, clear, emission);
+                    let neutral = self::expected(paint, reverse, clear);
+                    for (a, n) in decode(&pixels).iter().zip(neutral.iter().flatten()) {
+                        max_source_radiance = max_source_radiance.max(*a);
+                        ignored_emission_error = ignored_emission_error.max((a - n).abs());
+                    }
                     for (at, (a, e)) in decode(&pixels)
                         .iter()
                         .zip(expected.iter().flatten())
@@ -369,7 +424,13 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                         let error = (a - e).abs();
                         max_linear_error = max_linear_error.max(error);
                         assert!(
-                            a.is_finite() && error <= 0.002,
+                            a.is_finite()
+                                && error
+                                    <= if emission > 0.0 && at % 4 != 3 {
+                                        0.006 + 0.004 * e.abs()
+                                    } else {
+                                        0.002
+                                    },
                             "profile {profiles}, channel {at}: {a} != {e}"
                         );
                     }
@@ -420,7 +481,7 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                             0
                         );
                     } else {
-                        let prepared = preparer.prepare_publication(&clean);
+                        let prepared = preparer.prepare_publication(&clean).unwrap();
                         assert_eq!(prepared.stats.instances_repacked, 0);
                         assert_eq!(
                             renderer.upload(&device, &queue, &prepared).bytes_uploaded,
@@ -428,10 +489,14 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                         );
                     }
                     if profiles == 0 {
-                        // Actual draw with the ordinary raw packing, deliberately omitting
-                        // the profile consumer. This must disagree with the independent
-                        // authored linear-light expectation, rather than a fabricated image.
-                        let wrong = preparer.prepare(clean.frame());
+                        // Actual draw deliberately omitting the material/profile consumer.
+                        // Raw input rejects authored emission, so remove that declaration
+                        // to reproduce the old unprofiled draw as the negative control.
+                        let mut unprofiled = clean.frame().clone();
+                        for object in &mut unprofiled.objects {
+                            object.style.emission = noon_core::Emission::NONE;
+                        }
+                        let wrong = preparer.prepare(&unprofiled).unwrap();
                         renderer.upload(&device, &queue, &wrong);
                         let mut encoder = device.create_command_encoder(&Default::default());
                         renderer.encode(&mut encoder, &view, &wrong, wgpu::Color::TRANSPARENT);
@@ -449,7 +514,7 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
                         }
                     }
                     if let Some(dir) = &artifact {
-                        std::fs::write(dir.join(format!("case-{profiles}.json")),format!("{{\"paint\":{paint},\"path\":{path},\"reverse\":{reverse},\"clear\":{clear:?}}}")).unwrap();
+                        std::fs::write(dir.join(format!("case-{profiles}.json")),format!("{{\"paint\":{paint},\"path\":{path},\"reverse\":{reverse},\"clear\":{clear:?},\"emission\":{emission}}}")).unwrap();
                         std::fs::write(dir.join(format!("case-{profiles}.rgba16f")), pixels)
                             .unwrap();
                         std::fs::write(
@@ -473,7 +538,18 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
             }
         }
     }
-    let manifest=format!("{{\"profiles\":{profiles},\"width\":{SIZE},\"height\":{SIZE},\"linear_channels\":{},\"display_channels\":{},\"max_linear_error\":{max_linear_error},\"linear_bound\":0.002,\"max_display_error\":{max_display_error},\"display_bound\":2,\"missing_decode_negative_error\":{negative_error}}}",profiles*SIZE as u64*SIZE as u64*4,profiles*SIZE as u64*SIZE as u64*4);
+    if emission > 0.0 {
+        assert!(
+            max_source_radiance > 1.0,
+            "authored emission must survive above one before Bloom"
+        );
+        assert!(
+            ignored_emission_error > 0.5,
+            "a missing material publication must fail this corpus"
+        );
+    }
+    eprintln!("emission={emission}, maximum pre-Bloom radiance={max_source_radiance}, ignored-material difference={ignored_emission_error}");
+    let manifest=format!("{{\"profiles\":{profiles},\"width\":{SIZE},\"height\":{SIZE},\"linear_channels\":{},\"display_channels\":{},\"max_linear_error\":{max_linear_error},\"rgb_absolute_bound\":{},\"rgb_relative_bound\":{},\"alpha_absolute_bound\":0.002,\"emission_strength\":{emission},\"max_display_error\":{max_display_error},\"display_bound\":2,\"missing_decode_negative_error\":{negative_error}}}",profiles*SIZE as u64*SIZE as u64*4,profiles*SIZE as u64*SIZE as u64*4,if emission > 0.0 {0.006} else {0.002},if emission > 0.0 {0.004} else {0.0});
     if let Some(dir) = &artifact {
         std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
     }
@@ -483,13 +559,13 @@ fn qualify_authored_scene(retained: bool, visible: bool) {
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn authored_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
-    qualify_authored_scene(false, false);
+    qualify_authored_scene(false, false, 0.0);
 }
 
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn retained_view_profile_decodes_before_blending_and_matches_independent_bloom_pixels() {
-    qualify_authored_scene(true, false);
+    qualify_authored_scene(true, false, 0.0);
 }
 
 mod retained_color_assets;
@@ -497,9 +573,133 @@ mod retained_color_assets;
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn visible_retained_view_profile_matches_independent_bloom_pixels() {
-    qualify_authored_scene(true, true);
+    qualify_authored_scene(true, true, 0.0);
 }
 
 mod hdr_captures;
 
 mod view_bloom;
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn authored_emission_survives_above_one_before_bloom_with_unchanged_alpha() {
+    qualify_authored_scene(true, false, 7.0);
+}
+
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn authored_maximum_emission_uses_the_hdr_envelope_without_changing_alpha() {
+    qualify_authored_scene(true, false, 63.0);
+}
+
+#[test]
+#[ignore = "requires real native float/blending output; missing adapter fails qualification"]
+fn animated_material_targets_reach_independent_pre_bloom_and_display_pixels() {
+    for time in [0.0, 0.12345678912345, 1.0, 0.5] {
+        qualify_material(true, false, 63.0, Some(time));
+    }
+}
+
+#[cfg(feature = "native-text")]
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn first_active_family_publication_and_cached_seek_keep_hdr_material() {
+    use noon::{AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let mut camera = scene.camera_frame().unwrap();
+    camera
+        .set_view_color_profile(ViewColorProfile::LinearHdr)
+        .unwrap();
+    let mut source = scene.square(8.0).unwrap();
+    source.set_fill(0.5, 0.25, 0.75, 0.5).unwrap();
+    source.disable_stroke().unwrap();
+    source.set_emission(7.0).unwrap();
+    // A retained text member installs the family plan; keep it outside the
+    // sampled source so the independent center reference stays analytic.
+    let mut label = scene.text("A").unwrap();
+    label.set_translation(20.0, 0.0).unwrap();
+    scene.add(&source).unwrap();
+    let family = scene.family(&[(&label).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .declare_and_activate_family_text_write(
+            &family,
+            false,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear)
+                .lag_ratio(0.0)
+                .introducer(true),
+        )
+        .unwrap();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("family HDR material"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
+    renderer.set_viewport(&device, &queue, SIZE, SIZE);
+    renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 8.0)).unwrap(),
+    );
+    let mut text = renderer.create_retained_text_state(&device, &queue);
+    let mut preparer = RetainedFramePreparer::new();
+    for time in [0.75, 0.9, 0.75] {
+        session.seek(time).unwrap();
+        let publication = session.take_renderer_publication();
+        assert!(!publication.active_family_animation_indices().is_empty());
+        let prepared = preparer
+            .prepare_planned_publication(
+                &device,
+                &publication,
+                noon_render_wgpu::text::TextDeviceMetrics::uniform(2.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.color_profile(), ViewColorProfile::LinearHdr);
+        renderer.upload_retained(&device, &queue, &prepared, &mut text);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer
+            .encode_retained(
+                &mut encoder,
+                &view,
+                &prepared,
+                &text,
+                wgpu::Color::TRANSPARENT,
+                None,
+            )
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let pixels = decode(&read(&device, &queue, &target));
+        let center = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
+        // The text plan must preserve the stationary source's decoded radiance
+        // and independent half coverage during both fresh and cached packing.
+        let alpha = 0.5;
+        let expected = [
+            srgb_decode(0.5) * 8.0 * alpha,
+            srgb_decode(0.25) * 8.0 * alpha,
+            srgb_decode(0.75) * 8.0 * alpha,
+            alpha,
+        ];
+        for (actual, expected) in pixels[center..center + 4].iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() < 0.004,
+                "family at {time}: {actual} != {expected}"
+            );
+        }
+    }
+}

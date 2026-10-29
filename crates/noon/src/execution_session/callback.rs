@@ -22,21 +22,22 @@ use noon_runtime::{
 use super::{ExecutionEvaluationMode, ExecutionSession};
 use noon_runtime::SignalTimelinePreview;
 
-pub(super) const CALLBACK_TRANSLATION: u8 = 1;
-pub(super) const CALLBACK_ROTATION: u8 = 2;
-pub(super) const CALLBACK_SCALE: u8 = 4;
-pub(super) const CALLBACK_FILL: u8 = 8;
-pub(super) const CALLBACK_STROKE: u8 = 16;
-pub(super) const CALLBACK_STROKE_WIDTH: u8 = 32;
-pub(super) const CALLBACK_OPACITY: u8 = 64;
-pub(super) const CALLBACK_PRESENCE: u8 = 128;
+pub(super) const CALLBACK_TRANSLATION: u16 = 1;
+pub(super) const CALLBACK_ROTATION: u16 = 2;
+pub(super) const CALLBACK_SCALE: u16 = 4;
+pub(super) const CALLBACK_FILL: u16 = 8;
+pub(super) const CALLBACK_STROKE: u16 = 16;
+pub(super) const CALLBACK_STROKE_WIDTH: u16 = 32;
+pub(super) const CALLBACK_OPACITY: u16 = 64;
+pub(super) const CALLBACK_PRESENCE: u16 = 128;
+pub(super) const CALLBACK_EMISSION: u16 = 256;
 
 #[derive(Clone, Debug)]
 pub(super) struct CallbackPublicationReceipt {
     token: CallbackPhaseToken,
     time: f64,
     publication: PublicationContext,
-    domains: BTreeMap<SemanticNodeId, u8>,
+    domains: BTreeMap<SemanticNodeId, u16>,
 }
 
 /// Renderer-facing dirty state for one callback-published runtime row.
@@ -138,7 +139,7 @@ impl CallbackPublicationReceipt {
         object: SemanticNodeId,
         time: f64,
         publication: PublicationContext,
-    ) -> Option<u8> {
+    ) -> Option<u16> {
         (self.time == time && self.publication == publication)
             .then(|| self.domains.get(&object).copied())
             .flatten()
@@ -585,7 +586,7 @@ impl CallbackPhaseToken {
 /// Identity resolves only when the pinned callback result is prepared.
 pub type EffectiveSemanticPropertyWrite = RuntimeEffectivePropertyWrite<SemanticNodeId>;
 
-fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
+fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u16 {
     match write {
         EffectiveSemanticPropertyWrite::Presence { .. } => CALLBACK_PRESENCE,
         EffectiveSemanticPropertyWrite::Transform { .. } => {
@@ -595,7 +596,11 @@ fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
             CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE
         }
         EffectiveSemanticPropertyWrite::Style { .. } => {
-            CALLBACK_FILL | CALLBACK_STROKE | CALLBACK_STROKE_WIDTH | CALLBACK_OPACITY
+            CALLBACK_FILL
+                | CALLBACK_STROKE
+                | CALLBACK_STROKE_WIDTH
+                | CALLBACK_OPACITY
+                | CALLBACK_EMISSION
         }
         EffectiveSemanticPropertyWrite::Translation { .. } => CALLBACK_TRANSLATION,
         EffectiveSemanticPropertyWrite::Rotation { .. } => CALLBACK_ROTATION,
@@ -604,11 +609,12 @@ fn callback_write_domains(write: EffectiveSemanticPropertyWrite) -> u8 {
         EffectiveSemanticPropertyWrite::Stroke { .. } => CALLBACK_STROKE,
         EffectiveSemanticPropertyWrite::StrokeWidth { .. } => CALLBACK_STROKE_WIDTH,
         EffectiveSemanticPropertyWrite::Opacity { .. } => CALLBACK_OPACITY,
+        EffectiveSemanticPropertyWrite::Emission { .. } => CALLBACK_EMISSION,
         EffectiveSemanticPropertyWrite::EffectIntensity { .. } => 0,
     }
 }
 
-fn native_write_domain(property: SemanticObjectProperty) -> u8 {
+fn native_write_domain(property: SemanticObjectProperty) -> u16 {
     match property {
         SemanticObjectProperty::Presence => CALLBACK_PRESENCE,
         SemanticObjectProperty::Translation => CALLBACK_TRANSLATION,
@@ -616,7 +622,9 @@ fn native_write_domain(property: SemanticObjectProperty) -> u8 {
         SemanticObjectProperty::Scale => CALLBACK_SCALE,
         SemanticObjectProperty::StrokeWidth => CALLBACK_STROKE_WIDTH,
         SemanticObjectProperty::ObjectOpacity => CALLBACK_OPACITY,
-        SemanticObjectProperty::FillOpacity | SemanticObjectProperty::StrokeOpacity => 0,
+        SemanticObjectProperty::FillOpacity
+        | SemanticObjectProperty::StrokeOpacity
+        | SemanticObjectProperty::Emission => 0,
     }
 }
 
@@ -792,6 +800,7 @@ impl CallbackPhaseOverlay {
                 style.stroke_width = stroke_width
             }
             EffectiveSemanticPropertyWrite::Opacity { opacity, .. } => style.opacity = opacity,
+            EffectiveSemanticPropertyWrite::Emission { emission, .. } => style.emission = emission,
         }
         current.set_transform(transform);
         current.set_style(style);
@@ -1875,7 +1884,7 @@ impl ExecutionSession {
     fn commit_prepared_callback_content(
         &mut self,
         effective: noon_runtime::PreparedEffectivePropertyBatch,
-        receipt_domains: BTreeMap<SemanticNodeId, u8>,
+        receipt_domains: BTreeMap<SemanticNodeId, u16>,
         replacement: noon_runtime::PreparedEffectiveContentReplacement,
     ) -> Result<EffectiveContentLease, ExecutionSessionCallbackError> {
         self.runtime
@@ -2054,7 +2063,7 @@ impl ExecutionSession {
     ) -> Result<
         (
             noon_runtime::PreparedEffectivePropertyBatch,
-            BTreeMap<SemanticNodeId, u8>,
+            BTreeMap<SemanticNodeId, u16>,
         ),
         ExecutionSessionCallbackError,
     > {
@@ -2175,7 +2184,7 @@ impl ExecutionSession {
     fn finish_callback_publication(
         &mut self,
         mut completion: CallbackCompletion,
-        mut receipt_domains: BTreeMap<SemanticNodeId, u8>,
+        mut receipt_domains: BTreeMap<SemanticNodeId, u16>,
     ) {
         self.commit_callback_progress(&mut completion);
         if !self.callback_schedule.is_empty() {

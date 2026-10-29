@@ -3,6 +3,8 @@ use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
 mod backdrop_blur;
 mod bloom;
+mod emission;
+pub use emission::{Emission, EmissionError};
 mod blur;
 pub use backdrop_blur::BackdropBlur;
 pub use bloom::Bloom;

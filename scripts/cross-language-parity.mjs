@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, compareEffectiveFrames, MAX_EFFECTIVE_ABSOLUTE_ERROR } from "./manim-raster-support.mjs";
+import { captureAttemptedPage, createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Keep the workspace feature union, so this check reuses the normal validation build.
@@ -33,6 +35,9 @@ function comparable(frame) {
   return { ...effective, objects: frame.objects.map(({ id, ...object }) => object) };
 }
 
+const runtimeBuildIdentity = JSON.parse(await readFile(path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));
+const resources = createPyodideResourceCache(await readFile(path.join(repoRoot, "web/python-worker.js"), "utf8"));
+
 const server = await serveRepository(repoRoot, Number(process.env.NOON_PARITY_PORT ?? "4180"));
 let browser;
 const report = [];
@@ -40,24 +45,30 @@ try {
   browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
   for (const fixture of fixtures) {
     const page = await browser.newPage();
+    const failureTrace = createBrowserFailureTrace();
+    const detachFailureTrace = failureTrace.attach(browser, page.context(), page);
     const frames = [];
     const identities = new Map();
     const reverseIdentities = new Map();
     let deadline;
     try {
       await Promise.race([(async () => {
+        await resources.install(page.context());
         const errors = [];
         page.on("pageerror", (error) => errors.push(String(error)));
+        failureTrace.setPhase("bootstrap");
         await page.goto(`${server.baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
         await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
         await page.evaluate(() => window.noonHostRaster.ready());
         const source = await readFile(path.join(repoRoot, "web/python/examples", `${fixture.source ?? fixture.name}.py`), "utf8");
+        failureTrace.setPhase("load");
         const loaded = await page.evaluate(({ source, duration, context }) => window.noonHostRaster.load(source, duration, context),
           { source, duration: fixture.times.at(-1) + 1, context: fixture.context ?? {} });
         assert.equal(loaded.kind, "semantic_execution");
         assert.equal(loaded.rendererBackend, "WebGPU");
         let maximumAbsoluteError = 0;
         for (const [index, time] of fixture.times.entries()) {
+          failureTrace.setPhase("sample", { index, time });
           const metrics = await page.evaluate(({ index, times }) => window.noonHostRaster.renderThrough(index, times),
             { index, times: fixture.times });
           assert.equal(metrics.time, time);
@@ -81,7 +92,16 @@ try {
       })(), new Promise((_, reject) => {
         deadline = setTimeout(() => reject(new Error(`${fixture.name}: exceeded 60 seconds`)), 60_000);
       })]);
+    } catch (error) {
+      const trace = failureTrace.snapshot();
+      const attemptedPage = await captureAttemptedPage(page);
+      await writeFile(path.join(artifacts, `${fixture.name}-failure.json`), `${JSON.stringify({
+        fixture: fixture.name, runtimeBuildIdentity, error: String(error.stack ?? error).slice(0, 16_000),
+        trace, attemptedPage, resources: resources.stats(),
+      }, null, 2)}\n`);
+      throw error;
     } finally {
+      detachFailureTrace();
       clearTimeout(deadline);
       await writeFile(path.join(artifacts, `${fixture.name}-python.json`), `${JSON.stringify(frames, null, 2)}\n`);
       await page.close();
@@ -89,6 +109,7 @@ try {
   }
   await writeFile(path.join(artifacts, "report.json"), `${JSON.stringify({
     mode: "paired-current-runtime-frames", maximumEffectiveAbsoluteError: MAX_EFFECTIVE_ABSOLUTE_ERROR, fixtures: report,
+    resources: resources.stats(),
   }, null, 2)}\n`);
 } finally {
   await browser?.close();
