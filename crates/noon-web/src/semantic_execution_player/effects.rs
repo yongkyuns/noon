@@ -21,10 +21,12 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.add_effect(object, definition, name))
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn require_effect_resource_preparation(&mut self) {
         self.session.require_effect_resource_preparation();
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn prepare_effect_addition<'owner>(
         &mut self,
         object: impl Into<MobjectTarget<'owner>>,
@@ -45,6 +47,7 @@ impl SemanticExecutionPlayer {
         )
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn publish_effect_addition(
         &mut self,
         staged: noon::StagedEffectPublication,
