@@ -29,7 +29,10 @@ const materialAttachment = `        for panel, program in zip(panels, programs):
             panel.add_effect(ShaderEffect(program), name="stripes")`;
 assert.ok(materialLesson.includes(materialAttachment));
 const fadeSource = sourceForMode(materialLesson
-  .replace(materialAttachment, `        self.play(*(FadeIn(panel) for panel in panels), run_time=1, rate_func=linear)`)
+  .replace("class ShaderMaterial(Scene):", "class ShaderMaterial(MovingCameraScene):")
+  .replace("    def construct(self):\n", "    def construct(self):\n        self.camera.frame.set_view_color_profile('linear_hdr')\n")
+  .replace(materialAttachment, `        self.camera.frame.set_view_color_profile('compatibility')
+        self.play(*(FadeIn(panel) for panel in panels), run_time=1, rate_func=linear)`)
   .replace('        programs = [material("local"), material("scene")]\n', '')
   .replace("        self.add(*panels)", `        programs = [material("local"), material("scene")]
 ${materialAttachment}`));
