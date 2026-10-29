@@ -133,10 +133,17 @@ async function qualifyProfileTransition(context, baseUrl, backend) {
     assert.ok(treatedPixels > 500, "the retained picture contains the shader treatment");
     const compatibleSource = source.replace("self.camera.frame.set_view_color_profile('linear_hdr')",
       "self.camera.frame.set_view_color_profile('compatibility')");
-    await page.evaluate(source => noonHostRaster.load(source, 6), compatibleSource);
-    await page.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
-    assert.deepEqual(pixels, PNG.sync.read(await page.locator("#scene").screenshot()).data,
-      "transition output matches the same program authored entirely in compatibility color");
+    await page.close();
+    const referencePage = await context.newPage();
+    referencePage.on("pageerror", error => errors.push(String(error)));
+    try {
+      await referencePage.goto(baseUrl + "/web/manim-raster-host.html");
+      await referencePage.waitForFunction(() => globalThis.noonHostRaster);
+      await referencePage.evaluate(source => noonHostRaster.load(source, 6), compatibleSource);
+      await referencePage.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
+      assert.deepEqual(pixels, PNG.sync.read(await referencePage.locator("#scene").screenshot()).data,
+        "transition output matches the same program authored entirely in compatibility color");
+    } finally { await referencePage.close(); }
     assert.deepEqual(errors, []);
     return { backend, sourceMode, modules, treatedPixels, frame };
   } finally { await page.close(); }
