@@ -22,7 +22,8 @@ See [the animated material lesson](../../web/python/examples/showcase_shader_mat
 an independent coverage reference, different presentation cadences and seek/replay
 on WebGPU and WebGL2. It requires a clean renderer-smoke browser package.
 
-Late Rust attachments use `live.prepare_effect_attachments(...)` and yield
+Late Rust attachments use `live.prepare_effect_attachments(...)`; shader-bearing
+scene/family edits use `prepare_membership`/`prepare_family_membership`. Both yield
 `ContinuationStep::Publish`: native, direct-WASM and offscreen hosts prepare owned
 immutable modules before the normal publisher revalidates and commits the batch.
 The existing retention barrier then admits the frame before source resumption.
@@ -34,7 +35,8 @@ the default forces portable suspension. Both reject incompatible HDR attachments
 and view edits before publication. Pending resource work revalidates the view.
 Working-target changes retain weak references to immutable same-device programs;
 row bindings are prepared again for the new target. A different device requires
-fresh program preparation.
+fresh program preparation. Publication also rechecks that any newly executable
+program still matches the modules prepared before the await.
 
 Live Python shader attachments use that same staged transaction. Portable source
 statements suspend automatically; explicit async constructs await `add_effect`,

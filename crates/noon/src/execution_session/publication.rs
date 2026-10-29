@@ -39,7 +39,7 @@ pub(crate) enum SemanticPublicationPurpose {
 pub(super) struct PreparedRuntimePublication {
     pub effective: Option<PreparedEffectivePropertyBatch>,
     pub frame: Option<noon_runtime::PreparedFrameEvaluation>,
-    pub external_effects_prepared: bool,
+    pub prepared_effect_programs: Vec<noon_core::WgslEffectProgram>,
 }
 
 impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication {
@@ -47,7 +47,7 @@ impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication
         Self {
             effective,
             frame: None,
-            external_effects_prepared: false,
+            prepared_effect_programs: Vec::new(),
         }
     }
 }
@@ -108,7 +108,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::TranslationDragActive => f.write_str(
                 "cancel or release the active translation drag before authored publication",
             ),
-            Self::ExternalEffectPreparationRequired => f.write_str("new shader attachments require the publication-preparation barrier"),
+            Self::ExternalEffectPreparationRequired => f.write_str("newly executable shader programs require the publication-preparation barrier"),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -599,7 +599,7 @@ impl ExecutionSession {
         let PreparedRuntimePublication {
             effective,
             frame,
-            external_effects_prepared,
+            prepared_effect_programs,
         } = runtime;
         debug_assert!(
             frame.is_none() || !matches!(purpose, SemanticPublicationPurpose::Callback(_))
@@ -683,8 +683,9 @@ impl ExecutionSession {
             };
         self.validate_shader_view_profile(&prepared, &publication)?;
         if self.require_effect_preparation
-            && !external_effects_prepared
-            && publication.introduced_shader_programs().next().is_some()
+            && publication
+                .introduced_shader_programs()
+                .any(|program| !prepared_effect_programs.contains(program))
         {
             return Err(ExecutionSessionPublicationError::ExternalEffectPreparationRequired);
         }

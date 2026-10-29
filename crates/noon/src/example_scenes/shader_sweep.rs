@@ -22,7 +22,7 @@ pub struct ShaderSweep {
     panels: [Mobject; 2],
     phase: [ShaderParameterKey; 2],
     stage: u8,
-    deferred: Option<[WgslEffectProgram; 2]>,
+    deferred: bool,
     camera: Option<Mobject>,
     retire: bool,
 }
@@ -79,7 +79,7 @@ impl LiveContinuation for ShaderSweep {
         let segment = match self.stage {
             0 | 2 | 4 => live.wait_segment(0.5),
             1 | 3 => {
-                if let Some(programs) = self.deferred.take() {
+                if std::mem::take(&mut self.deferred) {
                     if let Some(camera) = self.camera.take() {
                         let mut transaction = noon_core::SemanticMutationTransaction::new();
                         transaction.set_view_color_profile(
@@ -88,12 +88,9 @@ impl LiveContinuation for ShaderSweep {
                         );
                         live.apply(transaction).map_err(message)?;
                     }
+                    let members = self.panels.each_ref().map(crate::MobjectTarget::from);
                     let pending = live
-                        .prepare_effect_attachments(self.panels.iter().zip(programs).map(
-                            |(panel, program)| {
-                                (panel, ShaderEffect::new(program).into(), "stripes")
-                            },
-                        ))
+                        .prepare_membership(crate::SceneMembershipRequest::Add(&members))
                         .map_err(message)?;
                     // The same stage resumes only after preparation, atomic
                     // publication and retention; neither panel is visible early.
@@ -157,8 +154,8 @@ pub fn program() -> Result<LiveProgram<ShaderSweep>, String> {
     build_program(false)
 }
 
-/// The same lesson with enrollment after its first wait and explicit retirement.
-/// Qualifies new immutable programs after a valid HDR-to-compatibility transition.
+/// The same lesson with shader-bearing insertion after its first wait and explicit
+/// retirement. Qualifies new programs after a valid HDR-to-compatibility transition.
 pub fn late_program() -> Result<LiveProgram<ShaderSweep>, String> {
     build_program(true)
 }
@@ -195,12 +192,12 @@ fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
         panel
             .set_translation(if i == 0 { -3.0 } else { 3.0 }, 0.0)
             .map_err(message)?;
+        panel
+            .add_effect(ShaderEffect::new(program.clone()), "stripes")
+            .map_err(message)?;
         if !late {
-            panel
-                .add_effect(ShaderEffect::new(program.clone()), "stripes")
-                .map_err(message)?;
+            scene.add(&panel).map_err(message)?;
         }
-        scene.add(&panel).map_err(message)?;
         panels.push(panel);
     }
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
@@ -232,7 +229,7 @@ fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
                 .each_ref()
                 .map(|program| program.parameter("phase").expect("declared phase")),
             stage: 0,
-            deferred: late.then_some(programs),
+            deferred: late,
             camera,
             retire: late,
         })

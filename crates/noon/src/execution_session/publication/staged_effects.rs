@@ -2,7 +2,7 @@
 use super::*;
 use noon_core::{SemanticNodeCreation, SemanticStoreIdentity, WgslEffectProgram};
 
-/// Unpublished effect attachments. This contains the original transaction and
+/// Unpublished effect attachments or membership. This contains the original transaction and
 /// immutable resource requests, never a Scene, execution copy, or borrowed proof.
 #[derive(Debug, PartialEq)]
 pub struct StagedEffectPublication {
@@ -37,11 +37,17 @@ impl ExecutionSession {
             return Err(ExecutionSessionPublicationError::UnknownObject(root));
         }
         for (index, mutation) in transaction.mutations().iter().enumerate() {
-            let SemanticMutation::AddNode {
-                creation: SemanticNodeCreation::Effect { .. },
-                ..
-            } = mutation
-            else {
+            if !matches!(
+                mutation,
+                SemanticMutation::AddNode {
+                    creation: SemanticNodeCreation::Effect { .. },
+                    ..
+                } | SemanticMutation::AddMember { .. }
+                    | SemanticMutation::RemoveMember { .. }
+                    | SemanticMutation::ReorderMember { .. }
+                    | SemanticMutation::ReplaceMemberContainer { .. }
+                    | SemanticMutation::SetForegroundMembers { .. }
+            ) {
                 return Err(ExecutionSessionPublicationError::Lowering(
                     SemanticPublicationLoweringError::UnsupportedMutation { index },
                 ));
@@ -86,7 +92,7 @@ impl ExecutionSession {
             prepared,
             Vec::new(),
             PreparedRuntimePublication {
-                external_effects_prepared: true,
+                prepared_effect_programs: staged.programs,
                 ..Default::default()
             },
             SemanticPublicationPurpose::AuthoredMutation,

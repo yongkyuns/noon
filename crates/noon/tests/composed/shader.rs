@@ -492,6 +492,9 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     let mut hidden = scene.rectangle(1.0, 1.0).unwrap();
     hidden.set_translation(20.0, 0.0).unwrap();
     scene.add(&hidden).unwrap();
+    let mut incoming = scene.rectangle(1.6, 1.2).unwrap();
+    incoming.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    incoming.disable_stroke().unwrap();
     let mut session = scene.execution_session().unwrap();
     let mut surface = Surface::new(&device, &queue);
     let input = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
@@ -664,5 +667,48 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         );
         assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 0]);
     }
-    eprintln!("owned shader preparation: stale context and reset rejected; current module reused; pending changes/last image retained;16 real program enrollment/retirement cycles");
+    scene
+        .live(&mut session)
+        .add_effect(&incoming, definition(&program), "material")
+        .unwrap();
+    session.require_effect_resource_preparation();
+    let context = session.publication_context();
+    let pending = scene
+        .live(&mut session)
+        .prepare_membership(noon::SceneMembershipRequest::Replace {
+            old: (&object).into(),
+            new: (&incoming).into(),
+        })
+        .unwrap();
+    let modules = pollster::block_on(
+        surface
+            .renderer
+            .effect_module_preparation(&device, pending.programs())
+            .prepare(),
+    )
+    .unwrap();
+    assert_eq!(modules.stats().pipeline_compiles, 1);
+    surface
+        .renderer
+        .cache_effect_programs(&device, &modules)
+        .unwrap();
+    assert_eq!(session.publication_context(), context);
+    assert_eq!(readback(&device, &queue, &surface.target), input);
+    scene
+        .live(&mut session)
+        .publish_staged_effects(pending)
+        .unwrap();
+    assert!(!scene.live(&mut session).contains(&object).unwrap());
+    assert!(scene.live(&mut session).contains(&incoming).unwrap());
+    let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let expected: Vec<_> = input
+        .iter()
+        .map(|&v| (f64::from(v) * 0.7).round() as u8)
+        .collect();
+    assert!(actual
+        .iter()
+        .zip(&expected)
+        .all(|(a, b)| a.abs_diff(*b) <= 2));
+    assert_eq!(surface.program_stats.pipeline_compiles, 0);
+    eprintln!("owned shader preparation: stale context and reset rejected; current module reused; pending changes/last image retained;16 real program enrollment/retirement cycles; shader-bearing replacement prepares before publication and matches independent coverage gain");
 }

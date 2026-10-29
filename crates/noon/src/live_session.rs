@@ -731,6 +731,17 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Stage an existing membership request until the host prepares any newly
+    /// executable shader programs. Membership and identities remain unpublished.
+    pub fn prepare_membership(
+        &mut self,
+        request: SceneMembershipRequest<'_>,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
+        let transaction =
+            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
+        self.stage_effect_publication(transaction)
+    }
+
     pub fn add_many(
         &mut self,
         members: &[MobjectTarget<'_>],
@@ -1232,6 +1243,21 @@ impl<'a> LiveSession<'a> {
                 .map_err(LiveSessionError::from)?;
         self.apply(transaction)?;
         Ok(changed)
+    }
+
+    /// Stage the ordinary family edit for the same resource-preparation barrier
+    /// as scene insertion. The returned change flags describe the pending edit.
+    pub fn prepare_family_membership<'root>(
+        &mut self,
+        family: impl Into<MobjectTarget<'root>>,
+        members: &[MobjectTarget<'_>],
+        adding: bool,
+    ) -> Result<(crate::StagedEffectPublication, Vec<bool>), LiveSessionError> {
+        let family = family.into();
+        self.require_membership_root(family)?;
+        let (transaction, changed) =
+            crate::family_authoring::family_membership_transaction(family, members, adding)?;
+        Ok((self.stage_effect_publication(transaction)?, changed))
     }
 
     /// Publish one fully validated detached Manim geometry object through this
