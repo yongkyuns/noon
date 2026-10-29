@@ -203,6 +203,17 @@ impl CompiledScene {
             expected,
             next.as_deref(),
         )?;
+        for property in [noon_core::Property::Transform, noon_core::Property::Morph] {
+            if let Err(error) = crate::validate_shader_source_track(property, next.as_deref()) {
+                if self
+                    .channel_tracks(CompiledChannelKey::new(index, property))
+                    .iter()
+                    .any(|track| !track.reconciled)
+                {
+                    return Err(CompilePatchError::InvalidTrack(error));
+                }
+            }
+        }
         for &attachment in expected {
             if next
                 .as_ref()

@@ -651,3 +651,156 @@ fn shader_time_dependency_follows_selected_history_across_attachment_removal() {
         assert!(session.take_renderer_publication().changes().is_empty());
     }
 }
+
+#[test]
+fn shader_point_morph_rejects_before_publication_and_rigid_motion_still_runs() {
+    use crate::{AnimationCompositionRequest, TransformToRequest};
+    use noon_core::SemanticAnimationCompositionKind;
+    for attached in [false, true] {
+        let mut scene = Scene::new();
+        let mut source = scene.rectangle(2.0, 1.0).unwrap();
+        source
+            .add_effect(ShaderEffect::new(program()), "material")
+            .unwrap();
+        if attached {
+            scene.add(&source).unwrap();
+        }
+        let mut target = source.target_editor().unwrap();
+        target.rotate(0.35).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let frame = session.frame().clone();
+        let nodes = source.integration_store().borrow().len();
+        let request = AnimationCompositionRequest::TransformTo(
+            TransformToRequest::point_correspondence(&source, &target, AnimationOptions::new()),
+        );
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[request],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            );
+        assert!(
+            result.is_err(),
+            "shader point morph was admitted (attached={attached})"
+        );
+        assert!(
+            format!("{result:?}").contains("UnsupportedShaderSourceTrack"),
+            "{result:?}"
+        );
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(source.integration_store().borrow().len(), nodes);
+        assert!(session.take_frame_changes().is_empty());
+
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::Rotate {
+                    target: &source,
+                    angle: 0.35,
+                    options: AnimationOptions::new(),
+                }],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 0.5)
+            .unwrap();
+        assert_ne!(session.frame().objects[0].transform.rotation, 0.0);
+        assert_eq!(
+            effective(&session, &source).values()[0],
+            ShaderValue::Scalar(0.25)
+        );
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 1.0)
+            .unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+    }
+}
+
+#[test]
+fn raw_shader_source_morph_admission_is_atomic_in_both_orders() {
+    use noon_compile::ExecutionMutationTransaction;
+    let object = ObjectId::new(1);
+    let mut row = CompiledObject::new(
+        object,
+        GeometryRef::rectangle(2.0, 1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    );
+    let stack = Arc::new(
+        CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(10, 1),
+            definition: ShaderEffect::new(program()).into(),
+        }])
+        .unwrap(),
+    );
+    let morph = TrackDefinition {
+        id: TrackId::new(1),
+        object,
+        property: Property::Morph,
+        values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: Default::default(),
+    };
+    row.effects = Some(Arc::clone(&stack));
+    assert!(matches!(
+        CompiledScene::compile_objects(vec![row.clone()], std::slice::from_ref(&morph)),
+        Err(noon_compile::CompileError::InvalidTrack(
+            noon_core::TimelineError::UnsupportedShaderSourceTrack(Property::Morph)
+        ))
+    ));
+    row.effects = None;
+    let mut runtime =
+        noon_runtime::SceneInstance::new(CompiledScene::compile_objects(vec![row], &[]).unwrap());
+    runtime.take_frame_changes();
+    let before = runtime.publication_context();
+    let frame = runtime.frame().clone();
+    let enroll = ExecutionPatch::SetEffectStack {
+        object,
+        expected: Box::new([]),
+        effects: Some(stack),
+    };
+    for reversed in [false, true] {
+        let mut patches = vec![enroll.clone(), ExecutionPatch::AddTrack(morph.clone())];
+        if reversed {
+            patches.reverse();
+        }
+        patches.insert(
+            0,
+            ExecutionPatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    rotation: 0.5,
+                    ..Transform2D::IDENTITY
+                },
+            },
+        );
+        assert!(matches!(
+            runtime.apply_execution_transaction(&ExecutionMutationTransaction::from_mutations(
+                patches
+            )),
+            Err(noon_compile::CompilePatchError::InvalidTrack(
+                noon_core::TimelineError::UnsupportedShaderSourceTrack(Property::Morph)
+            ))
+        ));
+        assert_eq!(runtime.publication_context(), before);
+        assert_eq!(runtime.frame(), &frame);
+        assert!(runtime.frame_changes().is_empty());
+    }
+    runtime
+        .apply_execution_patch(&ExecutionPatch::AddTrack(morph))
+        .unwrap();
+    runtime.evaluate(0.5).unwrap();
+    let before = runtime.frame().clone();
+    assert!(runtime.apply_execution_patch(&enroll).is_err());
+    assert_eq!(runtime.frame(), &before);
+}

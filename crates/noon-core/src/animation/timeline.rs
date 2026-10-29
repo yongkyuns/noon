@@ -1189,6 +1189,7 @@ pub enum TimelineError {
     InvalidPaintValues,
     UnsupportedPaintRateFunction(RateFunction),
     InvalidEffectValues(Property),
+    UnsupportedShaderSourceTrack(Property),
     UnsupportedGlowRateFunction(RateFunction),
     InvalidEffectAttachment {
         object: ObjectId,
@@ -1251,6 +1252,7 @@ impl std::fmt::Display for TimelineError {
             Self::InvalidPaintValues => formatter.write_str("continuous paint track is outside the finite planar fill profile"),
             Self::UnsupportedPaintRateFunction(rate) => write!(formatter, "continuous paint tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectValues(property) => write!(formatter, "invalid or incompatible effect endpoints for {property:?}"),
+            Self::UnsupportedShaderSourceTrack(property) => write!(formatter, "painted-pointwise shaders do not support source geometry tracks ({property:?}); use rigid motion channels instead"),
             Self::UnsupportedGlowRateFunction(rate) => write!(formatter, "glow tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),

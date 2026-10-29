@@ -3122,10 +3122,27 @@ pub(crate) fn validate_paint_track_profile(
     Ok(())
 }
 
+/// Geometry deformation is outside the finite painted-pointwise source profile.
+/// Check the compiled channel/stack together, including raw native execution.
+pub(crate) fn validate_shader_source_track(
+    property: Property,
+    effects: Option<&CompiledEffectStack>,
+) -> Result<(), noon_core::TimelineError> {
+    if matches!(property, Property::Transform | Property::Morph)
+        && effects.is_some_and(|stack| stack.definitions().iter().any(|d| d.as_shader().is_some()))
+    {
+        return Err(noon_core::TimelineError::UnsupportedShaderSourceTrack(
+            property,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_effect_track(
     track: &TrackDefinition,
     object: &CompiledObject,
 ) -> Result<(), noon_core::TimelineError> {
+    validate_shader_source_track(track.property, object.effects.as_deref())?;
     let effect = if let TrackValues::Effect { attachment, .. } = track.values {
         object
             .effects

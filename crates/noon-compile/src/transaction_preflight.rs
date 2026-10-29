@@ -750,6 +750,19 @@ pub(super) fn preflight_transaction_with_resources(
                     expected,
                     effects.as_deref(),
                 )?;
+                for property in [Property::Transform, Property::Morph] {
+                    if let Err(error) =
+                        crate::validate_shader_source_track(property, effects.as_deref())
+                    {
+                        if overlay
+                            .channel(scene, CompiledChannelKey::new(index, property))
+                            .iter()
+                            .any(|track| !track.reconciled)
+                        {
+                            return Err(CompilePatchError::InvalidTrack(error));
+                        }
+                    }
+                }
                 // Respect staged adds/replacements as well as base tracks. A
                 // retired generation cannot retain drivers or block its successor.
                 for attachment in expected {
@@ -890,6 +903,13 @@ pub(super) fn preflight_transaction_with_resources(
                     Some(additions),
                     &track.values,
                 )?;
+                if matches!(track.property, Property::Transform | Property::Morph) {
+                    crate::validate_shader_source_track(
+                        track.property,
+                        overlay.effects(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
@@ -945,6 +965,13 @@ pub(super) fn preflight_transaction_with_resources(
                     Some(additions),
                     &track.values,
                 )?;
+                if matches!(track.property, Property::Transform | Property::Morph) {
+                    crate::validate_shader_source_track(
+                        track.property,
+                        overlay.effects(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,

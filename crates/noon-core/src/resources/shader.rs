@@ -9,6 +9,8 @@ use crate::Color;
 /// that result with source alpha before applying final scope opacity once.
 /// At covered samples, input.color supplies straight encoded RGB and unit
 /// alpha. Returning it therefore preserves intrinsic source coverage exactly.
+/// Source point-morph tracks are unsupported; rigid pose and parameter channels
+/// retain their ordinary animation semantics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShaderProfile {
     PaintedPointwiseV1,

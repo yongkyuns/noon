@@ -94,6 +94,8 @@ class WgslEffectProgram(_Immutable):
     scene (+Y up), or pixels (top-left origin). Optional time is authored seconds.
     Module globals NoonGpuUniform, noon_uniform, noon_source, noon_unit,
     vs_fullscreen and fs_sample are reserved by this ABI.
+    Source point morphs are unsupported; use Rotate for rigid rotation rather
+    than animate.rotate, which requests point correspondence.
     """
     __slots__ = ("_program",)
 
