@@ -15,10 +15,37 @@ assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "exact clean 
 assert.ok(identity.sourceRevision);
 const times = [0, 0.25, 0.75, 1.5, 2];
 function sourceForMode(source) {
+  if (sourceMode === "async") return source
+    .replace("    def construct(self):", "    async def construct(self):")
+    .replaceAll("self.wait(", "await self.wait(")
+    .replaceAll("self.play(", "await self.play(");
   if (sourceMode !== "jspi") return source;
   return source.replace("    def construct(self):\n",
     "    def construct(self):\n        self.shader_lesson()\n\n    def shader_lesson(self):\n")
     .replace("        self.wait(0.5)\n", "        self.wait(0.5)\n        from _manim_scene import _synchronous_continuation_active\n        assert _synchronous_continuation_active(self), 'synchronous source required'\n");
+}
+const materialLesson = await readFile(root + "/web/python/examples/showcase_shader_material.py", "utf8");
+const materialAttachment = `        for panel, program in zip(panels, programs):
+            panel.add_effect(ShaderEffect(program), name="stripes")`;
+assert.ok(materialLesson.includes(materialAttachment));
+const fadeSource = sourceForMode(materialLesson
+  .replace(materialAttachment, `        self.play(*(FadeIn(panel) for panel in panels), run_time=1, rate_func=linear)`)
+  .replace('        programs = [material("local"), material("scene")]\n', '')
+  .replace("        self.add(*panels)", `        programs = [material("local"), material("scene")]
+${materialAttachment}`));
+
+function fadeReference(image, time) {
+  if (![0.5, 1, 7].includes(time)) return null;
+  const at = 4 * (Math.floor(image.height / 2) * image.width + Math.floor(image.width / 2 + 3 * image.height / 8));
+  const sceneY = (image.height / 2 - Math.floor(image.height / 2) - 0.5) * 8 / image.height;
+  const stripes = 0.5 + 0.5 * Math.cos(2 * Math.PI * sceneY * 2);
+  const expected = [[0.09, 0.48, 0.035], [0.2, 0.94, 0.045], [0.42, 0.83, 0.09]].map(([low, high, background]) =>
+    Math.round(255 * (time === 0.5 ? background : time === 7 ? 1 : 0.5 * (low + (high - low) * stripes) + 0.5 * background)));
+  const actual = [...image.data.subarray(at, at + 4)];
+  const maximumError = Math.max(...expected.map((value, channel) => Math.abs(value - actual[channel])));
+  assert.ok(maximumError <= 2, `literal FadeIn at ${time}: ${actual} expected ${expected}`);
+  assert.equal(actual[3], 255);
+  return { expected, actual, maximumError, runtimeBuild: identity.buildId };
 }
 function reference(image, time) {
   // Full source coverage at the center; straight encoded RGB, intrinsic alpha
@@ -160,13 +187,15 @@ async function qualifyPythonPreparation(context, baseUrl, backend, kind = "attac
             panel.add_effect(ShaderEffect(program), name="stripes")`;
     assert.ok(lesson.includes(original));
     const familyMembership = kind === "family" || kind === "object";
+    const fade = kind === "fade";
     const addition = index => {
       const call = kind === "scene" ? `self.add(panels[${index}], key="panel-${index}")`
       : familyMembership ? `family.add(panels[${index}])`
+      : fade ? `self.play(FadeIn(panels[${index}])${index === 0 ? ", UpdateFromAlphaFunc(anchor, observe_intro)" : ""}, run_time=0.25, rate_func=linear)`
         : `panels[${index}].add_effect(ShaderEffect(programs[${index}]), name="stripes")`;
-      return sourceMode === "async" ? `(await ${call})` : call;
+      return sourceMode === "async" && !fade ? `(await ${call})` : call;
     };
-    const rejectedCheck = kind === "scene" ? `            assert panels[0]._scene is None
+    const rejectedCheck = kind === "scene" || fade ? `            assert panels[0]._scene is None
             assert "panel-0" not in self._object_key_ids`
       : familyMembership ? `            assert len(family.submobjects) == 0`
         : `            try:
@@ -191,8 +220,8 @@ async function qualifyPythonPreparation(context, baseUrl, backend, kind = "attac
 ${rejectedCheck}
             self.wait(0.25)
             ${addition(0)}
-        bound = ${addition(1)}.set_opacity(1)
-        assert bound is ${familyMembership ? "family" : "panels[1]"}
+        bound = ${addition(1)}${fade ? "" : ".set_opacity(1)"}
+        assert bound is ${fade ? "self" : familyMembership ? "family" : "panels[1]"}${fade ? '\n        assert observed, "the introducing play must service its ordinary callback"' : ''}
         try:
             self.camera.frame.set_view_color_profile("linear_hdr")
         except Exception:
@@ -204,11 +233,17 @@ ${rejectedCheck}
         for panel in panels:
             panel.add_effect(ShaderEffect(shared), name="stripes")${familyMembership ? `\n        family = ${kind === "family" ? "VGroup()" : "Rectangle(width=0.01, height=0.01, fill_opacity=0, stroke=None)"}\n        self.add(family)` : ''}`)
       .replace('programs = [material("scene")] * 2', 'programs = [shared] * 2');
-    source = sourceMode === "async" ? source
-      .replace("    def construct(self):", "    async def construct(self):")
-      .replaceAll("self.wait(", "await self.wait(")
-      .replaceAll("self.play(", "await self.play(") : sourceForMode(source);
-    const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
+    if (fade) source = source.replace("        self.wait(0.5)", `        anchor = Dot(radius=0.01).set_opacity(0)
+        self.add(anchor)
+        observed = []
+        def observe_intro(_, alpha):
+            assert panels[0]._scene is self
+            assert abs(panels[0].get_center().x + 3) < 1e-6
+            observed.append(alpha)
+        self.wait(0.5)`);
+    source = sourceForMode(source);
+    const checkpoints = fade ? [0, 0.5, 0.75, 1, 1.25, 1.5] : [0, 0.5, 0.75];
+    const initial = await page.evaluate(({source, duration}) => noonHostRaster.load(source, duration), {source, duration: fade ? 6.75 : 6.25});
     assert.equal(initial.rendererBackend, backend);
     const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
     const author = page.workers().find(worker => worker.url().includes("python-worker"));
@@ -237,7 +272,7 @@ ${rejectedCheck}
     });
     let rejected = null;
     if (backend === "WebGPU") {
-      await page.evaluate(() => noonHostRaster.renderThrough(1, [0, 0.5, 0.75]));
+      await page.evaluate(times => noonHostRaster.renderThrough(1, times), checkpoints);
       rejected = await page.evaluate(() => noonHostRaster.debugFrame());
       assert.equal(await worker.evaluate(() => rejectedShaders), 1);
       assert.equal(rejected.time, 0.5);
@@ -246,9 +281,9 @@ ${rejectedCheck}
         "failed Python publication preserves the displayed frame");
       await worker.evaluate(() => { rejectShader = false; });
     }
-    await page.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
+    await page.evaluate(times => noonHostRaster.renderThrough(times.length - 1, times), checkpoints);
     const recovered = await page.evaluate(() => noonHostRaster.debugFrame());
-    assert.equal(recovered.time, 0.75);
+    assert.equal(recovered.time, checkpoints.at(-1));
     assert.equal(recovered.objects.flatMap(object => object.effects).length, 2);
     const preparationBytes = await author.evaluate(() => shaderPreparationBytes);
     assert.equal(preparationBytes.length, backend === "WebGPU" ? 3 : 2, "first use, optional failed attempt and shared-program reuse");
@@ -266,11 +301,17 @@ ${rejectedCheck}
 await qualifyPairedAuthoring({
   artifactDirectory: "ci-artifacts/shader-time",
   prepareContext: sourceMode !== "jspi" ? disableAuthoringJspi : undefined,
-  cases: (sourceMode !== "portable" ? [0] : times).map(sampleTime => ({ id: `shader-time-${sampleTime}`, file: "shader_time.py",
+  cases: [...(sourceMode !== "portable" ? [0] : times).map(sampleTime => ({ id: `shader-time-${sampleTime}`, file: "shader_time.py",
     factory: "createDirectShaderTimeSmokeRenderer", duration: 2, sampleTime,
     playback: "live", objectCount: 1, stopAtSourceCompletion: sampleTime === 2 })),
+    ...(sourceMode === "portable" ? [0.5, 1, 1.75, 7] : [1, 1.75]).map(sampleTime => ({
+      id: `shader-fade-${sampleTime}`, file: "shader_material_fade.py", source: fadeSource,
+      factory: "createDirectShaderFadeSmokeRenderer", duration: 7, sampleTime, playback: "live",
+      boundaries: [0.5, 1.5, 3.5, 4, 6, 6.5], stopAtSourceCompletion: sampleTime === 7,
+    }))],
   qualifyPixels({ fixture, rust, python }) {
-    return { rust: reference(rust, fixture.sampleTime), python: reference(python, fixture.sampleTime) };
+    const check = fixture.id.startsWith("shader-fade-") ? fadeReference : reference;
+    return { rust: check(rust, fixture.sampleTime), python: check(python, fixture.sampleTime) };
   },
   async qualifyLifecycle(context, baseUrl, backend) {
     if (sourceMode !== "portable") return {
@@ -278,6 +319,7 @@ await qualifyPairedAuthoring({
       pythonMembership: [await qualifyPythonPreparation(context, baseUrl, backend, "scene"),
         await qualifyPythonPreparation(context, baseUrl, backend, "family"),
         await qualifyPythonPreparation(context, baseUrl, backend, "object")],
+      pythonFade: await qualifyPythonPreparation(context, baseUrl, backend, "fade"),
       profileTransition: sourceMode === "jspi" ? await qualifyProfileTransition(context, baseUrl, backend) : null,
     };
     const images = new Map(), trials = [];
@@ -329,6 +371,7 @@ await qualifyPairedAuthoring({
       pythonMembership: [await qualifyPythonPreparation(context, baseUrl, backend, "scene"),
         await qualifyPythonPreparation(context, baseUrl, backend, "family"),
         await qualifyPythonPreparation(context, baseUrl, backend, "object")],
+      pythonFade: await qualifyPythonPreparation(context, baseUrl, backend, "fade"),
       profileTransition: await qualifyProfileTransition(context, baseUrl, backend) };
   },
 });

@@ -6,7 +6,7 @@ uses its explicit staged property view; this module installs no public methods.
 
 from __future__ import annotations
 
-from _noon_errors import engine_call, raise_engine_error
+from _noon_errors import engine_call, is_effect_preparation_required, raise_engine_error
 
 import copy
 import json
@@ -3484,10 +3484,7 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     try:
         _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
     except Exception as error:
-        diagnostic = getattr(error, "rust_cause", None)
-        while diagnostic is not None and diagnostic.code != "publication.effect_preparation_required":
-            diagnostic = diagnostic.cause
-        if diagnostic is None:
+        if not is_effect_preparation_required(error):
             raise
         from _manim_scene import _complete_prepared_publication
         if scene is None:

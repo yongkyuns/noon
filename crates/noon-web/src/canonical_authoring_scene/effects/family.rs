@@ -28,7 +28,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)?;
         Ok(WasmStagedEffectPublication {
             pending: Some(pending),
-            membership: None,
+            reservations: Default::default(),
         })
     }
 

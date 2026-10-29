@@ -71,6 +71,16 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn prepare_composition(
+        &mut self,
+        request: &noon::AnimationCompositionRequest<'_>,
+        options: noon_core::AnimationOptions,
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.require_completed_live_segment()?;
+        self.with_live_session(|live| live.prepare_composition(request, options))
+    }
+
     pub(crate) fn live_set_effect<'owner>(
         &mut self,
         object: impl Into<MobjectTarget<'owner>>,

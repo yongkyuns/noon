@@ -106,6 +106,13 @@ pub(crate) struct SceneMembershipBatch {
     bindings: Vec<(ObjectId, noon::Mobject)>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default)]
+pub(crate) struct BindingReservations {
+    bindings: Vec<(ObjectId, noon::Mobject)>,
+    allow_new: bool,
+}
+
 #[cfg(test)]
 pub(crate) enum CallbackMembershipTestMember {
     Existing(noon::Mobject),
@@ -117,6 +124,17 @@ pub(crate) enum CallbackMembershipTestMember {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl SceneMembershipBatch {
+    fn into_binding_reservations(self) -> BindingReservations {
+        BindingReservations {
+            allow_new: matches!(
+                self.kind,
+                SceneMembershipBatchKind::Add
+                    | SceneMembershipBatchKind::AddForeground
+                    | SceneMembershipBatchKind::Replace
+            ),
+            bindings: self.bindings,
+        }
+    }
     #[cfg(test)]
     pub(crate) fn callback_existing(
         kind: SceneMembershipBatchKind,
@@ -2207,24 +2225,11 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn activate_ordinary_mixed_composition(
-        &mut self,
+    fn ordinary_composition_request(
         kind: noon_core::SemanticAnimationCompositionKind,
         children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
-        play_options: noon_core::AnimationOptions,
-        allow_required_callbacks: bool,
-    ) -> Result<f64, AuthoringFailure> {
-        self.validate_ordinary_mixed_composition(children, composition_options, play_options)?;
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(
-                play_options
-                    .run_time
-                    .or(composition_options.run_time)
-                    .unwrap_or(1.0),
-            );
+    ) -> noon::AnimationCompositionRequest<'_> {
         fn request(child: &OrdinaryCompositionChild) -> noon::AnimationCompositionRequest<'_> {
             match child {
                 OrdinaryCompositionChild::WorldTransform {
@@ -2574,11 +2579,33 @@ impl CanonicalAuthoringScene {
             }
         }
         let requests = children.iter().map(request).collect::<Vec<_>>();
-        let composition = noon::AnimationCompositionRequest::Composition {
+        noon::AnimationCompositionRequest::Composition {
             kind,
             children: requests,
             options: composition_options,
-        };
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn activate_ordinary_mixed_composition(
+        &mut self,
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: &[OrdinaryCompositionChild],
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+        allow_required_callbacks: bool,
+    ) -> Result<f64, AuthoringFailure> {
+        self.validate_ordinary_mixed_composition(children, composition_options, play_options)?;
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(
+                play_options
+                    .run_time
+                    .or(composition_options.run_time)
+                    .unwrap_or(1.0),
+            );
+        let composition = Self::ordinary_composition_request(kind, children, composition_options);
         let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
@@ -2596,6 +2623,17 @@ impl CanonicalAuthoringScene {
             }
             player.live_declare_and_activate_composition(&composition, play_options)?
         };
+        for (id, target) in Self::ordinary_composition_bindings(children) {
+            self.bindings.insert(id, target.node_id());
+            self.identities.insert(target.node_id(), id);
+        }
+        Ok(end)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn ordinary_composition_bindings(
+        children: &[OrdinaryCompositionChild],
+    ) -> Vec<(ObjectId, &noon::Mobject)> {
         fn bindings<'a>(
             child: &'a OrdinaryCompositionChild,
             output: &mut Vec<(ObjectId, &'a noon::Mobject)>,
@@ -2719,11 +2757,31 @@ impl CanonicalAuthoringScene {
         for child in children {
             bindings(child, &mut entering);
         }
-        for (id, target) in entering {
-            self.bindings.insert(id, target.node_id());
-            self.identities.insert(target.node_id(), id);
-        }
-        Ok(end)
+        entering
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn prepare_ordinary_mixed_composition(
+        &mut self,
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: &[OrdinaryCompositionChild],
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<(noon::StagedEffectPublication, BindingReservations), AuthoringFailure> {
+        self.validate_ordinary_mixed_composition(children, composition_options, play_options)?;
+        let reservations = BindingReservations {
+            bindings: Self::ordinary_composition_bindings(children)
+                .into_iter()
+                .map(|(id, object)| (id, object.clone()))
+                .collect(),
+            allow_new: true,
+        };
+        self.validate_binding_reservations(&reservations)?;
+        let request = Self::ordinary_composition_request(kind, children, composition_options);
+        let pending = self
+            .active_live_player()?
+            .prepare_composition(&request, play_options)?;
+        Ok((pending, reservations))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3677,10 +3735,34 @@ impl CanonicalAuthoringScene {
         &self,
         batch: &SceneMembershipBatch,
     ) -> Result<Vec<(ObjectId, noon_core::SemanticNodeId)>, AuthoringFailure> {
+        self.validate_mobject_bindings(
+            &batch.bindings,
+            matches!(
+                batch.kind,
+                SceneMembershipBatchKind::Add
+                    | SceneMembershipBatchKind::AddForeground
+                    | SceneMembershipBatchKind::Replace
+            ),
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn validate_binding_reservations(
+        &self,
+        reservations: &BindingReservations,
+    ) -> Result<Vec<(ObjectId, noon_core::SemanticNodeId)>, AuthoringFailure> {
+        self.validate_mobject_bindings(&reservations.bindings, reservations.allow_new)
+    }
+
+    fn validate_mobject_bindings(
+        &self,
+        bindings: &[(ObjectId, noon::Mobject)],
+        allow_new: bool,
+    ) -> Result<Vec<(ObjectId, noon_core::SemanticNodeId)>, AuthoringFailure> {
         let mut new_bindings = Vec::new();
         let mut seen_ids = BTreeSet::new();
         let mut seen_nodes = BTreeSet::new();
-        for (wrapper_id, handle) in &batch.bindings {
+        for (wrapper_id, handle) in bindings {
             if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
                 return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
                     .with_message("membership mobject belongs to another authoring store"));
@@ -3697,14 +3779,7 @@ impl CanonicalAuthoringScene {
             match (self.bindings.get(wrapper_id), self.identities.get(&node)) {
                 (Some(bound_node), Some(bound_id))
                     if *bound_node == node && *bound_id == *wrapper_id => {}
-                (None, None)
-                    if matches!(
-                        batch.kind,
-                        SceneMembershipBatchKind::Add
-                            | SceneMembershipBatchKind::AddForeground
-                            | SceneMembershipBatchKind::Replace
-                    ) =>
-                {
+                (None, None) if allow_new => {
                     new_bindings.push((*wrapper_id, node));
                 }
                 _ => {
@@ -3981,12 +4056,9 @@ impl CanonicalAuthoringScene {
     fn publish_prepared_effects(
         &mut self,
         pending: noon::StagedEffectPublication,
-        membership: Option<&SceneMembershipBatch>,
+        reservations: &BindingReservations,
     ) -> Result<(), AuthoringFailure> {
-        let bindings = membership
-            .map(|batch| self.validate_membership_bindings(batch))
-            .transpose()?
-            .unwrap_or_default();
+        let bindings = self.validate_binding_reservations(reservations)?;
         self.active_live_player()?
             .publish_effect_addition(pending)?;
         for (id, node) in bindings {
@@ -6602,7 +6674,7 @@ mod wasm {
             Ok(
                 pending.map(|pending| super::effects::WasmStagedEffectPublication {
                     pending: Some(pending),
-                    membership: Some(batch),
+                    reservations: batch.into_binding_reservations(),
                 }),
             )
         }
@@ -7771,7 +7843,7 @@ mod wasm {
         #[wasm_bindgen(js_name = beginOrdinaryComposition)]
         pub fn begin_ordinary_composition(
             &mut self,
-            candidate: WasmAnimationCompositionBuilder,
+            candidate: &WasmAnimationCompositionBuilder,
         ) -> Result<f64, JsValue> {
             self.inner
                 .begin_ordinary_mixed_composition(
@@ -7781,6 +7853,26 @@ mod wasm {
                     candidate.play_options,
                 )
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = prepareOrdinaryComposition)]
+        pub fn prepare_ordinary_composition(
+            &mut self,
+            candidate: &WasmAnimationCompositionBuilder,
+        ) -> Result<super::effects::WasmStagedEffectPublication, JsValue> {
+            let (pending, reservations) = self
+                .inner
+                .prepare_ordinary_mixed_composition(
+                    candidate.kind,
+                    &candidate.children,
+                    candidate.composition_options,
+                    candidate.play_options,
+                )
+                .map_err(js_error)?;
+            Ok(super::effects::WasmStagedEffectPublication {
+                pending: Some(pending),
+                reservations,
+            })
         }
 
         #[wasm_bindgen(js_name = addUpdater)]

@@ -154,6 +154,10 @@ async function initializePyodide() {
           continuation.preparedPlayback || continuation.endpoint === null) {
         throw new Error("shader resource preparation requires the active render endpoint");
       }
+      if (staged.startsSegment === true) {
+        return await awaitSemanticContinuation(context, () =>
+          continuation.endpoint.prepareSourceEffects(continuation.generation, staged));
+      }
       await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
@@ -701,7 +705,7 @@ function registerContinuationContext(context) {
   return continuation;
 }
 
-function awaitSemanticContinuation(context) {
+function awaitSemanticContinuation(context, start = null) {
   let continuation;
   try {
     continuation = registerContinuationContext(context);
@@ -718,7 +722,17 @@ function awaitSemanticContinuation(context) {
   const result = new Promise((resolve, reject) => {
     continuation.pending = { resolve, reject };
   });
-  if (continuation.endpoint !== null) {
+  if (start !== null) {
+    const pending = continuation.pending;
+    Promise.resolve().then(start).catch(error => {
+      if (continuation.pending === pending) {
+        continuation.pending = null;
+        pending.reject(error);
+      } else if (!continuation.terminal) {
+        failContinuation(continuation, error);
+      }
+    });
+  } else if (continuation.endpoint !== null) {
     try {
       continuation.endpoint.startContinuation(continuation.generation);
     } catch (error) {

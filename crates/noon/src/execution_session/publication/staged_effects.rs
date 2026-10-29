@@ -28,6 +28,10 @@ impl StagedEffectPublication {
     pub fn programs(&self) -> &[WgslEffectProgram] {
         &self.programs
     }
+    /// Whether successful publication starts an ordinary animation segment.
+    pub fn starts_segment(&self) -> bool {
+        matches!(self.operation, StagedEffectOperation::Composition { .. })
+    }
     pub(crate) fn belongs_to(&self, session: &ExecutionSession) -> bool {
         self.store == session.store_identity && self.runtime == session.runtime_identity()
     }

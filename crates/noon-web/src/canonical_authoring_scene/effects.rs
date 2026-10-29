@@ -15,7 +15,18 @@ mod family;
 #[wasm_bindgen]
 pub struct WasmStagedEffectPublication {
     pub(super) pending: Option<noon::StagedEffectPublication>,
-    pub(super) membership: Option<super::SceneMembershipBatch>,
+    pub(super) reservations: super::BindingReservations,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WasmStagedEffectPublication {
+    #[wasm_bindgen(getter, js_name = startsSegment)]
+    pub fn starts_segment(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(noon::StagedEffectPublication::starts_segment)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -40,7 +51,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)?;
         Ok(WasmStagedEffectPublication {
             pending: Some(pending),
-            membership: None,
+            reservations: Default::default(),
         })
     }
 }
@@ -88,7 +99,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)?;
         Ok(WasmStagedEffectPublication {
             pending: Some(pending),
-            membership: None,
+            reservations: Default::default(),
         })
     }
 
@@ -102,7 +113,7 @@ impl CanonicalAuthoringSceneContext {
             .take()
             .ok_or_else(|| JsValue::from_str("effect publication is consumed"))?;
         self.inner
-            .publish_prepared_effects(pending, staged.membership.as_ref())
+            .publish_prepared_effects(pending, &staged.reservations)
             .map_err(js_error)
     }
 
@@ -202,12 +213,13 @@ mod tests {
 
     #[cfg(feature = "wgsl-effects")]
     #[test]
-    fn prepared_membership_revalidates_wrapper_reservations_before_commit() {
+    fn prepared_membership_and_composition_revalidate_wrapper_reservations_before_commit() {
         use noon::effects::{
             ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderProfile, ShaderSchema,
             WgslEffectProgram,
         };
-        for conflict in [false, true] {
+        for (composition, conflict) in [(false, false), (false, true), (true, false), (true, true)]
+        {
             let mut context = CanonicalAuthoringScene::default();
             let mut incoming = context.scene.circle(0.4).unwrap();
             let other = context.scene.circle(0.2).unwrap();
@@ -235,10 +247,30 @@ mod tests {
                 }],
                 bindings: vec![(id, incoming.clone())],
             };
-            let pending = context
-                .edit_membership_with_preparation(&batch, true)
-                .unwrap()
-                .unwrap();
+            let (pending, reservations) = if composition {
+                let children = [OrdinaryCompositionChild::Fade {
+                    entering_id: Some(id),
+                    target: incoming.clone(),
+                    direction: SemanticFadeDirection::In,
+                    endpoint: noon::FadeEndpoint::default(),
+                    options: noon_core::AnimationOptions::new(),
+                }];
+                context
+                    .prepare_ordinary_mixed_composition(
+                        noon_core::SemanticAnimationCompositionKind::Parallel,
+                        &children,
+                        noon_core::AnimationOptions::new(),
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .unwrap()
+            } else {
+                let pending = context
+                    .edit_membership_with_preparation(&batch, true)
+                    .unwrap()
+                    .unwrap();
+                (pending, batch.into_binding_reservations())
+            };
+            assert_eq!(pending.starts_segment(), composition);
             assert!(context.members().unwrap().is_empty());
             assert!(!context.bindings.contains_key(&id));
             assert!(!context.identities.contains_key(&incoming.node_id()));
@@ -246,7 +278,7 @@ mod tests {
                 context.bind_mobject(id, &other).unwrap();
             }
             let revision = context.scene.revision();
-            let result = context.publish_prepared_effects(pending, Some(&batch));
+            let result = context.publish_prepared_effects(pending, &reservations);
             if conflict {
                 assert!(result.is_err());
                 assert_eq!(context.scene.revision(), revision);

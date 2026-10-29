@@ -1513,6 +1513,7 @@ export async function attachSemanticEngine(
         throw new Error("resource preparation requires the current returned source lease");
       }
       const id = nextEffectPreparation++;
+      const startsSegment = staged.startsSegment === true;
       if (!Number.isSafeInteger(id)) throw new Error("effect preparation request IDs exhausted");
       const ready = new Promise((resolve, reject) => {
         pendingEffectPreparation = { id, resolve, reject };
@@ -1525,7 +1526,9 @@ export async function attachSemanticEngine(
           throw new Error("source changed during effect preparation");
         }
         context.publishPreparedEffects(staged);
-        const publication = send(context.drainReturnedPublicationJson());
+        const publication = startsSegment
+          ? this.startContinuation(generation)
+          : send(context.drainReturnedPublicationJson());
         await awaitPresentation(publication);
       } finally {
         // Until retention, the renderer's opaque preparation lease keeps every
@@ -1576,6 +1579,7 @@ export async function attachSemanticEngine(
       if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null, true);
       else observeContinuationWake(performance.now(), true);
       void drain();
+      return publication;
     },
   };
 }
