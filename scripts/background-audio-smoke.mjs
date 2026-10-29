@@ -416,7 +416,7 @@ try {
     assert.equal(rejected.before, rejected.after);
     return { scrubbed, restarted, rejected };
   });
-  await record("transport release and attack use separate native ramps without moving source anchors", async () => {
+  await record("transport release and attack use separate native ramps without moving source anchors", async evidence => {
     await seek(8);
     await page.locator("#play").click();
     await playing();
@@ -432,17 +432,25 @@ try {
       const newSource = qualification.starts.at(-1);
       const admitted = qualification.snapshot();
       const observations = [];
-      // These values come from the real native AudioParams while the device
-      // renders. Event inspection below separately verifies exact deadlines.
-      for (let index = 0; index < 35; index++) {
-        observations.push({ deviceTime: qualification.contexts[newSource.context].context.currentTime,
+      // Observe actual native render quanta in one bounded device probe. A
+      // timer yield can let an unrelated RAF consume the entire 60ms release.
+      // Keep the same 140ms budget and retain only one read per device quantum;
+      // this measures native gain behavior, not UI frame pacing.
+      const context = qualification.contexts[newSource.context].context;
+      const until = performance.now() + 140;
+      while (performance.now() < until) {
+        const deviceTime = context.currentTime;
+        if (observations.at(-1)?.deviceTime === deviceTime) continue;
+        observations.push({ deviceTime,
           oldBus: qualification.parameterValue(oldSource.busParameter),
           newBus: qualification.parameterValue(newSource.busParameter),
           output: qualification.sample()[newSource.context] });
-        await new Promise(resolve => setTimeout(resolve, 4));
       }
+      // Let trusted ended events and the existing retirement task drain.
+      await new Promise(resolve => setTimeout(resolve, 0));
       return { before, admitted, oldSource, newSource, observations, settled: qualification.snapshot() };
     });
+    Object.assign(evidence, transition);
     const { oldSource, newSource, admitted, observations, settled } = transition;
     const release = rampTo(admitted, oldSource.busParameter, 0, releaseSeconds, "seek release");
     const attack = rampTo(admitted, newSource.busParameter, 1, attackSeconds, "seek attack");
