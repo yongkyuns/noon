@@ -80,6 +80,30 @@
       "beats": [{"time": 1.5, "label": "Introduce the sources"}, {"time": 2.9, "label": "Ignite the glow"}, {"time": 4.8, "label": "Tune intensity, radius and color"}, {"time": 7.1, "label": "Fade to neutral"}, {"time": 8.7, "label": "Re-ignite a new attachment"}, {"time": 10.2, "label": "Draw and write with light"}]
     },
     {
+      "id": "showcase-painted-surfaces", "title": "A changing surface",
+      "lesson": "Animate image UVs, a radial gradient, seeded noise and a woven hatch on four shapes.",
+      "primary_feature": "animated-surface-paints", "category": "Visual effects",
+      "path": "python/examples/showcase_painted_surfaces.py",
+      "features": ["ImagePaint", "ImageMapping", "RadialGradient", "NoisePaint", "HatchPaint", "animate.set_fill"],
+      "duration": 7.5, "thumbnail_time": 3.6,
+      "thumbnail": "thumbnails/showcase/showcase-painted-surfaces.png",
+      "thumbnail_alt": "Four real rendered surfaces: diagonal image stripes, a coral radial gradient, teal noise and a warm woven hatch",
+      "still_intervals": [[0, 0.6], [3.1, 3.9], [6.4, 7.5]],
+      "beats": [{"time": 0.6, "label": "Four paints"}, {"time": 2.2, "label": "Animate the surface"}, {"time": 3.6, "label": "Changed material"}, {"time": 6.4, "label": "Return to the starting look"}]
+    },
+    {
+      "id": "showcase-layered-effects", "title": "Treat the composition",
+      "lesson": "Compare a source group with ordered Blur and Glow, then dissolve and restore the composed result.",
+      "primary_feature": "composed-ordered-effects", "category": "Visual effects",
+      "path": "python/examples/showcase_layered_effects.py",
+      "features": ["VGroup", "Blur", "Glow", "Dissolve", "composed scope", "animate.set_effect"],
+      "duration": 9.0, "thumbnail_time": 3.0,
+      "thumbnail": "thumbnails/showcase/showcase-layered-effects.png",
+      "thumbnail_alt": "Matching coral, teal and gold shape groups, with soft blue light around the treated composition on the right",
+      "still_intervals": [[0, 0.6], [2.6, 3.4], [4.6, 4.95], [6.15, 6.5], [8, 9]],
+      "beats": [{"time": 0.6, "label": "Same source"}, {"time": 3.0, "label": "Blur then Glow"}, {"time": 4.15, "label": "Dissolve the composition"}, {"time": 5.55, "label": "Restore with the same seed"}, {"time": 8.0, "label": "Return to the source"}]
+    },
+    {
       "id": "showcase-group-slicing", "title": "Animate part of a group",
       "lesson": "Select existing members with a slice while the surrounding objects stay in place.",
       "primary_feature": "group-slicing", "category": "Geometry and layout",

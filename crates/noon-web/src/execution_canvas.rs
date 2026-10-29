@@ -90,6 +90,9 @@ mod wasm {
     /// only drive its current segment, consume a renderer publication, admit that
     /// exact publication after presentation, and forward typed platform input.
     trait DirectLiveProgram: BrowserPointerTarget {
+        // Live authoring hosts retain their own read-only orchestration view.
+        // Browser input itself no longer requires access to a source session.
+        fn session(&self) -> &ExecutionSession;
         fn refresh_pointer_hover(
             &mut self,
             frame: &noon::integration::PointerFrameSnapshot,
@@ -166,6 +169,9 @@ mod wasm {
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
     {
+        fn session(&self) -> &ExecutionSession {
+            self.program.session()
+        }
         fn retire_execution_source(&mut self) -> Result<(), JsValue> {
             self.program.retire_execution_source().map_err(js_error)
         }
@@ -307,8 +313,38 @@ mod wasm {
     where
         C::Error: std::fmt::Display,
     {
-        fn session(&self) -> &ExecutionSession {
-            self.program.session()
+        fn has_native_pointer_subscribers(&self) -> bool {
+            BrowserPointerTarget::has_native_pointer_subscribers(&self.program)
+        }
+        fn translation_drag_active(&self) -> bool {
+            BrowserPointerTarget::translation_drag_active(&self.program)
+        }
+        fn inspection_camera(
+            &self,
+        ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
+            BrowserPointerTarget::inspection_camera(&self.program)
+        }
+        fn capture_pointer_frame(
+            &self,
+            view: noon::integration::PointerFrameView,
+        ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError>
+        {
+            BrowserPointerTarget::capture_pointer_frame(&self.program, view)
+        }
+        fn validate_pointer_frame(
+            &self,
+            frame: &noon::integration::PointerFrameSnapshot,
+            view: noon::integration::PointerFrameView,
+            validation: crate::browser_pointer_input::PointerFrameValidation,
+        ) -> Result<(), noon::integration::PointerFrameError> {
+            BrowserPointerTarget::validate_pointer_frame(&self.program, frame, view, validation)
+        }
+        fn pointer_input_token_for_frame(
+            &self,
+            frame: &noon::integration::PointerFrameSnapshot,
+            view: noon::integration::PointerFrameView,
+        ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
+            BrowserPointerTarget::pointer_input_token_for_frame(&self.program, frame, view)
         }
         fn observe_pointer_frame(
             &mut self,
@@ -351,6 +387,8 @@ mod wasm {
             callbacks: RustHostCallbackTable,
         },
         Program(Box<dyn DirectLiveProgram>),
+        #[cfg(feature = "prepared-prefix")]
+        Prepared(Box<crate::prepared_canvas_playback::PreparedCanvasPlayback>),
     }
 
     struct DirectExecutionSource {
@@ -385,10 +423,193 @@ mod wasm {
             })
         }
 
-        fn session(&self) -> &ExecutionSession {
+        // Only live source variants have an authored session. A prepared reader
+        // never exposes or borrows the producer through canvas audio/control APIs.
+        fn authored_session(&self) -> Result<&ExecutionSession, JsValue> {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.session(),
-                DirectSourceAuthority::Program(program) => program.session(),
+                DirectSourceAuthority::Session { session, .. } => Ok(session.session()),
+                DirectSourceAuthority::Program(program) => Ok(program.session()),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => Err(js_message(
+                    "prepared playback does not expose an authored source session",
+                )),
+            }
+        }
+
+        fn has_audio(&self) -> bool {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.session().has_audio(),
+                DirectSourceAuthority::Program(program) => program.session().has_audio(),
+                // Prepared source admission rejects authored audio before a
+                // reader exists; observing that invariant does not allocate.
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => false,
+            }
+        }
+
+        fn has_playback_controls(&self) -> bool {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().has_playback_controls()
+                }
+                DirectSourceAuthority::Program(program) => {
+                    program.session().has_playback_controls()
+                }
+                // Historical Indicate is admitted independently. Live playback
+                // controls cannot enter a prepared source or its retained past.
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => false,
+            }
+        }
+
+        fn paused_wake_plan(&self) -> BrowserExecutionWakePlan {
+            let state = match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.session().wake_state(),
+                DirectSourceAuthority::Program(program) => program.session().wake_state(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.wake_state(),
+            };
+            BrowserExecutionWakePlan::from_runtime(state.without_timeline_wake())
+        }
+
+        fn pointer_target(&self) -> &dyn BrowserPointerTarget {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session,
+                DirectSourceAuthority::Program(program) => program.as_ref(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => &playback.reader,
+            }
+        }
+
+        fn frame_pending(&self) -> bool {
+            self.wake_plan().present_now()
+        }
+        fn inspection_camera(&self) -> Result<Camera2DState, noon::integration::PointerFrameError> {
+            self.pointer_target().inspection_camera()
+        }
+        fn has_native_pointer_subscribers(&self) -> bool {
+            self.pointer_target().has_native_pointer_subscribers()
+        }
+        fn frame(&self) -> &noon_runtime::FrameState {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.session().frame(),
+                DirectSourceAuthority::Program(program) => program.session().frame(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.reader.frame(),
+            }
+        }
+        fn publication_context(&self) -> noon_core::PublicationContext {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().publication_context()
+                }
+                DirectSourceAuthority::Program(program) => program.session().publication_context(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.reader.publication_context(),
+            }
+        }
+        fn inspection_view_revision(&self) -> u64 {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().inspection_view_revision()
+                }
+                DirectSourceAuthority::Program(program) => {
+                    program.session().inspection_view_revision()
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.reader.inspection_view_revision()
+                }
+            }
+        }
+        fn interactions_active(&self) -> bool {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().interactions_active()
+                }
+                DirectSourceAuthority::Program(program) => program.session().interactions_active(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.reader.interactions_active(),
+            }
+        }
+        fn pointer_selection_presentation(&self) -> Option<PointerSelectionPresentation> {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().pointer_selection_presentation()
+                }
+                DirectSourceAuthority::Program(program) => {
+                    program.session().pointer_selection_presentation()
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.reader.pointer_selection_presentation()
+                }
+            }
+        }
+        fn painter_order(&self) -> &[u32] {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.session().painter_order(),
+                DirectSourceAuthority::Program(program) => program.session().painter_order(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.reader.painter_order(),
+            }
+        }
+        fn inset_2d_views(&self) -> Result<Vec<noon_core::Inset2DViewState>, JsValue> {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().inset_2d_views().map_err(js_error)
+                }
+                DirectSourceAuthority::Program(program) => {
+                    program.session().inset_2d_views().map_err(js_error)
+                }
+                // Prefix source admission rejects insets; do not borrow future producer views.
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => Ok(Vec::new()),
+            }
+        }
+        fn bounded_realtime_target(&self, requested: f64) -> f64 {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().bounded_realtime_target(requested)
+                }
+                DirectSourceAuthority::Program(program) => {
+                    program.session().bounded_realtime_target(requested)
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => requested,
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        fn diagnostic_frame_value(&self) -> serde_json::Value {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    noon::diagnostics::execution_frame_value(session.session())
+                }
+                DirectSourceAuthority::Program(program) => {
+                    noon::diagnostics::execution_frame_value(program.session())
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.reader.diagnostic_frame_value()
+                }
+            }
+        }
+        fn seek(&mut self, time: f64) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    if session.session().has_required_callbacks() {
+                        return Err(js_message(
+                            "opaque host callback sessions do not support seek or replay",
+                        ));
+                    }
+                    session.seek(time).map_err(js_error)?;
+                    Ok(())
+                }
+                DirectSourceAuthority::Program(_) => Err(js_message(
+                    "live continuation does not support arbitrary seek",
+                )),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.seek(time).map_err(js_error),
             }
         }
 
@@ -403,6 +624,12 @@ mod wasm {
                     .map(|_| ())
                     .map_err(js_error),
                 DirectSourceAuthority::Program(program) => program.refresh_pointer_hover(frame),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback
+                    .reader
+                    .refresh_pointer_hover(frame, frame.view())
+                    .map(|_| ())
+                    .map_err(js_error),
             }
         }
 
@@ -410,6 +637,8 @@ mod wasm {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => Some(session.session_mut()),
                 DirectSourceAuthority::Program(_) => None,
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => None,
             }
         }
 
@@ -417,6 +646,8 @@ mod wasm {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => Some(session),
                 DirectSourceAuthority::Program(_) => None,
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => None,
             }
         }
 
@@ -426,6 +657,10 @@ mod wasm {
                     BrowserExecutionWakePlan::from_session(session.session())
                 }
                 DirectSourceAuthority::Program(program) => program.wake_plan(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    BrowserExecutionWakePlan::from_runtime(playback.wake_state())
+                }
             }
         }
 
@@ -433,6 +668,9 @@ mod wasm {
             match &self.authority {
                 DirectSourceAuthority::Session { .. } => false,
                 DirectSourceAuthority::Program(program) => program.source_active(),
+                // Buffering is a real pause: the host must release its wall-time anchor.
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => false,
             }
         }
 
@@ -440,6 +678,8 @@ mod wasm {
             match &self.authority {
                 DirectSourceAuthority::Session { .. } => None,
                 DirectSourceAuthority::Program(program) => program.pending_endpoint(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => None,
             }
         }
 
@@ -456,6 +696,10 @@ mod wasm {
                         .expect("fresh viewport query shares this publication")
                 }
                 DirectSourceAuthority::Program(program) => program.query_viewports(bounds),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.reader.query_renderer_viewports(bounds)
+                }
             }
         }
 
@@ -468,6 +712,11 @@ mod wasm {
                 DirectSourceAuthority::Program(program) => {
                     program.advance_interactions(wall_time_seconds)
                 }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback
+                    .reader
+                    .advance_interactions(wall_time_seconds)
+                    .map_err(js_error),
             }
         }
 
@@ -477,7 +726,33 @@ mod wasm {
                     session.retire_execution_source().map_err(js_error)
                 }
                 DirectSourceAuthority::Program(program) => program.retire_execution_source(),
+                // A reader has no mutable semantic arena or temporary GlowPulse attachment.
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => Ok(()),
             }
+        }
+
+        /// Realtime host timer and RAF callbacks can carry out-of-order sampled
+        /// wall times. Only a prepared reader may ignore a stale clock sample;
+        /// explicit history advancement continues to reject backwards time.
+        fn stale_prepared_clock_sample(&self, requested_time: f64) -> bool {
+            if !requested_time.is_finite() {
+                return false;
+            }
+            match &self.authority {
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    requested_time < playback.reader.frame().time
+                }
+                DirectSourceAuthority::Session { .. } | DirectSourceAuthority::Program(_) => false,
+            }
+        }
+
+        fn drive_from_clock(&mut self, requested_time: f64) -> Result<(), JsValue> {
+            if self.stale_prepared_clock_sample(requested_time) {
+                return Ok(());
+            }
+            self.drive_to(requested_time)
         }
 
         fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue> {
@@ -489,6 +764,10 @@ mod wasm {
                     Ok(())
                 }
                 DirectSourceAuthority::Program(program) => program.drive_to(requested_time),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.advance(requested_time).map_err(js_error)
+                }
             }
         }
 
@@ -498,6 +777,10 @@ mod wasm {
                     session.session_mut().take_renderer_publication()
                 }
                 DirectSourceAuthority::Program(program) => program.take_renderer_publication(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.reader.take_renderer_publication()
+                }
             }
         }
 
@@ -510,6 +793,8 @@ mod wasm {
                 DirectSourceAuthority::Program(program) => {
                     program.admit_rendered_publication(publication)
                 }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => Ok(false),
             }
         }
 
@@ -527,6 +812,10 @@ mod wasm {
                 DirectSourceAuthority::Program(program) => {
                     program.set_native_state_input(source, value)
                 }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => Err(js_message(
+                    "prepared playback does not admit causal state input",
+                )),
             }
         }
 
@@ -543,6 +832,10 @@ mod wasm {
                     .map(|_| ())
                     .map_err(js_error)?,
                 DirectSourceAuthority::Program(program) => program.emit_native_event(occurrence)?,
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(_) => {
+                    return Err(js_message("prepared playback does not admit causal events"))
+                }
             }
             self.next_native_event_sequence = next;
             Ok(())
@@ -561,6 +854,10 @@ mod wasm {
                 }
                 DirectSourceAuthority::Program(program) => {
                     presentation.submit(program.as_mut(), binding, sequence, input)
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    presentation.submit(&mut playback.reader, binding, sequence, input)
                 }
             }
             .map_err(js_error)
@@ -581,6 +878,15 @@ mod wasm {
                 }
                 DirectSourceAuthority::Program(program) => presentation.scroll(
                     program.as_mut(),
+                    binding,
+                    revision,
+                    viewport,
+                    surface,
+                    delta_pixels,
+                ),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => presentation.scroll(
+                    &mut playback.reader,
                     binding,
                     revision,
                     viewport,
@@ -611,6 +917,15 @@ mod wasm {
                         retire_source,
                     )
                 }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    browser_pointer_input::cancel_browser_pointer_input(
+                        &mut playback.reader,
+                        binding,
+                        sequence,
+                        retire_source,
+                    )
+                }
             }
             .map_err(js_error)
         }
@@ -625,17 +940,20 @@ mod wasm {
                 DirectSourceAuthority::Program(program) => {
                     program.set_pointer_fill_selection(max_movement)
                 }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => match max_movement {
+                    Some(value) => playback.reader.enable_pointer_fill_selection(value),
+                    None => playback.reader.disable_pointer_fill_selection(),
+                }
+                .map_err(js_error),
             }
         }
 
         fn live_object_count(&self) -> usize {
-            let session = self.session();
-            session
-                .painter_order()
+            self.painter_order()
                 .iter()
                 .filter(|&&index| {
-                    session
-                        .frame()
+                    self.frame()
                         .presences
                         .get(index as usize)
                         .copied()
@@ -859,11 +1177,11 @@ mod wasm {
                     self.pause_audio_for_host_failure();
                     return Ok(false);
                 }
-                let changes_pending = self.source.session().wake_state().frame_pending()
+                let changes_pending = self.source.frame_pending()
                     || self.surface_frame_pending
                     || self
                         .pointer_presentation
-                        .needs_refresh(self.source.session())
+                        .needs_refresh(self.source.pointer_target())
                     || self.selection_pending();
                 if !self.drawable {
                     self.pause_audio_for_host_failure();
@@ -1017,7 +1335,40 @@ mod wasm {
         }
 
         pub fn time(&self) -> f64 {
-            self.source.session().frame().time
+            self.source.frame().time
+        }
+
+        /// Pause authored prepared playback without stopping temporary effects.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = setPreparedPlaying)]
+        pub fn set_prepared_playing(&mut self, playing: bool) -> Result<(), JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            if playback.set_playing(playing) {
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                self.sampled_scene_target = None;
+            }
+            Ok(())
+        }
+
+        /// Explicit test/debug observation, not a scene transport or clock authority.
+        #[cfg(all(
+            feature = "prepared-prefix",
+            any(debug_assertions, feature = "renderer-smoke")
+        ))]
+        #[wasm_bindgen(js_name = debugPreparedPlaybackJson)]
+        pub fn debug_prepared_playback_json(&self) -> Result<String, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            Ok(serde_json::json!({
+                "time": playback.reader.frame().time,
+                "frontier": playback.reader.frontier(), "end": playback.reader.end_time(),
+                "buffering": playback.buffering(), "playing": playback.playing(),
+                "interactions": playback.reader.interactions_active(),
+            })
+            .to_string())
         }
 
         #[wasm_bindgen(js_name = sectionCount)]
@@ -1081,8 +1432,7 @@ mod wasm {
         #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         #[wasm_bindgen(js_name = directSceneRevision)]
         pub fn direct_scene_revision(&self) -> Result<u64, JsValue> {
-            let session = self.source.session();
-            Ok(session.publication_context().scene_revision().get())
+            Ok(self.source.publication_context().scene_revision().get())
         }
 
         /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
@@ -1097,22 +1447,9 @@ mod wasm {
                     "direct seek time must lie within the admitted finite timeline",
                 ));
             }
-            let (pending, camera) = {
-                let execution = self.source.static_execution_mut().ok_or_else(|| {
-                    js_message("typed execution APIs require a direct session source")
-                })?;
-                if execution.session().has_required_callbacks() {
-                    return Err(js_message(
-                        "opaque host callback sessions do not support seek or replay",
-                    ));
-                }
-                execution.seek(time).map_err(js_error)?;
-                let session = execution.session();
-                (
-                    session.wake_state().frame_pending(),
-                    session.inspection_camera().map_err(js_error),
-                )
-            };
+            self.source.seek(time)?;
+            let pending = self.source.frame_pending();
+            let camera = self.source.inspection_camera().map_err(js_error);
             self.pending_scene_control = None;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
@@ -1120,13 +1457,13 @@ mod wasm {
             let camera_result = camera.and_then(|camera| self.sync_camera(camera));
             if let Err(error) = camera_result {
                 self.stop_audio();
-                if self.source.session().has_audio() {
+                if self.source.has_audio() {
                     self.direct_paused = true;
                 }
                 return Err(error);
             }
             if let Some(output) = &mut self.audio_output {
-                if let Err(error) = output.preload(self.source.session()) {
+                if let Err(error) = output.preload(self.source.authored_session()?) {
                     self.stop_audio();
                     self.direct_paused = true;
                     return Err(error);
@@ -1140,7 +1477,7 @@ mod wasm {
         #[wasm_bindgen(js_name = enableAudio)]
         pub fn enable_audio(&mut self) -> Result<js_sys::Promise, JsValue> {
             self.ensure_audio_profile()?;
-            if !self.source.session().has_audio() {
+            if !self.source.has_audio() {
                 return Err(js_message(
                     "this execution session contains no authored audio",
                 ));
@@ -1154,7 +1491,7 @@ mod wasm {
                 self.audio_output = Some(WebAudioOutput::new(self.audio_controls)?);
             }
             let output = self.audio_output.as_mut().unwrap();
-            output.preload(self.source.session())?;
+            output.preload(self.source.authored_session()?)?;
             output.unlock()
         }
 
@@ -1180,16 +1517,11 @@ mod wasm {
             self.sampled_scene_target = None;
             let observation: Result<(), JsValue> = (|| {
                 if let Some(target) = target {
-                    if !self.source.session().wake_state().frame_pending() {
-                        let target = self.bound_transport_target(
-                            self.source.session().bounded_realtime_target(target),
-                        );
-                        self.source.drive_to(target)?;
-                        let camera = self
-                            .source
-                            .session()
-                            .inspection_camera()
-                            .map_err(js_error)?;
+                    if !self.source.frame_pending() {
+                        let target = self
+                            .bound_transport_target(self.source.bounded_realtime_target(target));
+                        self.source.drive_from_clock(target)?;
+                        let camera = self.source.inspection_camera().map_err(js_error)?;
                         self.sync_camera(camera)?;
                     }
                 }
@@ -1199,7 +1531,7 @@ mod wasm {
                 self.stop_audio();
                 return Err(error);
             }
-            Ok(self.source.session().wake_state().frame_pending())
+            Ok(self.source.frame_pending())
         }
 
         /// Resume at the next accepted browser wake using the existing direct
@@ -1211,7 +1543,7 @@ mod wasm {
             if !self.direct_paused {
                 return Ok(());
             }
-            if self.source.session().has_audio()
+            if self.source.has_audio()
                 && !self
                     .audio_output
                     .as_ref()
@@ -1295,7 +1627,7 @@ mod wasm {
         pub fn dispose_audio(&mut self) {
             self.pending_scene_control = None;
             self.audio_output = None;
-            if self.source.session().has_audio() {
+            if self.source.has_audio() {
                 self.direct_paused = true;
                 self.direct_wake_clock = BrowserExecutionWakeClock::default();
                 self.sampled_scene_target = None;
@@ -1314,7 +1646,7 @@ mod wasm {
                 .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
             self.start_audio_at_anchor(plan)?;
-            let (cadence, delay_ms) = if self.source.session().interactions_active() {
+            let (cadence, delay_ms) = if self.source.interactions_active() {
                 ("animation-frame", None)
             } else {
                 match directive.wake() {
@@ -1329,7 +1661,7 @@ mod wasm {
                         || self.surface_frame_pending
                         || self
                             .pointer_presentation
-                            .needs_refresh(self.source.session())
+                            .needs_refresh(self.source.pointer_target())
                         || self.selection_pending()),
                 cadence,
                 delay_ms,
@@ -1373,19 +1705,21 @@ mod wasm {
 
             let Some(target_time) = target_time else {
                 self.source.advance_interactions(wall_time_ms / 1_000.0)?;
-                return Ok(self.source.session().wake_state().frame_pending());
+                return Ok(self.source.frame_pending());
             };
             // Hold the original wall-derived sample across required endpoint
             // admissions. Initial work still clips at its first publication.
             let wall_sample_target = self.bound_transport_target(target_time);
-            let target_time = self
-                .bound_transport_target(self.source.session().bounded_realtime_target(target_time));
+            let target_time =
+                self.bound_transport_target(self.source.bounded_realtime_target(target_time));
             let (pending, camera) = {
                 let direct = &mut self.source;
-                direct.drive_to(target_time)?;
+                if !direct.stale_prepared_clock_sample(target_time) {
+                    direct.drive_to(target_time)?;
+                }
                 direct.advance_interactions(wall_time_ms / 1_000.0)?;
-                let camera = direct.session().inspection_camera().map_err(js_error)?;
-                (direct.session().wake_state().frame_pending(), camera)
+                let camera = direct.inspection_camera().map_err(js_error)?;
+                (direct.frame_pending(), camera)
             };
             // Callback commits and ordinary source handoffs are elapsed wall
             // time, not explicit pauses. Preserve the same active epoch.
@@ -1446,7 +1780,7 @@ mod wasm {
                 alt,
                 meta,
             };
-            if !self.source.session().has_native_pointer_subscribers() {
+            if !self.source.has_native_pointer_subscribers() {
                 return Ok(Some(false));
             }
             if !self.drawable
@@ -1476,7 +1810,7 @@ mod wasm {
             }
             // Undefined is a recoverable rejection, not an admitted clean sample.
             // The synchronous DOM caller retires the contact and requests redraw.
-            Ok(publication.map(|_| pending || self.source.session().wake_state().frame_pending()))
+            Ok(publication.map(|_| pending || self.source.frame_pending()))
         }
 
         /// Existing input sequence of the single device-unlock request, if any.
@@ -1508,7 +1842,7 @@ mod wasm {
             }
             let publication = request.publication;
             self.pending_scene_control = None;
-            if publication != self.source.session().publication_context()
+            if publication != self.source.publication_context()
                 || !self.direct_paused
                 || !self.drawable
                 || self.webgl_context_lifecycle.is_lost()
@@ -1598,7 +1932,7 @@ mod wasm {
         #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         #[wasm_bindgen(js_name = debugSelectionFrameJson)]
         pub fn debug_selection_frame_json(&self) -> String {
-            noon::diagnostics::execution_frame_value(self.source.session()).to_string()
+            self.source.diagnostic_frame_value().to_string()
         }
 
         /// Explicit raster fixture/readback boundary; never used in Scene playback.
@@ -1627,12 +1961,12 @@ mod wasm {
         #[wasm_bindgen(js_name = debugPointerPresentationJson)]
         pub fn debug_pointer_presentation_json(&self) -> String {
             serde_json::json!({
-                "current": self.source.session().publication_context().frame_epoch().get().to_string(),
+                "current": self.source.publication_context().frame_epoch().get().to_string(),
                 "presented": self.pointer_presentation.presented.as_ref().map(|frame|
                     frame.publication().frame_epoch().get().to_string()),
-                "refreshPending": self.pointer_presentation.needs_refresh(self.source.session()),
+                "refreshPending": self.pointer_presentation.needs_refresh(self.source.pointer_target()),
                 "view": self.pointer_presentation.viewport().map(|view| [view.x, view.y]),
-                "inspectionRevision": self.source.session().inspection_view_revision().to_string(),
+                "inspectionRevision": self.source.inspection_view_revision().to_string(),
                 "presentedInspectionRevision": self.pointer_presentation.presented.as_ref()
                     .map(|frame| frame.inspection_revision().to_string()),
                 "camera": [self.camera_center.x, self.camera_center.y, self.camera_height],
@@ -1720,6 +2054,143 @@ mod wasm {
     }
 
     impl WasmExecutionCanvasRenderer {
+        /// Install the independent reader as this canvas's sole presentation owner.
+        /// The producer remains outside the host. No scene/history crosses JavaScript.
+        #[cfg(feature = "prepared-prefix")]
+        pub async fn create_from_prepared_prefix(
+            canvas: OffscreenCanvas,
+            reader: noon::PrefixReader,
+        ) -> Result<Self, JsValue> {
+            let camera = reader.inspection_camera().map_err(js_error)?;
+            let source = DirectExecutionSource {
+                authority: DirectSourceAuthority::Prepared(Box::new(
+                    crate::prepared_canvas_playback::PreparedCanvasPlayback::new(reader),
+                )),
+                next_native_event_sequence: 0,
+                browser_pointer_binding: None,
+            };
+            Self::create_with_source(canvas, source, camera.center, camera.height).await
+        }
+
+        /// Explicit allocation barrier, separate from future-history adoption.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn reserve_prepared_prefix_capacity(&mut self, total: usize) -> Result<usize, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            playback
+                .reader
+                .reserve_object_capacity(total)
+                .map_err(js_error)
+        }
+
+        /// Borrowed admission lets a caller retain a wrongly routed/capacity-limited batch.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn preflight_prepared_prefix(
+            &self,
+            batch: &noon::PrefixBatch,
+        ) -> Result<noon::PrefixBatchStats, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            playback.reader.preflight_append(batch).map_err(js_error)
+        }
+
+        /// Typed same-context delivery; the host must wake its existing driver after
+        /// success. Receiving history does not present, seek, or invalidate a receipt.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn append_prepared_prefix(
+            &mut self,
+            batch: noon::PrefixBatch,
+        ) -> Result<noon::PrefixBatchStats, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            let was_buffering = playback.buffering();
+            let stats = playback.append(batch).map_err(js_error)?;
+            if was_buffering && !playback.buffering() {
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                self.sampled_scene_target = None;
+            }
+            Ok(stats)
+        }
+
+        /// Read-only demand for a host-owned interpreter whose completed batch
+        /// has already been adopted here. Hosts never reconstruct authored time
+        /// from debug snapshots; a completed reader never requests more source.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn prepared_source_needs_work(&self, lookahead_seconds: f64) -> Result<bool, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            playback
+                .needs_preparation(lookahead_seconds)
+                .map_err(js_message)
+        }
+
+        /// Prepare at most one ordinary source continuation and deliver its batch.
+        /// The source stays outside the canvas. Borrowed admission retains a
+        /// rejected suffix for retry and prevents invoking the continuation twice.
+        /// Hosts must yield between calls; one segment is not a wall-time bound.
+        /// `None` means look-ahead demand is satisfied. Sleep until the ordinary
+        /// playback driver or navigation wakes preparation, rather than polling.
+        /// A buffered open frontier admits one refill even when the last evaluated
+        /// sample predates a long wait; otherwise throttling could deadlock playback.
+        #[cfg(feature = "prepared-prefix")]
+        pub fn prepare_source_step<C: noon::LiveContinuation>(
+            &mut self,
+            source: &mut noon::PreparedSource<C>,
+            lookahead_seconds: f64,
+        ) -> Result<Option<noon::PreparedSourceStatus>, JsValue>
+        where
+            C::Error: std::fmt::Display,
+        {
+            // Check host ownership before calling any user code.
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            let target = playback
+                .preparation_target(lookahead_seconds)
+                .map_err(js_message)?;
+            let buffering = playback.buffering();
+            if source.status() == noon::PreparedSourceStatus::ReaderReady {
+                return Err(js_message(
+                    "take the source reader before preparing its canvas",
+                ));
+            }
+            let progress = if buffering {
+                source.prepare_next().map(Some)
+            } else {
+                source.prepare_until(target)
+            }
+            .map_err(js_error)?;
+            if progress.is_none() {
+                return Ok(None);
+            }
+            if let Some(batch) = source.pending_batch() {
+                let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
+                    unreachable!()
+                };
+                // A foreign stream is rejected before capacity maintenance.
+                match playback.reader.preflight_append(batch) {
+                    Err(noon::PrefixError::CapacityRequired { object_slots }) => {
+                        playback
+                            .reader
+                            .reserve_object_capacity(object_slots)
+                            .map_err(js_error)?;
+                        playback.reader.preflight_append(batch).map_err(js_error)?;
+                    }
+                    other => {
+                        other.map_err(js_error)?;
+                    }
+                }
+                self.append_prepared_prefix(
+                    source.take_batch().expect("borrowed batch was admitted"),
+                )?;
+            }
+            Ok(Some(source.status()))
+        }
+
         /// Install immutable Scene-authored navigation labels for this host.
         /// This neither changes execution time nor bypasses seek admission.
         pub fn set_section_navigation(&mut self, navigation: noon::SceneSectionNavigation) {
@@ -1808,7 +2279,7 @@ mod wasm {
         {
             let source =
                 DirectExecutionSource::from_live_program_with_callbacks(program, callbacks)?;
-            let camera = source.session().inspection_camera().map_err(js_error)?;
+            let camera = source.inspection_camera().map_err(js_error)?;
             Self::create_with_source(canvas, source, camera.center, camera.height).await
         }
 
@@ -1838,7 +2309,7 @@ mod wasm {
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
             self.stop_audio();
-            if self.source.session().has_audio() {
+            if self.source.has_audio() {
                 self.direct_paused = true;
             }
             Ok(pending)
@@ -1900,20 +2371,18 @@ mod wasm {
         }
 
         fn finish_direct_native_input(&mut self) -> Result<bool, JsValue> {
-            let session = self.source.session();
-            let pending = session.wake_state().frame_pending();
-            let camera = session.inspection_camera().map_err(js_error)?;
+            let pending = self.source.frame_pending();
+            let camera = self.source.inspection_camera().map_err(js_error)?;
             self.sync_camera(camera)?;
             Ok(pending
                 || self.selection_pending()
                 || self
                     .pointer_presentation
-                    .needs_refresh(self.source.session()))
+                    .needs_refresh(self.source.pointer_target()))
         }
 
         fn selection_pending(&self) -> bool {
-            self.source.session().pointer_selection_presentation()
-                != self.last_selection_presentation
+            self.source.pointer_selection_presentation() != self.last_selection_presentation
         }
 
         fn dispatch_scene_control(
@@ -1933,7 +2402,7 @@ mod wasm {
                 PlaybackControl::TogglePlayback => {
                     if self.is_direct_playing() {
                         self.pause_direct(wall_time)?;
-                    } else if self.source.session().has_audio() && !self.audio_enabled() {
+                    } else if self.source.has_audio() && !self.audio_enabled() {
                         // Start resume synchronously while the release still has
                         // browser user activation. Never retain a mutable borrow
                         // across the asynchronous device operation.
@@ -1972,8 +2441,7 @@ mod wasm {
         }
 
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
-            let session = self.source.session();
-            if session.wake_state().frame_pending() {
+            if self.source.frame_pending() {
                 return Err(js_message(
                     "direct execution host must present pending runtime changes before advancing again",
                 ));
@@ -1987,7 +2455,7 @@ mod wasm {
                     "direct transport controls currently require a pre-authored execution session",
                 ));
             }
-            if self.source.session().has_required_callbacks() {
+            if self.source.authored_session()?.has_required_callbacks() {
                 return Err(js_message(
                     "direct transport controls currently require a session without required callbacks",
                 ));
@@ -1997,7 +2465,7 @@ mod wasm {
 
         fn ensure_audio_profile(&self) -> Result<(), JsValue> {
             self.ensure_direct_transport_profile()?;
-            if self.source.session().replay_scope_active() {
+            if self.source.authored_session()?.replay_scope_active() {
                 return Err(js_message(
                     "direct audio output does not yet support retained source history",
                 ));
@@ -2030,7 +2498,7 @@ mod wasm {
 
         fn pause_audio_for_host_failure(&mut self) {
             self.pending_scene_control = None;
-            if self.source.session().has_audio() || self.source.session().has_playback_controls() {
+            if self.source.has_audio() || self.source.has_playback_controls() {
                 self.stop_audio();
                 self.direct_paused = true;
                 self.direct_wake_clock = BrowserExecutionWakeClock::default();
@@ -2045,7 +2513,7 @@ mod wasm {
 
         fn require_ready_audio_device(&mut self) -> Result<(), JsValue> {
             if !self.direct_paused
-                && self.source.session().has_audio()
+                && self.source.has_audio()
                 && !self
                     .audio_output
                     .as_ref()
@@ -2063,7 +2531,7 @@ mod wasm {
         }
 
         fn start_audio_at_anchor(&mut self, plan: BrowserExecutionWakePlan) -> Result<(), JsValue> {
-            if self.direct_paused || !self.source.session().has_audio() {
+            if self.direct_paused || !self.source.has_audio() {
                 return Ok(());
             }
             if matches!(plan.cadence(), BrowserExecutionCadence::Idle) {
@@ -2078,7 +2546,7 @@ mod wasm {
                 .as_mut()
                 .ok_or_else(|| js_message("enable audio before starting direct audio playback"))?;
             if !output.is_scheduled() {
-                if let Err(error) = output.start(self.source.session()) {
+                if let Err(error) = output.start(self.source.authored_session()?) {
                     self.stop_audio();
                     self.direct_paused = true;
                     self.direct_wake_clock = BrowserExecutionWakeClock::default();
@@ -2092,13 +2560,11 @@ mod wasm {
         fn direct_wake_observation(&self) -> (BrowserExecutionWakePlan, f64) {
             let direct = &self.source;
             let plan = if self.direct_paused {
-                BrowserExecutionWakePlan::from_runtime(
-                    direct.session().wake_state().without_timeline_wake(),
-                )
+                direct.paused_wake_plan()
             } else {
                 direct.wake_plan()
             };
-            (plan, direct.session().frame().time)
+            (plan, direct.frame().time)
         }
 
         fn direct_scene_time_at(&self, wall_time_ms: f64) -> Result<f64, JsValue> {
@@ -2113,24 +2579,24 @@ mod wasm {
             camera_center: Vec2,
             camera_height: f32,
         ) -> Result<Self, JsValue> {
-            let has_audio = source.session().has_audio();
-            let has_controls = source.session().has_playback_controls();
+            let has_audio = source.has_audio();
+            let has_controls = source.has_playback_controls();
             if (has_audio || has_controls)
                 && (!matches!(source.authority, DirectSourceAuthority::Session { .. })
-                    || source.session().has_required_callbacks()
-                    || source.session().replay_scope_active())
+                    || source.authored_session()?.has_required_callbacks()
+                    || source.authored_session()?.replay_scope_active())
             {
                 return Err(js_message(
                     "direct audio and scene controls require a finite pre-authored session without callbacks or retained source history",
                 ));
             }
             let finite_transport_end = if has_audio || has_controls {
-                if source.session().frame().time < 0.0 {
+                if source.frame().time < 0.0 {
                     return Err(js_message(
                         "direct controlled playback requires a nonnegative initial scene time",
                     ));
                 }
-                Some(source.session().finite_timeline_end_time().ok_or_else(|| {
+                Some(source.authored_session()?.finite_timeline_end_time().ok_or_else(|| {
                     js_message("direct audio and scene controls require a finite immutable execution timeline")
                 })?)
             } else {
@@ -2219,7 +2685,7 @@ mod wasm {
             .map_err(js_error)?;
             let half_extent = camera.world_size * 0.5;
             let direct = &mut self.source;
-            let inset_views = direct.session().inset_2d_views().map_err(js_error)?;
+            let inset_views = direct.inset_2d_views()?;
             let mut view_bounds = vec![Rect::new(
                 camera.center - half_extent,
                 camera.center + half_extent,
@@ -2317,14 +2783,10 @@ mod wasm {
                     // sparse value-tracker updater at t=1.25) and can silently
                     // consume a required zero-duration continuation barrier.
                     // Only late frames have outstanding authored-time debt.
-                    if self.source.source_active() && self.source.session().frame().time < target {
+                    if self.source.source_active() && self.source.frame().time < target {
                         self.source.drive_to(target)?;
                     }
-                    let camera = self
-                        .source
-                        .session()
-                        .inspection_camera()
-                        .map_err(js_error)?;
+                    let camera = self.source.inspection_camera().map_err(js_error)?;
                     self.sync_camera(camera)?;
                 }
             }
@@ -2348,7 +2810,7 @@ mod wasm {
             let pointer_frame = self
                 .pointer_presentation
                 .capture(
-                    self.source.session(),
+                    self.source.pointer_target(),
                     Camera2DState {
                         center: camera.center,
                         height: camera.world_size.y,
@@ -2356,7 +2818,7 @@ mod wasm {
                 )
                 .map_err(js_error)?;
             let half_extent = camera.world_size * 0.5;
-            let presentation = self.source.session().pointer_selection_presentation();
+            let presentation = self.source.pointer_selection_presentation();
             let overlay = presentation
                 .as_ref()
                 .map(|value| AnalyticOverlay::new(&value.geometry, value.transform, value.color))
@@ -2368,7 +2830,7 @@ mod wasm {
             let publication_context;
             let draw = {
                 let direct = &mut self.source;
-                let inset_views = direct.session().inset_2d_views().map_err(js_error)?;
+                let inset_views = direct.inset_2d_views()?;
                 let mut view_bounds = vec![Rect::new(
                     camera.center - half_extent,
                     camera.center + half_extent,
@@ -2503,8 +2965,13 @@ mod wasm {
             };
             self.queue.present(surface_texture);
             if let Some(frame) = pointer_frame.as_ref() {
-                frame
-                    .validate_presentation(self.source.session(), frame.view())
+                self.source
+                    .pointer_target()
+                    .validate_pointer_frame(
+                        frame,
+                        frame.view(),
+                        browser_pointer_input::PointerFrameValidation::Presentation,
+                    )
                     .map_err(js_error)?;
                 self.source.refresh_pointer_hover(frame)?;
             }

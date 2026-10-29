@@ -50,6 +50,8 @@ pub use noon_runtime::SignalTimelineAppendError;
 pub use publication::{
     EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
 };
+#[cfg(feature = "prepared-prefix")]
+pub use replay::PrefixReader;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use noon_runtime::SignalTimelineSchedule;
@@ -856,8 +858,8 @@ pub struct ExecutionSession {
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
     pointer_selection: selection::PointerSelectionState,
-    interaction_bindings: interactions::InteractionBindings,
     translation_drag: translation_drag::TranslationDragState,
+    interaction_bindings: interactions::InteractionBindings,
     inspection: inspection::SessionInspectionView,
     last_structural_publication: StructuralPublicationStats,
     callback_schedule: CallbackSchedule,
@@ -913,8 +915,8 @@ impl Clone for ExecutionSession {
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
             pointer_selection: self.pointer_selection.fresh(),
-            interaction_bindings: self.interaction_bindings.clone(),
             translation_drag: self.translation_drag.clone(),
+            interaction_bindings: self.interaction_bindings.clone(),
             inspection: self.inspection,
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
@@ -1065,10 +1067,37 @@ impl ExecutionSession {
             .max()
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
-        let mut reactive_projection = lowered.reactive().clone();
-        let scalar_timeline = reactive_projection.take_scalar_timeline();
+        let reactive_projection = lowered.reactive().clone();
         let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
-        let mut runtime = SceneInstance::from_semantic_execution(lowered);
+        let runtime = SceneInstance::from_semantic_execution(lowered);
+        Self::from_runtime_projection(
+            store_identity,
+            execution_index,
+            reachability,
+            slots,
+            reactive_projection,
+            runtime,
+            camera_object,
+            next_activation_track_id,
+            callback_schedule,
+        )
+    }
+
+    // Common initialization for authored execution and a read-only historical
+    // projection. The caller moves exactly one runtime; no session is cloned.
+    #[allow(clippy::too_many_arguments)]
+    fn from_runtime_projection(
+        store_identity: noon_core::SemanticStoreIdentity,
+        execution_index: SemanticExecutionIndex,
+        reachability: SemanticExecutionReachability,
+        slots: noon_runtime::ExecutionSlotTable,
+        mut reactive_projection: SemanticReactiveProjection,
+        mut runtime: SceneInstance,
+        camera_object: Option<ObjectId>,
+        next_activation_track_id: Option<u64>,
+        callback_schedule: CallbackSchedule,
+    ) -> Self {
+        let scalar_timeline = reactive_projection.take_scalar_timeline();
         let signal_timeline =
             SignalTimelineSchedule::new(runtime.runtime_identity(), scalar_timeline);
         let mut spatial_index = ExecutionSpatialIndex::default();
@@ -1096,8 +1125,8 @@ impl ExecutionSession {
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
             pointer_selection: selection::PointerSelectionState::default(),
-            interaction_bindings: Default::default(),
             translation_drag: Default::default(),
+            interaction_bindings: Default::default(),
             inspection: inspection::SessionInspectionView::default(),
             last_structural_publication: StructuralPublicationStats::default(),
             callback_schedule,
@@ -5080,6 +5109,8 @@ impl ExecutionSession {
             }?;
             if requires_seek {
                 self.pointer_selection.reset();
+            } else {
+                self.reconcile_pointer_selection();
             }
             return Ok(self.runtime.frame());
         }
@@ -5099,6 +5130,8 @@ impl ExecutionSession {
         self.signal_timeline.commit(preview);
         if requires_seek {
             self.pointer_selection.reset();
+        } else {
+            self.reconcile_pointer_selection();
         }
         Ok(self.runtime.frame())
     }

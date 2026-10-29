@@ -276,7 +276,8 @@ impl ExecutionSession {
     /// callers still deliver unbound records through the normal session contract.
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        !self.interaction_bindings.is_empty()
+        self.runtime.has_click_indicate_bindings()
+            || !self.interaction_bindings.is_empty()
             || self.translation_drag.has_targets()
             || self.pointer_selection.enabled()
             || !self
@@ -383,6 +384,39 @@ impl ExecutionSession {
             .prepare_effective_property_batch(&[])
             .expect("an empty effective-property batch is always valid");
         self.submit_native_pointer_input_with_effective(store, token, input, effective, false)
+    }
+
+    /// The historical reader admits only presentation effects. Preparation and
+    /// metadata commit are the ordinary pointer lane; no producer arena is borrowed.
+    #[cfg(any(feature = "prepared-prefix", test))]
+    pub(super) fn submit_prepared_pointer_presentation(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let effective = self
+            .runtime
+            .prepare_effective_property_batch(&[])
+            .expect("an empty effective-property batch is always valid");
+        let prepared =
+            self.prepare_native_pointer_input_with_effective(token, input, effective, false)?;
+        let (frame, effective, timeline, metadata) = prepared.into_parts();
+        if frame.is_some()
+            || effective.is_some()
+            || timeline.is_some()
+            || matches!(
+                metadata.action,
+                Some(
+                    super::interactions::PreparedClickAction::GlowPulse { .. }
+                        | super::interactions::PreparedClickAction::Playback(_)
+                )
+            )
+        {
+            return Err(ExecutionSessionInputError::Interaction(
+                "prepared pointer input does not admit causal or semantic mutation".into(),
+            ));
+        }
+        self.commit_prepared_native_pointer_metadata(None, metadata)
     }
 
     /// Commit one typed native occurrence and a preflighted scoped effective

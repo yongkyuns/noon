@@ -368,6 +368,9 @@ const drafts = new Map();
 const sourceCache = new Map();
 const generations = new PlaygroundGeneration();
 let player = null;
+// Host identity only: the actual endpoint profile, not a source/runtime mirror.
+// #2211 removes the old presentation branch at the qualified default cutover.
+let preparedPlaybackPlayer = null;
 let playbackControls = null;
 let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
@@ -408,9 +411,20 @@ function setRuntimeStatus(message, state) {
   status.dataset.state = state;
 }
 
+function isPreparedPlayback(target = player) {
+  return target !== null && target === preparedPlaybackPlayer;
+}
+
 function playbackPresentation(playbackState, durationSeconds = playbackDurationSeconds) {
   const time = playbackState?.time;
   const playing = playbackState?.playing === true;
+  if (playbackState?.preparedPlayback === true) {
+    const end = playbackState.durationSeconds;
+    if (Number.isFinite(end) && time >= end) return { label: "Finished", state: "ready" };
+    if (!playing) return { label: "Paused", state: "ready" };
+    if (playbackState.buffering) return { label: "Buffering", state: "running" };
+    return { label: "Playing", state: "running" };
+  }
   const atEnd =
     Number.isFinite(time) &&
     Number.isFinite(durationSeconds) &&
@@ -422,11 +436,13 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
 }
 
 function setPlaybackRuntimeStatus(playbackState, detail = "") {
-  const sourceOwnsPlayback = sceneRunPromise !== null && activeSourceContinuation !== null;
+  const sourceOwnsPlayback = sceneRunPromise !== null && activeSourceContinuation !== null &&
+    playbackState?.preparedPlayback !== true;
   const phase = sourceOwnsPlayback
     ? { label: "Playing", state: "running" }
     : playbackPresentation(playbackState);
   status.dataset.playbackPhase = phase.label.toLowerCase();
+  status.dataset.playbackPlaying = String(phase.label === "Playing");
   setRuntimeStatus(detail ? `${phase.label} · ${detail}` : phase.label, phase.state);
   return phase;
 }
@@ -551,7 +567,8 @@ function createRuntimeClient() {
   return candidate;
 }
 
-function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds }) {
+function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
+  if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
     playbackControls = new PlaygroundPlaybackControls(
@@ -559,11 +576,21 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
       document.querySelector(".preview-pane"),
       { durationSeconds, onError: showPlaybackError },
     );
-  } else {
+  } else if (playbackState?.preparedPlayback !== true) {
     playbackControls.setDuration(durationSeconds);
   }
   playbackControls.setControllable(supported);
   playbackControls.setBusy(busyDepth > 0);
+  if (playbackState?.preparedPlayback === true) {
+    // Readiness comes from the reader, never the source's segment/final duration.
+    // A completion observation must not overwrite an in-flight user command.
+    playbackControls.observe(playbackState);
+  } else if (playbackState !== null) {
+    playbackControls.sync({ ...playbackState, durationSeconds,
+      hasAudio: playbackState.hasAudio ?? false,
+      canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
+    });
+  }
 }
 
 function ensureRuntimePreparation() {
@@ -602,6 +629,7 @@ async function ensureRuntimeReady({
   authoringClient: client,
   loopDurationSeconds,
   runPhaseMetrics = null,
+  runToken = null,
 }) {
   if (runtimeStartPromise !== null) return runtimeStartPromise;
   if (player !== null) return null;
@@ -614,6 +642,9 @@ async function ensureRuntimeReady({
     const nextPlayer = prepared.candidate;
     try {
       await prepared.ready;
+      if (runToken !== null && !isCurrentRun(runToken)) {
+        throw new Error("runtime preparation belongs to a superseded source run");
+      }
       if (runPhaseMetrics !== null) {
         runPhaseMetrics.renderPreparation = {
           startedAtMs: prepared.startedAtMs,
@@ -639,8 +670,15 @@ async function ensureRuntimeReady({
         }
       }
       const initialState = await nextPlayer.state();
+      if (runToken !== null && !isCurrentRun(runToken)) {
+        throw new Error("runtime attachment belongs to a superseded source run");
+      }
+      if ((initialState.preparedPlayback === true) !== (semanticExecution.preparedPlayback === true)) {
+        throw new Error("runtime playback profile does not match its source registration");
+      }
 
       player = nextPlayer;
+      preparedPlaybackPlayer = initialState.preparedPlayback === true ? nextPlayer : null;
       if (runtimePreparation === prepared) {
         runtimePreparation = null;
       }
@@ -650,22 +688,16 @@ async function ensureRuntimeReady({
       status.dataset.executionMode = nextPlayer.mode;
       status.dataset.executionTopology = "python-semantic-engine-render-worker";
       status.dataset.runtimeStartup = "started-on-demand";
-      const sourceOwnsExecution = semanticExecution.continuationGeneration != null;
+      const sourceOwnsExecution = semanticExecution.continuationGeneration != null &&
+        initialState.preparedPlayback !== true;
       updatePlaybackControls({
         supported: !sourceOwnsExecution && initialState.replaySupported !== false,
         player: nextPlayer,
         durationSeconds: loopDurationSeconds,
+        playbackState: initialState,
       });
 
       patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
-      playbackControls?.sync({
-        ...initialState,
-        hasAudio: initialState.hasAudio ?? false,
-        time: initialState.time,
-        playing: initialState.playing,
-        durationSeconds: initialState.hasAudio ? initialState.durationSeconds : loopDurationSeconds,
-        canUndoTranslationDrag: initialState.canUndoTranslationDrag ?? false,
-      });
       startMetricsPolling();
       return {
         ...initialState,
@@ -678,7 +710,8 @@ async function ensureRuntimeReady({
         runtimePreparation = null;
       }
       nextPlayer.terminate();
-      adoptRuntimeCanvas(nextPlayer);
+      if (runToken === null || isCurrentRun(runToken)) adoptRuntimeCanvas(nextPlayer);
+      if (preparedPlaybackPlayer === nextPlayer) preparedPlaybackPlayer = null;
       if (player === nextPlayer) {
         player = null;
         playbackControls?.destroy();
@@ -722,7 +755,7 @@ async function ensureExecutionReady() {
 async function runPlaygroundTestHook(name, payload) {
   const hook = globalThis.__NOON_PLAYGROUND_TEST_HOOKS__?.[name];
   if (typeof hook === "function") {
-    await hook(payload);
+    return await hook(payload);
   }
 }
 
@@ -852,6 +885,7 @@ async function discardSemanticExecution(authored, client) {
 function discardEarlyContinuationRuntime(attachedPlayer) {
   if (attachedPlayer == null) return;
   attachedPlayer.terminate();
+  if (preparedPlaybackPlayer === attachedPlayer) preparedPlaybackPlayer = null;
   if (player !== attachedPlayer) return;
   adoptRuntimeCanvas(attachedPlayer);
   playbackControls?.destroy();
@@ -911,7 +945,8 @@ function stopForSourceEdit() {
   const client = authoringClient;
   const continuation = activeSourceContinuation;
   let cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
-  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart) {
+  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart &&
+      !isPreparedPlayback()) {
     // A completed source run can keep its renderer, canvas and warm VM. The
     // existing semantic transition replaces the execution endpoint atomically.
     // Active/stuck source continuations still use bounded cancellation below.
@@ -1010,6 +1045,18 @@ async function runScene() {
         selection_generation: runToken.selectionGeneration,
         run_generation: runToken.runGeneration,
       } }), source);
+      // Exercise the existing worker option through the normal gallery lifecycle.
+      // This qualification hook is not a user mode switch. #2211 owns removal
+      // of the temporary gate and old branch after the default-cutover gates pass.
+      const { preparedPlayback = false, preparationLookaheadSeconds = 1 } =
+        await runPlaygroundTestHook("authoringRunOptions", {
+          exampleId: example.id, runGeneration: runToken.runGeneration,
+        }) ?? {};
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "before-authoring-options");
+      if (typeof preparedPlayback !== "boolean" ||
+          !Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
+        throw new TypeError("invalid prepared source run options");
+      }
       previousPreview.hold(canvas, "Building edited source");
       // Explicit Run replaces the source in the same authoring arena. Retire
       // input-owned semantic state before new Python can advance that arena.
@@ -1021,6 +1068,9 @@ async function runScene() {
         stopMetricsPolling();
         await retainedPlayer.retireExecutionSource();
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-source-retirement");
+        if (isPreparedPlayback() || preparedPlayback) {
+          discardEarlyContinuationRuntime(retainedPlayer);
+        }
         playerNeedsRestart = false;
         status.dataset.playbackPlaying = "false";
         status.dataset.playbackPhase = "stopped";
@@ -1042,6 +1092,8 @@ async function runScene() {
             run_generation: runToken.runGeneration,
           },
         }, {
+          preparedPlayback,
+          preparationLookaheadSeconds,
           async onSemanticContinuation(registration) {
             if (earlyContinuation !== null) {
               throw new Error("Python source registered more than one semantic continuation");
@@ -1060,6 +1112,7 @@ async function runScene() {
                 authoringClient: client,
                 loopDurationSeconds,
                 runPhaseMetrics,
+                runToken,
               });
             } else {
               await ensureExecutionReady();
@@ -1082,13 +1135,22 @@ async function runScene() {
             previousPreview.showLive();
             startMetricsPolling();
             updatePlaybackControls({
-              supported: false,
+              supported: result.preparedPlayback === true,
               player: attachedPlayer,
               durationSeconds: loopDurationSeconds,
+              playbackState: result,
             });
             earlyContinuation = { registration, attachedPlayer, result, client, runToken };
             activeSourceContinuation = earlyContinuation;
-            setBusy(true);
+            if (result.preparedPlayback === true) {
+              // Only startup owns this busy ticket. Source demand can remain
+              // suspended indefinitely while controls and gallery stay usable.
+              await applyExampleInteraction(example, attachedPlayer);
+              if (!isCurrentRun(runToken)) {
+                throw new Error("prepared source was superseded during interaction setup");
+              }
+              releaseBusy();
+            } else setBusy(true);
             setPlaybackRuntimeStatus(
               result,
               `${example.title} · Python source continuing`,
@@ -1150,15 +1212,24 @@ async function runScene() {
         if (player !== earlyContinuation.attachedPlayer) {
           throw new Error("semantic continuation runtime changed before final adoption");
         }
-        const replayExecution = {
-          contextId: semanticExecution.contextId,
-          callbackSessionId: semanticExecution.callbackSessionId ?? null,
-          continuationGeneration: null,
-        };
-        result = await measureReconciliation("continuation-replay", () => player.reconcileSemanticExecution(replayExecution, {
-          authoringClient: client,
-          loopDurationSeconds,
-        }));
+        if (semanticExecution.preparedPlayback === true) {
+          result = await player.state();
+          if (result.preparedPlayback !== true || result.durationSeconds !== authored.duration) {
+            throw new Error("prepared source completion has no matching adopted terminal history");
+          }
+          // Do not seek, resume, replace the reader, or reconfigure its input.
+          // The final source result is not another presentation authority.
+        } else {
+          const replayExecution = {
+            contextId: semanticExecution.contextId,
+            callbackSessionId: semanticExecution.callbackSessionId ?? null,
+            continuationGeneration: null,
+          };
+          result = await measureReconciliation("continuation-replay", () => player.reconcileSemanticExecution(replayExecution, {
+            authoringClient: client,
+            loopDurationSeconds,
+          }));
+        }
         if (!isCurrentRun(runToken)) {
           return recordStale(runToken, "after-continuation-replay");
         }
@@ -1173,6 +1244,7 @@ async function runScene() {
           authoringClient: client,
           loopDurationSeconds,
           runPhaseMetrics,
+          runToken,
         });
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
       } else {
@@ -1192,21 +1264,14 @@ async function runScene() {
         supported: result.replaySupported !== false,
         player,
         durationSeconds: loopDurationSeconds,
+        playbackState: result,
       });
       if (authored.duration > 0) {
         playbackDurationSeconds = authored.duration;
       }
-      playbackControls?.sync({
-        ...result,
-        hasAudio: result.hasAudio ?? false,
-        time: result.time,
-        playing: result.playing,
-        durationSeconds: result.hasAudio ? result.durationSeconds : playbackDurationSeconds,
-        canUndoTranslationDrag: result.canUndoTranslationDrag ?? false,
-      });
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
-      await applyExampleInteraction(example);
+      if (result.preparedPlayback !== true) await applyExampleInteraction(example);
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-interaction-config");
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;
@@ -1216,7 +1281,8 @@ async function runScene() {
       adoptRuntimeCanvas(player);
       startMetricsPolling();
 
-      const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
+      const operation = result.preparedPlayback === true ? "Prepared history retained"
+        : result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
       const phase = setPlaybackRuntimeStatus(
         result,
         `${report.metrics.objectCount} objects · ${rendererBackend} ${player.mode} worker`,
@@ -1236,7 +1302,32 @@ async function runScene() {
       if (activeSourceContinuation?.runToken === runToken) {
         activeSourceContinuation = null;
       }
-      discardEarlyContinuationRuntime(earlyContinuation?.attachedPlayer);
+      const retainedPlayer = earlyContinuation?.attachedPlayer;
+      if (authoringFailed && isCurrentRun(runToken) && isPreparedPlayback(retainedPlayer) &&
+          player === retainedPlayer && !playerNeedsRestart && !earlyContinuation.client.terminated) {
+        // A normal source exception leaves adopted history usable. Query the
+        // endpoint rather than inferring readiness from the failed source result.
+        try {
+          const partial = await retainedPlayer.state();
+          if (!isCurrentRun(runToken)) {
+            discardEarlyContinuationRuntime(retainedPlayer);
+            return recordStale(runToken, "after-partial-history");
+          }
+          if (player === retainedPlayer && partial.preparedPlayback === true &&
+              partial.durationSeconds === null) {
+            updatePlaybackControls({ supported: true, player: retainedPlayer,
+              durationSeconds: playbackDurationSeconds, playbackState: partial });
+            previousPreview.showLive();
+            startMetricsPolling();
+            setPlaybackRuntimeStatus(partial, "Partial history retained · source failed");
+            showSceneError(error);
+            return { stale: false, error, retainedPreparedHistory: true };
+          }
+        } catch (observationError) {
+          console.warn("Prepared history is no longer available", observationError);
+        }
+      }
+      discardEarlyContinuationRuntime(retainedPlayer);
       if (!isCurrentRun(runToken)) {
         return recordStale(runToken, "error");
       }
@@ -1471,9 +1562,6 @@ async function updateWorkerMetrics() {
     );
     metricTime.value = `${playbackState.time.toFixed(2)} s`;
     playbackControls?.observe(playbackState);
-    status.dataset.playbackPlaying = String(
-      activeSourceContinuation !== null || playbackState.playing,
-    );
     if (status.dataset.playbackPlaying !== "true") resetPresentationRate();
   } catch (error) {
     if (isCurrentMetricsObservation(observation)) showError(error);
@@ -1520,7 +1608,9 @@ async function updateRendererMetrics(observation) {
       const session = `${observation.runGeneration}:${metrics.mode}:${metrics.rendererRebuilds}:${metrics.gpuGeneration}`;
       const fps = presentationRate.observe(metrics, session);
       const text = fps === null ? "—" : fps.toFixed(1);
-      if (metricFps.value !== text) metricFps.value = text;
+      if (metricFps.value !== text) {
+        metricFps.value = text;
+      }
     } else {
       resetPresentationRate();
     }

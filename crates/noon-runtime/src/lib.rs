@@ -17,6 +17,8 @@ mod execution_slots;
 mod frame;
 mod graph_endpoints;
 mod numeric_text;
+#[cfg(test)]
+mod seek_storage_tests;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
 mod prepared_frame;
 mod spatial_composition;
@@ -32,6 +34,8 @@ mod replay;
 mod signal_timeline;
 mod spatial_index;
 mod translation_drag;
+#[cfg(feature = "prepared-prefix")]
+pub use replay::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReceiver};
 pub use replay::{ReplayError, ReplayLimits, ReplayStats};
 pub use signal_timeline::{
     PreparedSignalTimelineAppend, SignalTimelineAppendError, SignalTimelinePreview,
@@ -894,6 +898,12 @@ impl SceneInstance {
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
+        if matches!(patch, ExecutionPatch::SetClickIndicate { .. }) {
+            // Authored action metadata participates in ordinary execution history,
+            // but changing a binding does not change any rendered frame property.
+            self.compiled.apply_execution_patch(patch)?;
+            return Ok(&self.frame);
+        }
         if matches!(
             patch,
             ExecutionPatch::SetContent { .. }
@@ -1652,7 +1662,9 @@ impl SceneInstance {
     }
 
     fn rebuild_painter_order(&mut self) {
-        self.painter_order = self.compiled.painter_order().to_vec();
+        self.painter_order.clear();
+        self.painter_order
+            .extend_from_slice(self.compiled.painter_order());
         self.painter_order.sort_by(|&a, &b| {
             self.frame.objects[a as usize]
                 .content
@@ -1719,7 +1731,7 @@ impl SceneInstance {
 
     fn seek_unchecked(&mut self, time: f64) {
         self.clear_transient_animations();
-        self.frame = base_frame(&self.compiled, time);
+        reset_base_frame(&self.compiled, &mut self.frame, time);
         self.effective_driver_rows.clear();
         self.translation_drag_rows.clear();
         self.active_family_animation_indices.clear();
@@ -1937,99 +1949,73 @@ fn family_state_at(
 }
 
 fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
-    let appearances = initial_scalar_property(
-        compiled,
-        compiled.objects().len(),
-        Property::Appearance,
-        1.0,
-    );
-    let objects: Vec<_> = compiled
-        .objects()
-        .iter()
-        .enumerate()
-        .map(|(index, object)| FrameObjectState {
-            fill_paint: object.fill_paint.clone(),
-            draw_enabled: object.draw_enabled,
-            effects: object.effects.clone(),
-            z_index: initial_z_index(compiled, index),
-            id: object.id,
-            content: object.content.clone(),
-            text_bounds: object.text_bounds,
-            transform: affine_base_at_time(compiled, index, object.base_transform, time),
-            spatial: spatial_base_at_time(compiled, index, time),
-            style: object.base_style,
-            appearance: appearances[index],
-        })
-        .collect();
-    let mut presences = initial_bool_property(compiled, objects.len(), Property::Presence, true);
-    for (index, object) in compiled.objects().iter().enumerate() {
-        if !object.live {
-            presences[index] = false;
-        }
-    }
-    FrameState {
+    let mut frame = FrameState {
         time,
-        presences,
-        reveals: initial_scalar_property(compiled, objects.len(), Property::Reveal, 1.0),
-        morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
-        render_geometries: vec![None; objects.len()],
-        render_transforms: vec![None; objects.len()],
-        family_animations: vec![None; objects.len()],
-        family_animation_plan_indices: vec![None; objects.len()],
-        objects,
-    }
+        objects: Vec::new(),
+        presences: Vec::new(),
+        reveals: Vec::new(),
+        morphs: Vec::new(),
+        render_geometries: Vec::new(),
+        render_transforms: Vec::new(),
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
+    };
+    reset_base_frame(compiled, &mut frame, time);
+    frame
 }
 
-fn initial_bool_property(
-    compiled: &CompiledScene,
-    object_count: usize,
-    property: Property,
-    default: bool,
-) -> Vec<bool> {
-    let mut values = vec![default; object_count];
-    let mut initialized = vec![false; object_count];
-    for track in compiled
-        .tracks_iter()
-        .filter(|track| track.property == property)
-    {
-        let index = track.object_index as usize;
-        if initialized[index] {
-            continue;
-        }
-        let TrackValues::Bool { from, .. } = &track.values else {
-            unreachable!("compiled bool property must contain bool values");
-        };
-        values[index] = *from;
-        initialized[index] = true;
-    }
-    values
-}
-
-fn initial_scalar_property(
-    compiled: &CompiledScene,
-    object_count: usize,
-    property: Property,
-    default: f32,
-) -> Vec<f32> {
-    let mut values = vec![default; object_count];
-    let mut initialized = vec![false; object_count];
-    for track in compiled
-        .tracks_iter()
-        .filter(|track| track.property == property)
-    {
-        let index = track.object_index as usize;
-        if initialized[index] {
-            continue;
-        }
-        let (TrackValues::Scalar { from, .. } | TrackValues::PreparedMorph { from, .. }) =
-            &track.values
-        else {
-            unreachable!("compiled scalar property must contain scalar values");
-        };
-        values[index] = from.clamp(0.0, 1.0);
-        initialized[index] = true;
-    }
-    values
+/// Reset effective values without discarding explicitly reserved frame storage.
+/// Construction and seek share this initializer; ordinary forward ticks do not
+/// enter it. Indirect row payloads may still allocate, just as on the old reset.
+fn reset_base_frame(compiled: &CompiledScene, frame: &mut FrameState, time: f64) {
+    let count = compiled.objects().len();
+    frame.time = time;
+    frame.objects.clear();
+    frame.objects.extend(
+        compiled
+            .objects()
+            .iter()
+            .enumerate()
+            .map(|(index, object)| FrameObjectState {
+                draw_enabled: object.draw_enabled,
+                fill_paint: object.fill_paint.clone(),
+                effects: object.effects.clone(),
+                z_index: initial_z_index(compiled, index),
+                id: object.id,
+                content: object.content.clone(),
+                text_bounds: object.text_bounds,
+                transform: affine_base_at_time(compiled, index, object.base_transform, time),
+                spatial: spatial_base_at_time(compiled, index, time),
+                style: object.base_style,
+                appearance: initial_channel_scalar(compiled, index, Property::Appearance, 1.0),
+            }),
+    );
+    frame.presences.clear();
+    frame.presences.extend(
+        compiled
+            .objects()
+            .iter()
+            .enumerate()
+            .map(|(index, object)| {
+                object.live && initial_channel_bool(compiled, index, Property::Presence, true)
+            }),
+    );
+    frame.reveals.clear();
+    frame.reveals.extend(
+        (0..count).map(|index| initial_channel_scalar(compiled, index, Property::Reveal, 1.0)),
+    );
+    frame.morphs.clear();
+    frame.morphs.extend(
+        (0..count).map(|index| initial_channel_scalar(compiled, index, Property::Morph, 0.0)),
+    );
+    frame.render_geometries.clear();
+    frame.render_geometries.resize(count, None);
+    frame.render_transforms.clear();
+    frame.render_transforms.resize(count, None);
+    frame.family_animations.clear();
+    frame.family_animations.resize(count, None);
+    frame.family_animation_plan_indices.clear();
+    frame.family_animation_plan_indices.resize(count, None);
 }
 
 const PROPERTY_ORDER: [Property; 23] = [
