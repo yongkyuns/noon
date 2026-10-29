@@ -9,6 +9,7 @@ import { PNG } from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { browserArgs } from './manim-raster-support.mjs';
 import { createRuntimeBuildIdentity } from './build-runtime-identity.mjs';
+import { installWebGpuDeviceCapture } from './webgpu-device-capture.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const {chromium}=playwright;
 const output=process.env.NOON_BROWSER_HDR_ARTIFACTS ?? path.join(root,'ci-artifacts/direct-view-output');
@@ -29,6 +30,58 @@ function reference(time){
  const extraction=Math.max(0,luminance-0.15)/luminance;
  return [...linear.map(x=>Math.round(255*encode((x*(1+extraction*3*phase))/(1+x*(1+extraction*3*phase))))),255];
 }
+async function recoverHdr(page, backend, label) {
+ const before=await page.evaluate(()=>({time:hdr.renderer.time(),revision:String(hdr.renderer.directSceneRevision()),
+  generation:hdr.renderer.gpuGeneration(),frame:JSON.parse(hdr.renderer.debugSelectionFrameJson())}));
+ const original=PNG.sync.read(await page.locator('#scene').screenshot({scale:'css'}));
+ if(backend==='webgpu') {
+  await page.evaluate(()=>{
+   const capture=globalThis.__noonWebGpuDeviceCapture,index=capture?.ownerDeviceIndex;
+   if(index===null||index===undefined||!capture.devices[index]) throw new Error('HDR owner GPUDevice was not captured');
+   hdr.lostIndex=index;capture.devices[index].destroy();
+  });
+  await page.waitForFunction(()=>globalThis.__noonWebGpuDeviceCapture.lost[hdr.lostIndex]!==null);
+ } else {
+  await page.evaluate(()=>{
+   const extension=hdr.surface.getContext('webgl2')?.getExtension('WEBGL_lose_context');
+   if(!extension) throw new Error('real HDR WebGL context loss is unavailable');
+   hdr.loss={lost:0,restored:0,extension};
+   hdr.surface.addEventListener('webglcontextlost',event=>{event.preventDefault();hdr.loss.lost++;},{once:true});
+   hdr.surface.addEventListener('webglcontextrestored',()=>hdr.loss.restored++,{once:true});
+   extension.loseContext();
+  });
+  await page.waitForFunction(()=>hdr.loss.lost===1);
+  await page.evaluate(()=>hdr.loss.extension.restoreContext());
+  await page.waitForFunction(()=>hdr.loss.restored===1);
+ }
+ const after=await page.evaluate(async backend=>{
+  let recovered=false;
+  for(let attempt=0;attempt<100&&!recovered;attempt++) {
+   recovered=backend==='webgpu'?await hdr.renderer.recoverWebGpuDevice():await hdr.renderer.recoverWebGlContext();
+   if(!recovered) await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  if(!recovered) throw new Error('HDR GPU owner did not recover');
+  for(let attempt=0;attempt<100;attempt++) {
+   if(hdr.renderer.render()) return {time:hdr.renderer.time(),revision:String(hdr.renderer.directSceneRevision()),
+    generation:hdr.renderer.gpuGeneration(),frame:JSON.parse(hdr.renderer.debugSelectionFrameJson())};
+   await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  throw new Error('recovered HDR frame did not present');
+ },backend);
+ assert.equal(after.generation,before.generation+1,'replace the actual GPU owner once');
+ assert.equal(after.time,before.time,'GPU recovery cannot advance authored time');
+ assert.equal(after.revision,before.revision,'GPU recovery cannot replace semantic state');
+ assert.deepEqual(after.frame,before.frame,'GPU recovery preserves the complete authored pose');
+ await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+ const bytes=await page.locator('#scene').screenshot({scale:'css'});await writeFile(`${output}/${label}-recovered.png`,bytes);
+ const restored=PNG.sync.read(bytes);
+ assert.equal(restored.width,original.width);assert.equal(restored.height,original.height);
+ assert.deepEqual(restored.data,original.data,'recovered HDR/Bloom pixels are exact');
+ const at=4*(Math.floor(restored.height/2)*restored.width+Math.floor(restored.width/2));
+ const center=[...restored.data.subarray(at,at+4)],expected=reference(before.time);
+ assert.ok(center.every((x,i)=>Math.abs(x-expected[i])<=2),'recovery retains the independent material/Bloom/transfer reference');
+ return {label,before,after,center,expected,pixelsExact:true};
+}
 let browser,server;
 try{
  server=await serveRepository(root,0,{crossOriginIsolated:true});
@@ -36,10 +89,11 @@ try{
   browser=await chromium.launch({headless:true,channel:'chromium',args:browserArgs(backend)});
   const page=await browser.newPage({viewport:{width:800,height:500}});page.setDefaultTimeout(120000);
   if(backend==='webgl') await page.addInitScript(()=>Object.defineProperty(navigator,'gpu',{value:undefined}));
+  else await installWebGpuDeviceCapture(page);
   const errors=[];page.on('pageerror',e=>errors.push(String(e)));
   for(const mode of ['session','program']) {
   if(mode==='program') { await page.evaluate(()=>hdr.renderer.free()); await page.reload(); }
-  const entry={backend,mode,status:'running',frames:[],replay:[]};report.cases.push(entry);
+  const entry={backend,mode,status:'running',frames:[],replay:[],recovery:[]};report.cases.push(entry);
   try{
    await page.goto(server.baseUrl+'/web/execution-worker-smoke.html');
    entry.actual=await page.evaluate(async mode=>{
@@ -47,9 +101,10 @@ try{
     const {default:init,createDirectCameraBloomRenderer,createDirectCameraBloomSessionRenderer}=await import('./pkg/noon_web.js');await init();
     const canvas=document.querySelector('#scene');
     const factory=mode==='session'?createDirectCameraBloomSessionRenderer:createDirectCameraBloomRenderer;
-    const renderer=await factory(canvas.transferControlToOffscreen());
+    const surface=canvas.transferControlToOffscreen();
+    const renderer=await factory(surface);
     const {sampleDirectProgramThrough}=await import('../scripts/direct-program-sample.mjs');
-    globalThis.hdr={renderer,sample:time=>sampleDirectProgramThrough(renderer,time,[0.5,2.5,3,5])};
+    globalThis.hdr={renderer,surface,sample:time=>sampleDirectProgramThrough(renderer,time,[0.5,2.5,3,5])};
     return renderer.rendererBackend();
    },mode);
    assert.equal(entry.actual,backend==='webgpu'?'WebGPU':'WebGL2','actual renderer backend');
@@ -66,6 +121,7 @@ try{
     if(animating) assert.ok(Math.abs(state.time-time)<1e-12,`active authored time ${state.time} != ${time}`);
     else { assert.ok(state.time<=time); assert.deepEqual(reference(state.time),expected,'a sleeping publication must hold the requested authored pose'); }
     images.set(time,png.data);entry.frames.push({time,center,expected,state});
+    if(time===1.5) entry.recovery.push(await recoverHdr(page,backend,`${backend}-${mode}-active`));
    }
    assert.deepEqual(images.get(0),images.get(5),'exact neutral material and Bloom restoration');
    if(mode==='program') {
@@ -90,6 +146,7 @@ try{
    }
    assert.deepEqual(PNG.sync.read(await page.locator('#scene').screenshot({scale:'css'})).data,beforeResize,'same-size restoration is exact');
    entry.resize={rejected,restored:true};
+   entry.recovery.push(await recoverHdr(page,backend,`${backend}-${mode}-neutral`));
    assert.deepEqual(errors,[]);entry.status='passed';
   }catch(error){entry.status='failed';entry.error=String(error.stack??error);throw error;}
   finally{entry.errors=errors;}
