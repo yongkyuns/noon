@@ -1649,20 +1649,22 @@ The finite operator is deliberately specified independently of its WGSL:
    encoded-premultiplied SDR. They require a presentation path without an
    additional sRGB transfer. The separate float output remains linear HDR.
 
-Extraction, horizontal/vertical blur and combination each use a float image;
-resolution uses one unorm image: exactly 36 retained image bytes per pixel,
-excluding source, the 1056-byte uniform, program/binding objects and in-flight
-host frames. The filter queries actual adapter format support, checks device
-limits and validates all parameters/extent/budget before changing coherent
-state. An unsupported float target is a typed rejection, with no silent LDR
-substitute. Each scope belongs to its creating filter/device until cleared.
+A fresh disabled-Bloom scope prepares only combination and display resolution:
+one float image and one unorm image, **12 retained image bytes per pixel**.
+First enabling Bloom adds extraction and horizontal/vertical blur images and
+programs, bringing the image total to **36 bytes per pixel**. These remain warm
+until resize or clear, avoiding allocation churn during animated intensity edits.
+Source images, the 1056-byte uniform, program/binding objects and in-flight host
+frames are excluded. Adapter/device support and parameters/extent/budget are
+validated before changing coherent state; rejection preserves the last output.
+Each scope belongs to its creating filter/device until cleared.
 A clean scope uploads/allocates/encodes nothing. Intensity edits upload 16 bytes
 and encode only combination/resolution; radius edits reuse extraction; source
-or threshold changes invalidate their real dependency closure. Disabled bloom
-defers unused extraction/blur work. Source replacement rebinds two consumers;
-resize replaces five images without recompiling pipelines. Clearing retires
-all scope images/bindings; an abandoned encoder requires explicit invalidation
-before retry. Submission and device recovery remain host responsibilities.
+or threshold changes invalidate their real dependency closure. Disabled Bloom
+defers extraction/blur work. Source replacement rebinds only its consumers;
+resize prepares two images when disabled or five when enabled, reusing programs.
+Clearing retires all scope images/bindings; an abandoned encoder requires explicit
+invalidation before retry. Submission and device recovery remain host responsibilities.
 
 The native GPU qualification uses independent f64 full two-dimensional
 convolution, not the production separable kernel or GPU intermediate readback

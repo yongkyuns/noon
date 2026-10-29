@@ -71,6 +71,86 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("prepared source options validate before posting and require a continuation consumer", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  for (const options of [
+    { preparedPlayback: "yes" },
+    ...[0, -1, NaN, Infinity].map(preparationLookaheadSeconds => ({ preparationLookaheadSeconds })),
+    { preparedPlayback: true },
+  ]) {
+    await assert.rejects(client.run("class Demo(Scene): pass", {}, options),
+      /boolean|positive and finite|continuation consumer/);
+  }
+  assert.equal(worker.messages.length, 0); client.terminate();
+});
+
+test("prepared continuation metadata permits initial pause and prevents source reattachment", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  let registration;
+  const result = client.run("prepared source", {}, { preparedPlayback: true,
+    preparationLookaheadSeconds: 0.75, onSemanticContinuation(value) { registration = value; } });
+  await Promise.resolve();
+  assert.equal(worker.messages[0].preparedPlayback, true);
+  assert.equal(worker.messages[0].preparationLookaheadSeconds, 0.75);
+  const descriptor = { context_id: "prepared", continuation_generation: 3, prepared_playback: true };
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0, generation: 3, duration: 1, semanticExecution: descriptor,
+  }));
+  await Promise.resolve();
+  assert.equal(registration.semanticExecution.preparedPlayback, true);
+  const control = new MessageChannel(), render = new MessageChannel();
+  const options = { transportMode: "transferable", sharedSlotCapacity: 1024,
+    loopDurationSeconds: 1, session: 7, continuationGeneration: 3, initiallyPaused: true };
+  try {
+    const attached = client.attachSemanticExecution("prepared", control.port1, render.port1, options);
+    await Promise.resolve();
+    const request = worker.messages.at(-1);
+    assert.equal(request.initiallyPaused, true);
+    assert.equal(request.continuationRunRequestId, 0);
+    assert.equal("preparedPlayback" in request, false, "source registration owns preparation mode");
+    worker.emit("message", workerMessage("semantic_execution_attached", { requestId: request.requestId }));
+    await attached;
+    for (const override of [{ replaceExistingEndpoint: true }, { continuationGeneration: null },
+      { callbackSessionId: 2 }, { pacing: "external_samples" }]) {
+      await assert.rejects(client.attachSemanticExecution("prepared", control.port1, render.port1,
+        { ...options, ...override }), /reattach|replace|without Python callbacks/);
+    }
+    assert.equal(worker.messages.length, 2);
+    worker.emit("message", workerMessage("result", { requestId: 0,
+      resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: descriptor, duration: 2 }) }));
+    assert.equal((await result).semanticExecution.preparedPlayback, true);
+  } finally {
+    control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); client.terminate();
+  }
+});
+
+test("preparation metadata cannot cross a different source run mode", async () => {
+  for (const preparedPlayback of [false, true]) {
+    const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+    worker.emit("message", workerMessage("ready")); await client.ready();
+    const result = client.run("source", {}, { preparedPlayback, onSemanticContinuation() {} });
+    await Promise.resolve();
+    worker.emit("message", workerMessage("semantic_continuation_registered", {
+      requestId: 0, generation: 1, duration: 1,
+      semanticExecution: { context_id: "context", continuation_generation: 1, prepared_playback: !preparedPlayback },
+    }));
+    await assert.rejects(result, /preparation mode/);
+    assert.equal(client.terminated, true);
+  }
+});
+
+test("prepared descriptors retain continuation identity and reject required callbacks", () => {
+  const descriptor = { context_id: "context", continuation_generation: 1, prepared_playback: true };
+  assert.deepEqual(validateSemanticExecutionDescriptor(descriptor), {
+    contextId: "context", continuationGeneration: 1, preparedPlayback: true,
+  });
+  for (const change of [{ prepared_playback: "true" }, { continuation_generation: undefined }, { callback_session_id: 4 }]) {
+    assert.throws(() => validateSemanticExecutionDescriptor({ ...descriptor, ...change }), /boolean|source continuation/);
+  }
+});
+
 test("ready exposes a validated immutable build identity across the worker boundary", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);

@@ -144,6 +144,7 @@ export class FakeSemanticAuthoringClient {
       envelope("noon.engine", "ready", {
         transportMode: options.transportMode,
         semantic: true,
+        ...(this.preparedPlayback ? { preparedPlayback: true } : {}),
       }),
     );
     return { type: "semantic_execution_attached", contextId };

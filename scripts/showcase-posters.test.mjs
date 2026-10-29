@@ -15,20 +15,28 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  const existingEntries = manifest.entries.filter(entry =>
-    !["showcase-cuda-transpose", "showcase-background-music"].includes(entry.id));
-  assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
-    existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
-  assert.ok(evidence.posters.length === existingEntries.length ||
-    evidence.posters.length === existingEntries.length + 1,
-    "capture evidence must be the original batch or a fully refreshed batch");
-  for (const [index, entry] of existingEntries.entries()) {
-    assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
-  }
-  if (evidence.posters.length > existingEntries.length) {
-    const cuda = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
-    assertPoster(cuda, evidence.posters[existingEntries.length],
-      await read(cuda.path), await read(cuda.thumbnail));
+  for (const entry of manifest.entries) {
+    // CUDA has a separate fidelity contract, checked below.
+    if (entry.id === "showcase-cuda-transpose") continue;
+    const source = await read(entry.path), png = await read(entry.thumbnail);
+    const sha = bytes => createHash("sha256").update(bytes).digest("hex");
+    const candidates = [evidence];
+    try {
+      candidates.unshift(JSON.parse(await read(`thumbnails/showcase/${entry.id}-evidence.json`)));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    // A targeted refresh and a later full refresh may supersede one another.
+    // Select evidence for the current bytes, then enforce its complete contract.
+    const capture = candidates.find(capture => capture.posters.some(record =>
+      record.id === entry.id && record.sourceSha256 === sha(source) && record.image.pngSha256 === sha(png)));
+    assert.ok(capture, `${entry.id}: missing current source/image capture`);
+    assert.equal(capture.schema, 1);
+    assert.equal(capture.publication, "captured-preview");
+    assert.match(capture.captureRevision, /^[a-f0-9]{40}$/);
+    assert.equal(capture.captureRevision, capture.runtimeBuildIdentity.sourceRevision);
+    const record = capture.posters.find(record => record.id === entry.id);
+    assertRetainedPoster(entry, record, source, png, capture.runtimeBuildIdentity);
   }
 });
 

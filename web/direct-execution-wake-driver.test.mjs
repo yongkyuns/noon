@@ -205,3 +205,28 @@ test("timer and idle directives cancel RAF and a refreshed timer deadline replac
   assert.deepEqual(renderer.advances, [1_040]);
   assert.equal(scheduler.timers.size, 0);
 });
+
+test("optional preparation demand observes actual advances and explicit controls, never idle polling", () => {
+  const scheduler = fakeScheduler(); let demands = 0;
+  const renderer = fakeRenderer({ presentNow: true, cadence: "timer", delayMs: 250 }, () => ({ presentNow: true, cadence: "idle", delayMs: null }));
+  const driver = createDirectExecutionWakeDriver(renderer, { ...scheduler.options, onDemand() { demands++; } });
+  assert.equal(demands, 0, "initial presentation is not a source step");
+  const [handle, timer] = [...scheduler.timers.entries()][0];
+  scheduler.timers.delete(handle); scheduler.setNow(1250); timer.callback();
+  assert.equal(demands, 1); assert.equal(driver.stats().idle, true);
+  assert.equal(scheduler.timers.size, 0); assert.equal(scheduler.animationFrames.size, 0);
+  driver.wake(); assert.equal(demands, 2);
+  assert.equal(scheduler.timers.size, 0); assert.equal(scheduler.animationFrames.size, 0);
+  driver.stop(); driver.wake(); assert.equal(demands, 2);
+});
+
+test("continuous playback requests preparation without adding a second frame loop", () => {
+  const scheduler = fakeScheduler(); let demands = 0;
+  const renderer = fakeRenderer({ presentNow: true, cadence: "animation-frame", delayMs: null });
+  const driver = createDirectExecutionWakeDriver(renderer, { ...scheduler.options, onDemand() { demands++; } });
+  const [handle, callback] = [...scheduler.animationFrames.entries()][0];
+  scheduler.animationFrames.delete(handle); scheduler.setNow(1100); callback(1100);
+  assert.equal(demands, 1); assert.equal(scheduler.animationFrames.size, 1);
+  assert.equal(scheduler.timers.size, 0);
+  driver.stop();
+});

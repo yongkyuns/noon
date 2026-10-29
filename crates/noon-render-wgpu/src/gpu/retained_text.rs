@@ -1714,15 +1714,15 @@ impl RetainedFramePreparer {
                 device.limits().max_texture_dimension_2d,
             )
             .map_err(RetainedPrepareError::Image)?;
-        // A new/recovering consumer can receive an otherwise empty runtime
-        // delta. Its image draw index must reset with the image rows, using the
-        // staged proof rather than assuming the source's delta was initial.
+        // Cold or failed image preparation rebuilds residency even when the
+        // runtime delta is empty or sparse. Rebuild draw eligibility from that
+        // same decision; consumed producer dirtiness is not a renderer baseline.
+        // Successful warm preparation keeps the ordinary sparse path.
         let reset_changes = rows.reset.then(FrameChanges::all);
-        let eligibility =
-            self.stage_image_draw_eligibility(frame, reset_changes.as_ref().unwrap_or(changes));
+        let eligibility_changes = reset_changes.as_ref().unwrap_or(changes);
         Ok(PreparedImagePublication {
             rows,
-            eligibility,
+            eligibility: self.stage_image_draw_eligibility(frame, eligibility_changes),
             object_count: frame.objects.len(),
         })
     }

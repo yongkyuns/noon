@@ -12,7 +12,7 @@ fn present(f: &mut Fixture) {
     let frame = f
         .host
         .capture(
-            f.execution.session(),
+            &f.execution,
             f.execution.session().inspection_camera().unwrap(),
         )
         .unwrap();
@@ -99,7 +99,7 @@ fn direct_inspection_burst_does_not_relabel_or_queue_unpresented_samples() {
     assert_eq!(f.execution.session().inspection_view_revision(), revision);
     assert_eq!(f.execution.session().inspection_camera().unwrap(), camera);
     present(&mut f);
-    assert!(!f.host.needs_refresh(f.execution.session()));
+    assert!(!f.host.needs_refresh(&f.execution));
     assert!(f.execution.session().wake_state().is_quiescent());
 }
 
@@ -123,7 +123,7 @@ fn direct_inspection_aba_and_old_surface_geometry_do_not_authorize_zoom() {
     let frame = f
         .host
         .capture(
-            f.execution.session(),
+            &f.execution,
             f.execution.session().inspection_camera().unwrap(),
         )
         .unwrap();
@@ -223,10 +223,7 @@ fn direct_inspection_and_real_indicate_restore_independently() {
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
     let frame = host
-        .capture(
-            execution.session(),
-            execution.session().inspection_camera().unwrap(),
-        )
+        .capture(&execution, execution.session().inspection_camera().unwrap())
         .unwrap();
     host.did_present(frame);
     assert_eq!(

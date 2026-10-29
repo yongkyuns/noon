@@ -393,6 +393,21 @@ pub(crate) struct TransportTextDependencyClosure {
 }
 
 impl RetainedResourceBundle {
+    /// Valid bootstrap for a renderer whose selected resources arrive with its
+    /// first retained publication. It carries no speculative future resources.
+    pub fn empty() -> Self {
+        Self {
+            channel: RETAINED_RESOURCE_TRANSPORT_CHANNEL.to_owned(),
+            protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,
+            composed_sources: Vec::new(),
+            images: Vec::new(),
+            texts: Vec::new(),
+            geometries: Vec::new(),
+            fonts: Vec::new(),
+            render_geometry_resources: None,
+        }
+    }
+
     pub(crate) fn inventory(&self) -> RetainedResourceInventory {
         RetainedResourceInventory {
             composed_sources: self

@@ -78,6 +78,11 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
   }
   let phase = "setup";
   const events = [];
+  // Python/Emscripten can print a fatal explanation to stdout or a warning
+  // before an opaque WASM abort. Keep a separate finite tail so verbose output
+  // cannot evict lifecycle evidence. Never resolve console arguments or RPCs.
+  const consoleMessages = [];
+  let consoleMessageCount = 0;
   const record = (kind, facts = {}) => {
     events.push({ atMs: now(), phase, kind, ...facts });
     if (events.length > maxEvents) events.shift();
@@ -99,6 +104,18 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     on(context, "close", () => record("context-close"));
     on(page, "crash", () => record("page-crash"));
     on(page, "close", () => record("page-close"));
+    on(page, "console", message => {
+      const text = message.text();
+      const location = message.location();
+      consoleMessageCount++;
+      consoleMessages.push({
+        atMs: now(), phase, type: short(message.type(), 32),
+        text: short(text, 2048), textTruncated: text.length > 2048,
+        url: short(location.url, 500),
+        lineNumber: location.lineNumber, columnNumber: location.columnNumber,
+      });
+      if (consoleMessages.length > maxEvents) consoleMessages.shift();
+    });
     on(context, "requestfailed", request => record("request-failed", {
       url: short(request.url(), 500), error: short(request.failure()?.errorText),
     }));
@@ -126,6 +143,8 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
   };
   return Object.freeze({ setPhase, record, attach, snapshot: () => ({
     phase, events: events.map(event => ({ ...event })),
+    consoleMessageCount, consoleMessagesOmitted: consoleMessageCount - consoleMessages.length,
+    consoleMessages: consoleMessages.map(message => ({ ...message })),
   }) });
 }
 
