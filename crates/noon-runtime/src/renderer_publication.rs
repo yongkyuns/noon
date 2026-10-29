@@ -306,10 +306,9 @@ impl<'a> RendererPublication<'a> {
             .unwrap_or_default()
     }
 
-    pub(crate) fn with_view_color_profiles(
-        mut self,
-        profiles: &'a dyn ViewColorProfileLookup,
-    ) -> Self {
+    /// Borrow static camera metadata from the publishing execution projection,
+    /// including validated installed data at a genuine transport boundary.
+    pub fn with_view_color_profiles(mut self, profiles: &'a dyn ViewColorProfileLookup) -> Self {
         self.view_color_profiles = Some(profiles);
         self
     }

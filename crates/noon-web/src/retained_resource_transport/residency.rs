@@ -270,6 +270,7 @@ mod tests {
             generation: 0,
         };
         let delta = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
             protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 1,

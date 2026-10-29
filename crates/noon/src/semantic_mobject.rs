@@ -1526,6 +1526,7 @@ fn manim_style(color: Color) -> SemanticStyle {
         // Preserve Manim's public AUTO value; Cairo resolves its untouched default to butt.
         stroke_cap: StrokeCap::Auto,
         object_opacity: 1.0,
+        emission: noon_core::Emission::NONE,
     }
 }
 

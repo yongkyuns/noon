@@ -144,7 +144,7 @@ fn primitive_capture(
         .unwrap(),
     );
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     renderer.upload(device, queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer.encode(

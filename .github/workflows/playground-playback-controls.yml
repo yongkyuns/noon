@@ -27,6 +27,8 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/direct-view-output-qualification.mjs"
+      - "scripts/worker-view-output-qualification.mjs"
       - "scripts/prepared-canvas-qualification.mjs"
       - "scripts/prepared-source-qualification.mjs"
       - "scripts/prepared-python-qualification.mjs"
@@ -66,6 +68,8 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/direct-view-output-qualification.mjs"
+      - "scripts/worker-view-output-qualification.mjs"
       - "scripts/prepared-canvas-qualification.mjs"
       - "scripts/prepared-source-qualification.mjs"
       - "scripts/prepared-python-qualification.mjs"
@@ -152,6 +156,8 @@ jobs:
       - name: Qualify actual DOM samples and paused click-selection pixels
         run: |
           node scripts/shader-time-qualification.mjs
+          node scripts/direct-view-output-qualification.mjs
+          node scripts/worker-view-output-qualification.mjs
           node --test scripts/pointer-selection-raster-contract.test.mjs
           node scripts/browser-pointer-input-smoke.mjs
           node scripts/pointer-selection-qualification.mjs
@@ -191,6 +197,8 @@ jobs:
           name: playground-playback-controls
           path: |
             ci-artifacts/shader-time
+            ci-artifacts/direct-view-output
+            ci-artifacts/worker-view-output
             browser-smoke-artifacts/pointer-dom
             browser-smoke-artifacts/pointer-selection
             browser-smoke-artifacts/pointer-selection-direct

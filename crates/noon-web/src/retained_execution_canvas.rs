@@ -132,6 +132,7 @@ mod wasm {
         AnalyticOverlay, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
         PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState, UploadWrite,
     };
+    use noon_render_wgpu::{AuthoredViewOutput, OutputTransfer};
     use noon_runtime::FrameChanges;
     use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
@@ -200,6 +201,7 @@ mod wasm {
         queue: wgpu::Queue,
         backend: wgpu::Backend,
         config: wgpu::SurfaceConfiguration,
+        view_output: AuthoredViewOutput,
     }
 
     struct RetainedGpuState {
@@ -226,6 +228,8 @@ mod wasm {
         canvas: OffscreenCanvas,
         config: wgpu::SurfaceConfiguration,
         drawable: bool,
+        view_output: AuthoredViewOutput,
+        working_profile: noon_core::ViewColorProfile,
         mirror: InstalledRetainedExecutionMirror,
         pending_frame: bool,
         pending_changes: FrameChanges,
@@ -302,6 +306,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
             } = initialized;
             install_wgpu_error_handler(
                 &device,
@@ -323,6 +328,8 @@ mod wasm {
             self.queue = queue;
             self.backend = backend;
             self.config = config;
+            self.view_output = view_output;
+            self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.preparer = preparer;
             self.renderer = renderer;
             self.effect_program_task.cancel();
@@ -365,6 +372,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
             } = initialize_gpu(&canvas, width, height, false).await?;
             if backend == wgpu::Backend::Gl {
                 ensure_webgl_context_available(&canvas)?;
@@ -398,6 +406,8 @@ mod wasm {
                 canvas,
                 config,
                 drawable: true,
+                view_output,
+                working_profile: noon_core::ViewColorProfile::Compatibility,
                 mirror,
                 pending_frame: false,
                 pending_changes: FrameChanges::default(),
@@ -511,6 +521,24 @@ mod wasm {
                 None
             };
 
+            if delta
+                .retained
+                .primary_view
+                .is_some_and(|view| view.color_profile == noon_core::ViewColorProfile::LinearHdr)
+            {
+                if !self.view_output.supports_hdr() {
+                    return Err(js_message(
+                        "authored HDR requires float render/blend support",
+                    ));
+                }
+                if self.drawable {
+                    AuthoredViewOutput::validate_extent(
+                        &self.device,
+                        [self.config.width, self.config.height],
+                    )
+                    .map_err(js_error)?;
+                }
+            }
             // Mark only validated, accepted source glow publications. Once seen,
             // keep the path active long enough to retire removed GPU scopes.
             let received_glow = delta.retained.objects.iter().any(|row| {
@@ -868,12 +896,43 @@ mod wasm {
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());
+            let profile = {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                self.view_output
+                    .prepare(
+                        &self.device,
+                        &publication,
+                        !self.mirror.inset_2d_views().is_empty(),
+                        [self.config.width, self.config.height],
+                    )
+                    .map_err(js_error)?
+            };
+            if profile != self.working_profile {
+                let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                    wgpu::TextureFormat::Rgba16Float
+                } else {
+                    self.config.format
+                };
+                let gpu =
+                    build_retained_gpu_state(&self.mirror, &self.device, &self.queue, format)?;
+                self.preparer = gpu.preparer;
+                self.renderer = gpu.renderer;
+                self.text_gpu = gpu.text_gpu;
+                self.preloaded_geometry_count = gpu.preloaded_geometry_count;
+                self.preload_bytes_uploaded = gpu.preload_bytes_uploaded;
+                self.working_profile = profile;
+                self.pending_changes = FrameChanges::all();
+                self.update_camera()?;
+            }
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
             // Worker transport has already resolved and validated this frame and
             // its resource handles. The borrowed renderer publication uses those
             // same objects; no JS effects state or separate renderer is introduced.
-            let glow_publication = if self.glow_transport_seen {
+            let glow_publication = if self.glow_transport_seen || self.view_output.is_hdr() {
                 Some(
                     self.mirror
                         .renderer_publication(&self.pending_changes)
@@ -1060,21 +1119,43 @@ mod wasm {
                     )
                     .map_err(js_error)?;
             }
+            let no_overlay = OverlayGpuState::default();
             let draw = self
                 .renderer
                 .encode_retained_with_transient_presentations_and_overlay(
                     &mut encoder,
-                    &view,
+                    self.view_output.scene_view(&view),
                     InteractiveRetainedFrame {
                         prepared: &prepared,
                         text: &self.text_gpu,
                         transient: Some(&transient),
-                        overlay: &self.selection_overlay_gpu,
+                        overlay: if self.view_output.is_hdr() {
+                            &no_overlay
+                        } else {
+                            &self.selection_overlay_gpu
+                        },
                     },
                     CLEAR_COLOR,
                     None,
                 )
                 .map_err(js_error)?;
+            if let Some(publication) = glow_publication.as_ref() {
+                let work = self
+                    .view_output
+                    .resolve(
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        &mut self.renderer,
+                        publication,
+                        f64::from(self.camera_height),
+                        &self.selection_overlay_gpu,
+                        &surface_texture.texture,
+                    )
+                    .map_err(js_error)?;
+                self.last_bytes_uploaded =
+                    self.last_bytes_uploaded.saturating_add(work.bytes_uploaded);
+            }
             let command_buffer = encoder.finish();
             if let (Some(started), Some(timings)) = (encode_started, substage_timings.as_mut()) {
                 timings.encode_cpu_wall_ms = performance_now_ms() - started;
@@ -1162,6 +1243,10 @@ mod wasm {
             // dimensions are already current.
             if self.canvas.width() == width && self.canvas.height() == height {
                 return Ok(());
+            }
+            if self.view_output.is_hdr() && width > 0 && height > 0 {
+                AuthoredViewOutput::validate_extent(&self.device, [width, height])
+                    .map_err(js_error)?;
             }
             self.canvas.set_width(width);
             self.canvas.set_height(height);
@@ -1462,6 +1547,16 @@ mod wasm {
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| js_message("GPU adapter cannot present retained execution"))?;
         surface.configure(&device, &config);
+        let view_output = AuthoredViewOutput::new(
+            &adapter,
+            &device,
+            config.format,
+            if backend == wgpu::Backend::Gl {
+                OutputTransfer::BrowserWebGlSrgb
+            } else {
+                OutputTransfer::Direct
+            },
+        );
         Ok(InitializedGpu {
             instance,
             surface,
@@ -1469,6 +1564,7 @@ mod wasm {
             queue,
             backend,
             config,
+            view_output,
         })
     }
 

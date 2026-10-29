@@ -1,7 +1,7 @@
 use noon_compile::TransformGeometryPlan;
 use noon_core::{
-    mapped_continuous_progress, CompositionTimeMap, ObjectContentRef, Property, TrackTiming,
-    TrackValues,
+    mapped_continuous_progress, mapped_continuous_progress_f64, CompositionTimeMap,
+    ObjectContentRef, Property, TrackTiming, TrackValues,
 };
 
 use crate::frame::FrameRowState;
@@ -107,9 +107,12 @@ impl DerivedDisplayAnimationPlan {
             let base_content = occurrence.base.content.clone();
             let mut row = row_from_derived(&occurrence.base);
             for track in &occurrence.tracks {
-                let Some(progress) =
-                    mapped_continuous_progress(track.timing, &track.time_map, time)
-                else {
+                let progress = if track.property == Property::Emission {
+                    mapped_continuous_progress_f64(track.timing, &track.time_map, time)
+                } else {
+                    mapped_continuous_progress(track.timing, &track.time_map, time).map(f64::from)
+                };
+                let Some(progress) = progress else {
                     continue;
                 };
                 apply_derived_track(
@@ -270,10 +273,22 @@ fn apply_derived_track(
     row: &mut FrameRowState,
     base_content: &ObjectContentRef,
     track: &DerivedDisplayAnimationTrack,
-    progress: f32,
+    progress: f64,
     occurrence_index: u32,
 ) -> Result<(), DerivedDisplayEvaluationError> {
     match track.property {
+        Property::Emission => {
+            let TrackValues::Emission { from, to } = track.values else {
+                return Err(DerivedDisplayEvaluationError::InvalidValueKind {
+                    occurrence_index,
+                    property: track.property,
+                });
+            };
+            row.style.emission = from
+                .interpolate(to, progress)
+                .expect("finite material progress");
+            Ok(())
+        }
         Property::Morph => {
             let plan = track.transform_geometry_plan.as_ref().ok_or(
                 DerivedDisplayEvaluationError::MissingGeometryPlan {
@@ -285,7 +300,7 @@ fn apply_derived_track(
                 &mut row.as_mut(base_content),
                 &track.values,
                 plan,
-                progress,
+                progress as f32,
             )
             .ok_or(DerivedDisplayEvaluationError::InvalidValueKind {
                 occurrence_index,
@@ -302,7 +317,7 @@ fn apply_derived_track(
         | Property::Opacity
         | Property::Appearance
         | Property::Reveal => {
-            let value = crate::interpolate_track_values(&track.values, progress).ok_or(
+            let value = crate::interpolate_track_values(&track.values, progress as f32).ok_or(
                 DerivedDisplayEvaluationError::InvalidValueKind {
                     occurrence_index,
                     property: track.property,

@@ -6,7 +6,7 @@ use noon_core::Vec2;
 
 use super::{GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem};
 
-const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = [
+const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
@@ -36,6 +36,11 @@ const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = [
         format: wgpu::VertexFormat::Float32x4,
         offset: 40,
         shader_location: 5,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 56,
+        shader_location: 6,
     },
 ];
 
@@ -935,6 +940,7 @@ mod tests {
 
     fn test_quad() -> GlyphQuadInstance {
         GlyphQuadInstance {
+            emission: 0.0,
             origin: [0.0, 0.0],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -993,6 +999,7 @@ mod tests {
             panic!("visible mask glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {
+            emission: 0.0,
             origin: [-0.5, -0.5],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -1077,6 +1084,7 @@ mod tests {
         assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 2);
 
         let quads = [GlyphQuadInstance {
+            emission: 0.0,
             origin: [-0.5, -0.5],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -1151,6 +1159,7 @@ mod tests {
             panic!("visible glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {
+            emission: 0.0,
             origin: [0.0, 0.0],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],

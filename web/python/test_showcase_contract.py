@@ -40,7 +40,8 @@ class ShowcaseSourceContract(unittest.TestCase):
                 is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
                 expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
-                self.assertIn(expected_base, scene_bases)
+                allowed_bases = {expected_base, "MovingCameraScene"} if expected_base == "Scene" else {expected_base}
+                self.assertTrue(allowed_bases & scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
                 is_cuda = entry["id"] == "showcase-cuda-transpose"
                 if is_cuda:

@@ -32,4 +32,7 @@ name = "background_music_lesson"
 required-features = ["audio"]
 
 [dev-dependencies]
+noon-export = { path = "../noon-export" }
+serde_json = "1"
+half = "2"
 wgpu = { version = "30.0.1", default-features = false, features = ["noop"] }

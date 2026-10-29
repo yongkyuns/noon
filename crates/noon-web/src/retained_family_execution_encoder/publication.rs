@@ -114,6 +114,14 @@ impl RetainedFamilyExecutionDeltaEncoder {
             .map_err(|error| error.to_string())?;
             delta
         };
+        delta.retained.primary_view = publication.primary_view().and_then(|camera| {
+            publication.view_color_profile(camera).map(|color_profile| {
+                crate::TransportPrimaryView {
+                    camera,
+                    color_profile,
+                }
+            })
+        });
         debug_assert_eq!(delta.retained.publication_context, publication_context);
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())

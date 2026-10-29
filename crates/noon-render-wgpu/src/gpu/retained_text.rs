@@ -608,6 +608,7 @@ fn sorted_ranges_overlap(ranges: &[std::ops::Range<u32>], target: &std::ops::Ran
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedPrepareError {
+    ColorProfile(crate::ColorProfileError),
     Image(RasterImagePrepareError),
     StalePublication {
         received: PublicationContext,
@@ -629,6 +630,7 @@ pub enum RetainedPrepareError {
 impl std::fmt::Display for RetainedPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ColorProfile(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
             Self::StalePublication { received, applied } => write!(
                 formatter,
@@ -674,6 +676,12 @@ impl std::error::Error for RetainedPrepareError {}
 impl From<TextPrepareError> for RetainedPrepareError {
     fn from(value: TextPrepareError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<crate::ColorProfileError> for RetainedPrepareError {
+    fn from(error: crate::ColorProfileError) -> Self {
+        Self::ColorProfile(error)
     }
 }
 
@@ -1084,6 +1092,7 @@ struct ImageDrawEligibilityPreparation {
 /// emitted painter item keeps the owning retained `ObjectId`.
 pub struct RetainedFramePreparer {
     color_profile: noon_core::ViewColorProfile,
+    emission_profile_prepared: bool,
     images: RasterImageFramePreparer,
     geometry: FramePreparer,
     text: RetainedTextQuadPreparer,
@@ -1140,6 +1149,7 @@ impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
             color_profile: noon_core::ViewColorProfile::Compatibility,
+            emission_profile_prepared: false,
             images: RasterImageFramePreparer::default(),
             geometry: FramePreparer::for_individual_path_draws(),
             text: RetainedTextQuadPreparer::default(),
@@ -1404,6 +1414,28 @@ impl RetainedFramePreparer {
         self.prepare_with_changes(device, frame, &changes, texts, fonts, geometries, metrics)
     }
 
+    fn admit_color_profile(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        profile: noon_core::ViewColorProfile,
+    ) -> Result<(), crate::ColorProfileError> {
+        let changed = self.color_profile != profile;
+        crate::validate_color_profile(
+            frame,
+            changes,
+            profile,
+            changed || !self.emission_profile_prepared,
+        )?;
+        if changed {
+            self.prepared_generation_ready = false;
+            self.scratch_ready = false;
+        }
+        self.emission_profile_prepared = true;
+        self.color_profile = profile;
+        Ok(())
+    }
+
     /// Prepare one coherent runtime publication and retain its applied revision
     /// metadata for later stale-publication rejection.
     pub fn prepare_publication<'a>(
@@ -1420,7 +1452,11 @@ impl RetainedFramePreparer {
             }
         }
 
-        self.color_profile = publication.color_profile();
+        self.admit_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        )?;
         if previous.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1459,7 +1495,11 @@ impl RetainedFramePreparer {
             }
         }
         validate_visible_object_indices(publication.frame(), visible_object_indices)?;
-        self.color_profile = publication.color_profile();
+        self.admit_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        )?;
         if self.last_applied_publication.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1506,7 +1546,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        self.color_profile = noon_core::ViewColorProfile::Compatibility;
+        self.admit_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)?;
         self.prepare_with_changes_inner(
             device, frame, changes, texts, fonts, geometries, metrics, None, None,
         )
@@ -1526,7 +1566,7 @@ impl RetainedFramePreparer {
         images: &dyn RasterImageResourceLookup,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        self.color_profile = noon_core::ViewColorProfile::Compatibility;
+        self.admit_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)?;
         self.prepare_with_changes_inner(
             device,
             frame,
@@ -2990,6 +3030,7 @@ impl RetainedFramePreparer {
                     stroke_join: StrokeJoin::Round,
                     stroke_cap: StrokeCap::Round,
                     opacity: object_style.opacity,
+                    emission: object_style.emission,
                 },
                 appearance,
                 reveal,
@@ -3015,6 +3056,7 @@ impl RetainedFramePreparer {
                         stroke_join: StrokeJoin::Round,
                         stroke_cap: StrokeCap::Round,
                         opacity: object_style.opacity,
+                        emission: object_style.emission,
                     },
                     appearance,
                     reveal,
@@ -3044,6 +3086,7 @@ pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVecto
         stroke_join: vector.style.stroke_join,
         stroke_cap: vector.style.stroke_cap,
         opacity: object_style.opacity,
+        emission: object_style.emission,
     }
 }
 
@@ -4571,6 +4614,7 @@ mod tests {
             object_opacity: 1.0,
         }];
         let source_quad = GlyphQuadInstance {
+            emission: 0.0,
             origin: [1.0, 2.0],
             axis_x: [3.0, 0.0],
             axis_y: [0.0, 4.0],
@@ -4579,6 +4623,7 @@ mod tests {
             color: [1.0; 4],
         };
         let mut destination_quads = vec![GlyphQuadInstance {
+            emission: 0.0,
             origin: [0.0; 2],
             axis_x: [0.0; 2],
             axis_y: [0.0; 2],
@@ -6173,7 +6218,7 @@ mod tests {
         // for painter interleaving. Construct the compacted geometry state that
         // this defensive boundary protects without changing that policy.
         let mut geometry_preparer = FramePreparer::new();
-        let geometry = geometry_preparer.prepare(&frame);
+        let geometry = geometry_preparer.prepare(&frame).unwrap();
         let text_preparer = RetainedTextQuadPreparer::default();
         let mut applied_publication = None;
         let mut images = RasterImageFramePreparer::default();

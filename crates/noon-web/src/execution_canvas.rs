@@ -31,8 +31,8 @@ mod wasm {
     };
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
-        AnalyticOverlay, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
-        RetainedFramePreparer, RetainedTextGpuState,
+        AnalyticOverlay, AuthoredViewOutput, Camera2D, GpuRenderer, InteractiveRetainedFrame,
+        OverlayGpuState, RetainedFramePreparer, RetainedTextGpuState,
     };
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
@@ -83,6 +83,7 @@ mod wasm {
         queue: wgpu::Queue,
         backend: wgpu::Backend,
         config: wgpu::SurfaceConfiguration,
+        view_output: AuthoredViewOutput,
         timestamp_query_supported: bool,
     }
 
@@ -1031,6 +1032,8 @@ mod wasm {
         renderer: GpuRenderer,
         effect_program_task: EffectProgramTask,
         prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
+        view_output: AuthoredViewOutput,
+        working_profile: noon_core::ViewColorProfile,
         direct_text_gpu: RetainedTextGpuState,
         timestamp_query_supported: bool,
         timestamp_profiler: Option<GpuTimestampProfiler>,
@@ -1085,6 +1088,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
                 timestamp_query_supported,
             } = initialize_gpu(&self.canvas, self.config.width, self.config.height).await?;
             if backend != wgpu::Backend::Gl {
@@ -1119,6 +1123,8 @@ mod wasm {
             self.renderer = renderer;
             self.effect_program_task.cancel();
             self.prepared_effect_modules = None;
+            self.view_output = view_output;
+            self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
             self.selection_overlay = OverlayGpuState::default();
@@ -1162,6 +1168,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
                 timestamp_query_supported,
             } = initialize_webgpu(&self.canvas, self.config.width, self.config.height)
                 .await
@@ -1204,6 +1211,8 @@ mod wasm {
             self.renderer = renderer;
             self.effect_program_task.cancel();
             self.prepared_effect_modules = None;
+            self.view_output = view_output;
+            self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
             self.selection_overlay = OverlayGpuState::default();
@@ -1321,6 +1330,13 @@ mod wasm {
             // Assigning canvas dimensions clears its contents even when unchanged.
             if self.canvas.width() == width && self.canvas.height() == height {
                 return Ok(());
+            }
+            if width > 0
+                && height > 0
+                && self.working_profile == noon_core::ViewColorProfile::LinearHdr
+            {
+                AuthoredViewOutput::validate_extent(&self.device, [width, height])
+                    .map_err(js_error)?;
             }
             self.invalidate_pointer_surface()?;
             self.surface_frame_pending = true;
@@ -2694,6 +2710,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
                 timestamp_query_supported,
             } = initialize_gpu(&canvas, width, height).await?;
             let gpu_generation = 1;
@@ -2726,6 +2743,8 @@ mod wasm {
                 renderer,
                 effect_program_task: EffectProgramTask::default(),
                 prepared_effect_modules: None,
+                view_output,
+                working_profile: noon_core::ViewColorProfile::Compatibility,
                 direct_text_gpu,
                 timestamp_query_supported,
                 timestamp_profiler: None,
@@ -2825,6 +2844,28 @@ mod wasm {
                     .filter_map(noon_core::Inset2DViewState::camera_bounds),
             );
             let visibility = direct.query_viewports(&view_bounds);
+            let publication = direct.take_renderer_publication();
+            if publication.context() != expected {
+                return Err(js_message(
+                    "intermediate direct endpoint changed during retained preparation",
+                ));
+            }
+            prepare_working_profile(
+                &self.device,
+                &self.queue,
+                &self.config,
+                self.pointer_presentation.viewport().unwrap_or(Vec2::new(
+                    self.config.width as f32,
+                    self.config.height as f32,
+                )),
+                &publication,
+                !inset_views.is_empty(),
+                &mut self.view_output,
+                &mut self.working_profile,
+                &mut self.renderer,
+                &mut self.direct_text_gpu,
+                &mut self.direct_preparer,
+            )?;
             self.direct_preparer
                 .set_inset_views_active(!inset_views.is_empty());
             self.renderer
@@ -2835,12 +2876,6 @@ mod wasm {
                     &inset_views,
                 )
                 .map_err(js_error)?;
-            let publication = direct.take_renderer_publication();
-            if publication.context() != expected {
-                return Err(js_message(
-                    "intermediate direct endpoint changed during retained preparation",
-                ));
-            }
             let spatial_upload = self
                 .renderer
                 .prepare_spatial(&self.device, &self.queue, &publication)
@@ -2976,6 +3011,24 @@ mod wasm {
                         .filter_map(noon_core::Inset2DViewState::camera_bounds),
                 );
                 let visibility = direct.query_viewports(&view_bounds);
+                let publication = direct.take_renderer_publication();
+                publication_context = publication.context();
+                prepare_working_profile(
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    self.pointer_presentation.viewport().unwrap_or(Vec2::new(
+                        self.config.width as f32,
+                        self.config.height as f32,
+                    )),
+                    &publication,
+                    !inset_views.is_empty(),
+                    &mut self.view_output,
+                    &mut self.working_profile,
+                    &mut self.renderer,
+                    &mut self.direct_text_gpu,
+                    &mut self.direct_preparer,
+                )?;
                 self.direct_preparer
                     .set_inset_views_active(!inset_views.is_empty());
                 self.renderer
@@ -2986,8 +3039,6 @@ mod wasm {
                         &inset_views,
                     )
                     .map_err(js_error)?;
-                let publication = direct.take_renderer_publication();
-                publication_context = publication.context();
                 let spatial_upload = self
                     .renderer
                     .prepare_spatial(&self.device, &self.queue, &publication)
@@ -3033,6 +3084,11 @@ mod wasm {
                 let view = surface_texture
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
+                let clear = noon_render_wgpu::authored_clear_color(
+                    self.clear_color,
+                    publication.color_profile(),
+                );
+                let no_overlay = OverlayGpuState::default();
                 let mut encoder =
                     self.device
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3047,7 +3103,7 @@ mod wasm {
                         &prepared,
                         &self.direct_text_gpu,
                         &publication,
-                        self.clear_color,
+                        clear,
                         noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;
@@ -3065,21 +3121,44 @@ mod wasm {
                     .renderer
                     .encode_retained_with_transient_presentations_and_overlay(
                         &mut encoder,
-                        &view,
+                        self.view_output.scene_view(&view),
                         InteractiveRetainedFrame {
                             prepared: &prepared,
                             text: &self.direct_text_gpu,
                             transient: Some(&derived),
-                            overlay: &self.selection_overlay,
+                            overlay: if self.view_output.is_hdr() {
+                                &no_overlay
+                            } else {
+                                &self.selection_overlay
+                            },
                         },
-                        self.clear_color,
+                        clear,
                         query_set,
                     )
-                    .map_err(js_error);
+                    .map_err(js_error)
+                    .and_then(|draw| {
+                        let work = self
+                            .view_output
+                            .resolve(
+                                &self.device,
+                                &self.queue,
+                                &mut encoder,
+                                &mut self.renderer,
+                                &publication,
+                                f64::from(camera.world_size.y),
+                                &self.selection_overlay,
+                                &surface_texture.texture,
+                            )
+                            .map_err(js_error)?;
+                        self.last_bytes_uploaded =
+                            self.last_bytes_uploaded.saturating_add(work.bytes_uploaded);
+                        Ok(draw)
+                    });
                 let draw = match draw {
                     Ok(draw) => draw,
                     Err(error) => {
                         self.renderer.invalidate_effect_captures();
+                        self.view_output.invalidate();
                         if let Some(slot) = timestamp_slot {
                             profiler.expect("reserved profiler").cancel_slot(slot);
                         }
@@ -3178,6 +3257,43 @@ mod wasm {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_working_profile(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+        logical: Vec2,
+        publication: &RendererPublication<'_>,
+        insets: bool,
+        output: &mut AuthoredViewOutput,
+        working_profile: &mut noon_core::ViewColorProfile,
+        renderer: &mut GpuRenderer,
+        text: &mut RetainedTextGpuState,
+        preparer: &mut RetainedFramePreparer,
+    ) -> Result<(), JsValue> {
+        let profile = output
+            .prepare(device, publication, insets, [config.width, config.height])
+            .map_err(js_error)?;
+        if profile != *working_profile {
+            let camera = renderer.camera();
+            let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                config.format
+            };
+            let mut replacement = GpuRenderer::new(device, queue, format);
+            replacement
+                .set_viewport_with_logical_size(device, queue, config.width, config.height, logical)
+                .map_err(js_error)?;
+            replacement.set_camera(queue, camera);
+            *text = replacement.create_retained_text_state(device, queue);
+            *renderer = replacement;
+            *preparer = RetainedFramePreparer::new();
+            *working_profile = profile;
+        }
+        Ok(())
+    }
+
     async fn initialize_gpu(
         canvas: &OffscreenCanvas,
         width: u32,
@@ -3229,6 +3345,16 @@ mod wasm {
         let surface = create_surface(&instance, canvas).map_err(js_value_message)?;
         let config = default_surface_config(&surface, &adapter, width, height)?;
         surface.configure(&device, &config);
+        let view_output = AuthoredViewOutput::new(
+            &adapter,
+            &device,
+            config.format,
+            if backend == wgpu::Backend::Gl {
+                noon_render_wgpu::OutputTransfer::BrowserWebGlSrgb
+            } else {
+                noon_render_wgpu::OutputTransfer::Direct
+            },
+        );
         Ok(InitializedGpu {
             instance,
             surface,
@@ -3236,6 +3362,7 @@ mod wasm {
             queue,
             backend,
             config,
+            view_output,
             timestamp_query_supported,
         })
     }
@@ -3261,6 +3388,16 @@ mod wasm {
         let (device, queue, timestamp_query_supported) = request_device(&adapter, backend).await?;
         let config = default_surface_config(&surface, &adapter, width, height)?;
         surface.configure(&device, &config);
+        let view_output = AuthoredViewOutput::new(
+            &adapter,
+            &device,
+            config.format,
+            if backend == wgpu::Backend::Gl {
+                noon_render_wgpu::OutputTransfer::BrowserWebGlSrgb
+            } else {
+                noon_render_wgpu::OutputTransfer::Direct
+            },
+        );
         Ok(InitializedGpu {
             instance,
             surface,
@@ -3268,6 +3405,7 @@ mod wasm {
             queue,
             backend,
             config,
+            view_output,
             timestamp_query_supported,
         })
     }

@@ -71,6 +71,7 @@ pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
 }
 
 pub(crate) trait PaintStyleEdit {
+    fn set_emission(&mut self, emission: noon_core::Emission);
     fn has_fill(&self) -> bool;
     fn has_stroke(&self) -> bool;
     fn has_background_stroke(&self) -> bool;
@@ -121,6 +122,10 @@ fn set_paint_opacity(paint: &mut Option<SemanticPaint>, multiplier: &mut f64, op
 }
 
 impl PaintStyleEdit for SemanticStyle {
+    fn set_emission(&mut self, emission: noon_core::Emission) {
+        self.emission = emission;
+    }
+
     fn has_fill(&self) -> bool {
         self.fill.is_some()
     }
@@ -203,6 +208,10 @@ impl PaintStyleEdit for SemanticStyle {
 }
 
 impl PaintStyleEdit for Style {
+    fn set_emission(&mut self, emission: noon_core::Emission) {
+        self.emission = emission;
+    }
+
     fn has_fill(&self) -> bool {
         self.fill.is_some()
     }
@@ -864,6 +873,19 @@ impl Mobject {
             state.style.background_stroke_opacity,
         )
     }
+    /// Set checked colored emission for a linear-HDR material. This changes
+    /// radiance before association; it does not change alpha or create a halo.
+    pub fn set_emission(&mut self, strength: f64) -> Result<(), AuthoringError> {
+        let emission = noon_core::Emission::new(strength).map_err(AuthoringError::Emission)?;
+        let mut state = self.state()?;
+        state.style.emission = emission;
+        self.commit_state(state)
+    }
+
+    pub fn emission(&self) -> Result<f64, AuthoringError> {
+        Ok(self.state()?.style.emission.strength())
+    }
+
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;

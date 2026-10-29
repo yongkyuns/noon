@@ -137,7 +137,9 @@ fn animated_glow_publication_pixels() {
                 (wanted).into(),
                 "runtime channels must match independent endpoint arithmetic"
             );
-            let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+            let prepared = preparer
+                .prepare_incremental(publication.frame(), publication.changes())
+                .unwrap();
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             let stats = renderer
@@ -205,7 +207,9 @@ fn animated_glow_publication_pixels() {
             .apply_execution_patch(&ExecutionPatch::RemoveObject(runtime.frame().objects[1].id))
             .unwrap();
         let publication = runtime.take_renderer_publication();
-        let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+        let prepared = preparer
+            .prepare_incremental(publication.frame(), publication.changes())
+            .unwrap();
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         renderer
@@ -330,7 +334,9 @@ fn live_glow_value_publication_pixels() {
                     .definition,
                 (definition).into()
             );
-            let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+            let prepared = preparer
+                .prepare_incremental(publication.frame(), publication.changes())
+                .unwrap();
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             let stats = renderer

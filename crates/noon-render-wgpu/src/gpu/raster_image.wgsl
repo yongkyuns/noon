@@ -1,5 +1,5 @@
 struct Camera { center: vec2<f32>, clip_scale: vec2<f32>, viewport_size: vec2<f32>, viewport_origin: vec2<f32>, sample_center: vec2<f32>, sample_clip_scale: vec2<f32>, sample_viewport_size: vec2<f32>, sample_viewport_origin: vec2<f32>, };
-struct Image { translation: vec2<f32>, scale: vec2<f32>, rotation: f32, opacity: f32, sampling: u32, padding: u32, dimensions: vec2<f32>, crop_origin: vec2<f32>, };
+struct Image { translation: vec2<f32>, scale: vec2<f32>, rotation: f32, opacity: f32, sampling: u32, emission: f32, dimensions: vec2<f32>, crop_origin: vec2<f32>, };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var image: texture_2d<f32>;
 @group(2) @binding(0) var<uniform> object: Image;
@@ -61,5 +61,6 @@ struct VertexOutput {
         || any(input.position.xy >= input.clip_bounds.zw) {
         discard;
     }
-    return raster_sample(image, uv, vec2<u32>(object.dimensions), object.sampling, 1u, object.opacity);
+    let value = raster_sample(image, uv, vec2<u32>(object.dimensions), object.sampling, 1u, object.opacity);
+    return vec4(value.rgb * (1.0 + object.emission), value.a);
 }

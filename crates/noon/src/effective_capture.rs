@@ -129,6 +129,7 @@ pub(crate) fn target_style_from_effective(
         (effective.background_stroke.map(SemanticPaint::Solid), 1.0)
     };
     Ok(SemanticStyle {
+        emission: effective.emission,
         fill,
         fill_opacity,
         stroke,

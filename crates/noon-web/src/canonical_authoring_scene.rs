@@ -9,7 +9,7 @@ use crate::authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
-mod camera_profile;
+pub(crate) mod camera_profile;
 #[cfg(target_arch = "wasm32")]
 mod code;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -7022,6 +7022,15 @@ mod wasm {
         }
 
         /// Apply shared paint opacity while leaving whole-object opacity with its owner.
+        /// Validate one callback material value without changing authored state.
+        #[wasm_bindgen(js_name = callbackEmission)]
+        pub fn callback_emission(&self, strength: f64) -> Result<f64, JsValue> {
+            noon_core::Emission::new(strength)
+                .map(noon_core::Emission::strength)
+                .map_err(noon::AuthoringError::Emission)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = callbackPaintSetOpacity)]
         #[allow(clippy::too_many_arguments)]
         pub fn callback_paint_set_opacity(
@@ -10791,6 +10800,23 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetEmission)]
+        pub fn live_set_emission(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            strength: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_emission(handle.semantic_mobject(), strength)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetObjectOpacity)]
         pub fn live_set_object_opacity(
             &mut self,
@@ -11699,6 +11725,28 @@ mod wasm {
                 .live_set_family_own_opacity(&source.semantic_family()?, opacity)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyEmission)]
+        pub fn live_set_family_emission(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            strength: f64,
+        ) -> Result<(), JsValue> {
+            let emission = noon_core::Emission::new(strength)
+                .map_err(noon::AuthoringError::Emission)
+                .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_style(
+                    &source.semantic_family()?,
+                    noon::StyleUpdate {
+                        emission: Some(emission),
+                        ..noon::StyleUpdate::default()
+                    },
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFamilyObjectOpacity)]
         pub fn live_set_family_object_opacity(
             &mut self,

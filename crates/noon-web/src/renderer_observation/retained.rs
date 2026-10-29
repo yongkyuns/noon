@@ -535,6 +535,7 @@ mod tests {
             ..Transform2D::IDENTITY
         };
         let delta = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 7,

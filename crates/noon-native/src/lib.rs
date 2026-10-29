@@ -11,6 +11,8 @@ mod execution_source;
 mod playback_controls;
 mod pointer_input;
 mod selection_overlay;
+#[cfg(test)]
+mod view_output;
 
 #[cfg(feature = "audio")]
 mod audio_output;
@@ -39,8 +41,8 @@ use noon_core::{
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{
-    Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState, RetainedFramePreparer,
-    RetainedTextGpuState,
+    AuthoredViewOutput, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
+    RetainedFramePreparer, RetainedTextGpuState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -377,6 +379,8 @@ struct NativeApp {
     last_geometry_draw_calls: usize,
     #[cfg(test)]
     last_text_draw_calls: usize,
+    #[cfg(test)]
+    last_bloom_passes: [usize; 5],
 }
 
 impl NativeApp {
@@ -443,6 +447,8 @@ impl NativeApp {
             last_geometry_draw_calls: 0,
             #[cfg(test)]
             last_text_draw_calls: 0,
+            #[cfg(test)]
+            last_bloom_passes: [0; 5],
         }
     }
 
@@ -720,6 +726,7 @@ impl NativeApp {
                 .gpu
                 .as_mut()
                 .expect("drawable native host must own GPU state");
+            gpu.prepare_working_profile(&publication, !inset_views.is_empty(), camera)?;
             pollster::block_on(
                 gpu.renderer
                     .prepare_effect_programs(&gpu.device, &publication),
@@ -784,6 +791,9 @@ impl NativeApp {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon native frame"),
                 });
+            let clear =
+                noon_render_wgpu::authored_clear_color(CLEAR_COLOR, publication.color_profile());
+            let no_overlay = OverlayGpuState::default();
             // Endpoint drains above retain the same surface and renderer; only
             // the final bounded pass may create a glow capture/blur workload.
             gpu.renderer
@@ -794,7 +804,7 @@ impl NativeApp {
                     &prepared,
                     &gpu.text_state,
                     &publication,
-                    CLEAR_COLOR,
+                    clear,
                     noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                 )
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
@@ -802,24 +812,46 @@ impl NativeApp {
                 .renderer
                 .encode_retained_with_transient_presentations_and_overlay(
                     &mut encoder,
-                    &view,
+                    gpu.view_output.scene_view(&view),
                     InteractiveRetainedFrame {
                         prepared: &prepared,
                         text: &gpu.text_state,
                         transient: Some(&derived),
-                        overlay: &gpu.overlay,
+                        overlay: if gpu.view_output.is_hdr() {
+                            &no_overlay
+                        } else {
+                            &gpu.overlay
+                        },
                     },
-                    CLEAR_COLOR,
+                    clear,
                     None,
                 )
                 .map_err(|error| {
                     gpu.renderer.invalidate_effect_captures();
+                    gpu.view_output.invalidate();
                     NativeHostError::Gpu(error.to_string())
                 })?;
             #[cfg(test)]
             {
                 self.last_geometry_draw_calls = _draw.geometry.draw_calls;
                 self.last_text_draw_calls = _draw.text.draw_calls;
+            }
+            let _view_work = gpu
+                .view_output
+                .resolve(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut encoder,
+                    &mut gpu.renderer,
+                    &publication,
+                    f64::from(camera.height),
+                    &gpu.overlay,
+                    &surface_texture.texture,
+                )
+                .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+            #[cfg(test)]
+            {
+                self.last_bloom_passes = _view_work.passes;
             }
             window.pre_present_notify();
             let _submission = gpu.queue.submit(Some(encoder.finish()));
@@ -1206,6 +1238,8 @@ struct NativeGpu {
     renderer: GpuRenderer,
     prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
     overlay: OverlayGpuState,
+    view_output: AuthoredViewOutput,
+    working_profile: noon_core::ViewColorProfile,
 }
 
 impl NativeGpu {
@@ -1247,6 +1281,12 @@ impl NativeGpu {
         renderer.set_camera(&queue, camera_for_viewport(camera, width, height)?);
 
         let text_state = renderer.create_retained_text_state(&device, &queue);
+        let view_output = AuthoredViewOutput::new(
+            &adapter,
+            &device,
+            config.format,
+            noon_render_wgpu::OutputTransfer::Direct,
+        );
         Ok(Self {
             instance,
             surface,
@@ -1259,6 +1299,8 @@ impl NativeGpu {
             renderer,
             prepared_effect_modules: None,
             overlay: OverlayGpuState::default(),
+            view_output,
+            working_profile: noon_core::ViewColorProfile::Compatibility,
         })
     }
 
@@ -1271,6 +1313,10 @@ impl NativeGpu {
         if !self.drawable {
             return Ok(());
         }
+        if self.working_profile == noon_core::ViewColorProfile::LinearHdr {
+            AuthoredViewOutput::validate_extent(&self.device, [size.width, size.height])
+                .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+        }
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
@@ -1281,6 +1327,42 @@ impl NativeGpu {
             camera_for_viewport(camera, size.width, size.height)?,
         );
         Ok(())
+    }
+
+    fn prepare_working_profile(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        insets_active: bool,
+        camera: Camera2DState,
+    ) -> Result<(), NativeHostError> {
+        let profile = self
+            .view_output
+            .prepare(
+                &self.device,
+                publication,
+                insets_active,
+                [self.config.width, self.config.height],
+            )
+            .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+        if profile != self.working_profile {
+            let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                self.config.format
+            };
+            let mut renderer = GpuRenderer::new(&self.device, &self.queue, format);
+            renderer.set_viewport(
+                &self.device,
+                &self.queue,
+                self.config.width,
+                self.config.height,
+            );
+            self.text_state = renderer.create_retained_text_state(&self.device, &self.queue);
+            self.renderer = renderer;
+            self.preparer = RetainedFramePreparer::new();
+            self.working_profile = profile;
+        }
+        self.set_camera(camera)
     }
 
     fn set_camera(&mut self, camera: Camera2DState) -> Result<(), NativeHostError> {

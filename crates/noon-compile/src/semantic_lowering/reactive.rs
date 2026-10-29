@@ -827,7 +827,9 @@ fn lower_property(
         SemanticObjectProperty::RotationZ => Ok(Property::Rotation),
         SemanticObjectProperty::ObjectOpacity => Ok(Property::Opacity),
         SemanticObjectProperty::StrokeWidth => Ok(Property::StrokeWidth),
-        SemanticObjectProperty::FillOpacity | SemanticObjectProperty::StrokeOpacity => {
+        SemanticObjectProperty::FillOpacity
+        | SemanticObjectProperty::StrokeOpacity
+        | SemanticObjectProperty::Emission => {
             Err(SemanticReactiveLoweringError::UnsupportedProperty { target, property })
         }
     }

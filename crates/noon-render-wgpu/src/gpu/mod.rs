@@ -39,8 +39,10 @@ pub use source_capture::{
 mod effect_stack;
 mod gaussian_blur;
 mod hdr_bloom;
+mod view_output;
 #[cfg(test)]
 pub(crate) use hdr_bloom::tests::{decode as test_decode_hdr, read as test_read_hdr};
+pub use view_output::{AuthoredViewOutput, ViewOutputError};
 #[cfg(test)]
 mod hdr_scene_raster_tests;
 pub use hdr_bloom::{
@@ -592,6 +594,7 @@ pub struct GpuRenderer {
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    display_overlay_pipelines: Option<[wgpu::RenderPipeline; 2]>,
     circle_pipeline_single_sample: wgpu::RenderPipeline,
     rectangle_pipeline_single_sample: wgpu::RenderPipeline,
     line_pipeline_single_sample: wgpu::RenderPipeline,
@@ -923,6 +926,7 @@ impl GpuRenderer {
             circle_pipeline,
             rectangle_pipeline,
             line_pipeline,
+            display_overlay_pipelines: None,
             circle_pipeline_single_sample,
             rectangle_pipeline_single_sample,
             line_pipeline_single_sample,
@@ -2842,7 +2846,7 @@ mod tests {
 
         let mut frame = test_frame();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         let first_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(first_upload.buffer_reallocations, 3);
@@ -2856,13 +2860,17 @@ mod tests {
         assert!(renderer.rectangle_capacity_bytes() >= size_of::<RectangleInstance>());
         assert!(renderer.line_capacity_bytes() >= size_of::<LineInstance>());
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
         let second_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(second_upload.buffer_reallocations, 0);
         assert_eq!(second_upload.bytes_uploaded, 0);
 
         frame.objects[0].transform.translation = Vec2::new(0.25, -0.5);
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         let partial_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(partial_upload.buffer_reallocations, 0);
         assert_eq!(partial_upload.bytes_uploaded, size_of::<CircleInstance>());
@@ -2958,7 +2966,7 @@ mod tests {
 
         let frame = test_frame();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         renderer.upload(&device, &queue, &prepared);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -2997,7 +3005,7 @@ mod tests {
 
         let frame = test_frame_with_path();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         renderer.upload(&device, &queue, &prepared);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -3049,7 +3057,7 @@ mod tests {
         renderer.set_viewport(&device, &queue, 64, 64);
         let frame = test_frame_with_path();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         let upload = renderer.upload(&device, &queue, &prepared);
         // The compact ordinary-path stream is a distinct retained GPU buffer.
@@ -3079,7 +3087,9 @@ mod tests {
         assert_eq!(draw.draw_calls, 2);
         assert_eq!(draw.instances_drawn, 2);
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
         let unchanged_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(unchanged_upload.buffer_reallocations, 0);
         assert_eq!(unchanged_upload.bytes_uploaded, 0);

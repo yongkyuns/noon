@@ -2089,10 +2089,13 @@ name = "noon-native"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "half",
  "noon",
  "noon-core",
+ "noon-export",
  "noon-render-wgpu",
  "pollster",
+ "serde_json",
  "wgpu",
  "winit",
 ]

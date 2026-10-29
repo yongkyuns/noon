@@ -104,6 +104,68 @@
       "beats": [{"time": 0.6, "label": "Same source"}, {"time": 3.0, "label": "Blur then Glow"}, {"time": 4.15, "label": "Dissolve the composition"}, {"time": 5.55, "label": "Restore with the same seed"}, {"time": 8.0, "label": "Return to the source"}]
     },
     {
+      "id": "showcase-bloom-emission",
+      "title": "Brightness and Bloom",
+      "lesson": "Raise material radiance, spread the bright source with camera Bloom, then restore both independent controls.",
+      "primary_feature": "hdr-bloom-emission",
+      "category": "Visual effects",
+      "path": "python/examples/showcase_bloom_emission.py",
+      "features": [
+        "linear HDR",
+        "emission",
+        "camera Bloom",
+        "animate.set_effect"
+      ],
+      "duration": 7.5,
+      "thumbnail_time": 4.75,
+      "thumbnail": "thumbnails/showcase/showcase-bloom-emission.png",
+      "thumbnail_alt": "A bright cyan source with a soft halo between labels for independent material emission and camera Bloom",
+      "still_intervals": [
+        [
+          0,
+          0.75
+        ],
+        [
+          2.25,
+          3
+        ],
+        [
+          4.5,
+          5.25
+        ],
+        [
+          6.75,
+          7.5
+        ]
+      ],
+      "beats": [
+        {
+          "time": 0.35,
+          "label": "Neutral source"
+        },
+        {
+          "time": 1.5,
+          "label": "Raise material radiance"
+        },
+        {
+          "time": 2.6,
+          "label": "Bright source without Bloom"
+        },
+        {
+          "time": 3.75,
+          "label": "Add camera spread"
+        },
+        {
+          "time": 4.75,
+          "label": "Radiance and Bloom together"
+        },
+        {
+          "time": 6.75,
+          "label": "Restore the neutral source"
+        }
+      ]
+    },
+    {
       "id": "showcase-group-slicing", "title": "Animate part of a group",
       "lesson": "Select existing members with a slice while the surrounding objects stay in place.",
       "primary_feature": "group-slicing", "category": "Geometry and layout",

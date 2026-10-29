@@ -447,6 +447,7 @@ pub enum Property {
     Fill,
     Stroke,
     StrokeWidth,
+    Emission,
     Opacity,
     Appearance,
     Reveal,
@@ -467,6 +468,7 @@ pub enum Property {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
+    Emission,
     Paint,
     Effect,
     Bool,
@@ -500,6 +502,7 @@ impl Property {
             Self::Transform => ValueKind::Object,
             Self::WorldTransform => ValueKind::WorldTransform,
             Self::CameraProfile => ValueKind::CameraProfile,
+            Self::Emission => ValueKind::Emission,
             Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation
@@ -808,6 +811,11 @@ impl EffectTrackEndBehavior {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
+    /// Checked f64 material endpoints; independent of coverage and opacity.
+    Emission {
+        from: crate::Emission,
+        to: crate::Emission,
+    },
     /// Continuous fill endpoints share the ordinary Fill channel with solids.
     Paint {
         transition: Arc<crate::PaintTransition>,
@@ -918,6 +926,7 @@ impl TrackValues {
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
             Self::Scalar { .. } => ValueKind::Scalar,
+            Self::Emission { .. } => ValueKind::Emission,
             Self::Vec2 { .. } | Self::ArcVec2 { .. } | Self::PathVec2 { .. } => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
             Self::PreparedMorph { .. } => ValueKind::Scalar,

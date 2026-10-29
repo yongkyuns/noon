@@ -1238,6 +1238,7 @@ fn collect_text_paths<'a>(
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     opacity: 1.0,
+                    emission: object_style.emission,
                 };
                 let fill_source = SourceKey::TextGlyphRun(
                     handle,

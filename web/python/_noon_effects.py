@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -66,6 +66,8 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
         if parameters is not None:
             from _noon_shaders import _write_parameters
             _write_parameters(request, parameters)
+        if threshold is not None:
+            engine_call(request.setThreshold, _number(threshold, "threshold"))
         yield request
     finally:
         request.free()
@@ -146,6 +148,28 @@ class Blur:
     def radius(self):
         value = float(self._definition.radius)
         return Pixels(value) if bool(self._definition.pixels) else value
+
+
+class Bloom(Blur):
+    """Camera-only bright-region spread in the explicit linear HDR view.
+
+    Threshold and intensity operate on scene radiance before SDR presentation.
+    Object emission controls radiance independently of the camera treatment.
+    """
+    __slots__ = ()
+
+    def __init__(self, *, radius=None, threshold=None, intensity=None):
+        with _update(radius=radius, threshold=threshold, intensity=intensity) as update:
+            from js import noonBloom
+            self._definition = engine_call(noonBloom, update)
+
+    @property
+    def threshold(self):
+        return float(self._definition.threshold)
+
+    @property
+    def intensity(self):
+        return float(self._definition.intensity)
 
 
 class BackdropBlur:
@@ -377,7 +401,7 @@ class EffectHandle:
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
         from _noon_shaders import ShaderEffect
-        return {"shader": ShaderEffect, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
+        return {"shader": ShaderEffect, "bloom": Bloom, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -480,9 +504,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

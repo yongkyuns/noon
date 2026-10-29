@@ -104,6 +104,8 @@ pub struct GlyphQuadInstance {
     /// target decodes it once. Alpha remains linear. Color glyphs use RGB=1 and
     /// the alpha component as the owning object's opacity multiplier.
     pub color: [f32; 4],
+    /// Additional linear material radiance; alpha is independent.
+    pub emission: f32,
 }
 
 /// Painter-ordered retained text item prepared for renderer integration.
@@ -585,6 +587,7 @@ impl RetainedTextQuadPreparer {
                     quad.origin[0] += delta.x;
                     quad.origin[1] += delta.y;
                     quad.color = color;
+                    quad.emission = object.style.emission.strength() as f32;
                 }
             }
 
@@ -646,6 +649,7 @@ impl RetainedTextQuadPreparer {
                     object.transform,
                     object.style.fill,
                     object.style.opacity * object.appearance,
+                    object.style.emission,
                     run,
                     fonts,
                     metrics,
@@ -808,6 +812,7 @@ impl RetainedTextQuadPreparer {
                             object.transform,
                             object.style.fill,
                             object.style.opacity * object.appearance,
+                            object.style.emission,
                             run,
                             fonts,
                             metrics,
@@ -859,6 +864,7 @@ impl RetainedTextQuadPreparer {
         object_transform: Transform2D,
         object_fill: Option<Color>,
         object_opacity: f32,
+        emission: noon_core::Emission,
         run: &GlyphRun,
         fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
@@ -930,6 +936,7 @@ impl RetainedTextQuadPreparer {
                 axis_y: [world_axis_y.x, world_axis_y.y],
                 uv_min: atlas_image.uv_min,
                 uv_max: atlas_image.uv_max,
+                emission: emission.strength() as f32,
                 color,
             };
             let instance_index = match atlas_image.plane {

@@ -1825,12 +1825,11 @@ existing reconstruction and opacity order. The HDR repair has an actual failing
 old-order pixel witness; the 0.002 bound was unchanged.
 
 Mask glyph coverage remains linear alpha; authored tint RGB is decoded at the
-vertex. Color glyph atlas pages already use `Rgba8UnormSrgb`, so texture loads
-perform the one input decode. HDR color texels are associated before bilinear
-interpolation, then multiplied by linear tint and final alpha. Decoding the atlas
-again or associating only after interpolation is incorrect. Compatibility shader
-branches preserve their existing operations. The asset conversion needs no
-additional retained texture images or per-frame pixel upload.
+vertex. Color atlas pages retain encoded `Rgba8Unorm` bytes; the glyph shader
+decodes each tap explicitly, avoiding fixed-function sRGB approximation under
+amplified radiance. HDR associates taps before interpolation; Compatibility keeps
+its existing unassociated filtering and encoded-tint rules. No additional atlas
+mode, retained texture or per-frame pixel upload is needed.
 
 The authored-view integration test now runs the same 16-case independent planar
 source/Bloom oracle through direct, canonical retained, and retained-visible
@@ -1988,3 +1987,116 @@ This reusable presentation seam does not yet wire HDR into native windows or
 browser canvases, qualify physical presentation or deliver checked emission.
 Those host/capability, public authoring, extension and remaining M5 gates remain
 open.
+
+### Native window HDR and viewer-overlay integration (#1897 M4/M5)
+
+The normal native frame loop selects its working format from the current
+borrowed Runtime publication. A LinearHdr primary 2D camera renders into a
+retained RGBA16Float target, uses the same `HdrBloomFilter::prepare_view` as frame
+capture, and presents the encoded SDR output with `EncodedDisplayPresenter`.
+Compatibility publications keep the ordinary native surface renderer. Profile
+changes replace disposable renderer/text/preparer resources, preserving the
+semantic scene, Runtime, identities and authored time.
+
+Native admission checks RGBA16Float attachment/texturing/copy usages, blending,
+four-sample support, attachment-byte limits, one of the four qualified SDR
+surface formats, primary 2D view ownership, absence of insets/spatial rows,
+device extents and an explicit **256 MiB primary-view target budget**. At current
+fixed quality, source (8), four-sample scene attachment (32), and Bloom/output
+scratch (36) total **76 bytes/pixel**. 1920x1080 fits; 3840x2160 rejects. Assets,
+object-effect scopes, the surface and in-flight resource leases have separate
+owners. Object-effect capture budgets remain unchanged. There is no silent
+resolution/quality reduction. Initial/global view admission inspects spatial rows
+once; later publications inspect changed rows. Extent preflight precedes native
+resize allocations. A clean settled window retains the existing sleep behavior.
+
+Viewer selection is composed onto encoded SDR **after** Bloom/output resolution
+and before the final surface transfer. It reuses the same renderer's camera,
+quad and fixed-size overlay instance, with two lazy display pipelines. It never
+enters authored Bloom input or normal capture/export. Removing it recomputes the
+clean output instead of accumulating a tint.
+
+The real native GPU proof has thirteen phases: live parameter edits, viewer
+overlay/clear, neutral and absent Bloom, Compatibility/HDR transitions, resize,
+target recreation and a newly requested device. Every HDR phase without an
+overlay matches normal `SessionCapture` exactly at the same view/state. Float
+values use the predeclared 0.006 + 0.004*abs(expected) bound; displayed values use
+the existing two-byte bound. Expected values come from literal .5 radiance over
+opaque black, an independent full-2D finite Gaussian and explicit SDR transfer.
+An actual consumer that sends the viewer tint through Bloom must fail those
+display bounds; restoring the correct consumer must recover exactly. Parameter
+and viewer edits upload no source geometry. Separate native-window CI advances
+an ordinary authored Bloom animation to its exact endpoint and presents it.
+
+`cargo run -p noon-native --example camera_bloom` is an ordinary Rust creator
+example. Browser/Python HDR hosts, checked emission, broader view/capture profiles,
+public WGSL extensions, physical presentation/performance and remaining M5
+qualification remain open. New-device resource recreation is not a claim of
+automatic OS/device-loss recovery.
+
+
+### Candidate checked material emission (#1897 M4)
+
+The shared candidate stores checked f64 strength `e` in `[0, 63]`; zero is neutral.
+Radiance is `decode_srgb(base_rgb) * (1 + e)` before coverage, opacity, blending
+and filtering. Emission changes neither alpha nor coverage and adds no separate
+halo. Bloom remains a view treatment.
+
+The first profile requires unit base paints/opacity, primary planar linear-HDR
+output and supported capture/view capabilities. Compatibility/spatial emission
+rejects before retained view changes. Copy, target and effective style capture
+retain the material value; GPU state remains a disposable projection.
+
+All present authored HDR styles require finite unit paint/opacity, including at
+zero emission. Geometry, retained/family preparation and view targets share this
+admission check before changing caches; local publications inspect only dirty
+rows. Low-level `FramePreparer` raw inputs retain their explicitly already-linear
+packing contract, reject authored emission through `Result`, and preserve prior
+geometry on rejection. Active family scratch preparation keeps the publication's
+color profile, including first use and cached seek.
+
+Native shape/image proofs use the existing HDR RGB bound
+`.006 + .004 * abs(reference)` and two-byte display bound. Glyph inputs use
+`.002 + .001 * abs(reference)` for amplified RGB; ordinary float inputs and all
+alpha retain `.002`. Color glyphs decode exact stored bytes once before
+reconstruction. Eight ordinary RGBA8 cases independently check Compatibility's
+unassociated filtering and encoded tint with a two-byte bound.
+
+Ordinary Rust target animation and live semantic property writes retain checked
+f64 material values independently of opacity. Completion combines material and
+other style endpoints in one transaction; seeks recover captured source values
+before the first track and authored values after reconciliation.
+
+This candidate does **not** complete emission authoring. Leaf callback writes use
+checked f64 values through the existing effective-write vocabulary and ownership
+receipt; completion preserves continuing callback domains independently of opacity.
+Native scalar-graph bindings and family/provisional callback emission remain
+unsupported. Family material edits reuse the atomic style transaction and ordinary
+method targets; non-rendered roots retain metadata without multiplying leaf radiance.
+Python ordinary and leaf callback setters forward through shared Rust/WASM operations.
+Native and direct Rust/WASM hosts share `AuthoredViewOutput`, a disposable GPU
+cache over the existing float renderer, Bloom and encoded display presenter. The
+browser selects float drawing resources from the Runtime publication, restores
+them after device/context replacement, and applies viewer overlays after Bloom.
+The finite profile requires a primary planar view, float blending/MSAA4 support,
+no insets, and the existing retained target budget; unsupported requests reject
+before replacing those targets.
+
+`node scripts/direct-view-output-qualification.mjs` checks actual WebGPU/WebGL2
+pixels against an independent f64 uniform-interior reference, live/finite source
+modes, exact seek/restoration and resize admission. The native full-field oracle
+remains `cargo test -p noon-native --lib view_output::native_hdr -- --include-ignored`.
+Held frames may sleep rather than republish time; active animation and explicit
+seek still sample canonical authored time. These software-GPU checks do not
+qualify physical-device performance.
+
+The Python `camera_bloom.py` example pairs the same ordinary camera profile,
+material emission and Bloom tracks with Rust. The genuine worker channel carries
+the selected camera's profile; effects retain their ordinary row and attachment
+identity. `node scripts/worker-view-output-qualification.mjs` compares both hosts
+byte-for-byte on WebGPU/WebGL2 and checks an independent f64 interior reference.
+The gallery's `showcase_bloom_emission.py` demonstrates radiance first, camera
+spread second, and restoration. Neither path adds a shader clock or host engine.
+Broader composed/input/recovery/performance gates, full local validation and
+required CI remain necessary before promotion; software-GPU parity does not
+qualify physical-device performance.

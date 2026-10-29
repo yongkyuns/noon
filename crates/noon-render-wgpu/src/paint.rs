@@ -26,6 +26,7 @@ impl PreparedFrame<'_> {
 pub(crate) struct PreparedPaint {
     pub definition: Arc<SemanticPaint>,
     pub color_profile: noon_core::ViewColorProfile,
+    pub emission: noon_core::Emission,
     pub bounds: Rect,
     pub transform: Transform2D,
     source_index: usize,
@@ -78,6 +79,7 @@ impl FramePreparer {
                     .map(|bounds| PreparedPaint {
                         definition: definition.clone(),
                         color_profile: self.color_profile,
+                        emission: object.style.emission,
                         bounds,
                         transform: frame.render_transform(index),
                         source_index: index,

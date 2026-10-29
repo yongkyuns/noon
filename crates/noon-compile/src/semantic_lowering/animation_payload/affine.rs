@@ -1985,6 +1985,22 @@ pub(super) fn lower_affine_channels(
         width_changed,
         &mut channels,
     )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Emission,
+        Property::Emission,
+        TrackValues::Emission {
+            from: from.style.emission,
+            to: target.style.emission,
+        },
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::Emission,
+            value: SemanticSignalValue::Scalar(target.style.emission.strength()),
+        },
+        source.style.emission != target.style.emission
+            || from.style.emission != target.style.emission,
+        &mut channels,
+    )?;
     if let Some(channel) = lower_object_opacity_channel(
         source.style.object_opacity,
         target.style.object_opacity,
@@ -3325,7 +3341,8 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
         Property::EffectSeed => 21,
         Property::EffectSize => 22,
         Property::EffectThreshold => 23,
-        Property::EffectShader(index) => 24 + u16::from(index),
+        Property::Emission => 24,
+        Property::EffectShader(index) => 25 + u16::from(index),
     };
     (object.get(), slot, None)
 }

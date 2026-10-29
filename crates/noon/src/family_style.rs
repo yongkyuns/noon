@@ -16,6 +16,8 @@ use noon_core::{SemanticMutationTransaction, SemanticStyle};
 /// Omission preserves a field; disabling paint remains an explicit Rust operation.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StyleUpdate {
+    /// Checked material strength; applied once to each leaf, never to a composite.
+    pub emission: Option<noon_core::Emission>,
     pub fill_color: Option<Color>,
     pub fill_opacity: Option<f64>,
     pub stroke_color: Option<Color>,
@@ -28,6 +30,9 @@ pub struct StyleUpdate {
 
 impl StyleUpdate {
     pub(crate) fn apply<S: PaintStyleEdit>(&self, style: &mut S) -> Result<(), AuthoringError> {
+        if let Some(emission) = self.emission {
+            style.set_emission(emission);
+        }
         fill(style, self.fill_color, self.fill_opacity)?;
         stroke(
             style,
@@ -481,6 +486,15 @@ impl MobjectFamily {
         .apply(&mut self.integration_store().borrow_mut())
         .map(|_| ())
         .map_err(AuthoringError::from)
+    }
+
+    /// Set every member material atomically. Non-rendered roots retain the value
+    /// for authoring; nested families do not multiply material gain.
+    pub fn set_emission(&self, strength: f64) -> Result<(), AuthoringError> {
+        self.set_style(StyleUpdate {
+            emission: Some(noon_core::Emission::new(strength).map_err(AuthoringError::Emission)?),
+            ..StyleUpdate::default()
+        })
     }
 
     /// Atomically update supplied paint fields on every family root and leaf.

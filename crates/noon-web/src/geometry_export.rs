@@ -44,6 +44,7 @@ pub(crate) fn mobject_fields(
     let color =
         |(r, g, b, a): (f64, f64, f64, f64)| Color::rgba(r as f32, g as f32, b as f32, a as f32);
     let style = Style {
+        emission: state.style.emission,
         fill: object
             .wire_fill()
             .map_err(|error| error.to_string())?
