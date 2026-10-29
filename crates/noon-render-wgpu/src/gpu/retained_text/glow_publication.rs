@@ -368,6 +368,7 @@ impl GpuRenderer {
     pub fn reset_retained_effect_publication(&mut self) {
         self.retained_effects = RetainedEffectPublication::default();
         self.effect_captures = None;
+        self.effect_programs = Default::default();
     }
 
     /// Add only effect-source indices to the execution-owned, painter-ordered
@@ -807,7 +808,13 @@ impl GpuRenderer {
                     self.retire_backdrop_output(object);
                 }
                 let extra_bytes = self.backdrop_texture_bytes();
+                let shader_context = definitions
+                    .iter()
+                    .any(|d| d.as_shader().is_some())
+                    .then(|| self.effect_shader_context(publication, index))
+                    .transpose()?;
                 let request = EffectCaptureRequest {
+                    shader: shader_context.as_ref(),
                     object_index: scratch,
                     definitions,
                     texture_budget_bytes: texture_budget_bytes

@@ -706,6 +706,11 @@ impl NativeApp {
                 .gpu
                 .as_mut()
                 .expect("drawable native host must own GPU state");
+            pollster::block_on(
+                gpu.renderer
+                    .prepare_effect_programs(&gpu.device, &publication),
+            )
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
             gpu.renderer
                 .prepare_spatial(&gpu.device, &gpu.queue, &publication)

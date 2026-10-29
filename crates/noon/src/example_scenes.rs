@@ -79,6 +79,8 @@ pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
 pub mod scope_opacity;
+#[cfg(feature = "wgsl-effects")]
+pub mod shader_sweep;
 pub mod shadow;
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub mod spatial_camera_labels;

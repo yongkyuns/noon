@@ -1660,3 +1660,13 @@ pub async fn create_direct_lingering_renderer(
     let session = noon::example_scenes::polynomial_rates::lingering_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
+
+/// The same checked custom-material lesson as the native Rust example.
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepSmokeRenderer)]
+pub async fn create_direct_shader_sweep_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}

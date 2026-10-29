@@ -36,6 +36,33 @@ pub struct PreparedShaderProgram {
     device: wgpu::Device,
 }
 
+impl PreparedShaderProgram {
+    pub(in crate::gpu) fn matches(
+        &self,
+        device: &wgpu::Device,
+        source: &WgslEffectProgram,
+    ) -> bool {
+        self.device == *device && self.source.module() == source.module()
+    }
+}
+
+impl ShaderSampleContext {
+    pub(in crate::gpu) fn for_capture(mut self, origin: [i32; 2]) -> Self {
+        let translate = |rows: [[f64; 3]; 2]| {
+            rows.map(|mut r| {
+                r[2] += r[0] * f64::from(origin[0]) + r[1] * f64::from(origin[1]);
+                r
+            })
+        };
+        self.local_from_capture = self.local_from_capture.map(translate);
+        self.scene_from_capture = translate(self.scene_from_capture);
+        for (value, origin) in self.output_origin.iter_mut().zip(origin) {
+            *value += f64::from(origin);
+        }
+        self
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct ShaderUniform {
@@ -54,12 +81,11 @@ pub(super) struct ShaderScope {
 impl ShaderUniform {
     pub(super) fn new(
         definition: &ShaderEffect,
-        capture: GaussianBlurCapture<'_>,
-        parameters: &SampleParameters<'_>,
+        extent: [u32; 2],
+        context: Option<&ShaderSampleContext>,
+        scope_opacity: f32,
     ) -> Result<Self, EffectPrepareError> {
-        let context = parameters
-            .shader
-            .ok_or(EffectPrepareError::InvalidSourceBounds)?;
+        let context = context.ok_or(EffectPrepareError::InvalidSourceBounds)?;
         let dependencies = definition.program().schema().dependencies;
         let rows = match dependencies.coordinates {
             ShaderCoordinates::LocalNormalized => context
@@ -80,7 +106,6 @@ impl ShaderUniform {
         // Include pixel-center lowering and the generic dot product's seven
         // possible roundings; output coordinates use one addition. Fused
         // evaluation can only reduce this bound.
-        let extent = [capture.source.width(), capture.source.height()];
         if extent.contains(&0) {
             return Err(EffectPrepareError::InvalidSourceBounds);
         }
@@ -129,7 +154,7 @@ impl ShaderUniform {
         }
         Ok(Self {
             position,
-            control: [parameters.scope_opacity, time as f32, 0.0, 0.0],
+            control: [scope_opacity, time as f32, 0.0, 0.0],
             integers: [definition.seed(), 0, 0, 0],
             parameters: values,
         })
@@ -217,7 +242,12 @@ impl SampleFilter {
         parameters: SampleParameters<'_>,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         let definition = parameters.definition.as_shader().expect("shader pass");
-        let uniform = ShaderUniform::new(definition, capture, &parameters)?;
+        let uniform = ShaderUniform::new(
+            definition,
+            [capture.source.width(), capture.source.height()],
+            parameters.shader,
+            parameters.scope_opacity,
+        )?;
         super::validate_texture(capture, &parameters)?;
         let program = self.shader_program_for_scope(device, definition.program(), Some(scope))?;
         let program_changed = scope

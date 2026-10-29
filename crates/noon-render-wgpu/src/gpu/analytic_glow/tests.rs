@@ -45,6 +45,7 @@ fn effect(intensity: f64) -> EffectDefinition {
 
 fn request(definitions: &[EffectDefinition]) -> EffectCaptureRequest<'_> {
     EffectCaptureRequest {
+        shader: None,
         object_index: 1,
         definitions,
         texture_budget_bytes: 1_000_000,

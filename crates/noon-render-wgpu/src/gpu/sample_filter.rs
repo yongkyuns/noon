@@ -219,11 +219,29 @@ pub(super) fn validate_input(
     parameters: SampleParameters,
 ) -> Result<(), EffectPrepareError> {
     if let Some(definition) = parameters.definition.as_shader() {
-        shader::ShaderUniform::new(definition, capture, &parameters)?;
+        shader::ShaderUniform::new(
+            definition,
+            [capture.source.width(), capture.source.height()],
+            parameters.shader,
+            parameters.scope_opacity,
+        )?;
         validate_texture(capture, &parameters)
     } else {
         checked_uniform(capture, parameters).map(|_| ())
     }
+}
+
+pub(super) fn validate_effect_shader_context(
+    definitions: &[noon_core::EffectDefinition],
+    context: Option<&ShaderSampleContext>,
+    size: [u32; 2],
+) -> Result<(), EffectPrepareError> {
+    for definition in definitions {
+        if let Some(value) = definition.as_shader() {
+            shader::ShaderUniform::new(value, size, context, 1.0)?;
+        }
+    }
+    Ok(())
 }
 
 impl SampleFilter {

@@ -94,7 +94,10 @@ pub mod effects {
     pub use noon_core::{
         BackdropBlur, Bloom, Blur, DissolveDirection, DissolveStyle, EffectDefinition,
         EffectOffset, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
-        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, Shadow,
+        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, ShaderCoordinates, ShaderDependencies,
+        ShaderEffect, ShaderParameterDefinition, ShaderParameterKey, ShaderParameterType,
+        ShaderProfile, ShaderProgramError, ShaderSchema, ShaderUnit, ShaderValue, Shadow,
+        WgslEffectProgram,
     };
 }
 mod drawing;

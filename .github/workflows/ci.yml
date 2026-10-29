@@ -289,7 +289,7 @@ jobs:
           NOON_GLYPH_COVERAGE_ARTIFACT_DIR: ${{ github.workspace }}/glyph-coverage-raster-artifacts
         run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture
       - name: Qualify public composed group pixels and lifecycle
-        run: 'cargo test -p noon --test glow_scene_raster composed:: -- --ignored --nocapture'
+        run: 'cargo test -p noon --features wgsl-effects --test glow_scene_raster composed:: -- --ignored --nocapture'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
         run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
       - name: Qualify authored glass lens and native export

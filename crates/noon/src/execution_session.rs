@@ -1605,6 +1605,14 @@ impl ExecutionSession {
         self.runtime.painter_order()
     }
 
+    /// Borrow the stable frame/resources for fallible device preparation.
+    /// Presentation changes and continuation receipts remain pending.
+    pub fn resource_publication(&self) -> RendererPublication<'_> {
+        self.runtime
+            .resource_publication()
+            .with_primary_view(self.camera_object)
+    }
+
     /// Consume one coherent renderer publication from this typed session.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         let prefix_queries = self.runtime.has_painter_prefix_sources();

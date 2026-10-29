@@ -330,6 +330,11 @@ impl NativeCapture {
     ) -> Result<CaptureWork, CaptureError> {
         self.fault.check()?;
         self.prepare_working_profile(publication, view)?;
+        pollster::block_on(
+            self.renderer
+                .prepare_effect_programs(&self.device, publication),
+        )
+        .map_err(CaptureError::gpu)?;
         let clear = noon_render_wgpu::authored_clear_color(self.clear, self.working_profile);
         let camera = view.camera;
         let width = self.layout.width();

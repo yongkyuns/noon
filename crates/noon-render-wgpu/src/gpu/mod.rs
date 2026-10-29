@@ -42,6 +42,8 @@ pub use hdr_bloom::{
 };
 mod glow_filter;
 mod sample_filter;
+mod shader_effects;
+pub use shader_effects::{EffectProgramPrepareError, EffectProgramStats};
 mod shadow_filter;
 pub use effect_stack::{
     EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,
@@ -571,6 +573,7 @@ impl std::error::Error for PathPreloadUploadError {}
 pub struct GpuRenderer {
     fill_paints: Option<Box<paint::PaintGpu>>,
     effect_captures: Option<Box<analytic_glow::EffectCaptureGpu>>,
+    effect_programs: shader_effects::EffectPrograms,
     retained_effects: retained_text::glow_publication::RetainedEffectPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
@@ -946,6 +949,7 @@ impl GpuRenderer {
             derived_display,
             images: None,
             effect_captures: None,
+            effect_programs: Default::default(),
             fill_paints: None,
             retained_effects: Default::default(),
             circle_capacity_bytes: 0,

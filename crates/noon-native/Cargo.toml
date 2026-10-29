@@ -6,8 +6,13 @@ license = "MIT"
 description = "Native window host for typed Noon execution sessions"
 
 [features]
+wgsl-effects = ["noon/wgsl-effects"]
 audio = ["dep:cpal"]
 latex = ["noon/latex"]
+
+[[example]]
+name = "shader_sweep"
+required-features = ["wgsl-effects"]
 
 [dependencies]
 cpal = { version = "=0.18.2", default-features = false, optional = true }

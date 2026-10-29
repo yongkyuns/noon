@@ -532,9 +532,13 @@ impl SceneInstance {
         &self.changes
     }
 
-    /// Consume one renderer publication atomically with its accumulated changes.
-    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        let changes = self.take_frame_changes();
+    /// Borrow a coherent publication for fallible resource preparation without
+    /// consuming dirty changes or acknowledging any presentation/continuation.
+    pub fn resource_publication(&self) -> RendererPublication<'_> {
+        self.publication_with_changes(self.changes.clone())
+    }
+
+    fn publication_with_changes(&self, changes: FrameChanges) -> RendererPublication<'_> {
         RendererPublication::new(
             self.publication,
             &self.frame,
@@ -551,6 +555,12 @@ impl SceneInstance {
         .with_view_color_profiles(self)
     }
 
+    /// Consume one renderer publication atomically with its accumulated changes.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let changes = self.take_frame_changes();
+        self.publication_with_changes(changes)
+    }
+
     /// Consume one renderer publication while queueing a presentation-only redraw
     /// for the immediately following publication.
     ///
@@ -563,20 +573,7 @@ impl SceneInstance {
     ) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();
         self.changes = FrameChanges::presentation_redraw();
-        RendererPublication::new(
-            self.publication,
-            &self.frame,
-            changes,
-            self,
-            self.compiled.font_resources(),
-            self,
-            self,
-            self.compiled.family_animation_plans(),
-            &self.active_family_animation_indices,
-            &self.painter_order,
-            self,
-        )
-        .with_view_color_profiles(self)
+        self.publication_with_changes(changes)
     }
 
     /// Consume derived spatial invalidation for the execution-session index owner.

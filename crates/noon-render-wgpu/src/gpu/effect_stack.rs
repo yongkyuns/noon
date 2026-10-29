@@ -291,6 +291,35 @@ pub struct EffectStackFilter {
 }
 
 impl EffectStackFilter {
+    pub(super) fn pin_shader_programs(
+        &self,
+        device: &wgpu::Device,
+        scope: Option<&EffectStackScope>,
+        definitions: &[EffectDefinition],
+    ) -> Result<[Option<Arc<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN], EffectPrepareError>
+    {
+        if definitions.len() > MAX_EFFECT_STACK_LEN {
+            return Err(EffectPrepareError::StackExceedsProfile);
+        }
+        let mut programs = std::array::from_fn(|_| None);
+        for (index, definition) in definitions.iter().enumerate() {
+            if let Some(shader) = definition.as_shader() {
+                let previous = scope
+                    .and_then(|scope| scope.passes.get(index))
+                    .and_then(|pass| match &pass.filter {
+                        PassFilter::Sample(scope) => Some(scope.as_ref()),
+                        _ => None,
+                    });
+                programs[index] = Some(self.sample.shader_program_for_scope(
+                    device,
+                    shader.program(),
+                    previous,
+                )?);
+            }
+        }
+        Ok(programs)
+    }
+
     /// Fallible device preparation shared with the ordinary sampled filter.
     /// Keep the lease alive through the first coherent stack preparation.
     pub async fn prepare_shader_program(

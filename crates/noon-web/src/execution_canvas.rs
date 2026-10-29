@@ -735,7 +735,14 @@ mod wasm {
                 backend,
                 self.gpu_diagnostics.clone(),
             );
-            let renderer = GpuRenderer::new(&device, &queue, config.format);
+            let mut renderer = GpuRenderer::new(&device, &queue, config.format);
+            {
+                let publication = self.source.session().resource_publication();
+                renderer
+                    .prepare_effect_programs(&device, &publication)
+                    .await
+                    .map_err(js_error)?;
+            }
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             self.instance = instance;
@@ -805,7 +812,14 @@ mod wasm {
                 backend,
                 self.gpu_diagnostics.clone(),
             );
-            let renderer = GpuRenderer::new(&device, &queue, config.format);
+            let mut renderer = GpuRenderer::new(&device, &queue, config.format);
+            {
+                let publication = self.source.session().resource_publication();
+                renderer
+                    .prepare_effect_programs(&device, &publication)
+                    .await
+                    .map_err(js_error)?;
+            }
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             // The WebGPU backend has no destructor-side browser teardown. Once
@@ -2195,6 +2209,14 @@ mod wasm {
                 last_selection_presentation: None,
             };
             result.update_camera()?;
+            {
+                let publication = result.source.session().resource_publication();
+                result
+                    .renderer
+                    .prepare_effect_programs(&result.device, &publication)
+                    .await
+                    .map_err(js_error)?;
+            }
             Ok(result)
         }
 
