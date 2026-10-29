@@ -233,6 +233,7 @@ impl EffectDefinition {
                 parameter == EffectParameter::Size && a.size() != b.size()
             }
             (Self::Shader(a), Self::Shader(b)) => match parameter {
+                EffectParameter::Seed => a.seed() != b.seed(),
                 EffectParameter::Shader(index) => {
                     a.program() != b.program()
                         || a.values().get(usize::from(index)) != b.values().get(usize::from(index))
@@ -253,7 +254,11 @@ impl EffectDefinition {
             Self::Glow(value) => EffectUpdate::default().source(value.source()),
             Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
             Self::Shader(value) => {
-                let mut update = EffectUpdate::default();
+                let mut update = if value.program().schema().dependencies.seed {
+                    EffectUpdate::default().seed(value.seed())
+                } else {
+                    EffectUpdate::default()
+                };
                 for (index, parameter) in value.program().schema().parameters.iter().enumerate() {
                     if !parameter.kind.is_continuous() {
                         let key = value

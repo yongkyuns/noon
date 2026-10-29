@@ -312,3 +312,50 @@ fn shader_copy_intent_addresses_the_last_schema_parameter_without_aliasing() {
         .copy_provenance()
         .is_none());
 }
+
+#[test]
+fn shader_seed_uses_the_existing_discrete_parameter_without_a_random_clock() {
+    use crate::{EffectParameter, EffectParameterError, EffectTrackValue, EffectUpdate, Property};
+    let mut declared = schema();
+    declared.dependencies.seed = true;
+    let program = WgslEffectProgram::prepare(
+        declared,
+        SCAN.replace("p.phase", "p.phase + f32(input.seed & 1u) * 0.1"),
+    )
+    .unwrap();
+    let original = ShaderEffect::new(program.clone());
+    let seeded = EffectUpdate::default()
+        .seed(u32::MAX)
+        .apply_to(original.clone())
+        .unwrap();
+    assert_eq!(seeded.seed(), u32::MAX);
+    assert_eq!(
+        EffectUpdate::default()
+            .seed(u32::MAX)
+            .prepare(seeded.clone())
+            .unwrap()
+            .sample(0.5)
+            .unwrap()
+            .seed,
+        Some(u32::MAX)
+    );
+    assert_eq!(seeded.values(), original.values());
+    assert!(Arc::ptr_eq(seeded.program().module(), program.module()));
+    assert_eq!(
+        EffectTrackValue::from_definition(Property::EffectSeed, &seeded.clone().into()),
+        Some(EffectTrackValue::Seed(u32::MAX))
+    );
+    assert_eq!(
+        EffectUpdate::default().seed(7).prepare(original),
+        Err(EffectParameterError::DiscreteTransition(
+            EffectParameter::Seed
+        ))
+    );
+    let plain = ShaderEffect::new(WgslEffectProgram::prepare(schema(), SCAN).unwrap());
+    assert_eq!(
+        EffectUpdate::default().seed(7).apply_to(plain),
+        Err(EffectParameterError::UnsupportedParameter(
+            EffectParameter::Seed
+        ))
+    );
+}

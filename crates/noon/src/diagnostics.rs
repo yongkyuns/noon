@@ -9,7 +9,7 @@ fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
             json!({"kind":"bloom","radius":v.radius(),"threshold":v.threshold(),"intensity":v.intensity()})
         }
         noon_core::EffectDefinition::Shader(value) => {
-            json!({"kind":"shader","profile":format!("{:?}",value.program().schema().profile),"values":value.values()})
+            json!({"kind":"shader","profile":format!("{:?}",value.program().schema().profile),"values":value.values(),"seed":value.seed()})
         }
         noon_core::EffectDefinition::Pixelate(v) => json!({"kind":"pixelate","size":v.size()}),
         noon_core::EffectDefinition::Glow(glow) => {

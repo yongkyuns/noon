@@ -549,7 +549,15 @@ impl EffectTrackValue {
                 .as_noise_dissolve()
                 .map(|v| Self::Softness(v.softness())),
             Property::EffectSize => definition.as_pixelate().map(|v| Self::Size(v.size())),
-            Property::EffectSeed => definition.as_noise_dissolve().map(|v| Self::Seed(v.seed())),
+            Property::EffectSeed => definition
+                .as_noise_dissolve()
+                .map(|v| Self::Seed(v.seed()))
+                .or_else(|| {
+                    definition
+                        .as_shader()
+                        .filter(|v| v.program().schema().dependencies.seed)
+                        .map(|v| Self::Seed(v.seed()))
+                }),
             Property::EffectIntensity => definition.intensity().map(Self::Intensity),
             Property::EffectThreshold => definition.threshold().map(Self::Threshold),
             _ => None,

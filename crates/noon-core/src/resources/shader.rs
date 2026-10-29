@@ -363,6 +363,7 @@ impl ShaderParameterKey {
 pub struct ShaderEffect {
     program: WgslEffectProgram,
     values: Arc<[ShaderValue]>,
+    seed: u32,
 }
 impl ShaderEffect {
     pub fn new(program: WgslEffectProgram) -> Self {
@@ -372,10 +373,17 @@ impl ShaderEffect {
             .iter()
             .map(|p| p.default)
             .collect();
-        Self { program, values }
+        Self {
+            program,
+            values,
+            seed: 0,
+        }
     }
     pub fn program(&self) -> &WgslEffectProgram {
         &self.program
+    }
+    pub const fn seed(&self) -> u32 {
+        self.seed
     }
     pub fn values(&self) -> &[ShaderValue] {
         &self.values
@@ -411,7 +419,9 @@ impl crate::EffectValue for ShaderEffect {
         use crate::{EffectParameter, EffectParameterError};
         update.validate()?;
         for parameter in update.parameters() {
-            if !matches!(parameter, EffectParameter::Shader(_)) {
+            if !matches!(parameter, EffectParameter::Shader(_))
+                && !(parameter == EffectParameter::Seed && self.program.schema().dependencies.seed)
+            {
                 return Err(EffectParameterError::UnsupportedParameter(parameter));
             }
         }
@@ -431,6 +441,9 @@ impl crate::EffectValue for ShaderEffect {
                 values[write.key.index] = write.value;
             }
         }
+        if let Some(seed) = update.seed {
+            self.seed = seed;
+        }
         Ok(self)
     }
     fn validate_effect_value_update(
@@ -445,6 +458,11 @@ impl crate::EffectValue for ShaderEffect {
     fn validate_effect_transition(&self, target: &Self) -> Result<(), crate::EffectParameterError> {
         use crate::{EffectParameter, EffectParameterError};
         self.validate_effect_value_update(target)?;
+        if self.seed != target.seed {
+            return Err(EffectParameterError::DiscreteTransition(
+                EffectParameter::Seed,
+            ));
+        }
         for (index, parameter) in self.program.schema().parameters.iter().enumerate() {
             if !parameter.kind.is_continuous() && self.values[index] != target.values[index] {
                 return Err(EffectParameterError::DiscreteTransition(
@@ -460,7 +478,11 @@ impl crate::EffectValue for ShaderEffect {
         request: &crate::EffectUpdate,
         alpha: f64,
     ) -> Result<crate::EffectUpdate, crate::EffectParameterError> {
-        let mut result = crate::EffectUpdate::default();
+        let mut result = if request.seed.is_some() {
+            crate::EffectUpdate::default().seed(self.seed)
+        } else {
+            crate::EffectUpdate::default()
+        };
         for write in request.shader_parameters() {
             let index = write.key.index;
             let value = self.values[index]
