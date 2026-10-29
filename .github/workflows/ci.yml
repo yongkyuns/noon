@@ -471,7 +471,16 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Test Rust/Python semantic parity
+        id: semantic_parity
         run: node scripts/cross-language-parity.mjs
+      - name: Preserve failed semantic parity evidence
+        if: ${{ failure() && steps.semantic_parity.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: semantic-parity-failure
+          path: browser-smoke-artifacts/cross-language
+          if-no-files-found: error
+          retention-days: 3
       - name: Test deterministic seek/playback/rewind in WASM
         run: node scripts/deterministic-replay-smoke.mjs
       - name: Test Manim-style Python compatibility
