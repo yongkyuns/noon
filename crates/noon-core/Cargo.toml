@@ -5,5 +5,10 @@ edition = "2021"
 license = "MIT"
 description = "Renderer-independent semantic core for Noon"
 
+[features]
+# Source preparation is optional; geometry-only consumers do not load Naga.
+wgsl-effects = ["dep:naga"]
+
 [dependencies]
+naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in"], optional = true }
 serde = { version = "1", features = ["derive", "rc"] }
