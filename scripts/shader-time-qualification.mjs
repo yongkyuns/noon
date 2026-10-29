@@ -194,7 +194,7 @@ async function qualifyPythonPreparation(context, baseUrl, backend, kind = "attac
     const addition = index => {
       const call = kind === "scene" ? `self.add(panels[${index}], key="panel-${index}")`
       : familyMembership ? `family.add(panels[${index}])`
-      : fade ? `self.play(FadeIn(panels[${index}])${index === 0 ? ", UpdateFromAlphaFunc(anchor, observe_intro)" : ""}, run_time=0.25, rate_func=linear)`
+      : fade ? `self.play(FadeIn(panels[${index}])${index === 0 ? ", UpdateFromFunc(anchor, observe_intro)" : ""}, run_time=0.25, rate_func=linear)`
         : `panels[${index}].add_effect(ShaderEffect(programs[${index}]), name="stripes")`;
       return sourceMode === "async" && !fade ? `(await ${call})` : call;
     };
@@ -238,10 +238,10 @@ ${rejectedCheck}
     if (fade) source = source.replace("        self.wait(0.5)", `        anchor = Dot(radius=0.01).set_opacity(0)
         self.add(anchor)
         observed = []
-        def observe_intro(_, alpha):
+        def observe_intro(_):
             assert panels[0]._scene is not None
             assert abs(panels[0].get_center().x + 3) < 1e-6
-            observed.append(alpha)
+            observed.append(True)
         self.wait(0.5)`);
     source = sourceForMode(source);
     const checkpoints = fade ? [0, 0.5, 0.75, 1, 1.25, 1.5] : [0, 0.5, 0.75];
