@@ -267,10 +267,12 @@ fn authored_profile_color_repack_is_once_per_view_change_and_other_edits_stay_lo
         assert!((f64::from(actual) - expected).abs() < 1e-6);
     }
     assert_eq!(prepared.circles[0].style.opacity, 0.5);
-    assert_eq!(
-        prepared.stats.instances_repacked,
-        publication.frame().objects.len()
-    );
+    // The 64 painted circles repack; the camera is a non-drawable controller.
+    assert_eq!(prepared.stats.instances_repacked, 64);
+    let camera_index = publication
+        .object_index(publication.primary_view().unwrap())
+        .unwrap();
+    assert!(!publication.frame().objects[camera_index].draw_enabled);
     let linear = prepared.circles.to_vec();
     drop(publication);
     let publication = session.take_renderer_publication();

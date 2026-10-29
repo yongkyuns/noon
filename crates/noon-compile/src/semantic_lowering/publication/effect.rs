@@ -25,14 +25,36 @@ pub(super) fn lower_prepared_attachment(
         return Ok(None);
     }
     match prepared.proposed_object_state(owner) {
-        Ok(state) => super::super::projection::validate_effect_source_profile(
-            semantic,
-            &state,
-            prepared.store(),
-        )?,
+        Ok(state) => {
+            if effects.iter().any(|effect| {
+                effect.definition.input_role() == noon_core::EffectInputRole::AuthoredView
+            }) {
+                if state.role() != noon_core::SemanticObjectRole::Camera2D
+                    || state.view_color_profile() != noon_core::ViewColorProfile::LinearHdr
+                {
+                    return Err(SemanticLoweringError::UnsupportedEffectProfile {
+                        owner: semantic,
+                    }
+                    .into());
+                }
+            } else {
+                super::super::projection::validate_effect_source_profile(
+                    semantic,
+                    &state,
+                    prepared.store(),
+                )?;
+            }
+        }
         Err(error) => {
             // An admitted non-drawable family already owns its immutable input
             // plan. Parameter-only publication must not traverse that family.
+            if effects.iter().any(|effect| {
+                effect.definition.input_role() == noon_core::EffectInputRole::AuthoredView
+            }) {
+                return Err(
+                    SemanticLoweringError::UnsupportedEffectProfile { owner: semantic }.into(),
+                );
+            }
             if prepared.family_style(owner).is_err() {
                 return Err(error.into());
             }
@@ -70,6 +92,11 @@ pub(super) fn lower_changes(
                 // Pending/newly reachable owners get the final column through
                 // their ordinary CreateObject entry, never a premature patch.
                 if let Some(owner) = owner.existing() {
+                    owners.insert(owner);
+                }
+            }
+            SemanticMutation::SetViewColorProfile { object, .. } => {
+                if let Some(owner) = object.existing() {
                     owners.insert(owner);
                 }
             }

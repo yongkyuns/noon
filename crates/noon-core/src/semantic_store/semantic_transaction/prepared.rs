@@ -335,6 +335,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
             }
         }
+        super::view_effect::validate(transaction, &preflight, store)?;
         for mutation in &transaction.mutations {
             let SemanticMutation::AddAnimation { token, animation } = mutation else {
                 continue;

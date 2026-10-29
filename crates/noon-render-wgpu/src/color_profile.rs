@@ -71,3 +71,24 @@ pub(crate) fn working_color_shader(format: wgpu::TextureFormat) -> String {
         include_str!("working_color.wgsl")
     )
 }
+
+/// Convert an authored sRGB clear into the selected renderer working profile.
+/// Alpha stays linear; the GPU receives already-decoded color in an HDR view.
+pub fn authored_clear_color(color: wgpu::Color, profile: ViewColorProfile) -> wgpu::Color {
+    if profile == ViewColorProfile::Compatibility {
+        return color;
+    }
+    let decode = |x: f64| {
+        if x <= 0.04045 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    wgpu::Color {
+        r: decode(color.r),
+        g: decode(color.g),
+        b: decode(color.b),
+        a: color.a,
+    }
+}

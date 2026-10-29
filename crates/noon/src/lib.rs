@@ -87,14 +87,14 @@ mod effect_authoring;
 mod effective_capture;
 pub mod number_line_example;
 
-/// Finite leaf effects through shared semantic identity, ordinary animation
-/// channels and retained source capture. Groups/stacks have separate admission.
+/// Checked appearance definitions using shared semantic identity and ordinary
+/// animation channels. Source roles and host capabilities have explicit admission.
 pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{
-        BackdropBlur, Blur, DissolveDirection, DissolveStyle, EffectDefinition, EffectOffset,
-        EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource, NoiseDissolve,
-        NoiseDissolveError, Pixelate, Pixels, Shadow,
+        BackdropBlur, Bloom, Blur, DissolveDirection, DissolveStyle, EffectDefinition,
+        EffectOffset, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
+        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, Shadow,
     };
 }
 mod drawing;

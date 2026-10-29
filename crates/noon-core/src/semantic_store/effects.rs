@@ -16,6 +16,7 @@ pub const MAX_EFFECT_STACK_LEN: usize = 8;
 /// Finite built-in definitions; custom program/schema resources remain #1897 M4.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EffectDefinition {
+    Bloom(crate::Bloom),
     Glow(Glow),
     Blur(Blur),
     BackdropBlur(BackdropBlur),
@@ -31,6 +32,13 @@ pub enum EffectDefinition {
 pub enum EffectInputRole {
     Painted,
     PainterPrefix,
+    AuthoredView,
+}
+
+impl From<crate::Bloom> for EffectDefinition {
+    fn from(value: crate::Bloom) -> Self {
+        Self::Bloom(value)
+    }
 }
 
 impl From<BackdropBlur> for EffectDefinition {
@@ -70,9 +78,30 @@ impl From<Glow> for EffectDefinition {
 }
 
 impl EffectDefinition {
+    pub const fn as_bloom(self) -> Option<crate::Bloom> {
+        if let Self::Bloom(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub const fn intensity(self) -> Option<f64> {
+        match self {
+            Self::Bloom(v) => Some(v.intensity()),
+            Self::Glow(v) => Some(v.intensity()),
+            _ => None,
+        }
+    }
+    pub const fn threshold(self) -> Option<f64> {
+        match self {
+            Self::Bloom(v) => Some(v.threshold()),
+            _ => None,
+        }
+    }
     pub const fn input_role(self) -> EffectInputRole {
         match self {
             Self::BackdropBlur(_) => EffectInputRole::PainterPrefix,
+            Self::Bloom(_) => EffectInputRole::AuthoredView,
             _ => EffectInputRole::Painted,
         }
     }
@@ -85,6 +114,7 @@ impl EffectDefinition {
     }
     pub const fn radius(self) -> Option<EffectRadius> {
         match self {
+            Self::Bloom(v) => Some(v.radius()),
             Self::Glow(v) => Some(v.radius()),
             Self::Blur(v) => Some(v.radius()),
             Self::BackdropBlur(v) => Some(v.radius()),
@@ -94,6 +124,7 @@ impl EffectDefinition {
     }
     pub fn is_neutral(self) -> bool {
         match self {
+            Self::Bloom(v) => v.is_neutral(),
             Self::Glow(v) => v.is_neutral(),
             Self::Blur(v) => v.is_neutral(),
             Self::BackdropBlur(v) => v.is_neutral(),
@@ -113,9 +144,11 @@ impl EffectDefinition {
         match self {
             Self::Glow(v) => Some(v.color()),
             Self::Shadow(v) => Some(v.color()),
-            Self::Blur(_) | Self::BackdropBlur(_) | Self::NoiseDissolve(_) | Self::Pixelate(_) => {
-                None
-            }
+            Self::Bloom(_)
+            | Self::Blur(_)
+            | Self::BackdropBlur(_)
+            | Self::NoiseDissolve(_)
+            | Self::Pixelate(_) => None,
         }
     }
     pub const fn as_glow(self) -> Option<Glow> {
@@ -148,6 +181,12 @@ impl EffectDefinition {
     /// Declaration identity and stack order are independent of parameter dirtiness.
     pub(crate) fn parameter_changed(self, next: Self, parameter: EffectParameter) -> bool {
         match (self, next) {
+            (Self::Bloom(a), Self::Bloom(b)) => match parameter {
+                EffectParameter::Radius => a.radius() != b.radius(),
+                EffectParameter::Threshold => a.threshold() != b.threshold(),
+                EffectParameter::Intensity => a.intensity() != b.intensity(),
+                _ => false,
+            },
             (Self::Glow(previous), Self::Glow(next)) => match parameter {
                 EffectParameter::Color => previous.color() != next.color(),
                 EffectParameter::Offset => false,
@@ -190,9 +229,11 @@ impl EffectDefinition {
         match self {
             Self::Glow(value) => EffectUpdate::default().source(value.source()),
             Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
-            Self::Blur(_) | Self::BackdropBlur(_) | Self::Shadow(_) | Self::Pixelate(_) => {
-                EffectUpdate::default()
-            }
+            Self::Bloom(_)
+            | Self::Blur(_)
+            | Self::BackdropBlur(_)
+            | Self::Shadow(_)
+            | Self::Pixelate(_) => EffectUpdate::default(),
         }
     }
 }
@@ -201,6 +242,7 @@ impl crate::object_state::effect_value_sealed::Sealed for EffectDefinition {}
 impl EffectValue for EffectDefinition {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         match self {
+            Self::Bloom(v) => update.apply_to(v).map(Self::Bloom),
             Self::Glow(v) => update.apply_to(v).map(Self::Glow),
             Self::Blur(v) => update.apply_to(v).map(Self::Blur),
             Self::BackdropBlur(v) => update.apply_to(v).map(Self::BackdropBlur),
@@ -218,6 +260,7 @@ impl EffectValue for EffectDefinition {
     }
     fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
         match (self, target) {
+            (Self::Bloom(a), Self::Bloom(b)) => a.validate_effect_transition(b),
             (Self::Glow(a), Self::Glow(b)) => a.validate_effect_transition(b),
             (Self::Blur(a), Self::Blur(b)) => a.validate_effect_transition(b),
             (Self::BackdropBlur(a), Self::BackdropBlur(b)) => a.validate_effect_transition(b),
@@ -234,6 +277,7 @@ impl EffectValue for EffectDefinition {
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         match (self, target) {
+            (Self::Bloom(a), Self::Bloom(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Glow(a), Self::Glow(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Blur(a), Self::Blur(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::BackdropBlur(a), Self::BackdropBlur(b)) => {
@@ -304,6 +348,7 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u16 {
         EffectParameter::Softness => 64,
         EffectParameter::Seed => 128,
         EffectParameter::Size => 256,
+        EffectParameter::Threshold => 512,
     }
 }
 

@@ -230,6 +230,7 @@ fn apply_effective_track_endpoint(
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectThreshold
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness

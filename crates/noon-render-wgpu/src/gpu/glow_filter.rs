@@ -497,6 +497,9 @@ impl EffectCaptureParameters {
             };
         }
         Ok(match self.definition {
+            noon_core::EffectDefinition::Bloom(_) => {
+                return Err(EffectPrepareError::UnsupportedCapture)
+            }
             noon_core::EffectDefinition::NoiseDissolve(_)
             | noon_core::EffectDefinition::Pixelate(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,

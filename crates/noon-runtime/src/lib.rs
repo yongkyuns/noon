@@ -1488,6 +1488,7 @@ impl SceneInstance {
                 Property::EffectColor
                 | Property::EffectRadius
                 | Property::EffectIntensity
+                | Property::EffectThreshold
                 | Property::EffectOffset
                 | Property::EffectProgress
                 | Property::EffectSoftness
@@ -2774,6 +2775,7 @@ fn apply_group_to_row(
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectThreshold
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
