@@ -64,6 +64,9 @@ enum PassFilter {
 impl PassFilter {
     fn new(definition: EffectDefinition) -> Self {
         match definition {
+            EffectDefinition::Bloom(_) => {
+                unreachable!("authored-view input rejected by capture preflight")
+            }
             EffectDefinition::Glow(_) => Self::Glow(Box::default()),
             EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_) => {
                 Self::Blur(Box::default())

@@ -228,6 +228,7 @@ const fn parameter_bit(parameter: EffectParameter) -> u16 {
         EffectParameter::Softness => 64,
         EffectParameter::Seed => 128,
         EffectParameter::Size => 256,
+        EffectParameter::Threshold => 512,
     }
 }
 

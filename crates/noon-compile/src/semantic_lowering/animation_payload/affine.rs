@@ -3325,6 +3325,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
         Property::EffectSoftness => 20,
         Property::EffectSeed => 21,
         Property::EffectSize => 22,
+        Property::EffectThreshold => 23,
     };
     (object.get(), slot, None)
 }

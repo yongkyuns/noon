@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod color_profile;
+pub use color_profile::authored_clear_color;
 mod gpu;
 mod mega_mesh;
 mod paint;

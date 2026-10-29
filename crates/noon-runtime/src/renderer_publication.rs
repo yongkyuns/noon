@@ -286,6 +286,20 @@ impl<'a> RendererPublication<'a> {
 
     /// The working color profile of the selected authored view. Publications
     /// without a 2D view controller keep the ordinary compatibility profile.
+    pub const fn primary_view(&self) -> Option<noon_core::ObjectId> {
+        self.primary_view
+    }
+
+    /// Effective attachment values on the selected authored camera, borrowed
+    /// from the ordinary frame row. No separate view-effects state is retained.
+    pub fn view_effects(&self) -> Option<&noon_compile::CompiledEffectStack> {
+        let camera = self.primary_view?;
+        self.view_color_profile(camera)?;
+        self.frame.objects[self.object_index(camera)?]
+            .effects
+            .as_deref()
+    }
+
     pub fn color_profile(&self) -> noon_core::ViewColorProfile {
         self.primary_view
             .and_then(|camera| self.view_color_profile(camera))

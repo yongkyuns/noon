@@ -975,7 +975,20 @@ fn lower_effect_stack(
     if effects.len() > noon_core::MAX_EFFECT_STACK_LEN {
         return Err(unsupported());
     }
-    validate_effect_source_profile(owner, state, store)?;
+    let view_effect = effects.iter().any(|&id| {
+        store.semantic_effect_state(id).is_ok_and(|effect| {
+            effect.definition().input_role() == noon_core::EffectInputRole::AuthoredView
+        })
+    });
+    if view_effect {
+        if state.role() != SemanticObjectRole::Camera2D
+            || state.view_color_profile() != noon_core::ViewColorProfile::LinearHdr
+        {
+            return Err(unsupported());
+        }
+    } else {
+        validate_effect_source_profile(owner, state, store)?;
+    }
     let mut lowered = Vec::with_capacity(effects.len());
     let mut visibility = None;
     for &attachment in effects {
@@ -1153,7 +1166,14 @@ pub(super) fn lower_object_state(
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
-        presentation: state.presentation(),
+        presentation: if state.role() == SemanticObjectRole::Camera2D {
+            noon_core::SemanticPresentation {
+                draw_enabled: false,
+                ..state.presentation()
+            }
+        } else {
+            state.presentation()
+        },
         signal_bindings: state.signal_bindings().to_vec(),
         decimal_number: state.decimal_number().cloned(),
         spatial,

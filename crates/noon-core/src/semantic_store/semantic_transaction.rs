@@ -28,6 +28,7 @@ use crate::{CompositionTimeMap, TrackTiming};
 mod inset_view;
 mod pending_resources;
 mod prepared;
+mod view_effect;
 pub use prepared::{
     PendingGeometryPublicationError, PendingResourceExtensionError,
     PreparedSemanticMutationTransaction, SemanticTransactionReadError,

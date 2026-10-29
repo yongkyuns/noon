@@ -65,6 +65,11 @@ pub struct TransportEffectState {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TransportEffectDefinition {
+    Bloom {
+        radius: EffectRadius,
+        threshold: f64,
+        intensity: f64,
+    },
     Pixelate {
         size: EffectRadius,
     },
@@ -94,6 +99,11 @@ pub enum TransportEffectDefinition {
 impl From<&noon_compile::CompiledEffect> for TransportEffectState {
     fn from(effect: &noon_compile::CompiledEffect) -> Self {
         let definition = match effect.definition {
+            noon_core::EffectDefinition::Bloom(v) => TransportEffectDefinition::Bloom {
+                radius: v.radius(),
+                threshold: v.threshold(),
+                intensity: v.intensity(),
+            },
             noon_core::EffectDefinition::Pixelate(v) => {
                 TransportEffectDefinition::Pixelate { size: v.size() }
             }
@@ -133,6 +143,9 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
 impl TransportEffectState {
     fn to_compiled(self) -> Option<noon_compile::CompiledEffect> {
         let definition = match self.definition {
+            // Cross-worker HDR profile/view metadata has a separate qualification
+            // gate. Do not silently render a view effect as ordinary RGBA8.
+            TransportEffectDefinition::Bloom { .. } => return None,
             TransportEffectDefinition::Pixelate { size } => {
                 noon_core::Pixelate::new(EffectUpdate::default().size(size))
                     .ok()?

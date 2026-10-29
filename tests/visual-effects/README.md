@@ -1864,3 +1864,48 @@ This slice does not establish public checked emission, camera Bloom authoring,
 HDR text-capture qualification, view/host capability admission, browser execution,
 export/recovery or physical-device performance. The complete M4/M5 goal remains
 open in #1897.
+
+
+### Authored camera Bloom and native capture integration (#1897 M4)
+
+`Bloom` is a checked view-input definition on the existing Camera2D controller,
+with radius in scene/final-pixel units, associated-linear Rec.709 threshold
+[0,64], and intensity [0,8]. `EffectUpdate::threshold` has its own ordinary typed
+track property; it shares capture, target intent, activation, reconciliation,
+Runtime sampling and attachment generation with other effect parameters.
+Explicit zero remains a write. Radius units cannot change during interpolation.
+
+The initial view stack admits one Bloom attachment on a LinearHdr Camera2D.
+Ordinary objects, families, mixed view/object stacks and duplicate view effects
+reject before publication. Removing Bloom and leaving HDR in one transaction is
+valid; changing to Compatibility with Bloom still attached rejects atomically.
+A camera controller is non-drawable by semantic role. Its paint and opacity never
+scale or become the view input. Renderer publications borrow effective view
+attachments directly from that camera's ordinary Runtime row.
+
+The same `HdrBloomFilter::prepare_view` resolves the selected camera's effective
+values. A LinearHdr view without an attachment still resolves its linear base
+with zero added Bloom. The ordinary native `SessionCapture`/`capture_frames` host
+selects the working format from that publication, decodes the authored clear,
+renders through the same retained renderer, and uses the same Bloom/SDR output.
+Its metadata distinguishes `LinearHdrSdrRgba8Opaque` from compatibility UNORM
+bytes. It checks float usages, blending, four-sample support, image budget and
+its finite primary-2D/no-inset/no-spatial profile before allocating the HDR view.
+Profile changes rebuild only disposable renderer state; they add no authored
+scene, view-parameter map or playback clock.
+
+The camera proof animates radius, threshold and intensity, samples forward and
+backward authored times, checks exact seek restoration/removal and clean reuse,
+and verifies nonzero camera-frame opacity cannot affect output. An actual wrong
+opacity-uniform consumer must fail its independent full-2D f64 reference. The
+normal capture-host proof covers persistent edits, zero energy, removal and
+Compatibility/HDR/Compatibility transitions over a nonblack authored clear,
+with independent display expectations and exact restored output.
+
+This is native capture integration, not the complete M4 creator release. Checked
+emission, native interactive/browser/Python host wiring, broader view/capture
+capabilities, the public WGSL extension and remaining M5 gates stay open. Ordinary
+retained hosts whose working format disagrees with the authored profile reject
+explicitly. Cross-worker transport rejects Bloom until its view/profile metadata
+is qualified. Existing video/file format admission has not been expanded by this
+slice; HDR-derived SDR files need their separate output qualification.

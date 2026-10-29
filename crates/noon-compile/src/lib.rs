@@ -90,6 +90,7 @@ impl DynamicProperties {
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectThreshold
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
@@ -171,11 +172,12 @@ pub struct CompiledEffect {
 }
 
 impl CompiledEffect {
-    /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 8] = [
+    /// Ordinary timeline channels owned by one lowered appearance attachment.
+    pub const PARAMETER_PROPERTIES: [Property; 9] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
+        Property::EffectThreshold,
         Property::EffectOffset,
         Property::EffectProgress,
         Property::EffectSoftness,
@@ -195,6 +197,7 @@ impl CompiledEffect {
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
             + usize::from(update.intensity.is_some())
+            + usize::from(update.threshold.is_some())
             + usize::from(update.offset.is_some())
             + usize::from(update.progress.is_some())
             + usize::from(update.softness.is_some())
@@ -204,6 +207,7 @@ impl CompiledEffect {
             (update.color.is_some(), Property::EffectColor),
             (update.radius.is_some(), Property::EffectRadius),
             (update.intensity.is_some(), Property::EffectIntensity),
+            (update.threshold.is_some(), Property::EffectThreshold),
             (update.offset.is_some(), Property::EffectOffset),
             (update.progress.is_some(), Property::EffectProgress),
             (update.softness.is_some(), Property::EffectSoftness),
@@ -218,9 +222,9 @@ impl CompiledEffect {
                             property,
                             self.definition,
                         )
-                        .expect("glow property"),
+                        .expect("checked appearance parameter"),
                         to: noon_core::EffectTrackValue::from_definition(property, target)
-                            .expect("glow property"),
+                            .expect("checked appearance parameter"),
                         end_behavior: noon_core::EffectTrackEndBehavior::Sample,
                     },
                 ));
@@ -1526,6 +1530,7 @@ impl CompiledScene {
                         | Property::EffectColor
                         | Property::EffectRadius
                         | Property::EffectIntensity
+                        | Property::EffectThreshold
                         | Property::EffectOffset
                         | Property::EffectProgress
                         | Property::EffectSoftness
@@ -2887,6 +2892,7 @@ impl CompiledScene {
                             | Property::EffectColor
                             | Property::EffectRadius
                             | Property::EffectIntensity
+                            | Property::EffectThreshold
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
@@ -3712,6 +3718,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectSoftness => 20,
         Property::EffectSeed => 21,
         Property::EffectSize => 22,
+        Property::EffectThreshold => 23,
     }
 }
 
