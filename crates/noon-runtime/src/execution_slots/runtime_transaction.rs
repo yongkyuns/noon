@@ -552,17 +552,21 @@ impl SceneInstance {
                                         == Some(effect)
                                 })
                             })
-                            && noon_compile::CompiledEffect::PARAMETER_PROPERTIES
-                                .into_iter()
-                                .all(|property| {
-                                    self.compiled
-                                        .channel_tracks(noon_compile::CompiledChannelKey::effect(
-                                            index as u32,
-                                            property,
-                                            attachment,
-                                        ))
-                                        .is_empty()
-                                })
+                            && current.and_then(|stack| stack.get(attachment)).is_some_and(
+                                |effect| {
+                                    effect.parameter_properties().all(|property| {
+                                        self.compiled
+                                            .channel_tracks(
+                                                noon_compile::CompiledChannelKey::effect(
+                                                    index as u32,
+                                                    property,
+                                                    attachment,
+                                                ),
+                                            )
+                                            .is_empty()
+                                    })
+                                },
+                            )
                             && self.transient_glow_attachment(*object) == Some((attachment, true))
                     })
                 } else {

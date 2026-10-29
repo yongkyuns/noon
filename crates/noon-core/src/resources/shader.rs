@@ -504,6 +504,20 @@ impl ShaderValue {
         if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
             return None;
         }
+        let valid = |value| match value {
+            Self::Scalar(v) => finite(v),
+            Self::Vector2(v) => v.into_iter().all(finite),
+            Self::Color(v) => ShaderParameterType::Color.accepts(Self::Color(v)),
+            Self::Boolean(_) | Self::Unsigned(_) => true,
+        };
+        if !valid(self)
+            || !valid(target)
+            || std::mem::discriminant(&self) != std::mem::discriminant(&target)
+            || matches!((self, target), (Self::Boolean(a), Self::Boolean(b)) if a != b)
+            || matches!((self, target), (Self::Unsigned(a), Self::Unsigned(b)) if a != b)
+        {
+            return None;
+        }
         if alpha == 0.0 {
             return Some(self);
         }

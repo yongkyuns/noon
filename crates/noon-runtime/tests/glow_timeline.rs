@@ -806,13 +806,13 @@ fn bounded_polynomial_glow_normalizes_roundoff_at_the_peak() {
 #[test]
 fn public_endpoint_sampler_rejects_cross_parameter_pairs() {
     assert!(EffectTrackValue::Intensity(0.5)
-        .sample(EffectTrackValue::Color(Color::BLUE), 0.5)
+        .sample_value(EffectTrackValue::Color(Color::BLUE), 0.5)
         .is_err());
     assert!(EffectTrackValue::Intensity(0.5)
-        .sample(EffectTrackValue::Intensity(1.0), f64::NAN)
+        .sample_value(EffectTrackValue::Intensity(1.0), f64::NAN)
         .is_err());
     assert!(EffectTrackValue::Radius(EffectRadius::Pixels(2.0))
-        .sample(EffectTrackValue::Radius(EffectRadius::Scene(3.0)), 0.5)
+        .sample_value(EffectTrackValue::Radius(EffectRadius::Scene(3.0)), 0.5)
         .is_err());
 }
 

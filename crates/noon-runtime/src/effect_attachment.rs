@@ -1,9 +1,7 @@
 //! Attachment lifetime on the existing execution publication and scheduler.
 use std::sync::Arc;
 
-use noon_compile::{
-    CompilePatchError, CompiledChannelKey, CompiledEffect, CompiledEffectStack, ExecutionPatch,
-};
+use noon_compile::{CompilePatchError, CompiledChannelKey, CompiledEffectStack, ExecutionPatch};
 use noon_core::ObjectId;
 
 use crate::{EvaluationStats, RuntimePatchStats, SceneInstance};
@@ -42,7 +40,11 @@ impl SceneInstance {
             {
                 continue;
             }
-            for property in CompiledEffect::PARAMETER_PROPERTIES {
+            let retired = previous
+                .as_ref()
+                .and_then(|stack| stack.get(attachment))
+                .expect("validated previous attachment");
+            for property in retired.parameter_properties() {
                 let channel = CompiledChannelKey::effect(index, property, attachment);
                 if self.groups.remove(&channel).is_some() {
                     let retired = self.timeline_scheduler.relower_channel(channel, &[]);
@@ -66,7 +68,9 @@ impl SceneInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_compile::{CompiledObject, CompiledScene, ExecutionMutationTransaction};
+    use noon_compile::{
+        CompiledEffect, CompiledObject, CompiledScene, ExecutionMutationTransaction,
+    };
     use noon_core::{
         Blur, EffectTrackEndBehavior, EffectTrackValue, EffectUpdate, GeometryRef, Property,
         RateFunction, SemanticNodeId, Style, TrackDefinition, TrackId, TrackTiming, TrackValues,

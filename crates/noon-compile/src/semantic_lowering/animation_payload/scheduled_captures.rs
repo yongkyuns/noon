@@ -63,7 +63,8 @@ impl ScheduledCaptures {
             };
             let mut effect = stack.get(*attachment)?;
             effect.definition = (if *at_end { *to } else { *from })
-                .update()
+                .update(&effect.definition)
+                .ok()?
                 .apply_to(effect.definition)
                 .ok()?;
             if !std::sync::Arc::make_mut(&mut stack).replace(effect) {
@@ -235,6 +236,7 @@ fn apply_effective_track_endpoint(
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectShader(_)
             | Property::EffectSeed,
             TrackValues::Effect {
                 attachment,
@@ -246,7 +248,11 @@ fn apply_effective_track_endpoint(
             let stack = value.effects.as_mut()?;
             let mut effect = stack.get(*attachment)?;
             let endpoint = if at_end { *to } else { *from };
-            effect.definition = endpoint.update().apply_to(effect.definition).ok()?;
+            effect.definition = endpoint
+                .update(&effect.definition)
+                .ok()?
+                .apply_to(effect.definition)
+                .ok()?;
             assert!(std::sync::Arc::make_mut(stack).replace(effect));
         }
         (Property::ZIndex, TrackValues::ZIndex { from, to }) => {

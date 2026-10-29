@@ -1493,6 +1493,7 @@ impl SceneInstance {
                 | Property::EffectProgress
                 | Property::EffectSoftness
                 | Property::EffectSize
+                | Property::EffectShader(_)
                 | Property::EffectSeed => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
@@ -1511,7 +1512,8 @@ impl SceneInstance {
                             &base.definition,
                         )
                         .expect("glow channel")
-                        .update()
+                        .update(&base.definition)
+                        .expect("validated base effect field")
                         .apply_to(current.definition.clone())
                         .expect("validated base glow");
                         if current.definition != next {
@@ -1627,9 +1629,7 @@ impl SceneInstance {
 
     fn relower_object(&mut self, object_index: usize, time: f64, stats: &mut EvaluationStats) {
         reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-        for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
-            evaluation_property_channels(&self.compiled, object_index as u32, property)
-        }) {
+        for channel in evaluation_object_channels(&self.compiled, object_index as u32) {
             let tracks = self.compiled.channel_tracks(channel);
             let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
@@ -2032,7 +2032,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 23] = [
+const PROPERTY_ORDER: [Property; 15] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -2048,15 +2048,21 @@ const PROPERTY_ORDER: [Property; 23] = [
     Property::Appearance,
     Property::Reveal,
     Property::Morph,
-    Property::EffectColor,
-    Property::EffectRadius,
-    Property::EffectIntensity,
-    Property::EffectOffset,
-    Property::EffectProgress,
-    Property::EffectSoftness,
-    Property::EffectSeed,
-    Property::EffectSize,
 ];
+
+fn evaluation_object_channels(
+    compiled: &CompiledScene,
+    object_index: u32,
+) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+    PROPERTY_ORDER
+        .into_iter()
+        .map(move |property| CompiledChannelKey::new(object_index, property))
+        .chain(
+            compiled
+                .channels_for_object_index(object_index)
+                .filter(|c| c.property.is_effect()),
+        )
+}
 
 /// Ordinary channels can have derived drivers without explicit tracks (camera
 /// angular motion). Keep those addresses and add exact effect attachment lanes.
@@ -2780,6 +2786,7 @@ fn apply_group_to_row(
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectShader(_)
             | Property::EffectSeed
             | Property::Presence
             | Property::ZIndex
@@ -3111,9 +3118,10 @@ fn apply_effect_channel(
         };
         noon_core::EffectTrackValue::from_definition(track.property, &base.definition)
             .expect("validated effect channel")
-            .update()
+            .update(&base.definition)
+            .expect("validated base effect field")
     } else {
-        from.sample(to, alpha)
+        from.sample(to, alpha, &current.definition)
             .expect("validated glow endpoints and normalized timing")
     };
     let next = patch

@@ -210,7 +210,12 @@ impl CompiledScene {
             {
                 continue;
             }
-            for property in CompiledEffect::PARAMETER_PROPERTIES {
+            let retired = self.objects[index as usize]
+                .effects
+                .as_ref()
+                .and_then(|stack| stack.get(attachment))
+                .expect("validated previous attachment");
+            for property in retired.parameter_properties() {
                 let channel = CompiledChannelKey::effect(index, property, attachment);
                 if let Some(retired) = self.tracks.remove(&channel) {
                     self.track_count -= retired.len();
@@ -223,8 +228,10 @@ impl CompiledScene {
         }
         let dynamic = next.as_ref().is_some_and(|stack| {
             stack.attachments().iter().any(|&attachment| {
-                CompiledEffect::PARAMETER_PROPERTIES
-                    .into_iter()
+                stack
+                    .get(attachment)
+                    .expect("validated attachment")
+                    .parameter_properties()
                     .any(|property| {
                         self.has_channel(CompiledChannelKey::effect(index, property, attachment))
                     })

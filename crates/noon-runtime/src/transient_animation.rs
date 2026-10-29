@@ -462,11 +462,17 @@ impl SceneInstance {
                     let alpha = timing
                         .evaluate_progress_f64((elapsed / driver.duration).clamp(0.0, 1.0))
                         .clamp(0.0, 1.0);
-                    noon_core::EffectTrackValue::Intensity(pulse.source)
-                        .sample(noon_core::EffectTrackValue::Intensity(pulse.target), alpha)
-                        .expect("validated pulse endpoints and bounded timing")
-                        .intensity
-                        .expect("intensity sampling owns one parameter")
+                    let noon_core::EffectTrackValue::Intensity(value) =
+                        noon_core::EffectTrackValue::Intensity(pulse.source)
+                            .sample_value(
+                                noon_core::EffectTrackValue::Intensity(pulse.target),
+                                alpha,
+                            )
+                            .expect("validated pulse endpoints and bounded timing")
+                    else {
+                        unreachable!("intensity sampling owns one parameter")
+                    };
+                    value
                 };
                 writes.push(EffectivePropertyWrite::EffectIntensity {
                     object,
@@ -800,6 +806,7 @@ impl SceneInstance {
                     | Property::EffectProgress
                     | Property::EffectSoftness
                     | Property::EffectSize
+                    | Property::EffectShader(_)
                     | Property::EffectSeed => {
                         let Some(attachment) = attachment else {
                             return false;

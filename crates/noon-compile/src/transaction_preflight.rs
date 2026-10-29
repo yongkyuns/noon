@@ -672,7 +672,11 @@ pub(super) fn preflight_transaction_with_resources(
                     {
                         continue;
                     }
-                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                    let retired = previous
+                        .as_ref()
+                        .and_then(|stack| stack.get(*attachment))
+                        .expect("validated previous attachment");
+                    for property in retired.parameter_properties() {
                         for track in overlay.channel(
                             scene,
                             CompiledChannelKey::effect(index, property, *attachment),
@@ -936,6 +940,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectProgress
                             | Property::EffectSoftness
                             | Property::EffectSize
+                            | Property::EffectShader(_)
                             | Property::EffectSeed
                     )
                 {

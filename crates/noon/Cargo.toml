@@ -6,6 +6,7 @@ license = "MIT"
 description = "Ergonomic language-neutral authoring facade for Noon"
 
 [features]
+wgsl-effects = ["noon-core/wgsl-effects"]
 image-decode = ["dep:image"]
 # Convenience product configuration. Geometry-only consumers disable defaults.
 default = ["native-text", "typst", "bundled-fonts", "image-decode", "code"]

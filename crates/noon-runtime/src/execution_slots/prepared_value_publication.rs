@@ -424,7 +424,7 @@ impl SceneInstance {
             .expect("validated surviving schema");
         // Persistent edits own only the authored parameters they change. Preserve
         // another parameter's effective driver, including an input-owned pulse.
-        for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
+        for property in base.parameter_properties() {
             let next = noon_core::EffectTrackValue::from_definition(property, &base.definition);
             let old = previous.as_ref().and_then(|value| {
                 noon_core::EffectTrackValue::from_definition(property, &value.definition)
@@ -432,13 +432,14 @@ impl SceneInstance {
             if next != old {
                 if let Some(next) = next {
                     effective.definition = next
-                        .update()
+                        .update(&base.definition)
+                        .expect("validated surviving field")
                         .apply_to(effective.definition)
                         .expect("validated surviving schema");
                 }
             }
         }
-        for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
+        for property in base.parameter_properties() {
             let channel = noon_compile::CompiledChannelKey::effect(
                 object_index as u32,
                 property,

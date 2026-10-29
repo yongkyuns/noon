@@ -544,7 +544,8 @@ impl ExecutionSession {
                 ownership.remove_on_completion.then_some(*attachment)
             })
             .collect::<BTreeSet<_>>();
-        stage_glow_completions(entries, &removed_glow, &mut semantic);
+        stage_glow_completions(store, entries, &removed_glow, &mut semantic)
+            .map_err(ExecutionSessionPublicationError::Semantic)?;
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -897,10 +898,11 @@ fn has_ancestor_in(
 }
 
 fn stage_glow_completions(
+    store: &SemanticStore,
     entries: &[crate::execution_segment::SegmentCompletionEntry],
     removed: &BTreeSet<SemanticNodeId>,
     semantic: &mut SemanticMutationTransaction,
-) {
+) -> Result<(), noon_core::SemanticMutationTransactionError> {
     let final_entries = entries
         .iter()
         .enumerate()
@@ -917,10 +919,26 @@ fn stage_glow_completions(
             if !removed.contains(attachment)
                 && final_entries.get(&(*attachment, value.property())) == Some(&index)
             {
-                semantic.update_effect(*attachment, value.update());
+                let index = semantic.mutations().len();
+                let definition = store
+                    .semantic_effect_state(*attachment)
+                    .map_err(|error| noon_core::SemanticMutationTransactionError::Node {
+                        index,
+                        error,
+                    })?
+                    .definition();
+                let update = value.update(&definition).map_err(|error| {
+                    noon_core::SemanticMutationTransactionError::EffectParameter {
+                        index,
+                        effect: *attachment,
+                        error,
+                    }
+                })?;
+                semantic.update_effect(*attachment, update);
             }
         }
     }
+    Ok(())
 }
 
 fn should_reconcile_execution_track(
@@ -2054,7 +2072,13 @@ mod glow_completion_tests {
             entry(&source, attachment, EffectTrackValue::Intensity(0.7), 2),
         ];
         let mut tx = SemanticMutationTransaction::new();
-        stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);
+        stage_glow_completions(
+            &scene.integration_store().borrow(),
+            &entries,
+            &BTreeSet::new(),
+            &mut tx,
+        )
+        .unwrap();
         assert_eq!(tx.mutations().len(), 1);
         let mut store = scene.integration_store().borrow_mut();
         let revision = store.scene_revision();
@@ -2085,12 +2109,17 @@ mod glow_completion_tests {
             entry(&source, new, EffectTrackValue::Color(Color::BLUE), 1),
             entry(&source, old, EffectTrackValue::Intensity(7.0), 2),
         ];
+        let revision = scene.revision();
+        let before = definition(&scene.integration_store().borrow(), new);
         let mut tx = SemanticMutationTransaction::new();
-        stage_glow_completions(&entries, &BTreeSet::new(), &mut tx);
-        let mut store = scene.integration_store().borrow_mut();
-        let revision = store.scene_revision();
-        let before = definition(&store, new);
-        assert!(tx.prepare(&mut store).is_err());
+        assert!(stage_glow_completions(
+            &scene.integration_store().borrow(),
+            &entries,
+            &BTreeSet::new(),
+            &mut tx
+        )
+        .is_err());
+        let store = scene.integration_store().borrow();
         assert_eq!(store.scene_revision(), revision);
         assert_eq!(definition(&store, new), before);
     }

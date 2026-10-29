@@ -419,3 +419,6 @@ mod shadow_tests;
 mod target_intent_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "wgsl-effects"))]
+mod shader_tests;
