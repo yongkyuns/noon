@@ -99,7 +99,7 @@ mod tests {
 
     fn radius_track(id: u64, effect: CompiledEffect, radius: f64) -> TrackDefinition {
         let (property, values) = effect
-            .parameter_channels(EffectUpdate::default().radius(radius))
+            .parameter_channels(&EffectUpdate::default().radius(radius))
             .unwrap()
             .remove(0);
         TrackDefinition {
@@ -221,7 +221,7 @@ mod tests {
             ),
             (b.clone(), EffectUpdate::default().progress(0.6)),
         ] {
-            for (property, values) in effect.parameter_channels(update).unwrap() {
+            for (property, values) in effect.parameter_channels(&update).unwrap() {
                 tracks.push(TrackDefinition {
                     id: TrackId::new(tracks.len() as u64 + 1),
                     object: ObjectId::new(0),

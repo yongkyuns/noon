@@ -620,7 +620,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     let update = EffectUpdate::default().intensity(Glow::default().intensity());
 
     let mut staged = SemanticMutationTransaction::new();
-    staged.update_effect(copied_effect, update);
+    staged.update_effect(copied_effect, update.clone());
     let prepared = staged.prepare(&mut store).unwrap();
     assert_eq!(
         prepared.proposed_scene_revision(),
@@ -649,7 +649,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     );
 
     let mut invalid = SemanticMutationTransaction::new();
-    invalid.update_effect(copied_effect, update);
+    invalid.update_effect(copied_effect, update.clone());
     invalid.update_effect(copied_effect, EffectUpdate::default().radius(-1.0));
     assert!(invalid.apply(&mut store).is_err());
     assert_eq!(store.scene_revision(), revision);
@@ -659,7 +659,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     );
 
     let mut accepted = SemanticMutationTransaction::new();
-    accepted.update_effect(copied_effect, update);
+    accepted.update_effect(copied_effect, update.clone());
     let result = accepted.prepare(&mut store).unwrap().commit();
     assert!(
         result.impacts().is_empty(),
@@ -679,8 +679,8 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
 
     let committed_revision = store.scene_revision();
     let mut repeated = SemanticMutationTransaction::new();
-    repeated.update_effect(copied_effect, update);
-    repeated.update_effect(original_effect, update);
+    repeated.update_effect(copied_effect, update.clone());
+    repeated.update_effect(original_effect, update.clone());
     assert!(repeated.apply(&mut store).unwrap().impacts().is_empty());
     assert_eq!(store.scene_revision(), committed_revision);
     assert_eq!(store.last_mutation_stats().slots_written, 0);
@@ -892,7 +892,7 @@ fn every_disjoint_parameter_order_preserves_earlier_updates() {
                     let halo = attach(&mut store, owner, "glow");
                     let mut tx = SemanticMutationTransaction::new();
                     for index in order {
-                        tx.update_effect(halo, updates[index]);
+                        tx.update_effect(halo, updates[index].clone());
                     }
                     let result = tx.apply(&mut store).unwrap();
                     let expected: Vec<_> = order

@@ -75,6 +75,7 @@ impl PassFilter {
             EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_) => {
                 Self::Sample(Box::default())
             }
+            EffectDefinition::Shader(_) => Self::Sample(Box::default()),
         }
     }
     fn matches(&self, definition: &EffectDefinition) -> bool {

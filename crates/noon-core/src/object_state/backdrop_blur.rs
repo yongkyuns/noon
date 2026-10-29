@@ -18,7 +18,7 @@ impl BackdropBlur {
 }
 impl sealed::Sealed for BackdropBlur {}
 impl EffectValue for BackdropBlur {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         self.0.apply_effect_update(update).map(Self)
     }
     fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
@@ -27,7 +27,7 @@ impl EffectValue for BackdropBlur {
     fn sample_effect_parameters(
         &self,
         target: &Self,
-        request: EffectUpdate,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         self.0.sample_effect_parameters(&target.0, request, alpha)

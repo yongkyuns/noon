@@ -1562,7 +1562,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .semantic_effect_state(effect)
                         .expect("validated effect");
                     let owner = previous.owner();
-                    let next = previous.updated(update).expect("preflighted effect update");
+                    let next = previous
+                        .updated(&update)
+                        .expect("preflighted effect update");
                     let previous = previous.definition();
                     let prepared = preflight.staged_effects[&effect].definition();
                     // Publish this mutation's disjoint channels in order. The

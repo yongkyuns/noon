@@ -116,7 +116,7 @@ mod wasm {
     impl WasmEffectUpdate {
         #[wasm_bindgen(js_name = setSize)]
         pub fn set_size(&mut self, size: f64, pixels: bool) -> Result<(), JsValue> {
-            let value = self.value.size(if pixels {
+            let value = self.value.clone().size(if pixels {
                 EffectRadius::Pixels(size)
             } else {
                 EffectRadius::Scene(size)
@@ -215,7 +215,7 @@ mod wasm {
     impl WasmEffectDefinition {
         #[wasm_bindgen(js_name = glow)]
         pub fn glow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
-            Glow::new(update.value)
+            Glow::new(update.value.clone())
                 .map(|value| Self {
                     value: value.into(),
                 })
@@ -224,7 +224,7 @@ mod wasm {
         }
         #[wasm_bindgen(js_name = pixelate)]
         pub fn pixelate(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
-            noon_core::Pixelate::new(update.value)
+            noon_core::Pixelate::new(update.value.clone())
                 .map(|value| Self {
                     value: value.into(),
                 })
@@ -244,7 +244,7 @@ mod wasm {
         }
         #[wasm_bindgen(js_name = blur)]
         pub fn blur(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
-            noon::effects::Blur::new(update.value)
+            noon::effects::Blur::new(update.value.clone())
                 .map(|value| Self {
                     value: value.into(),
                 })
@@ -253,7 +253,7 @@ mod wasm {
         }
         #[wasm_bindgen(js_name = backdropBlur)]
         pub fn backdrop_blur(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
-            noon::effects::BackdropBlur::new(update.value)
+            noon::effects::BackdropBlur::new(update.value.clone())
                 .map(|value| Self {
                     value: value.into(),
                 })
@@ -262,7 +262,7 @@ mod wasm {
         }
         #[wasm_bindgen(js_name = shadow)]
         pub fn shadow(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
-            noon::effects::Shadow::new(update.value)
+            noon::effects::Shadow::new(update.value.clone())
                 .map(|v| Self { value: v.into() })
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
@@ -309,6 +309,7 @@ mod wasm {
         pub fn kind(&self) -> String {
             match self.value {
                 EffectDefinition::Bloom(_) => "bloom",
+                EffectDefinition::Shader(_) => "shader",
                 EffectDefinition::Pixelate(_) => "pixelate",
                 EffectDefinition::Glow(_) => "glow",
                 EffectDefinition::Blur(_) => "blur",
@@ -377,7 +378,7 @@ mod wasm {
         pub fn set_glow(&self, update: &WasmEffectUpdate) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()
-                .set_glow(update.value)
+                .set_glow(update.value.clone())
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = addEffect)]
@@ -402,7 +403,7 @@ mod wasm {
         pub fn set_effect(&self, name: &str, update: &WasmEffectUpdate) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()
-                .set_effect(name, update.value)
+                .set_effect(name, update.value.clone())
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = setEffectHandle)]
@@ -413,7 +414,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.semantic_mobject()
                 .clone()
-                .set_effect(&effect.handle, update.value)
+                .set_effect(&effect.handle, update.value.clone())
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = removeEffect)]

@@ -13,7 +13,7 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_set_glow(family.semantic_family_ref(), update.value)
+            .live_set_glow(family.semantic_family_ref(), update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveAddFamilyEffect)]
@@ -39,7 +39,11 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_set_effect(family.semantic_family_ref(), name.into(), update.value)
+            .live_set_effect(
+                family.semantic_family_ref(),
+                name.into(),
+                update.value.clone(),
+            )
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveSetFamilyEffectHandle)]
@@ -55,7 +59,7 @@ impl CanonicalAuthoringSceneContext {
             .live_set_effect(
                 family.semantic_family_ref(),
                 (&effect.handle).into(),
-                update.value,
+                update.value.clone(),
             )
             .map_err(js_error)
     }

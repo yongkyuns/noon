@@ -187,8 +187,13 @@ impl CompiledEffect {
     /// this value from the runtime row at activation, not an earlier authored copy.
     pub fn parameter_channels(
         &self,
-        update: noon_core::EffectUpdate,
+        update: &noon_core::EffectUpdate,
     ) -> Result<Vec<(Property, TrackValues)>, noon_core::EffectParameterError> {
+        if let Some(write) = update.shader_parameters().first() {
+            return Err(noon_core::EffectParameterError::UnsupportedParameter(
+                noon_core::EffectParameter::Shader(write.key.index() as u8),
+            ));
+        }
         let target = update.apply_to(self.definition.clone())?;
         noon_core::EffectValue::validate_effect_transition(&self.definition, &target)?;
         let count = usize::from(update.color.is_some())
@@ -4565,7 +4570,7 @@ mod tests {
         channels.extend(
             effect
                 .parameter_channels(
-                    noon_core::EffectUpdate::default()
+                    &noon_core::EffectUpdate::default()
                         .color(noon_core::Color::BLUE)
                         .radius(0.3)
                         .intensity(0.8),

@@ -1203,7 +1203,7 @@ mod tests {
         let attachment = noon_core::SemanticNodeId::new(90, 1);
         enroll_temporary_glow(&mut instance, object, attachment);
         let (property, values) = neutral_glow(attachment)
-            .parameter_channels(noon_core::EffectUpdate::default().radius(0.3))
+            .parameter_channels(&noon_core::EffectUpdate::default().radius(0.3))
             .unwrap()
             .pop()
             .unwrap();

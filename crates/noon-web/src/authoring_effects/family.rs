@@ -10,7 +10,7 @@ impl WasmAuthoringFamilyHandle {
     #[wasm_bindgen(js_name = setGlow)]
     pub fn set_glow(&self, update: &WasmEffectUpdate) -> Result<(), JsValue> {
         self.semantic_family()?
-            .set_glow(update.value)
+            .set_glow(update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = addEffect)]
@@ -29,7 +29,7 @@ impl WasmAuthoringFamilyHandle {
     #[wasm_bindgen(js_name = setEffect)]
     pub fn set_effect(&self, name: &str, update: &WasmEffectUpdate) -> Result<(), JsValue> {
         self.semantic_family()?
-            .set_effect(name, update.value)
+            .set_effect(name, update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = setEffectHandle)]
@@ -39,7 +39,7 @@ impl WasmAuthoringFamilyHandle {
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
         self.semantic_family()?
-            .set_effect(&effect.handle, update.value)
+            .set_effect(&effect.handle, update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = removeEffect)]

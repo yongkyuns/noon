@@ -350,7 +350,7 @@ mod backdrop_tests {
         assert!(next.replace(updated.clone()));
         assert_eq!(next.backdrop_blur(), Some(updated));
         let channels = blur
-            .parameter_channels(EffectUpdate::default().radius(0.4))
+            .parameter_channels(&EffectUpdate::default().radius(0.4))
             .unwrap();
         assert_eq!(channels.len(), 1);
         assert_eq!(channels[0].0, noon_core::Property::EffectRadius);

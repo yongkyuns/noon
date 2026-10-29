@@ -13,7 +13,7 @@ use crate::{
 /// Semantic storage can retain declarations outside that execution profile.
 pub const MAX_EFFECT_STACK_LEN: usize = 8;
 
-/// Finite built-in definitions; custom program/schema resources remain #1897 M4.
+/// Checked appearance values and immutable program-backed treatments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EffectDefinition {
     Bloom(crate::Bloom),
@@ -23,6 +23,7 @@ pub enum EffectDefinition {
     Shadow(Shadow),
     NoiseDissolve(NoiseDissolve),
     Pixelate(Pixelate),
+    Shader(crate::ShaderEffect),
 }
 
 /// Explicit high-level input role; an ordinary painted filter never implicitly
@@ -77,7 +78,20 @@ impl From<Glow> for EffectDefinition {
     }
 }
 
+impl From<crate::ShaderEffect> for EffectDefinition {
+    fn from(value: crate::ShaderEffect) -> Self {
+        Self::Shader(value)
+    }
+}
+
 impl EffectDefinition {
+    pub fn as_shader(&self) -> Option<&crate::ShaderEffect> {
+        if let Self::Shader(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
     pub const fn as_bloom(&self) -> Option<crate::Bloom> {
         if let Self::Bloom(v) = self {
             Some(*v)
@@ -119,7 +133,7 @@ impl EffectDefinition {
             Self::Blur(v) => Some(v.radius()),
             Self::BackdropBlur(v) => Some(v.radius()),
             Self::Shadow(v) => Some(v.radius()),
-            Self::NoiseDissolve(_) | Self::Pixelate(_) => None,
+            Self::NoiseDissolve(_) | Self::Pixelate(_) | Self::Shader(_) => None,
         }
     }
     pub fn is_neutral(&self) -> bool {
@@ -131,6 +145,7 @@ impl EffectDefinition {
             Self::Shadow(v) => v.is_neutral(),
             Self::NoiseDissolve(v) => v.is_neutral(),
             Self::Pixelate(v) => v.is_neutral(),
+            Self::Shader(_) => false,
         }
     }
     pub const fn as_shadow(&self) -> Option<Shadow> {
@@ -148,7 +163,8 @@ impl EffectDefinition {
             | Self::Blur(_)
             | Self::BackdropBlur(_)
             | Self::NoiseDissolve(_)
-            | Self::Pixelate(_) => None,
+            | Self::Pixelate(_)
+            | Self::Shader(_) => None,
         }
     }
     pub const fn as_glow(&self) -> Option<Glow> {
@@ -216,11 +232,18 @@ impl EffectDefinition {
             (Self::Pixelate(a), Self::Pixelate(b)) => {
                 parameter == EffectParameter::Size && a.size() != b.size()
             }
+            (Self::Shader(a), Self::Shader(b)) => match parameter {
+                EffectParameter::Shader(index) => {
+                    a.program() != b.program()
+                        || a.values().get(usize::from(index)) != b.values().get(usize::from(index))
+                }
+                _ => false,
+            },
             _ => true,
         }
     }
 
-    pub fn update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    pub fn update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.apply_to(self)
     }
     /// Authored fields with no continuous runtime channel. Persistent value
@@ -229,6 +252,20 @@ impl EffectDefinition {
         match self {
             Self::Glow(value) => EffectUpdate::default().source(value.source()),
             Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
+            Self::Shader(value) => {
+                let mut update = EffectUpdate::default();
+                for (index, parameter) in value.program().schema().parameters.iter().enumerate() {
+                    if !parameter.kind.is_continuous() {
+                        let key = value
+                            .program()
+                            .parameter(&parameter.name)
+                            .expect("checked schema");
+                        update = update.shader_parameter(&key, value.values()[index]);
+                    }
+                }
+                update
+            }
+
             Self::Bloom(_)
             | Self::Blur(_)
             | Self::BackdropBlur(_)
@@ -240,7 +277,7 @@ impl EffectDefinition {
 
 impl crate::object_state::effect_value_sealed::Sealed for EffectDefinition {}
 impl EffectValue for EffectDefinition {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         match self {
             Self::Bloom(v) => update.apply_to(v).map(Self::Bloom),
             Self::Glow(v) => update.apply_to(v).map(Self::Glow),
@@ -249,12 +286,14 @@ impl EffectValue for EffectDefinition {
             Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
             Self::NoiseDissolve(v) => update.apply_to(v).map(Self::NoiseDissolve),
             Self::Pixelate(v) => update.apply_to(v).map(Self::Pixelate),
+            Self::Shader(v) => update.apply_to(v).map(Self::Shader),
         }
     }
     fn validate_effect_value_update(&self, target: &Self) -> Result<(), EffectParameterError> {
         match (self, target) {
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_value_update(b),
             (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_value_update(b),
+            (Self::Shader(a), Self::Shader(b)) => a.validate_effect_value_update(b),
             (previous, next) => previous.validate_effect_transition(next),
         }
     }
@@ -267,13 +306,14 @@ impl EffectValue for EffectDefinition {
             (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_transition(b),
             (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_transition(b),
+            (Self::Shader(a), Self::Shader(b)) => a.validate_effect_transition(b),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
     fn sample_effect_parameters(
         &self,
         target: &Self,
-        request: EffectUpdate,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         match (self, target) {
@@ -288,6 +328,7 @@ impl EffectValue for EffectDefinition {
                 a.sample_effect_parameters(b, request, alpha)
             }
             (Self::Pixelate(a), Self::Pixelate(b)) => a.sample_effect_parameters(b, request, alpha),
+            (Self::Shader(a), Self::Shader(b)) => a.sample_effect_parameters(b, request, alpha),
             _ => Err(EffectParameterError::IncompatibleDefinition),
         }
     }
@@ -301,7 +342,7 @@ impl EffectValue for EffectDefinition {
 pub struct SemanticEffectCopyProvenance {
     source_attachment: SemanticNodeId,
     copied_definition: EffectDefinition,
-    written_parameters: u16,
+    written_parameters: u32,
 }
 
 impl SemanticEffectCopyProvenance {
@@ -329,7 +370,7 @@ impl SemanticEffectCopyProvenance {
         self.written_parameters & effect_parameter_bit(parameter) != 0
     }
 
-    fn with_update(mut self, update: EffectUpdate) -> Self {
+    fn with_update(mut self, update: &EffectUpdate) -> Self {
         for parameter in update.parameters() {
             self.written_parameters |= effect_parameter_bit(parameter);
         }
@@ -337,7 +378,7 @@ impl SemanticEffectCopyProvenance {
     }
 }
 
-const fn effect_parameter_bit(parameter: EffectParameter) -> u16 {
+const fn effect_parameter_bit(parameter: EffectParameter) -> u32 {
     match parameter {
         EffectParameter::Color => 1,
         EffectParameter::Radius => 2,
@@ -349,6 +390,8 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u16 {
         EffectParameter::Seed => 128,
         EffectParameter::Size => 256,
         EffectParameter::Threshold => 512,
+        EffectParameter::Shader(index) if index < 16 => 1 << (10 + index),
+        EffectParameter::Shader(_) => 0,
     }
 }
 
@@ -419,7 +462,7 @@ impl SemanticEffectState {
         self.copy_provenance.clone()
     }
 
-    pub(crate) fn updated(&self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    pub(crate) fn updated(&self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         let mut next = self.clone();
         next.definition = next.definition.update(update)?;
         next.copy_provenance = next.copy_provenance.map(|copy| copy.with_update(update));

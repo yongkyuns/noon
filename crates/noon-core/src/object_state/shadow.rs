@@ -40,7 +40,7 @@ impl Shadow {
 }
 impl sealed::Sealed for Shadow {}
 impl EffectValue for Shadow {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.require_parameters(&[
             EffectParameter::Color,
             EffectParameter::Radius,
@@ -69,7 +69,7 @@ impl EffectValue for Shadow {
     fn sample_effect_parameters(
         &self,
         target: &Self,
-        request: EffectUpdate,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let channel = |a: f32, b: f32| interpolate(f64::from(a), f64::from(b), alpha) as f32;

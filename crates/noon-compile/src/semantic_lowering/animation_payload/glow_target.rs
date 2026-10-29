@@ -251,8 +251,23 @@ fn attachment_channels(
             update.softness = Some(b.softness());
         }
     }
+    if let (Some(a), Some(b)) = (baseline.as_shader(), destination.as_shader()) {
+        for (index, value) in b.values().iter().enumerate() {
+            if a.values()[index] != *value
+                || copy_intent.is_some_and(|copy| {
+                    copy.writes_parameter(noon_core::EffectParameter::Shader(index as u8))
+                })
+            {
+                let key = b
+                    .program()
+                    .parameter(&b.program().schema().parameters[index].name)
+                    .expect("checked shader schema");
+                update = update.shader_parameter(&key, *value);
+            }
+        }
+    }
     effective
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .map_err(EffectTargetLoweringError::Parameter)
 }
 

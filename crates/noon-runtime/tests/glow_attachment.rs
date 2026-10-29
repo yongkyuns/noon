@@ -51,7 +51,7 @@ fn only(stack: &noon_compile::CompiledEffectStack) -> CompiledEffect {
 fn channels(effect: &CompiledEffect, start: f64, offset: u64) -> Vec<TrackDefinition> {
     effect
         .parameter_channels(
-            EffectUpdate::default()
+            &EffectUpdate::default()
                 .radius(Pixels(6.5))
                 .color(Color::BLUE)
                 .intensity(2.0),
@@ -135,7 +135,7 @@ fn parameter_channels_require_exact_attachment_addresses_for_every_finite_kind()
             definition: definition.clone(),
         });
         let tracks: Vec<_> = effect
-            .parameter_channels(update)
+            .parameter_channels(&update)
             .unwrap()
             .into_iter()
             .enumerate()

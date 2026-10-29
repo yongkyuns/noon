@@ -1085,7 +1085,7 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(90),
-                effects: vec![crate::TransportEffectState::from(&compiled_glow)],
+                effects: vec![crate::TransportEffectState::try_from(&compiled_glow).unwrap()],
                 visibility: None,
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {

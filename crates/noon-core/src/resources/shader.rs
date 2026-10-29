@@ -43,7 +43,7 @@ pub enum ShaderUnit {
 
 /// Colors and numeric vectors remain distinct semantic types even when their
 /// lowered GPU representation could otherwise be interchangeable.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ShaderValue {
     Scalar(f64),
     Vector2([f64; 2]),
@@ -97,6 +97,7 @@ impl ShaderParameterType {
             Self::Scalar { .. } | Self::Vector2 { .. } | Self::Color
         )
     }
+    #[cfg(feature = "wgsl-effects")]
     fn wgsl(&self) -> &'static str {
         match self {
             Self::Scalar { .. } => "f32",
@@ -106,6 +107,7 @@ impl ShaderParameterType {
             Self::Unsigned { .. } => "u32",
         }
     }
+    #[cfg(feature = "wgsl-effects")]
     fn valid(&self) -> bool {
         let range = |a: f64, b: f64| finite(a) && finite(b) && a <= b;
         match self {
@@ -179,7 +181,7 @@ impl std::error::Error for ShaderProgramError {}
 #[derive(Debug, PartialEq)]
 struct Program {
     schema: ShaderSchema,
-    source: Arc<str>,
+    source_start: usize,
     module: Arc<str>,
 }
 
@@ -195,6 +197,7 @@ impl PartialEq for WgslEffectProgram {
 }
 
 impl WgslEffectProgram {
+    #[cfg(feature = "wgsl-effects")]
     pub fn prepare(
         schema: ShaderSchema,
         source: impl Into<Arc<str>>,
@@ -235,11 +238,12 @@ impl WgslEffectProgram {
             module.push_str("noon_unused: u32,\n");
         }
         module.push_str("}\n");
+        let source_start = module.len();
         module.push_str(&source);
         validate_wgsl(&module)?;
         Ok(Self(Arc::new(Program {
             schema,
-            source,
+            source_start,
             module: module.into(),
         })))
     }
@@ -247,7 +251,7 @@ impl WgslEffectProgram {
         &self.0.schema
     }
     pub fn source(&self) -> &str {
-        &self.0.source
+        &self.0.module[self.0.source_start..]
     }
     /// Validated function module, including generated typed declarations. This
     /// content is the GPU program cache key; attachment values are not included.
@@ -266,6 +270,7 @@ impl WgslEffectProgram {
     }
 }
 
+#[cfg(feature = "wgsl-effects")]
 fn validate_wgsl(source: &str) -> Result<(), ShaderProgramError> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| ShaderProgramError::Wgsl(e.emit_to_string(source)))?;
@@ -322,6 +327,7 @@ fn validate_wgsl(source: &str) -> Result<(), ShaderProgramError> {
 
 // Naga's `may_kill` reports divergent termination for uniformity analysis; it
 // intentionally omits uniform discard. This profile forbids either form.
+#[cfg(feature = "wgsl-effects")]
 fn discards(block: &naga::Block) -> bool {
     block.iter().any(|statement| match statement {
         naga::Statement::Kill => true,
@@ -396,5 +402,113 @@ impl ShaderEffect {
     }
 }
 
-#[cfg(test)]
+impl crate::object_state::effect_value_sealed::Sealed for ShaderEffect {}
+impl crate::EffectValue for ShaderEffect {
+    fn apply_effect_update(
+        mut self,
+        update: &crate::EffectUpdate,
+    ) -> Result<Self, crate::EffectParameterError> {
+        use crate::{EffectParameter, EffectParameterError};
+        update.validate()?;
+        for parameter in update.parameters() {
+            if !matches!(parameter, EffectParameter::Shader(_)) {
+                return Err(EffectParameterError::UnsupportedParameter(parameter));
+            }
+        }
+        // Check the complete patch before making any values writable.
+        for write in update.shader_parameters() {
+            if write.key.program != self.program {
+                return Err(EffectParameterError::ShaderProgramMismatch);
+            }
+        }
+        if update
+            .shader_parameters()
+            .iter()
+            .any(|w| self.values[w.key.index] != w.value)
+        {
+            let values = Arc::make_mut(&mut self.values);
+            for write in update.shader_parameters() {
+                values[write.key.index] = write.value;
+            }
+        }
+        Ok(self)
+    }
+    fn validate_effect_value_update(
+        &self,
+        target: &Self,
+    ) -> Result<(), crate::EffectParameterError> {
+        if self.program != target.program {
+            return Err(crate::EffectParameterError::ShaderProgramMismatch);
+        }
+        Ok(())
+    }
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), crate::EffectParameterError> {
+        use crate::{EffectParameter, EffectParameterError};
+        self.validate_effect_value_update(target)?;
+        for (index, parameter) in self.program.schema().parameters.iter().enumerate() {
+            if !parameter.kind.is_continuous() && self.values[index] != target.values[index] {
+                return Err(EffectParameterError::DiscreteTransition(
+                    EffectParameter::Shader(index as u8),
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn sample_effect_parameters(
+        &self,
+        target: &Self,
+        request: &crate::EffectUpdate,
+        alpha: f64,
+    ) -> Result<crate::EffectUpdate, crate::EffectParameterError> {
+        let mut result = crate::EffectUpdate::default();
+        for write in request.shader_parameters() {
+            let index = write.key.index;
+            let value = self.values[index]
+                .interpolate(target.values[index], alpha)
+                .ok_or(crate::EffectParameterError::InvalidShaderParameter(
+                    index as u8,
+                ))?;
+            result = result.shader_parameter(&write.key, value);
+        }
+        result.validate()?;
+        Ok(result)
+    }
+}
+
+impl ShaderValue {
+    /// Same typed value at a canonical unit progress. Discrete changes do not
+    /// acquire an interpolation rule merely because their storage is numeric.
+    pub(crate) fn interpolate(self, target: Self, alpha: f64) -> Option<Self> {
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return None;
+        }
+        if alpha == 0.0 {
+            return Some(self);
+        }
+        if alpha == 1.0 {
+            return Some(target);
+        }
+        let scalar = |a: f64, b: f64| a * (1.0 - alpha) + b * alpha;
+        match (self, target) {
+            (Self::Scalar(a), Self::Scalar(b)) => Some(Self::Scalar(scalar(a, b))),
+            (Self::Vector2(a), Self::Vector2(b)) => {
+                Some(Self::Vector2([scalar(a[0], b[0]), scalar(a[1], b[1])]))
+            }
+            (Self::Color(a), Self::Color(b)) => {
+                let c = |a: f32, b: f32| scalar(f64::from(a), f64::from(b)) as f32;
+                Some(Self::Color(Color::rgba(
+                    c(a.red, b.red),
+                    c(a.green, b.green),
+                    c(a.blue, b.blue),
+                    c(a.alpha, b.alpha),
+                )))
+            }
+            (Self::Boolean(a), Self::Boolean(b)) if a == b => Some(self),
+            (Self::Unsigned(a), Self::Unsigned(b)) if a == b => Some(self),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "wgsl-effects"))]
 mod tests;

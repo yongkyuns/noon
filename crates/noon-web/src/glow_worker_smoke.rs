@@ -209,7 +209,7 @@ fn runtime(
             .color(Color::rgba(0.15, 0.85, 0.25, 0.5))
     };
     for (i, (property, values)) in effect
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .unwrap()
         .into_iter()
         .enumerate()

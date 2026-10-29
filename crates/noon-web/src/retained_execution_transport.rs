@@ -96,9 +96,13 @@ pub enum TransportEffectDefinition {
         progress: f64,
     },
 }
-impl From<&noon_compile::CompiledEffect> for TransportEffectState {
-    fn from(effect: &noon_compile::CompiledEffect) -> Self {
-        let definition = match effect.definition {
+impl TryFrom<&noon_compile::CompiledEffect> for TransportEffectState {
+    type Error = RetainedExecutionTransportError;
+    fn try_from(effect: &noon_compile::CompiledEffect) -> Result<Self, Self::Error> {
+        let definition = match &effect.definition {
+            noon_core::EffectDefinition::Shader(_) => {
+                return Err(RetainedExecutionTransportError::UnsupportedShaderProgram)
+            }
             noon_core::EffectDefinition::Bloom(v) => TransportEffectDefinition::Bloom {
                 radius: v.radius(),
                 threshold: v.threshold(),
@@ -134,10 +138,10 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
                 }
             }
         };
-        Self {
+        Ok(Self {
             attachment: effect.attachment,
             definition,
-        }
+        })
     }
 }
 impl TransportEffectState {
@@ -581,6 +585,7 @@ pub enum RetainedTransportApplyOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
     UnsupportedComposedSource,
+    UnsupportedShaderProgram,
     UnknownComposedSource(crate::TransportComposedSourceHandle),
     InvalidComposedSourceHandle(TransportSlotId),
     InvalidComposedSource(noon_compile::CompiledComposedSourceError),
@@ -633,6 +638,7 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::UnknownComposedSource(handle) => write!(formatter, "unknown immutable composed source {handle:?}"),
             Self::InvalidComposedSourceHandle(slot) => write!(formatter, "invalid composed source provenance or owner profile at {slot:?}"),
             Self::InvalidComposedSource(error) => error.fmt(formatter),
+            Self::UnsupportedShaderProgram => formatter.write_str("custom shader transport requires a program resource key"),
             Self::UnsupportedComposedSource => write!(formatter,"composed source conversion requires a publication resource key"),
             Self::InvalidEffectState(slot) => write!(
                 formatter,
@@ -2112,9 +2118,10 @@ fn transport_object(
             .map(|stack| {
                 stack
                     .iter()
-                    .map(|effect| TransportEffectState::from(&effect))
-                    .collect()
+                    .map(|effect| TransportEffectState::try_from(&effect))
+                    .collect::<Result<Vec<_>, _>>()
             })
+            .transpose()?
             .unwrap_or_default(),
         z_index: object.z_index,
         content: match composed_source {

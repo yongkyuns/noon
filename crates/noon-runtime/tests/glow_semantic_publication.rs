@@ -555,7 +555,7 @@ fn semantic_removal_retires_only_glow_drivers_and_replay_restores_their_identity
         .get(old)
         .unwrap();
     let (property, values) = declaration
-        .parameter_channels(EffectUpdate::default().intensity(2.0))
+        .parameter_channels(&EffectUpdate::default().intensity(2.0))
         .unwrap()
         .pop()
         .unwrap();

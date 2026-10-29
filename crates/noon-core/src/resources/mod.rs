@@ -43,7 +43,5 @@ pub use text_parts::*;
 mod transaction;
 pub use transaction::*;
 
-#[cfg(feature = "wgsl-effects")]
 mod shader;
-#[cfg(feature = "wgsl-effects")]
 pub use shader::*;

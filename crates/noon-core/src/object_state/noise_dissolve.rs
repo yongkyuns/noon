@@ -70,7 +70,7 @@ impl NoiseDissolve {
 
 impl sealed::Sealed for NoiseDissolve {}
 impl EffectValue for NoiseDissolve {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.require_parameters(&[
             EffectParameter::Progress,
             EffectParameter::Softness,
@@ -97,7 +97,7 @@ impl EffectValue for NoiseDissolve {
     fn sample_effect_parameters(
         &self,
         target: &Self,
-        request: EffectUpdate,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let update = EffectUpdate {

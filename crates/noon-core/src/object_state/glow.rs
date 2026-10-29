@@ -76,7 +76,7 @@ impl Glow {
 
 impl sealed::Sealed for Glow {}
 impl EffectValue for Glow {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.require_parameters(&[
             EffectParameter::Color,
             EffectParameter::Radius,
@@ -107,7 +107,7 @@ impl EffectValue for Glow {
     fn sample_effect_parameters(
         &self,
         target: &Self,
-        request: EffectUpdate,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let color = |from: f32, to: f32| interpolate(f64::from(from), f64::from(to), alpha) as f32;

@@ -44,6 +44,7 @@ fn schema() -> ShaderSchema {
 #[test]
 fn prepared_sources_share_programs_but_keep_values_and_failed_edits_independent() {
     let program = WgslEffectProgram::prepare(schema(), SCAN).unwrap();
+    assert_eq!(program.source(), SCAN);
     let original = ShaderEffect::new(program.clone());
     let phase = program.parameter("phase").unwrap();
     let changed = original
@@ -190,4 +191,124 @@ fn checked_wgsl_rejects_undeclared_inputs_bad_abi_and_external_resources() {
     declared.dependencies.seed = true;
     let source = SCAN.replace("p.phase", "fract(input.time + f32(input.seed))");
     WgslEffectProgram::prepare(declared, source).unwrap();
+}
+
+#[test]
+fn shader_values_use_normal_transactions_and_reject_entire_invalid_patches() {
+    use crate::{
+        EffectParameter, EffectUpdate, SemanticMutationTransaction, SemanticNodeCreation,
+        SemanticObjectState, SemanticStore, StoredGeometry,
+    };
+    let program = WgslEffectProgram::prepare(schema(), SCAN).unwrap();
+    let phase = program.parameter("phase").unwrap();
+    let width = program.parameter("width").unwrap();
+    let mut store = SemanticStore::new();
+    let mut tx = SemanticMutationTransaction::new();
+    let object = tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let binding = tx.create_effect(object, "scan", ShaderEffect::new(program.clone()));
+    let created = tx.apply(&mut store).unwrap();
+    let binding = created.resolve(binding).unwrap();
+    let original = store.semantic_effect_state(binding).unwrap().definition();
+    let update = EffectUpdate::default().shader_parameter(&phase, ShaderValue::Scalar(0.75));
+    assert_eq!(
+        update.parameters().collect::<Vec<_>>(),
+        [EffectParameter::Shader(1)]
+    );
+    let prepared = update.prepare(original.clone()).unwrap();
+    for (time, expected) in [(1.0, 0.75), (0.0, 0.5), (0.5, 0.625), (0.25, 0.5625)] {
+        let value = prepared
+            .sample(time)
+            .unwrap()
+            .apply_to(original.clone())
+            .unwrap();
+        assert_eq!(
+            value.as_shader().unwrap().values()[1],
+            ShaderValue::Scalar(expected)
+        );
+        assert!(Arc::ptr_eq(
+            value.as_shader().unwrap().program().module(),
+            program.module()
+        ));
+    }
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(binding, update);
+    tx.apply(&mut store).unwrap();
+    let accepted = store.semantic_effect_state(binding).unwrap().clone();
+    let revision = store.scene_revision();
+    let other =
+        WgslEffectProgram::prepare(schema(), SCAN.replace("p.tint.rgb", "vec3<f32>(0.0)")).unwrap();
+    for bad in [
+        EffectUpdate::default()
+            .shader_parameter(&width, ShaderValue::Scalar(0.8))
+            .shader_parameter(&phase, ShaderValue::Scalar(2.0)),
+        EffectUpdate::default().shader_parameter(&phase, ShaderValue::Color(Color::WHITE)),
+        EffectUpdate::default()
+            .shader_parameter(&other.parameter("phase").unwrap(), ShaderValue::Scalar(0.2)),
+    ] {
+        let mut tx = SemanticMutationTransaction::new();
+        tx.update_effect(binding, bad);
+        assert!(tx.apply(&mut store).is_err());
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.semantic_effect_state(binding).unwrap(), &accepted);
+    }
+}
+
+#[test]
+fn shader_copy_intent_addresses_the_last_schema_parameter_without_aliasing() {
+    use crate::{
+        EffectParameter, EffectUpdate, SemanticMutationTransaction, SemanticNodeCreation,
+        SemanticObjectState, SemanticStore, StoredGeometry,
+    };
+    let mut schema = schema();
+    let mut parameters = schema.parameters.into_vec();
+    for i in parameters.len()..16 {
+        parameters.push(ShaderParameterDefinition {
+            name: format!("p{i}").into(),
+            kind: ShaderParameterType::Scalar {
+                range: 0.0..=1.0,
+                unit: ShaderUnit::Normalized,
+            },
+            default: ShaderValue::Scalar(0.0),
+        });
+    }
+    schema.parameters = parameters.into_boxed_slice();
+    let program = WgslEffectProgram::prepare(schema, SCAN).unwrap();
+    let last = program.parameter("p15").unwrap();
+    let mut store = SemanticStore::new();
+    let mut tx = SemanticMutationTransaction::new();
+    let source = tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    tx.create_effect(source, "scan", ShaderEffect::new(program));
+    let source = tx.apply(&mut store).unwrap().resolve(source).unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    let copied = tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    store.copy_effects_into(source, copied, &mut tx).unwrap();
+    let copied = tx.apply(&mut store).unwrap().resolve(copied).unwrap();
+    let binding = store.effect_by_name(copied, "scan").unwrap().unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(
+        binding,
+        EffectUpdate::default().shader_parameter(&last, ShaderValue::Scalar(0.0)),
+    );
+    assert!(tx.apply(&mut store).unwrap().impacts().is_empty());
+    let intent = store
+        .semantic_effect_state(binding)
+        .unwrap()
+        .copy_provenance()
+        .unwrap();
+    assert!(intent.writes_parameter(EffectParameter::Shader(15)));
+    assert!(!intent.writes_parameter(EffectParameter::Shader(14)));
+    assert!(!intent.writes_parameter(EffectParameter::Shader(255)));
+    assert!(!intent.writes_parameter(EffectParameter::Color));
+    let original = store.effect_by_name(source, "scan").unwrap().unwrap();
+    assert!(store
+        .semantic_effect_state(original)
+        .unwrap()
+        .copy_provenance()
+        .is_none());
 }

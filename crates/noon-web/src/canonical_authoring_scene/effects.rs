@@ -23,7 +23,7 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_set_glow(object.semantic_mobject(), update.value)
+            .live_set_glow(object.semantic_mobject(), update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveAddEffect)]
@@ -49,7 +49,7 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_set_effect(object.semantic_mobject(), name.into(), update.value)
+            .live_set_effect(object.semantic_mobject(), name.into(), update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveSetEffectHandle)]
@@ -65,7 +65,7 @@ impl CanonicalAuthoringSceneContext {
             .live_set_effect(
                 object.semantic_mobject(),
                 (&effect.handle).into(),
-                update.value,
+                update.value.clone(),
             )
             .map_err(js_error)
     }
