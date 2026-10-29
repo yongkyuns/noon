@@ -472,7 +472,9 @@ fn render_with_query(
         "same publication retry is idempotent"
     );
     assert_eq!(retry.rows_visited, 0);
-    let prepared = frame_preparer.prepare_incremental(publication.frame(), publication.changes());
+    let prepared = frame_preparer
+        .prepare_incremental(publication.frame(), publication.changes())
+        .unwrap();
     renderer.upload(device, queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     if let Some(query) = query {
@@ -3146,7 +3148,8 @@ fn many_shared_meshes_upload_only_the_changed_instance_and_batch_one_draw() {
         assert_eq!(moved.resident_instances, 600);
 
         let prepared = frame_preparer
-            .prepare_incremental(moved_publication.frame(), moved_publication.changes());
+            .prepare_incremental(moved_publication.frame(), moved_publication.changes())
+            .unwrap();
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         let draw = renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);

@@ -14,3 +14,4 @@ __pycache__/
 /ci-artifacts
 /web/ci-artifact.json
 /web/ci-Cargo.lock
+/node_modules

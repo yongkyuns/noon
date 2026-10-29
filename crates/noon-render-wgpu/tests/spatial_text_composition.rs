@@ -266,7 +266,7 @@ fn retained_world_paths_preserve_direct_edge_coverage_with_and_without_hud() {
             );
             if !retained_pass {
                 let mut preparer = FramePreparer::new();
-                let prepared = preparer.prepare(publication.frame());
+                let prepared = preparer.prepare(publication.frame()).unwrap();
                 renderer.upload(&device, &queue, &prepared);
                 let mut encoder = device.create_command_encoder(&Default::default());
                 renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);

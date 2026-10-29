@@ -231,7 +231,7 @@ fn planar_float_draws_preserve_emission_alpha_order_and_feed_real_bloom() {
             for reverse in [false, true] {
                 for clear in [[0.0; 4], [0.25, 0.125, 0.0625, 1.0]] {
                     let frame = frame(path, reverse, paint);
-                    let prepared = preparer.prepare(&frame);
+                    let prepared = preparer.prepare(&frame).unwrap();
                     renderer.upload(&device, &queue, &prepared);
                     let mut encoder = device.create_command_encoder(&Default::default());
                     renderer.encode(
@@ -288,7 +288,8 @@ fn planar_float_draws_preserve_emission_alpha_order_and_feed_real_bloom() {
                     max_display_error = max_display_error.max(error);
                     assert!(error <= 2, "profile {profiles} bloom display error {error}");
                     let clean = preparer
-                        .prepare_incremental(&frame, &noon_runtime::FrameChanges::default());
+                        .prepare_incremental(&frame, &noon_runtime::FrameChanges::default())
+                        .unwrap();
                     assert_eq!(renderer.upload(&device, &queue, &clean).bytes_uploaded, 0);
                     if let Some(directory) = &artifacts {
                         std::fs::write(directory.join(format!("case-{profiles}.json")), format!("{{\"paint\":{paint},\"path\":{path},\"reverse\":{reverse},\"clear\":{clear:?}}}")).unwrap();
@@ -322,7 +323,7 @@ fn planar_float_draws_preserve_emission_alpha_order_and_feed_real_bloom() {
     // helper loses emitted energy before even reaching the float attachment.
     let mut negative = new_renderer(&device, &queue, true);
     let frame = frame(false, false, false);
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     negative.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
     negative.encode(&mut encoder, &view, &prepared, wgpu::Color::TRANSPARENT);

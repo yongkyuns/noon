@@ -341,8 +341,8 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
                                 &initial,
                                 noon_render_wgpu::text::TextDeviceMetrics::uniform(2.0).unwrap()
                             ),
-                            Err(noon_render_wgpu::RetainedPrepareError::UnsupportedEmission(
-                                _
+                            Err(noon_render_wgpu::RetainedPrepareError::ColorProfile(
+                                noon_render_wgpu::ColorProfileError::UnsupportedEmission(_)
                             ))
                         ));
                     }
@@ -404,7 +404,7 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
                             )
                             .unwrap();
                     } else {
-                        let prepared = preparer.prepare_publication(&publication);
+                        let prepared = preparer.prepare_publication(&publication).unwrap();
                         renderer.upload(&device, &queue, &prepared);
                         renderer.encode(&mut encoder, &view, &prepared, clear_color);
                     }
@@ -481,7 +481,7 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
                             0
                         );
                     } else {
-                        let prepared = preparer.prepare_publication(&clean);
+                        let prepared = preparer.prepare_publication(&clean).unwrap();
                         assert_eq!(prepared.stats.instances_repacked, 0);
                         assert_eq!(
                             renderer.upload(&device, &queue, &prepared).bytes_uploaded,
@@ -489,10 +489,14 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
                         );
                     }
                     if profiles == 0 {
-                        // Actual draw with the ordinary raw packing, deliberately omitting
-                        // the profile consumer. This must disagree with the independent
-                        // authored linear-light expectation, rather than a fabricated image.
-                        let wrong = preparer.prepare(clean.frame());
+                        // Actual draw deliberately omitting the material/profile consumer.
+                        // Raw input rejects authored emission, so remove that declaration
+                        // to reproduce the old unprofiled draw as the negative control.
+                        let mut unprofiled = clean.frame().clone();
+                        for object in &mut unprofiled.objects {
+                            object.style.emission = noon_core::Emission::NONE;
+                        }
+                        let wrong = preparer.prepare(&unprofiled).unwrap();
                         renderer.upload(&device, &queue, &wrong);
                         let mut encoder = device.create_command_encoder(&Default::default());
                         renderer.encode(&mut encoder, &view, &wrong, wgpu::Color::TRANSPARENT);
@@ -593,5 +597,109 @@ fn authored_maximum_emission_uses_the_hdr_envelope_without_changing_alpha() {
 fn animated_material_targets_reach_independent_pre_bloom_and_display_pixels() {
     for time in [0.0, 0.12345678912345, 1.0, 0.5] {
         qualify_material(true, false, 63.0, Some(time));
+    }
+}
+
+#[cfg(feature = "native-text")]
+#[test]
+#[ignore = "requires a real native float/blending adapter; absence fails qualification"]
+fn first_active_family_publication_and_cached_seek_keep_hdr_material() {
+    use noon::{AnimationOptions, RateFunction};
+    let mut scene = Scene::new();
+    let mut camera = scene.camera_frame().unwrap();
+    camera
+        .set_view_color_profile(ViewColorProfile::LinearHdr)
+        .unwrap();
+    let mut source = scene.square(8.0).unwrap();
+    source.set_fill(0.5, 0.25, 0.75, 0.5).unwrap();
+    source.disable_stroke().unwrap();
+    source.set_emission(7.0).unwrap();
+    // A retained text member installs the family plan; keep it outside the
+    // sampled source so the independent center reference stays analytic.
+    let mut label = scene.text("A").unwrap();
+    label.set_translation(20.0, 0.0).unwrap();
+    scene.add(&source).unwrap();
+    let family = scene.family(&[(&label).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .declare_and_activate_family_text_write(
+            &family,
+            false,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear)
+                .lag_ratio(0.0)
+                .introducer(true),
+        )
+        .unwrap();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("family HDR material"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
+    renderer.set_viewport(&device, &queue, SIZE, SIZE);
+    renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 8.0)).unwrap(),
+    );
+    let mut text = renderer.create_retained_text_state(&device, &queue);
+    let mut preparer = RetainedFramePreparer::new();
+    for time in [0.75, 0.9, 0.75] {
+        session.seek(time).unwrap();
+        let publication = session.take_renderer_publication();
+        assert!(!publication.active_family_animation_indices().is_empty());
+        let prepared = preparer
+            .prepare_planned_publication(
+                &device,
+                &publication,
+                noon_render_wgpu::text::TextDeviceMetrics::uniform(2.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.color_profile(), ViewColorProfile::LinearHdr);
+        renderer.upload_retained(&device, &queue, &prepared, &mut text);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer
+            .encode_retained(
+                &mut encoder,
+                &view,
+                &prepared,
+                &text,
+                wgpu::Color::TRANSPARENT,
+                None,
+            )
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let pixels = decode(&read(&device, &queue, &target));
+        let center = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
+        // The text plan must preserve the stationary source's decoded radiance
+        // and independent half coverage during both fresh and cached packing.
+        let alpha = 0.5;
+        let expected = [
+            srgb_decode(0.5) * 8.0 * alpha,
+            srgb_decode(0.25) * 8.0 * alpha,
+            srgb_decode(0.75) * 8.0 * alpha,
+            alpha,
+        ];
+        for (actual, expected) in pixels[center..center + 4].iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() < 0.004,
+                "family at {time}: {actual} != {expected}"
+            );
+        }
     }
 }

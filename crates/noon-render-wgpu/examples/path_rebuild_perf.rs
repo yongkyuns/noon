@@ -7,7 +7,7 @@ use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath};
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::{FrameObjectState, FrameState};
 
-fn main() {
+fn main() -> Result<(), noon_render_wgpu::ColorProfileError> {
     let mut segments = 20_000usize;
     let mut samples = 30usize;
     let mut args = std::env::args().skip(1);
@@ -21,11 +21,11 @@ fn main() {
     assert!(segments >= 3 && samples > 0);
     let frame = build_frame(segments);
     let mut preparer = FramePreparer::new();
-    black_box(preparer.prepare(&frame));
+    black_box(preparer.prepare(&frame)?);
     let mut timings = Vec::with_capacity(samples);
     for _ in 0..samples {
         let started = Instant::now();
-        let prepared = preparer.prepare(black_box(&frame));
+        let prepared = preparer.prepare(black_box(&frame))?;
         black_box(prepared.path_vertices.len());
         black_box(prepared.path_indices.len());
         timings.push(started.elapsed());
@@ -37,6 +37,7 @@ fn main() {
         ms(percentile(&timings, 0.95)),
         ms(percentile(&timings, 0.99))
     );
+    Ok(())
 }
 
 fn build_frame(segments: usize) -> FrameState {
