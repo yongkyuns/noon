@@ -462,7 +462,10 @@ try {
     near(admitted.transport.time, 10, "output transition does not advance authored time", 0);
     assert.ok(newSource.args[0] < attack.hold.args[1], "new PCM runs behind the muted bus before attack");
     assert.equal(admitted.transport.sceneRevision, transition.before.transport.sceneRevision);
-    const waiting = observations.filter(sample => sample.deviceTime < attack.hold.args[1]);
+    // A device quantum can advance between the clock, gain and analyser reads.
+    // Require the complete observation to precede the attack deadline.
+    const waiting = observations.filter(sample => sample.deviceTime < attack.hold.args[1]
+      && sample.output.deviceTime < attack.hold.args[1]);
     assert.ok(waiting.length > 0, "observe the replacement's muted waiting interval");
     assert.ok(waiting.every(sample => sample.newBus === 0));
     assert.ok(observations.some(sample => sample.oldBus > 0.01 && sample.oldBus < 0.99),
