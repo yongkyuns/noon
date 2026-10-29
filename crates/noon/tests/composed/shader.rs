@@ -408,3 +408,94 @@ fn offscreen_shader_residency_and_failed_program_prepare_keep_last_output_and_pe
     );
     assert_eq!(surface.program_stats.pipeline_compiles, 0);
 }
+
+#[test]
+#[ignore = "requires a real adapter; canonical shader time through an ordinary wait"]
+fn shader_time_wait_pixels_and_seek_use_authored_time_without_source_recapture() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let program = WgslEffectProgram::prepare(ShaderSchema {
+        profile: ShaderProfile::PaintedPointwiseV1,
+        dependencies: ShaderDependencies { coordinates: ShaderCoordinates::LocalNormalized, authored_time: true, seed: false },
+        parameters: Box::new([]),
+    }, "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return vec4<f32>(input.color.rgb, 0.2 + 0.25 * input.time); }").unwrap();
+    let make = |effect: bool| {
+        let mut scene = Scene::new();
+        let mut source = scene.rectangle(1.6, 1.2).unwrap();
+        source.set_fill(0.5, 0.75, 1.0, 0.5).unwrap();
+        source.disable_stroke().unwrap();
+        source.set_object_opacity(0.75).unwrap();
+        scene.add(&source).unwrap();
+        if effect {
+            scene
+                .add_effect(&source, ShaderEffect::new(program.clone()), "clock")
+                .unwrap();
+        }
+        scene
+    };
+    let scene = make(true);
+    let plain = make(false);
+    let mut session = scene.execution_session().unwrap();
+    let mut baseline = plain.execution_session().unwrap();
+    let wait = scene.live(&mut session).wait_segment(2.0).unwrap();
+    let plain_wait = plain.live(&mut baseline).wait_segment(2.0).unwrap();
+    assert_eq!(
+        session.segment_state(wait).timeline(),
+        noon_runtime::TimelineWakeState::Continuous
+    );
+    let mut surface = Surface::new(&device, &queue);
+    let mut plain_surface = Surface::new(&device, &queue);
+    let mut midpoint = None;
+    let mut overall_maximum = 0;
+    for (step, time) in [0.0, 0.25, 0.75, 1.5, 0.75, 1.5].into_iter().enumerate() {
+        if step < 4 {
+            scene
+                .live(&mut session)
+                .advance_segment_to(wait, time)
+                .unwrap();
+            plain
+                .live(&mut baseline)
+                .advance_segment_to(plain_wait, time)
+                .unwrap();
+        } else {
+            session.seek(time).unwrap();
+            baseline.seek(time).unwrap();
+        }
+        let input =
+            plain_surface.render_on(&device, &queue, &mut baseline, wgpu::Color::TRANSPARENT);
+        let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+        let expected: Vec<_> = input
+            .iter()
+            .map(|&v| (f64::from(v) * (0.2 + 0.25 * time)).round() as u8)
+            .collect();
+        let maximum = actual
+            .iter()
+            .zip(&expected)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        overall_maximum = overall_maximum.max(maximum);
+        assert!(
+            maximum <= 2,
+            "canonical time={time}: max RGBA error{maximum}"
+        );
+        if step == 2 {
+            midpoint = Some(actual.clone());
+        }
+        if step == 4 {
+            assert_eq!(midpoint.as_ref(), Some(&actual));
+        }
+        assert_eq!(
+            surface.program_stats.pipeline_compiles,
+            usize::from(step == 0)
+        );
+        if step > 0 && step < 4 {
+            assert_eq!(surface.effect_stats.source_passes, 0);
+            assert_eq!(surface.effect_stats.texture_allocations, 0);
+            assert_eq!(surface.effect_stats.sources_prepared, 1);
+        }
+    }
+    eprintln!("ordinary shader canonical time:6 images, max byte error{overall_maximum}; independent coverage gain; exact seek; no source recapture or allocation on forward time changes");
+}

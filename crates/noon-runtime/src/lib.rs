@@ -89,6 +89,8 @@ pub struct EvaluationStats {
     pub groups_evaluated: usize,
     pub tracks_advanced: usize,
     pub binary_search_steps: usize,
+    /// Active declared time-effect rows invalidated by a changed authored time.
+    pub time_effect_rows: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -238,6 +240,8 @@ pub struct SceneInstance {
     /// transient lifetime cannot restore immutable playback admission.
     immutable_playback_revision: noon_core::ExecutionRevision,
     effective_driver_rows: BTreeSet<usize>,
+    time_effect_rows: BTreeSet<usize>,
+    active_time_effect_rows: BTreeSet<usize>,
     effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
     effective_images: BTreeMap<
         noon_core::RasterImageResourceHandle,
@@ -292,6 +296,8 @@ impl Clone for SceneInstance {
             publication: self.publication,
             immutable_playback_revision: self.immutable_playback_revision,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            time_effect_rows: self.time_effect_rows.clone(),
+            active_time_effect_rows: self.active_time_effect_rows.clone(),
             effective_content_drivers,
             effective_images: self.effective_images.clone(),
             effective_geometries: self.effective_geometries.clone(),
@@ -402,6 +408,8 @@ impl SceneInstance {
             publication: PublicationContext::default(),
             immutable_playback_revision: noon_core::ExecutionRevision::default(),
             effective_driver_rows: BTreeSet::new(),
+            time_effect_rows: BTreeSet::new(),
+            active_time_effect_rows: BTreeSet::new(),
             effective_content_drivers: BTreeMap::new(),
             effective_images: BTreeMap::new(),
             effective_geometries: BTreeMap::new(),
@@ -586,6 +594,7 @@ impl SceneInstance {
     }
 
     pub(crate) fn mark_changed(&mut self, object_index: usize) {
+        self.refresh_time_effect_row(object_index);
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
         if let Ok(index) = u32::try_from(object_index) {
@@ -633,12 +642,15 @@ impl SceneInstance {
     }
 
     pub(crate) fn mark_added(&mut self, object_index: usize) {
+        self.refresh_time_effect_row(object_index);
         self.changes.insert_added(object_index);
         self.spatial_changes.insert_added(object_index);
         self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
     pub(crate) fn mark_removed(&mut self, object_index: usize) {
+        self.time_effect_rows.remove(&object_index);
+        self.active_time_effect_rows.remove(&object_index);
         self.changes.insert_removed(object_index);
         self.spatial_changes.insert_removed(object_index);
     }
@@ -649,6 +661,7 @@ impl SceneInstance {
     }
 
     pub(crate) fn mark_all_changed(&mut self) {
+        self.rebuild_time_effect_rows();
         self.changes.invalidate_all();
         self.spatial_changes.invalidate_all();
     }
@@ -1408,6 +1421,7 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
+        self.refresh_time_effect_row(index);
         if matches!(
             patch,
             ExecutionPatch::SetEffects { .. } | ExecutionPatch::SetDrawEnabled { .. }
@@ -1733,7 +1747,6 @@ impl SceneInstance {
         self.translation_drag_rows.clear();
         self.active_family_animation_indices.clear();
         self.pending_family_endpoint_expirations.clear();
-        self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
         for group in self.groups.values_mut() {
@@ -1770,6 +1783,7 @@ impl SceneInstance {
         }
         self.refresh_all_graph_dependencies();
         self.refresh_all_spatial_anchors();
+        self.mark_all_changed();
         self.last_stats = stats;
     }
 
@@ -1827,6 +1841,9 @@ impl SceneInstance {
 
         self.flush_spatial_anchor_changes();
 
+        if self.frame.time != previous_time {
+            stats.time_effect_rows = self.invalidate_time_effects();
+        }
         self.last_stats = stats;
         if self.frame.time != previous_time {
             self.publish_effective_change();

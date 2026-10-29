@@ -7,6 +7,52 @@ use noon_core::ObjectId;
 use crate::{EvaluationStats, RuntimePatchStats, SceneInstance};
 
 impl SceneInstance {
+    // Sparse derived dependency indices, not authored values or another clock.
+    // The attached set proves finite-time admission; the active set keeps quiet
+    // hidden rows out of ordinary ticks and makes wake observation O(1).
+    pub(crate) fn refresh_time_effect_row(&mut self, index: usize) {
+        let row = &self.frame.objects[index];
+        let timed = self.object_slot_is_live(index)
+            && row.effects.as_ref().is_some_and(|stack| {
+                stack
+                    .definitions()
+                    .iter()
+                    .filter_map(|d| d.as_shader())
+                    .any(|shader| shader.program().schema().dependencies.authored_time)
+            });
+        if timed {
+            self.time_effect_rows.insert(index);
+        } else {
+            self.time_effect_rows.remove(&index);
+        }
+        let active = timed
+            && self.frame.is_present(index)
+            && (row.draw_enabled || row.content.composed_source().is_some())
+            && row.style.opacity > 0.0
+            && row.appearance > 0.0;
+        if active {
+            self.active_time_effect_rows.insert(index);
+        } else {
+            self.active_time_effect_rows.remove(&index);
+        }
+    }
+
+    pub(crate) fn rebuild_time_effect_rows(&mut self) {
+        self.time_effect_rows.clear();
+        self.active_time_effect_rows.clear();
+        for index in 0..self.frame.objects.len() {
+            self.refresh_time_effect_row(index);
+        }
+    }
+
+    pub(crate) fn invalidate_time_effects(&mut self) -> usize {
+        for &index in &self.active_time_effect_rows {
+            // Time changes appearance only; geometry/spatial work stays clean.
+            self.changes.insert(index);
+        }
+        self.active_time_effect_rows.len()
+    }
+
     pub(crate) fn apply_effect_stack_patch(
         &mut self,
         patch: &ExecutionPatch,
@@ -56,6 +102,7 @@ impl SceneInstance {
         }
         let index = index as usize;
         self.frame.objects[index].effects = next;
+        self.refresh_time_effect_row(index);
         // Halo coverage is renderer-derived. Semantic geometry, spatial queries,
         // object motion, painter order and all unrelated rows stay untouched.
         self.changes.insert(index);

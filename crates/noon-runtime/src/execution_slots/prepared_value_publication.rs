@@ -267,6 +267,7 @@ impl SceneInstance {
                     self.changes.insert(object_index);
                 }
                 self.frame.objects[object_index].effects = Some(effective);
+                self.refresh_time_effect_row(object_index);
                 continue;
             }
             let before = FrameRowState::from_frame(&self.frame, object_index);
@@ -367,6 +368,7 @@ impl SceneInstance {
             }
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
+            self.refresh_time_effect_row(object_index);
             if before.differs_from_frame(&self.frame, object_index) {
                 if before.spatially_differs_from_frame(&self.frame, object_index) {
                     self.mark_changed(object_index);

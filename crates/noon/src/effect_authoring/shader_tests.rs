@@ -359,3 +359,295 @@ fn shader_raw_channels_reject_invalid_schema_and_retire_exact_generation_atomica
     runtime.seek(1.5).unwrap();
     assert!(runtime.frame().objects[0].effects.is_none());
 }
+
+fn time_program() -> WgslEffectProgram {
+    WgslEffectProgram::prepare(
+        ShaderSchema {
+            profile: ShaderProfile::PaintedPointwiseV1,
+            dependencies: ShaderDependencies {
+                coordinates: ShaderCoordinates::LocalNormalized,
+                authored_time: true,
+                seed: false,
+            },
+            parameters: Box::new([]),
+        },
+        "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return vec4<f32>(input.color.rgb, 0.2 + 0.25 * input.time); }",
+    ).unwrap()
+}
+
+#[test]
+fn declared_shader_time_invalidates_only_active_dependencies_and_prepared_commit_is_atomic() {
+    use noon_runtime::{SceneInstance, TimelineWakeState};
+    const INDEX: usize = 50_000;
+    let effect = CompiledEffect {
+        attachment: SemanticNodeId::new(100_001, 1),
+        definition: ShaderEffect::new(time_program()).into(),
+    };
+    let mut rows: Vec<_> = (0..100_000)
+        .map(|i| {
+            CompiledObject::new(
+                ObjectId::new(i),
+                GeometryRef::circle(0.4),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    rows[INDEX].effects = Some(Arc::new(
+        CompiledEffectStack::new([effect.clone()]).unwrap(),
+    ));
+    rows[INDEX + 1].effects = Some(Arc::new(
+        CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(100_002, 1),
+            definition: ShaderEffect::new(program()).into(),
+        }])
+        .unwrap(),
+    ));
+    let mut runtime = SceneInstance::new(CompiledScene::compile_objects(rows, &[]).unwrap());
+    runtime.take_frame_changes();
+    runtime.take_spatial_changes();
+    assert_eq!(
+        runtime.wake_state().timeline(),
+        TimelineWakeState::Continuous
+    );
+    assert_eq!(runtime.finite_timeline_end_time(), None);
+    runtime.advance_to(0.25).unwrap();
+    assert_eq!(runtime.last_stats().time_effect_rows, 1);
+    assert_eq!(runtime.last_stats().groups_evaluated, 0);
+    assert_eq!(runtime.take_frame_changes().object_indices(), &[INDEX]);
+    assert!(runtime.take_spatial_changes().is_empty());
+    runtime.advance_to(0.25).unwrap();
+    assert_eq!(runtime.last_stats().time_effect_rows, 0);
+    assert!(runtime.take_frame_changes().is_empty());
+    let before = runtime.publication_context();
+    let prepared = runtime.prepare_advance_to(0.5).unwrap();
+    assert_eq!(
+        prepared.staged_row_count(),
+        0,
+        "time dependency changes no semantic row values"
+    );
+    assert_eq!(runtime.publication_context(), before);
+    assert_eq!(runtime.frame().time, 0.25);
+    assert!(runtime.frame_changes().is_empty());
+    let writes = runtime.prepare_effective_property_batch(&[]).unwrap();
+    runtime.commit_prepared_frame(prepared, writes).unwrap();
+    assert_eq!(runtime.last_stats().time_effect_rows, 1);
+    assert_eq!(runtime.take_frame_changes().object_indices(), &[INDEX]);
+    assert!(runtime.take_spatial_changes().is_empty());
+    let object = ObjectId::new(INDEX as u64);
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetDrawEnabled {
+            object,
+            enabled: false,
+        })
+        .unwrap();
+    runtime.take_frame_changes();
+    runtime.advance_to(0.75).unwrap();
+    assert_eq!(runtime.last_stats().time_effect_rows, 0);
+    assert!(runtime.take_frame_changes().is_empty());
+    assert_eq!(
+        runtime.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    );
+    assert_eq!(
+        runtime.finite_timeline_end_time(),
+        None,
+        "hidden time dependency is still unbounded"
+    );
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetDrawEnabled {
+            object,
+            enabled: true,
+        })
+        .unwrap();
+    runtime.take_frame_changes();
+    runtime.advance_to(1.0).unwrap();
+    assert_eq!(runtime.take_frame_changes().object_indices(), &[INDEX]);
+    assert!(runtime
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object,
+            expected: Box::new([SemanticNodeId::new(100_001, 0)]),
+            effects: None,
+        })
+        .is_err());
+    assert_eq!(
+        runtime.wake_state().timeline(),
+        TimelineWakeState::Continuous
+    );
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object,
+            expected: Box::new([effect.attachment]),
+            effects: None,
+        })
+        .unwrap();
+    runtime.take_frame_changes();
+    runtime.advance_to(1.25).unwrap();
+    assert!(runtime.take_frame_changes().is_empty());
+    assert_eq!(runtime.last_stats().time_effect_rows, 0);
+    assert_eq!(
+        runtime.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    );
+    assert_eq!(runtime.finite_timeline_end_time(), Some(0.0));
+}
+
+#[test]
+fn shader_time_uses_live_wait_boundaries_and_stops_after_removal_or_source_completion() {
+    use crate::{
+        ContinuationStep, LiveContinuation, LiveProgramStatus, LiveSession, RustHostCallbackTable,
+    };
+    use noon_runtime::TimelineWakeState;
+    struct Hold {
+        source: Mobject,
+        stage: u8,
+        retire: bool,
+    }
+    impl LiveContinuation for Hold {
+        type Error = String;
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+            let step = self.stage;
+            self.stage += 1;
+            match step {
+                0 => live
+                    .wait_segment(1.0)
+                    .map(ContinuationStep::Await)
+                    .map_err(|e| e.to_string()),
+                1 => {
+                    if self.retire {
+                        live.remove_effect(&self.source, "clock")
+                            .map_err(|e| e.to_string())?;
+                    }
+                    live.wait_segment(0.5)
+                        .map(ContinuationStep::Await)
+                        .map_err(|e| e.to_string())
+                }
+                _ => Ok(ContinuationStep::Finished),
+            }
+        }
+    }
+    for retire in [false, true] {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        scene.add(&source).unwrap();
+        scene
+            .add_effect(&source, ShaderEffect::new(time_program()), "clock")
+            .unwrap();
+        let mut program = scene
+            .into_live_program(Hold {
+                source,
+                stage: 0,
+                retire,
+            })
+            .unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        program.resume().unwrap();
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+        program.take_renderer_publication();
+        program.drive_to(&mut callbacks, 0.5).unwrap();
+        assert_eq!(program.session().frame().time, 0.5);
+        assert_eq!(
+            program
+                .take_renderer_publication()
+                .changes()
+                .object_indices(),
+            &[0]
+        );
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let context = program.take_renderer_publication().context();
+        program.admit_publication(context).unwrap();
+        program.resume().unwrap();
+        assert_eq!(
+            program.wake_state().timeline(),
+            if retire {
+                TimelineWakeState::Deadline(1.5)
+            } else {
+                TimelineWakeState::Continuous
+            }
+        );
+        program.take_renderer_publication();
+        let status = program.drive_to(&mut callbacks, 1.5).unwrap();
+        if matches!(status, LiveProgramStatus::PublicationPending(_)) {
+            let context = program.take_renderer_publication().context();
+            program.admit_publication(context).unwrap();
+        } else {
+            assert_eq!(status, LiveProgramStatus::ReadyToResume);
+        }
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
+        assert_eq!(
+            program.session().wake_state().timeline(),
+            if retire {
+                TimelineWakeState::Quiescent
+            } else {
+                TimelineWakeState::Continuous
+            },
+            "the source's completion gate bounds an otherwise unbounded time dependency"
+        );
+    }
+}
+
+#[test]
+fn shader_time_dependency_follows_selected_history_across_attachment_removal() {
+    use noon_runtime::TimelineWakeState;
+    let mut scene = Scene::new();
+    let source = scene.circle(0.4).unwrap();
+    scene.add(&source).unwrap();
+    scene
+        .add_effect(&source, ShaderEffect::new(time_program()), "clock")
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    let wait = scene.live(&mut session).wait_segment(1.0).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(wait, 1.0)
+        .unwrap();
+    scene.live(&mut session).complete_segment(wait).unwrap();
+    scene
+        .live(&mut session)
+        .remove_effect(&source, "clock")
+        .unwrap();
+    let wait = scene.live(&mut session).wait_segment(1.0).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(wait, 2.0)
+        .unwrap();
+    scene.live(&mut session).complete_segment(wait).unwrap();
+    session.seal_replay().unwrap();
+    for _ in 0..2 {
+        session.seek(0.25).unwrap();
+        session.take_renderer_publication();
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+        session.advance_to(0.5).unwrap();
+        assert_eq!(
+            session
+                .take_renderer_publication()
+                .changes()
+                .object_indices(),
+            &[0]
+        );
+        session.seek(1.5).unwrap();
+        session.take_renderer_publication();
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
+        session.advance_to(1.75).unwrap();
+        assert!(session.take_renderer_publication().changes().is_empty());
+    }
+}

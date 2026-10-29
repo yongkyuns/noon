@@ -743,6 +743,9 @@ impl SceneInstance {
         self.effective_driver_rows = next_drivers;
         self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
+        if time_changed {
+            self.last_stats.time_effect_rows = self.invalidate_time_effects();
+        }
         let changed = time_changed || changed || reactive_changed;
         if publish && changed {
             self.publication = self.publication.with_frame_epoch(
