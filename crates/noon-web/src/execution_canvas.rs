@@ -732,13 +732,25 @@ mod wasm {
             }
         }
 
-        /// Realtime browser callbacks may be observed out of timestamp order
-        /// across timer/performance.now and RAF. A prepared reader must ignore
-        /// only such stale clock samples; explicit advance and seek stay strict.
+        /// Realtime host timer and RAF callbacks can carry out-of-order sampled
+        /// wall times. Only a prepared reader may ignore a stale clock sample;
+        /// explicit history advancement continues to reject backwards time.
+        fn stale_prepared_clock_sample(&self, requested_time: f64) -> bool {
+            if !requested_time.is_finite() {
+                return false;
+            }
+            match &self.authority {
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    requested_time < playback.reader.frame().time
+                }
+                DirectSourceAuthority::Session { .. } | DirectSourceAuthority::Program(_) => false,
+            }
+        }
+
         fn drive_from_clock(&mut self, requested_time: f64) -> Result<(), JsValue> {
-            #[cfg(feature = "prepared-prefix")]
-            if let DirectSourceAuthority::Prepared(playback) = &mut self.authority {
-                return playback.advance_clock_sample(requested_time).map_err(js_error);
+            if self.stale_prepared_clock_sample(requested_time) {
+                return Ok(());
             }
             self.drive_to(requested_time)
         }
@@ -1702,7 +1714,9 @@ mod wasm {
                 self.bound_transport_target(self.source.bounded_realtime_target(target_time));
             let (pending, camera) = {
                 let direct = &mut self.source;
-                direct.drive_from_clock(target_time)?;
+                if !direct.stale_prepared_clock_sample(target_time) {
+                    direct.drive_to(target_time)?;
+                }
                 direct.advance_interactions(wall_time_ms / 1_000.0)?;
                 let camera = direct.inspection_camera().map_err(js_error)?;
                 (direct.frame_pending(), camera)
