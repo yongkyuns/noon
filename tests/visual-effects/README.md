@@ -1947,3 +1947,49 @@ This reusable presentation seam does not yet wire HDR into native windows or
 browser canvases, qualify physical presentation or deliver checked emission.
 Those host/capability, public authoring, extension and remaining M5 gates remain
 open.
+
+### Native window HDR and viewer-overlay integration (#1897 M4/M5)
+
+The normal native frame loop selects its working format from the current
+borrowed Runtime publication. A LinearHdr primary 2D camera renders into a
+retained RGBA16Float target, uses the same `HdrBloomFilter::prepare_view` as frame
+capture, and presents the encoded SDR output with `EncodedDisplayPresenter`.
+Compatibility publications keep the ordinary native surface renderer. Profile
+changes replace disposable renderer/text/preparer resources, preserving the
+semantic scene, Runtime, identities and authored time.
+
+Native admission checks RGBA16Float attachment/texturing/copy usages, blending,
+four-sample support, attachment-byte limits, one of the four qualified SDR
+surface formats, primary 2D view ownership, absence of insets/spatial rows,
+device extents and an explicit **256 MiB primary-view target budget**. At current
+fixed quality, source (8), four-sample scene attachment (32), and Bloom/output
+scratch (36) total **76 bytes/pixel**. 1920x1080 fits; 3840x2160 rejects. Assets,
+object-effect scopes, the surface and in-flight resource leases have separate
+owners. Object-effect capture budgets remain unchanged. There is no silent
+resolution/quality reduction. Initial/global view admission inspects spatial rows
+once; later publications inspect changed rows. Extent preflight precedes native
+resize allocations. A clean settled window retains the existing sleep behavior.
+
+Viewer selection is composed onto encoded SDR **after** Bloom/output resolution
+and before the final surface transfer. It reuses the same renderer's camera,
+quad and fixed-size overlay instance, with two lazy display pipelines. It never
+enters authored Bloom input or normal capture/export. Removing it recomputes the
+clean output instead of accumulating a tint.
+
+The real native GPU proof has thirteen phases: live parameter edits, viewer
+overlay/clear, neutral and absent Bloom, Compatibility/HDR transitions, resize,
+target recreation and a newly requested device. Every HDR phase without an
+overlay matches normal `SessionCapture` exactly at the same view/state. Float
+values use the predeclared 0.006 + 0.004*abs(expected) bound; displayed values use
+the existing two-byte bound. Expected values come from literal .5 radiance over
+opaque black, an independent full-2D finite Gaussian and explicit SDR transfer.
+An actual consumer that sends the viewer tint through Bloom must fail those
+display bounds; restoring the correct consumer must recover exactly. Parameter
+and viewer edits upload no source geometry. Separate native-window CI advances
+an ordinary authored Bloom animation to its exact endpoint and presents it.
+
+`cargo run -p noon-native --example camera_bloom` is an ordinary Rust creator
+example. Browser/Python HDR hosts, checked emission, broader view/capture profiles,
+public WGSL extensions, physical presentation/performance and remaining M5
+qualification remain open. New-device resource recreation is not a claim of
+automatic OS/device-loss recovery.

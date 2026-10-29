@@ -164,6 +164,24 @@ jobs:
             cargo test -p noon-native native_surface_smoke_presents_typed_semantic_frame \
               -- --ignored --nocapture --test-threads=1
 
+      - name: Qualify native HDR pixels, capture equivalence and recovery
+        env:
+          NOON_NATIVE_HDR_ARTIFACTS: ${{ github.workspace }}/native-hdr-proof
+        run: cargo test -p noon-native --lib view_output::tests::native_hdr -- --include-ignored --nocapture
+      - name: Present authored camera Bloom through native host
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_authored_camera_bloom \
+              -- --ignored --nocapture --test-threads=1
+      - name: Preserve native HDR proof
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-hdr-proof
+          path: native-hdr-proof
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Present typed Rust continuation endpoint through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \
