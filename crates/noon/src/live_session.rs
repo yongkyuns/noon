@@ -670,10 +670,9 @@ impl<'a> LiveSession<'a> {
     pub fn publish_staged_effects(
         &mut self,
         staged: crate::StagedEffectPublication,
-    ) -> Result<(), LiveSessionError> {
+    ) -> Result<Option<ExecutionSegment>, LiveSessionError> {
         self.session
             .publish_staged_effects(&mut self.store.borrow_mut(), staged)
-            .map(|_| ())
             .map_err(Into::into)
     }
 
@@ -2284,6 +2283,24 @@ impl<'a> LiveSession<'a> {
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_composition(&mut store, self.root, &request, play_options)
+            .map_err(Into::into)
+    }
+
+    /// Stage this ordinary composition until its newly executable resources are ready.
+    /// The original request is validated again at publication, including activation capture.
+    pub fn prepare_composition(
+        &mut self,
+        request: &AnimationCompositionRequest<'_>,
+        play_options: AnimationOptions,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
+        let request = self.execution_composition_request(request)?;
+        self.session
+            .stage_composition_publication(
+                &mut self.store.borrow_mut(),
+                self.root,
+                request,
+                play_options,
+            )
             .map_err(Into::into)
     }
 

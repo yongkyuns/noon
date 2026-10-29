@@ -58,8 +58,8 @@ pub(crate) struct PreparedReactiveEnrollmentBatch {
 }
 
 pub(super) struct PreparedScalarPublicationContract {
-    handled_signals: std::collections::HashSet<SemanticNodeId>,
-    reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+    pub(super) handled_signals: std::collections::HashSet<SemanticNodeId>,
+    pub(super) reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,7 +188,7 @@ impl EffectiveSemanticObject<'_> {
 }
 
 impl ExecutionSession {
-    fn validate_shader_view_profile(
+    pub(super) fn validate_shader_view_profile(
         &self,
         prepared: &PreparedSemanticMutationTransaction<'_>,
         publication: &noon_compile::PreparedSemanticPublication,

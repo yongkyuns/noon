@@ -3612,6 +3612,11 @@ impl SemanticExecutionPlayer {
         )
         .declare_and_activate_composition(request, play_options)
         .map_err(AuthoringFailure::from)?;
+        Ok(self.admit_live_segment(segment))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn admit_live_segment(&mut self, segment: noon::ExecutionSegment) -> f64 {
         let end_time = segment.end_time();
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
@@ -3619,7 +3624,7 @@ impl SemanticExecutionPlayer {
         // This is another interval in the same active source. Internal
         // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        Ok(end_time)
+        end_time
     }
 
     /// Create and sparsely enroll one scalar tracker in this retained session.

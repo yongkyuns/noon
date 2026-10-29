@@ -460,11 +460,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
             .pending_effects
             .take()
             .expect("preparation owns a transaction");
-        if let Err(error) = self.scene.owned_live().publish_staged_effects(pending) {
-            self.phase = LiveProgramPhase::Terminal;
-            return Err(LiveProgramError::Completion(error));
-        }
-        self.phase = LiveProgramPhase::PublicationPending(self.session().publication_context());
+        let segment = match self.scene.owned_live().publish_staged_effects(pending) {
+            Ok(segment) => segment,
+            Err(error) => {
+                self.phase = LiveProgramPhase::Terminal;
+                return Err(LiveProgramError::Completion(error));
+            }
+        };
+        self.phase = match segment {
+            Some(segment) => LiveProgramPhase::Awaiting(segment),
+            None => LiveProgramPhase::PublicationPending(self.session().publication_context()),
+        };
         Ok(self.status())
     }
 

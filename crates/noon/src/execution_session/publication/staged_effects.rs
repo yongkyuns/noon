@@ -1,15 +1,27 @@
 //! An owned existing transaction across external resource preparation.
+use super::super::{
+    ExecutionSessionAnimationError, SemanticCompositionRequest, ShaderPublicationPreparation,
+};
 use super::*;
 use noon_core::{SemanticNodeCreation, SemanticStoreIdentity, WgslEffectProgram};
 
-/// Unpublished effect attachments or membership. This contains the original transaction and
-/// immutable resource requests, never a Scene, execution copy, or borrowed proof.
+#[derive(Debug, PartialEq)]
+enum StagedEffectOperation {
+    Transaction(SemanticMutationTransaction),
+    Composition {
+        request: Box<SemanticCompositionRequest>,
+        options: noon_core::AnimationOptions,
+    },
+}
+
+/// Unpublished effect attachments, membership or composition. This owns the original
+/// semantic input and immutable resource requests, never a Scene or execution copy.
 #[derive(Debug, PartialEq)]
 pub struct StagedEffectPublication {
     store: SemanticStoreIdentity,
     runtime: noon_runtime::RuntimeIdentity,
     root: SemanticNodeId,
-    transaction: SemanticMutationTransaction,
+    operation: StagedEffectOperation,
     programs: Vec<WgslEffectProgram>,
 }
 impl StagedEffectPublication {
@@ -73,32 +85,77 @@ impl ExecutionSession {
             store: prepared.store().identity(),
             runtime: self.runtime_identity(),
             root,
-            transaction: prepared.into_transaction(),
+            operation: StagedEffectOperation::Transaction(prepared.into_transaction()),
             programs,
         })
     }
+
+    pub(crate) fn stage_composition_publication(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        request: SemanticCompositionRequest,
+        options: noon_core::AnimationOptions,
+    ) -> Result<StagedEffectPublication, ExecutionSessionAnimationError> {
+        let mut programs = Vec::new();
+        self.prepare_composition_publication(
+            store,
+            root,
+            &request,
+            options,
+            ShaderPublicationPreparation::Collect(&mut programs),
+        )?;
+        Ok(StagedEffectPublication {
+            store: store.identity(),
+            runtime: self.runtime_identity(),
+            root,
+            operation: StagedEffectOperation::Composition {
+                request: Box::new(request),
+                options,
+            },
+            programs,
+        })
+    }
+
     pub(crate) fn publish_staged_effects(
         &mut self,
         store: &mut SemanticStore,
         staged: StagedEffectPublication,
-    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+    ) -> Result<Option<crate::ExecutionSegment>, ExecutionSessionAnimationError> {
         if !staged.belongs_to(self) {
-            return Err(ExecutionSessionPublicationError::ForeignSemanticStore);
+            return Err(ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::ForeignSemanticStore,
+            ));
         }
-        self.require_published_store(store)?;
-        let prepared =
-            self.prepare_semantic_transaction_with_callback_release(store, staged.transaction)?;
-        self.apply_prepared_semantic_transaction_with_execution_contract(
-            prepared,
-            Vec::new(),
-            PreparedRuntimePublication {
-                prepared_effect_programs: staged.programs,
-                ..Default::default()
-            },
-            SemanticPublicationPurpose::AuthoredMutation,
-            None,
-            Some(staged.root),
-        )
-        .map(|(result, _)| result)
+        self.require_published_store(store)
+            .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
+        match staged.operation {
+            StagedEffectOperation::Composition { request, options } => self
+                .prepare_composition_publication(
+                    store,
+                    staged.root,
+                    &request,
+                    options,
+                    ShaderPublicationPreparation::Publish(&staged.programs),
+                ),
+            StagedEffectOperation::Transaction(transaction) => {
+                let prepared = self
+                    .prepare_semantic_transaction_with_callback_release(store, transaction)
+                    .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
+                self.apply_prepared_semantic_transaction_with_execution_contract(
+                    prepared,
+                    Vec::new(),
+                    PreparedRuntimePublication {
+                        prepared_effect_programs: staged.programs,
+                        ..Default::default()
+                    },
+                    SemanticPublicationPurpose::AuthoredMutation,
+                    None,
+                    Some(staged.root),
+                )
+                .map(|_| None)
+                .map_err(ExecutionSessionAnimationError::AuthoredPublication)
+            }
+        }
     }
 }

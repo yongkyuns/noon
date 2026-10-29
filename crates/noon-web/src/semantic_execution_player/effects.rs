@@ -65,7 +65,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         staged: noon::StagedEffectPublication,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.publish_staged_effects(staged))
+        if let Some(segment) = self.with_live_session(|live| live.publish_staged_effects(staged))? {
+            self.admit_live_segment(segment);
+        }
+        Ok(())
     }
 
     pub(crate) fn live_set_effect<'owner>(

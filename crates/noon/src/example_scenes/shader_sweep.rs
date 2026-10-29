@@ -18,11 +18,16 @@ fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> {
     return vec4<f32>(input.color.rgb * mix(p.low.rgb, p.high.rgb, stripes), 1.0);
 }";
 
+enum Introduction {
+    Membership,
+    Fade,
+}
+
 pub struct ShaderSweep {
     panels: [Mobject; 2],
     phase: [ShaderParameterKey; 2],
     stage: u8,
-    deferred: bool,
+    deferred: Option<Introduction>,
     camera: Option<Mobject>,
     retire: bool,
 }
@@ -79,7 +84,7 @@ impl LiveContinuation for ShaderSweep {
         let segment = match self.stage {
             0 | 2 | 4 => live.wait_segment(0.5),
             1 | 3 => {
-                if std::mem::take(&mut self.deferred) {
+                if let Some(introduction) = self.deferred.take() {
                     if let Some(camera) = self.camera.take() {
                         let mut transaction = noon_core::SemanticMutationTransaction::new();
                         transaction.set_view_color_profile(
@@ -88,10 +93,32 @@ impl LiveContinuation for ShaderSweep {
                         );
                         live.apply(transaction).map_err(message)?;
                     }
-                    let members = self.panels.each_ref().map(crate::MobjectTarget::from);
-                    let pending = live
-                        .prepare_membership(crate::SceneMembershipRequest::Add(&members))
-                        .map_err(message)?;
+                    let pending = match introduction {
+                        Introduction::Membership => {
+                            let members = self.panels.each_ref().map(crate::MobjectTarget::from);
+                            live.prepare_membership(crate::SceneMembershipRequest::Add(&members))
+                        }
+                        Introduction::Fade => live.prepare_composition(
+                            &AnimationCompositionRequest::Composition {
+                                kind: SemanticAnimationCompositionKind::Parallel,
+                                children: self
+                                    .panels
+                                    .iter()
+                                    .map(|target| AnimationCompositionRequest::Fade {
+                                        target,
+                                        direction: noon_core::SemanticFadeDirection::In,
+                                        endpoint: crate::FadeEndpoint::default(),
+                                        options: AnimationOptions::new()
+                                            .run_time(1.0)
+                                            .rate_func(RateFunction::Linear),
+                                    })
+                                    .collect(),
+                                options: AnimationOptions::new(),
+                            },
+                            AnimationOptions::new(),
+                        ),
+                    }
+                    .map_err(message)?;
                     // The same stage resumes only after preparation, atomic
                     // publication and retention; neither panel is visible early.
                     return Ok(ContinuationStep::Publish(pending));
@@ -151,16 +178,22 @@ impl LiveContinuation for ShaderSweep {
 }
 
 pub fn program() -> Result<LiveProgram<ShaderSweep>, String> {
-    build_program(false)
+    build_program(None)
 }
 
 /// The same lesson with shader-bearing insertion after its first wait and explicit
 /// retirement. Qualifies new programs after a valid HDR-to-compatibility transition.
 pub fn late_program() -> Result<LiveProgram<ShaderSweep>, String> {
-    build_program(true)
+    build_program(Some(Introduction::Membership))
 }
 
-fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
+/// The same material lesson introduced by an ordinary one-second FadeIn.
+pub fn fade_in_program() -> Result<LiveProgram<ShaderSweep>, String> {
+    build_program(Some(Introduction::Fade))
+}
+
+fn build_program(introduction: Option<Introduction>) -> Result<LiveProgram<ShaderSweep>, String> {
+    let late = introduction.is_some();
     let mut scene = Scene::new();
     let camera = if late {
         let camera = scene.camera_frame().map_err(message)?;
@@ -229,7 +262,7 @@ fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
                 .each_ref()
                 .map(|program| program.parameter("phase").expect("declared phase")),
             stage: 0,
-            deferred: late,
+            deferred: introduction,
             camera,
             retire: late,
         })

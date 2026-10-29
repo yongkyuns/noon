@@ -2,6 +2,153 @@
 use super::*;
 
 #[test]
+fn shader_composition_preparation_is_inert_and_captures_fresh_activation_state() {
+    let mut scene = Scene::new();
+    let mut source = scene.circle(0.5).unwrap();
+    source.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    source.disable_stroke().unwrap();
+    source
+        .add_effect(ShaderEffect::new(program()), "material")
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session.require_effect_resource_preparation();
+    let request = crate::AnimationCompositionRequest::Fade {
+        target: &source,
+        direction: noon_core::SemanticFadeDirection::In,
+        endpoint: crate::FadeEndpoint::default(),
+        options: noon_core::AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(noon_core::RateFunction::Linear),
+    };
+    session.take_frame_changes();
+    let before = session.publication_context();
+    let frame = session.frame().clone();
+    let discarded = scene
+        .live(&mut session)
+        .prepare_composition(&request, noon_core::AnimationOptions::new())
+        .unwrap();
+    assert_eq!(discarded.programs(), &[program()]);
+    drop(discarded);
+    let pending = scene
+        .live(&mut session)
+        .prepare_composition(&request, noon_core::AnimationOptions::new())
+        .unwrap();
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.frame(), &frame);
+    assert!(session.take_frame_changes().is_empty());
+    assert!(!scene.live(&mut session).contains(&source).unwrap());
+    scene
+        .live(&mut session)
+        .set_object_opacity(&source, 0.6)
+        .unwrap();
+    let segment = scene
+        .live(&mut session)
+        .publish_staged_effects(pending)
+        .unwrap()
+        .unwrap();
+    assert_eq!(segment.end_time(), 1.0);
+    assert!(scene.live(&mut session).contains(&source).unwrap());
+    let id = session.execution_object_id(source.node_id()).unwrap();
+    let opacity = |session: &ExecutionSession| {
+        let row = session
+            .frame()
+            .objects
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap();
+        row.style.fill.unwrap().alpha * row.style.opacity * row.appearance
+    };
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.0)
+        .unwrap();
+    assert_eq!(opacity(&session), 0.0);
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
+    assert!((opacity(&session) - 0.3).abs() < 1e-6);
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.0)
+        .unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    assert!((opacity(&session) - 0.6).abs() < 1e-6);
+    assert_eq!(effective(&session, &source).program(), &program());
+}
+
+#[test]
+fn shader_composition_revalidates_prepared_program_view_and_detached_membership() {
+    for change in 0..3 {
+        let mut scene = Scene::new();
+        let camera = scene.camera_frame().unwrap();
+        let mut source = scene.circle(0.5).unwrap();
+        let original = program();
+        source
+            .add_effect(ShaderEffect::new(original.clone()), "material")
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.require_effect_resource_preparation();
+        let request = crate::AnimationCompositionRequest::Fade {
+            target: &source,
+            direction: noon_core::SemanticFadeDirection::In,
+            endpoint: crate::FadeEndpoint::default(),
+            options: noon_core::AnimationOptions::new(),
+        };
+        let pending = scene
+            .live(&mut session)
+            .prepare_composition(&request, noon_core::AnimationOptions::new())
+            .unwrap();
+        match change {
+            0 => {
+                let replacement = WgslEffectProgram::prepare(
+                    original.schema().clone(),
+                    format!("{}\n", original.source()),
+                )
+                .unwrap();
+                let mut live = scene.live(&mut session);
+                live.remove_effect(&source, "material").unwrap();
+                live.add_effect(&source, ShaderEffect::new(replacement), "material")
+                    .unwrap();
+            }
+            1 => {
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.set_view_color_profile(
+                    camera.node_id(),
+                    noon_core::ViewColorProfile::LinearHdr,
+                );
+                scene.live(&mut session).apply(transaction).unwrap();
+            }
+            _ => {
+                let addition = scene
+                    .live(&mut session)
+                    .prepare_membership(crate::SceneMembershipRequest::Add(&[(&source).into()]))
+                    .unwrap();
+                scene
+                    .live(&mut session)
+                    .publish_staged_effects(addition)
+                    .unwrap();
+            }
+        }
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let frame = session.frame().clone();
+        let error = scene
+            .live(&mut session)
+            .publish_staged_effects(pending)
+            .unwrap_err();
+        assert!(format!("{error:?}").contains(match change {
+            0 => "ExternalEffectPreparationRequired",
+            1 => "UnsupportedEffectProfile",
+            _ => "TargetIsNotDetached",
+        }));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &frame);
+        assert!(session.take_frame_changes().is_empty());
+    }
+}
+
+#[test]
 fn shader_membership_revalidates_program_and_view_after_preparation() {
     for change_program in [false, true] {
         let mut scene = Scene::new();

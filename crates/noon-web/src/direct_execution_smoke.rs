@@ -1681,6 +1681,15 @@ pub async fn create_direct_shader_sweep_late_smoke_renderer(
 }
 
 #[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderFadeSmokeRenderer)]
+pub async fn create_direct_shader_fade_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::fade_in_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
 #[wasm_bindgen(js_name = createDirectShaderTimeSmokeRenderer)]
 pub async fn create_direct_shader_time_smoke_renderer(
     canvas: OffscreenCanvas,
