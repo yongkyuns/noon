@@ -74,6 +74,110 @@ fn finite_kernel_normalization_and_layout() {
     }
 }
 #[test]
+fn neutral_scope_defers_bloom_resources_and_preserves_output_on_budget_rejection() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let texture = source(&device, [17, 13], HDR);
+    let capture = HdrBloomCapture {
+        source: &texture,
+        revision: 1,
+    };
+    let mut filter = noop_filter(&device);
+    let mut scope = HdrBloomScope::default();
+    let quiet = HdrBloomParameters {
+        intensity: 0.0,
+        scratch_budget_bytes: 17 * 13 * 12,
+        ..parameters(2.25)
+    };
+    let first = filter
+        .prepare(&device, &queue, &mut scope, capture, quiet)
+        .unwrap();
+    assert_eq!(
+        (
+            first.pipeline_compiles,
+            first.texture_allocations,
+            first.bind_group_creations
+        ),
+        (2, 2, 2)
+    );
+    assert_eq!(first.scratch_bytes, 17 * 13 * 12);
+    assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+    assert_eq!(
+        encode(&device, &queue, &filter, &mut scope).passes,
+        [0, 0, 0, 1, 1]
+    );
+    let output = scope.display_output().unwrap().clone();
+    assert_eq!(
+        filter.prepare(
+            &device,
+            &queue,
+            &mut scope,
+            capture,
+            HdrBloomParameters {
+                intensity: 1.0,
+                ..quiet
+            }
+        ),
+        Err(HdrBloomPrepareError::ScratchBudgetExceeded)
+    );
+    assert_eq!(scope.display_output(), Some(&output));
+    let unchanged = filter
+        .prepare(&device, &queue, &mut scope, capture, quiet)
+        .unwrap();
+    assert_eq!(
+        unchanged,
+        HdrBloomStats {
+            scratch_bytes: first.scratch_bytes,
+            ..Default::default()
+        }
+    );
+    assert_eq!(encode(&device, &queue, &filter, &mut scope).passes, [0; 5]);
+    let active = filter
+        .prepare(&device, &queue, &mut scope, capture, parameters(2.25))
+        .unwrap();
+    assert_eq!(
+        (
+            active.pipeline_compiles,
+            active.texture_allocations,
+            active.bind_group_creations
+        ),
+        (3, 3, 4)
+    );
+    assert_eq!(scope.display_output(), Some(&output));
+    assert_eq!(scope.scratch_bytes(), 17 * 13 * 36);
+    assert_eq!(encode(&device, &queue, &filter, &mut scope).passes, [1; 5]);
+    // Resizing a disabled scope releases warm Bloom images without discarding programs.
+    let smaller = source(&device, [7, 5], HDR);
+    let stats = filter
+        .prepare(
+            &device,
+            &queue,
+            &mut scope,
+            HdrBloomCapture {
+                source: &smaller,
+                revision: 1,
+            },
+            HdrBloomParameters {
+                scratch_budget_bytes: 7 * 5 * 12,
+                ..quiet
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            stats.pipeline_compiles,
+            stats.texture_allocations,
+            stats.bind_group_creations
+        ),
+        (0, 2, 2)
+    );
+    assert_eq!(scope.scratch_bytes(), 7 * 5 * 12);
+    assert_eq!(
+        encode(&device, &queue, &filter, &mut scope).passes,
+        [0, 0, 0, 1, 1]
+    );
+}
+
+#[test]
 fn retained_dirty_closure_atomic_rejection_and_retirement() {
     let (device, queue) = wgpu::Device::noop(&Default::default());
     let texture = source(&device, [17, 13], HDR);
