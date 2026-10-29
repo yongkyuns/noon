@@ -157,6 +157,7 @@ jobs:
         run: |
           node scripts/shader-time-qualification.mjs
           NOON_SHADER_SOURCE_MODE=jspi NOON_PAIRED_ARTIFACTS=ci-artifacts/shader-jspi node scripts/shader-time-qualification.mjs
+          NOON_SHADER_SOURCE_MODE=async NOON_PAIRED_ARTIFACTS=ci-artifacts/shader-async node scripts/shader-time-qualification.mjs
           node scripts/direct-view-output-qualification.mjs
           node scripts/worker-view-output-qualification.mjs
           node --test scripts/pointer-selection-raster-contract.test.mjs
