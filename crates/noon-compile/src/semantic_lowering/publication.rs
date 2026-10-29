@@ -235,6 +235,20 @@ impl PreparedSemanticPublication {
         &self.values
     }
 
+    /// Newly executable shader attachments require external resource admission.
+    /// Parameter edits, reorders and detached semantic copies introduce no module.
+    pub fn introduces_shader_attachments(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.compiled.effects.as_ref().is_some_and(|stack| {
+                stack.definitions().iter().any(|definition| definition.as_shader().is_some())
+            })
+        }) || self.values.mutations().iter().any(|patch| {
+            matches!(patch, ExecutionPatch::SetEffectStack { expected, effects: Some(stack), .. }
+                if stack.attachments().iter().zip(stack.definitions()).any(|(attachment, definition)|
+                    !expected.contains(attachment) && definition.as_shader().is_some()))
+        })
+    }
+
     pub fn resource_additions(&self) -> &CompiledResources {
         &self.resource_additions
     }

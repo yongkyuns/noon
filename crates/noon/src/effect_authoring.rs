@@ -351,6 +351,25 @@ impl LiveSession<'_> {
         Ok(())
     }
 
+    /// Stage one atomic batch of named attachments for the existing program's
+    /// publication-preparation barrier. No attachment/revision is visible yet.
+    pub fn prepare_effect_attachments<'owner, T>(
+        &mut self,
+        attachments: impl IntoIterator<Item = (T, EffectDefinition, &'owner str)>,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError>
+    where
+        T: Into<MobjectTarget<'owner>>,
+    {
+        let mut transaction = SemanticMutationTransaction::new();
+        for (object, definition, name) in attachments {
+            let object = object.into();
+            object.require_store(self.integration_store())?;
+            object.validate()?;
+            transaction.create_effect(object.node_id(), name, definition);
+        }
+        self.stage_effect_publication(transaction)
+    }
+
     pub fn add_effect<'owner>(
         &mut self,
         object: impl Into<MobjectTarget<'owner>>,

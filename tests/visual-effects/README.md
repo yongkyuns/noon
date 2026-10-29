@@ -22,10 +22,17 @@ See [the animated material lesson](../../web/python/examples/showcase_shader_mat
 an independent coverage reference, different presentation cadences and seek/replay
 on WebGPU and WebGL2. It requires a clean renderer-smoke browser package.
 
-Device compilation is still performed after semantic/runtime publication. This
-is an open atomic-publication requirement, even when the previous rendered image
-and GPU cache remain intact on failure. Native Python, broader recovery and the
-physical-device performance matrix are also unqualified; #1897 owns promotion.
+Late Rust attachments use `live.prepare_effect_attachments(...)` and yield
+`ContinuationStep::Publish`: native, direct-WASM and offscreen hosts prepare owned
+immutable modules before the normal publisher revalidates and commits the batch.
+The existing retention barrier then admits the frame before source resumption.
+Parameter edits and detached animation targets need no new module preparation;
+headless prepared prefixes explicitly reject this resource-dependent operation.
+The shader-time qualification also checks real GPU compilation failure and retry.
+
+Python-worker attachment publication still needs the same pre-publication resource
+barrier. Native Python, broader recovery and the physical-device performance
+matrix are also unqualified; #1897 owns promotion.
 
 ## Current authored GlowPulse extension
 

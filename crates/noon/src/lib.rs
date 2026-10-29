@@ -246,7 +246,8 @@ pub use execution_session::{
     ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
     ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
     ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
-    SignalTimelineAppendError, TranslationDragError, TranslationDragReceipt, TranslationDragUndo,
+    SignalTimelineAppendError, StagedEffectPublication, TranslationDragError,
+    TranslationDragReceipt, TranslationDragUndo,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};

@@ -48,7 +48,8 @@ pub use completion::ExecutionSegmentCompletionError;
 pub use effective_content::ExecutionSessionContentError;
 pub use noon_runtime::SignalTimelineAppendError;
 pub use publication::{
-    EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
+    EffectiveSemanticObject, ExecutionSessionPublicationError, StagedEffectPublication,
+    StructuralPublicationStats,
 };
 #[cfg(feature = "prepared-prefix")]
 pub use replay::PrefixReader;
@@ -844,6 +845,7 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 #[derive(Debug)]
 pub struct ExecutionSession {
     store_identity: noon_core::SemanticStoreIdentity,
+    require_effect_preparation: bool,
     execution_index: SemanticExecutionIndex,
     reachability: SemanticExecutionReachability,
     slots: noon_runtime::ExecutionSlotTable,
@@ -899,6 +901,7 @@ impl Clone for ExecutionSession {
         });
         Self {
             store_identity: self.store_identity.clone(),
+            require_effect_preparation: self.require_effect_preparation,
             execution_index: self.execution_index.clone(),
             reachability: self.reachability.clone(),
             slots: self.slots.clone(),
@@ -1111,6 +1114,7 @@ impl ExecutionSession {
         let _ = runtime.take_spatial_changes();
         Self {
             store_identity,
+            require_effect_preparation: false,
             execution_index,
             reachability,
             slots,

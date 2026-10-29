@@ -564,6 +564,20 @@ impl NativeApp {
 
     fn resume_ready_preserving_clock(&mut self, now: Instant) -> Result<bool, NativeHostError> {
         let resumed = self.execution.resume_ready()?;
+        if let Some(programs) = self.execution.pending_effect_programs().map(<[_]>::to_vec) {
+            if let Some(gpu) = self.gpu.as_mut() {
+                let request = gpu
+                    .renderer
+                    .effect_module_preparation(&gpu.device, &programs);
+                let prepared = pollster::block_on(request.prepare())
+                    .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                gpu.renderer
+                    .cache_effect_programs(&gpu.device, &prepared)
+                    .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                self.execution.publish_prepared_effects()?;
+                gpu.prepared_effect_modules = Some(prepared);
+            }
+        }
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
         Ok(resumed)
     }
@@ -711,6 +725,7 @@ impl NativeApp {
                     .prepare_effect_programs(&gpu.device, &publication),
             )
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+            gpu.prepared_effect_modules = None;
             gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
             gpu.renderer
                 .prepare_spatial(&gpu.device, &gpu.queue, &publication)
@@ -1189,6 +1204,7 @@ struct NativeGpu {
     preparer: RetainedFramePreparer,
     text_state: RetainedTextGpuState,
     renderer: GpuRenderer,
+    prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
     overlay: OverlayGpuState,
 }
 
@@ -1241,6 +1257,7 @@ impl NativeGpu {
             preparer: RetainedFramePreparer::new(),
             text_state,
             renderer,
+            prepared_effect_modules: None,
             overlay: OverlayGpuState::default(),
         })
     }

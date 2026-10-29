@@ -826,6 +826,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 message,
             ),
             E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
+            E::ExternalEffectPreparationRequired => Self::new(
+                "pending_work",
+                "publication.effect_preparation_required",
+                message,
+            ),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
             }

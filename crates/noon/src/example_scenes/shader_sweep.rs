@@ -79,10 +79,16 @@ impl LiveContinuation for ShaderSweep {
             0 | 2 | 4 => live.wait_segment(0.5),
             1 | 3 => {
                 if let Some(programs) = self.deferred.take() {
-                    for (panel, program) in self.panels.iter().zip(programs) {
-                        live.add_effect(panel, ShaderEffect::new(program), "stripes")
-                            .map_err(message)?;
-                    }
+                    let pending = live
+                        .prepare_effect_attachments(self.panels.iter().zip(programs).map(
+                            |(panel, program)| {
+                                (panel, ShaderEffect::new(program).into(), "stripes")
+                            },
+                        ))
+                        .map_err(message)?;
+                    // The same stage resumes only after preparation, atomic
+                    // publication and retention; neither panel is visible early.
+                    return Ok(ContinuationStep::Publish(pending));
                 }
                 let outward = self.stage == 1;
                 let targets = self

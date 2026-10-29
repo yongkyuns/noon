@@ -586,7 +586,11 @@ impl ExecutionSession {
                     self.apply_prepared_semantic_transaction_with_execution_contract(
                         prepared,
                         Vec::new(),
-                        PreparedRuntimePublication { effective, frame },
+                        PreparedRuntimePublication {
+                            effective,
+                            frame,
+                            ..Default::default()
+                        },
                         SemanticPublicationPurpose::TransientGlowLifecycle,
                         None,
                         None,

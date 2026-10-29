@@ -114,6 +114,9 @@ fn observe(
         let status = sample.advance().unwrap();
         match status {
             ForwardSampleStatus::Progress => {}
+            ForwardSampleStatus::ResourcePreparationPending => {
+                panic!("fixture contains no external effect resources")
+            }
             ForwardSampleStatus::PublicationPending(expected) => {
                 assert!(matches!(
                     sample.admit_endpoint(expected),

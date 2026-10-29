@@ -412,6 +412,9 @@ mod tests {
                     assert_eq!(publication, expected);
                     program.admit_publication(publication).unwrap();
                 }
+                LiveProgramStatus::PreparingResources => {
+                    panic!("signal train has no external effect resources")
+                }
                 LiveProgramStatus::Finished => break,
                 LiveProgramStatus::Terminal => panic!("signal train terminated"),
             }

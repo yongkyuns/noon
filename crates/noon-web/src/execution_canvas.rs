@@ -106,6 +106,8 @@ mod wasm {
         /// A pending authoring/publication barrier is not a user pause.
         fn source_active(&self) -> bool;
         fn pending_endpoint(&self) -> Option<noon_core::PublicationContext>;
+        fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]>;
+        fn publish_prepared_effects(&mut self) -> Result<(), JsValue>;
         fn query_viewports(&mut self, bounds: &[Rect])
             -> noon::integration::ExecutionViewportQuery;
         /// Returns whether this operation resumed a subsequent continuation stage.
@@ -137,10 +139,13 @@ mod wasm {
             mut program: LiveProgram<C>,
             mut callbacks: RustHostCallbackTable,
         ) -> Result<Self, JsValue> {
+            program.require_effect_resource_preparation();
             let status = program.resume().map_err(js_error)?;
             if !matches!(
                 status,
-                LiveProgramStatus::Awaiting(_) | LiveProgramStatus::Finished
+                LiveProgramStatus::Awaiting(_)
+                    | LiveProgramStatus::Finished
+                    | LiveProgramStatus::PreparingResources
             ) {
                 return Err(js_message(
                     "direct live continuation did not begin at an await or finished state",
@@ -171,6 +176,15 @@ mod wasm {
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
     {
+        fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+            self.program.pending_effect_programs()
+        }
+        fn publish_prepared_effects(&mut self) -> Result<(), JsValue> {
+            self.program
+                .publish_prepared_effects()
+                .map(|_| ())
+                .map_err(js_error)
+        }
         fn session(&self) -> &ExecutionSession {
             self.program.session()
         }
@@ -254,7 +268,8 @@ mod wasm {
                             return Ok(());
                         }
                     }
-                    ForwardSampleStatus::PublicationPending(_)
+                    ForwardSampleStatus::ResourcePreparationPending
+                    | ForwardSampleStatus::PublicationPending(_)
                     | ForwardSampleStatus::Ready(_)
                     | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
                 }
@@ -666,6 +681,18 @@ mod wasm {
             }
         }
 
+        fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+            match &self.authority {
+                DirectSourceAuthority::Program(p) => p.pending_effect_programs(),
+                _ => None,
+            }
+        }
+        fn publish_prepared_effects(&mut self) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Program(p) => p.publish_prepared_effects(),
+                _ => Err(js_message("source has no staged publication")),
+            }
+        }
         fn source_active(&self) -> bool {
             match &self.authority {
                 DirectSourceAuthority::Session { .. } => false,
@@ -1003,6 +1030,7 @@ mod wasm {
         direct_preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         effect_program_task: EffectProgramTask,
+        prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
         direct_text_gpu: RetainedTextGpuState,
         timestamp_query_supported: bool,
         timestamp_profiler: Option<GpuTimestampProfiler>,
@@ -1031,6 +1059,7 @@ mod wasm {
         pub fn retire_execution_source(&mut self) -> Result<(), JsValue> {
             self.source.retire_execution_source()?;
             self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
             Ok(())
         }
 
@@ -1089,6 +1118,7 @@ mod wasm {
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
             self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
             self.selection_overlay = OverlayGpuState::default();
@@ -1173,6 +1203,7 @@ mod wasm {
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
             self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
             self.selection_overlay = OverlayGpuState::default();
@@ -1225,6 +1256,7 @@ mod wasm {
                     return Ok(false);
                 }
                 let changes_pending = self.source.frame_pending()
+                    || self.source.pending_effect_programs().is_some()
                     || self.surface_frame_pending
                     || self
                         .pointer_presentation
@@ -1708,6 +1740,7 @@ mod wasm {
             serde_json::to_string(&DirectWakeDirectiveJson {
                 present_now: self.drawable
                     && (directive.present_now()
+                        || self.source.pending_effect_programs().is_some()
                         || self.surface_frame_pending
                         || self
                             .pointer_presentation
@@ -2692,6 +2725,7 @@ mod wasm {
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,
                 effect_program_task: EffectProgramTask::default(),
+                prepared_effect_modules: None,
                 direct_text_gpu,
                 timestamp_query_supported,
                 timestamp_profiler: None,
@@ -2729,6 +2763,17 @@ mod wasm {
         // If that publication advances, reuse successful immutable modules while
         // replanning its current delta instead of installing stale row bindings.
         fn prepare_direct_effect_programs(&mut self) -> Result<bool, JsValue> {
+            if let Some(programs) = self.source.pending_effect_programs() {
+                let Some(prepared) = self
+                    .effect_program_task
+                    .poll_modules(&mut self.renderer, &self.device, programs)
+                    .map_err(js_error)?
+                else {
+                    return Ok(false);
+                };
+                self.source.publish_prepared_effects()?;
+                self.prepared_effect_modules = Some(prepared);
+            }
             if !self.effect_program_task.is_pending()
                 && self
                     .renderer
@@ -2737,9 +2782,14 @@ mod wasm {
                 return Ok(true);
             }
             let publication = self.source.resource_publication();
-            self.effect_program_task
+            let ready = self
+                .effect_program_task
                 .poll(&mut self.renderer, &self.device, &publication)
-                .map_err(js_error)
+                .map_err(js_error)?;
+            if ready {
+                self.prepared_effect_modules = None;
+            }
+            Ok(ready)
         }
 
         /// Keep one exact endpoint in the production retained GPU renderer

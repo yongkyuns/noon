@@ -14,8 +14,9 @@ pub(super) struct RowRequest {
 pub struct EffectProgramPreparation {
     pub(super) authority: Arc<()>,
     pub(super) device: wgpu::Device,
-    pub(super) context: PublicationContext,
+    pub(super) context: Option<PublicationContext>,
     pub(super) rows: Vec<(usize, Option<RowRequest>)>,
+    pub(super) modules: Vec<(WgslEffectProgram, Option<GpuLease<PreparedShaderProgram>>)>,
     pub(super) stats: EffectProgramStats,
     pub(super) missing: bool,
 }
@@ -24,8 +25,9 @@ pub struct EffectProgramPreparation {
 pub struct PreparedEffectPrograms {
     pub(super) authority: Arc<()>,
     pub(super) device: wgpu::Device,
-    pub(super) context: PublicationContext,
+    pub(super) context: Option<PublicationContext>,
     pub(super) rows: Vec<(usize, Option<ResidentRow>)>,
+    pub(super) modules: Vec<GpuLease<PreparedShaderProgram>>,
     pub(super) stats: EffectProgramStats,
 }
 
@@ -46,6 +48,11 @@ impl EffectProgramPreparation {
             device: self.device,
             context: self.context,
             stats: self.stats,
+            modules: self
+                .modules
+                .into_iter()
+                .map(|(_, p)| p.expect("ready program"))
+                .collect(),
             rows: self
                 .rows
                 .into_iter()
@@ -77,18 +84,19 @@ impl EffectProgramPreparation {
         mut self,
         mut filter: super::super::sample_filter::SampleFilter,
     ) -> Result<PreparedEffectPrograms, EffectProgramPrepareError> {
-        for (_, row) in &mut self.rows {
-            if let Some(row) = row {
-                for (source, program) in &mut row.programs {
-                    if program.is_none() {
-                        let (prepared, work) = filter
-                            .prepare_shader_program(&self.device, source)
-                            .await
-                            .map_err(EffectProgramPrepareError::Gpu)?;
-                        self.stats.pipeline_compiles += work.pipeline_compiles;
-                        *program = Some(prepared);
-                    }
-                }
+        for (source, program) in self.modules.iter_mut().chain(
+            self.rows
+                .iter_mut()
+                .filter_map(|(_, row)| row.as_mut())
+                .flat_map(|row| row.programs.iter_mut()),
+        ) {
+            if program.is_none() {
+                let (prepared, work) = filter
+                    .prepare_shader_program(&self.device, source)
+                    .await
+                    .map_err(EffectProgramPrepareError::Gpu)?;
+                self.stats.pipeline_compiles += work.pipeline_compiles;
+                *program = Some(prepared);
             }
         }
         self.missing = false;

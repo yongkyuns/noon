@@ -657,6 +657,24 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    pub(crate) fn stage_effect_publication(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
+        self.session
+            .stage_effect_publication(&mut self.store.borrow_mut(), self.root, transaction)
+            .map_err(Into::into)
+    }
+    pub(crate) fn publish_staged_effects(
+        &mut self,
+        staged: crate::StagedEffectPublication,
+    ) -> Result<(), LiveSessionError> {
+        self.session
+            .publish_staged_effects(&mut self.store.borrow_mut(), staged)
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     /// Prepare resources and publish one semantic transaction while borrowing
     /// the already-running execution session. Composite authoring uses this
     /// boundary so resource admission and the transaction share one rollback

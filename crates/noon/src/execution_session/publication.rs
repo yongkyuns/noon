@@ -19,7 +19,9 @@ use super::ExecutionSession;
 
 mod prepared_value;
 use prepared_value::PreparedPublication;
+mod staged_effects;
 mod transient_glow;
+pub use staged_effects::StagedEffectPublication;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticPublicationPurpose {
@@ -37,6 +39,7 @@ pub(crate) enum SemanticPublicationPurpose {
 pub(super) struct PreparedRuntimePublication {
     pub effective: Option<PreparedEffectivePropertyBatch>,
     pub frame: Option<noon_runtime::PreparedFrameEvaluation>,
+    pub external_effects_prepared: bool,
 }
 
 impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication {
@@ -44,6 +47,7 @@ impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication
         Self {
             effective,
             frame: None,
+            external_effects_prepared: false,
         }
     }
 }
@@ -69,6 +73,7 @@ pub enum ExecutionSessionPublicationError {
     SegmentCompletionPending,
     TranslationDragActive,
     ForeignSemanticStore,
+    ExternalEffectPreparationRequired,
     ReplaySealed,
     StaleSceneRevision {
         expected: SceneRevision,
@@ -103,6 +108,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::TranslationDragActive => f.write_str(
                 "cancel or release the active translation drag before authored publication",
             ),
+            Self::ExternalEffectPreparationRequired => f.write_str("new shader attachments require the publication-preparation barrier"),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -144,6 +150,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             | Self::SegmentCompletionPending
             | Self::TranslationDragActive
             | Self::ForeignSemanticStore
+            | Self::ExternalEffectPreparationRequired
             | Self::StaleSceneRevision { .. }
             | Self::UnknownObject(_) => None,
         }
@@ -568,7 +575,11 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
-        let PreparedRuntimePublication { effective, frame } = runtime;
+        let PreparedRuntimePublication {
+            effective,
+            frame,
+            external_effects_prepared,
+        } = runtime;
         debug_assert!(
             frame.is_none() || !matches!(purpose, SemanticPublicationPurpose::Callback(_))
         );
@@ -649,6 +660,12 @@ impl ExecutionSession {
                     .map_err(ExecutionSessionPublicationError::Lowering)?;
                 (publication, revised)
             };
+        if self.require_effect_preparation
+            && !external_effects_prepared
+            && publication.introduces_shader_attachments()
+        {
+            return Err(ExecutionSessionPublicationError::ExternalEffectPreparationRequired);
+        }
         let preparation_stats = publication.stats();
         let order_patches = order_root
             .map(|root| prepare_semantic_root_order(&prepared, root))

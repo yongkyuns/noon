@@ -29,6 +29,44 @@ impl EffectProgramTask {
             .saturating_add(work.pipeline_compiles as u64);
     }
 
+    pub(crate) fn poll_modules(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        device: &wgpu::Device,
+        programs: &[noon_core::WgslEffectProgram],
+    ) -> Result<Option<PreparedEffectPrograms>, EffectProgramPrepareError> {
+        let completed = self
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.borrow_mut().take());
+        if self.pending.is_some() && completed.is_none() {
+            return Ok(None);
+        }
+        self.pending = None;
+        let completed = completed.transpose()?;
+        if let Some(prepared) = &completed {
+            self.record(prepared.stats());
+            renderer
+                .cache_effect_programs(device, prepared)
+                .map_err(EffectProgramPrepareError::Profile)?;
+        }
+        match renderer
+            .effect_module_preparation(device, programs)
+            .try_ready()
+        {
+            Ok(ready) => Ok(Some(ready)),
+            Err(request) => {
+                let pending = Rc::new(RefCell::new(None));
+                let result = Rc::clone(&pending);
+                wasm_bindgen_futures::spawn_local(async move {
+                    *result.borrow_mut() = Some(request.prepare().await);
+                });
+                self.pending = Some(pending);
+                Ok(None)
+            }
+        }
+    }
+
     /// False retains the caller's pending frame and dirty changes. A completed
     /// task may belong to an older publication: reuse its immutable programs,
     /// then replan the current delta instead of installing stale row bindings.

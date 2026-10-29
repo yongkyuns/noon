@@ -220,6 +220,9 @@ fn qualify_export_sampling_pixels() {
         let mut frames = Vec::new();
         for _ in 0..1_000 {
             match export.advance().unwrap() {
+                ExportFramesStatus::ResourcePreparationPending => {
+                    panic!("temporal fixture has no external shaders")
+                }
                 ExportFramesStatus::Progress => {}
                 ExportFramesStatus::PublicationPending(context) => {
                     {

@@ -416,7 +416,11 @@ impl ExecutionSession {
         let publication = self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared_semantic,
             Vec::new(),
-            PreparedRuntimePublication { effective, frame },
+            PreparedRuntimePublication {
+                effective,
+                frame,
+                ..Default::default()
+            },
             SemanticPublicationPurpose::TranslationDrag(active.node),
             None,
             None,

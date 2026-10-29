@@ -84,8 +84,9 @@ impl GpuRenderer {
         let mut request = EffectProgramPreparation {
             authority: Arc::clone(&self.effect_programs.authority),
             device: device.clone(),
-            context: publication.context(),
+            context: Some(publication.context()),
             rows: Vec::new(),
+            modules: Vec::new(),
             stats: EffectProgramStats::default(),
             missing: false,
         };
@@ -180,6 +181,34 @@ impl GpuRenderer {
         Ok(request)
     }
 
+    /// Prepare immutable requested modules before any semantic/runtime revision
+    /// exists. No speculative renderer row or object identity is manufactured.
+    pub fn effect_module_preparation(
+        &self,
+        device: &wgpu::Device,
+        programs: &[noon_core::WgslEffectProgram],
+    ) -> EffectProgramPreparation {
+        let modules: Vec<_> = programs
+            .iter()
+            .map(|source| {
+                let prepared = self
+                    .effect_captures
+                    .as_deref()
+                    .and_then(|cache| cache.filter.shader_program(device, source).ok());
+                (source.clone(), prepared)
+            })
+            .collect();
+        EffectProgramPreparation {
+            authority: Arc::clone(&self.effect_programs.authority),
+            device: device.clone(),
+            context: None,
+            rows: Vec::new(),
+            missing: modules.iter().any(|(_, p)| p.is_none()),
+            modules,
+            stats: EffectProgramStats::default(),
+        }
+    }
+
     /// Make validated immutable modules available to a newer publication without
     /// installing stale row bindings. The caller keeps this lease through replanning.
     pub fn cache_effect_programs(
@@ -191,6 +220,12 @@ impl GpuRenderer {
             || !Arc::ptr_eq(&prepared.authority, &self.effect_programs.authority)
         {
             return Err(EffectPrepareError::PublicationMismatch);
+        }
+        for program in &prepared.modules {
+            self.effect_captures
+                .get_or_insert_with(Default::default)
+                .filter
+                .remember_shader_program(program);
         }
         for (_, row) in &prepared.rows {
             if let Some(row) = row {
@@ -211,7 +246,7 @@ impl GpuRenderer {
         publication: &RendererPublication<'_>,
         prepared: PreparedEffectPrograms,
     ) -> Result<EffectProgramStats, EffectPrepareError> {
-        if prepared.context != publication.context() {
+        if prepared.context != Some(publication.context()) {
             return Err(EffectPrepareError::PublicationMismatch);
         }
         self.cache_effect_programs(device, &prepared)?;
@@ -230,7 +265,7 @@ impl GpuRenderer {
                 self.effect_programs.rows.remove(&index);
             }
         }
-        self.effect_programs.context = Some(prepared.context);
+        self.effect_programs.context = prepared.context;
         self.effect_programs.device = Some(device.clone());
         Ok(prepared.stats)
     }

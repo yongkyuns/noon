@@ -23,6 +23,70 @@ function reference(image, time) {
   assert.equal(actual[3], 255);
   return { expected, actual, maximumError, runtimeBuild: identity.buildId };
 }
+// The CPU-authored program stays valid. Corrupt only the real device descriptor
+// to prove that compilation failure cannot publish the staged semantic batch.
+async function qualifyLatePreparation(context, baseUrl, backend) {
+  const page = await context.newPage();
+  try {
+    if (backend === "WebGPU") await page.addInitScript(() => {
+      globalThis.rejectLateShader = false;
+      globalThis.rejectedLateShaders = 0;
+      const original = GPUDevice.prototype.createShaderModule;
+      GPUDevice.prototype.createShaderModule = function (descriptor) {
+        if (globalThis.rejectLateShader && descriptor.code.includes("let stripes")) {
+          globalThis.rejectedLateShaders++;
+          descriptor = { ...descriptor, code: descriptor.code + "\ninvalid generated WGSL" };
+        }
+        return original.call(this, descriptor);
+      };
+    });
+    await page.goto(baseUrl + "/web/manim-raster-host.html");
+    assert.equal(await page.evaluate(async () => {
+      const wasm = await import("./pkg/noon_web.js"); await wasm.default();
+      globalThis.lateRenderer = await wasm.createDirectShaderSweepLateSmokeRenderer(
+        document.querySelector("#scene").transferControlToOffscreen());
+      if (!lateRenderer.render()) throw new Error("initial scene did not render");
+      lateRenderer.advanceDirectRealtime(0);
+      return lateRenderer.rendererBackend();
+    }), backend);
+    const previousPixels = PNG.sync.read(await page.locator("#scene").screenshot()).data;
+    const before = await page.evaluate(() => {
+      globalThis.rejectLateShader = true;
+      lateRenderer.advanceDirectRealtime(500);
+      return JSON.parse(lateRenderer.debugSelectionFrameJson());
+    });
+    let failure;
+    if (backend === "WebGPU") {
+      failure = await page.evaluate(async () => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          try { lateRenderer.render(); }
+          catch (error) { return String(error); }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        throw new Error("real shader compilation was not rejected");
+      });
+      assert.match(failure, /shader|WGSL|compil|valid/i);
+      assert.equal(await page.evaluate(() => rejectedLateShaders), 1);
+      assert.deepEqual(await page.evaluate(() => JSON.parse(lateRenderer.debugSelectionFrameJson())), before,
+        "GPU failure must leave the current runtime publication intact");
+      assert.deepEqual(PNG.sync.read(await page.locator("#scene").screenshot()).data, previousPixels,
+        "the old displayed frame remains live through failed preparation");
+    }
+    const after = await page.evaluate(async () => {
+      globalThis.rejectLateShader = false;
+      const { sampleDirectProgramThrough } = await import("../scripts/direct-program-sample.mjs");
+      await sampleDirectProgramThrough(lateRenderer, 0.5);
+      return { frame: JSON.parse(lateRenderer.debugSelectionFrameJson()),
+        programs: JSON.parse(lateRenderer.debugEffectProgramsJson()) };
+    });
+    assert.equal(before.objects.flatMap(object => object.effects).length, 0);
+    assert.equal(after.frame.objects.flatMap(object => object.effects).length, 2);
+    assert.equal(after.programs.rows, 2);
+    assert.equal(after.programs.pipelineCompiles, 1);
+    return { backend, failure, before, after };
+  } finally { await page.close(); }
+}
+
 await qualifyPairedAuthoring({
   artifactDirectory: "ci-artifacts/shader-time",
   prepareContext: disableAuthoringJspi,
@@ -76,6 +140,6 @@ await qualifyPairedAuthoring({
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
-    return { backend, trials };
+    return { backend, trials, latePreparation: await qualifyLatePreparation(context, baseUrl, backend) };
   },
 });
