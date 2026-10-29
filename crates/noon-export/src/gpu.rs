@@ -115,11 +115,10 @@ impl NativeCapture {
         let request = self
             .renderer
             .effect_module_preparation(&self.device, programs);
-        let prepared =
-            pollster::block_on(request.prepare()).map_err(|e| CaptureError::View(e.to_string()))?;
+        let prepared = pollster::block_on(request.prepare()).map_err(CaptureError::gpu)?;
         self.renderer
             .cache_effect_programs(&self.device, &prepared)
-            .map_err(|e| CaptureError::View(e.to_string()))?;
+            .map_err(CaptureError::gpu)?;
         self.prepared_effect_modules = Some(prepared);
         Ok(())
     }

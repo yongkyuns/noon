@@ -54,6 +54,14 @@ fn fixture() -> Result<Fixture, String> {
                         .admit_publication(context)
                         .map_err(|e| e.to_string())?;
                 }
+                LiveProgramStatus::PreparingResources => {
+                    // This GPU-free exporter constructs codec artifacts only.
+                    // Their renderer consumer prepares the transferred modules;
+                    // this fixture does not qualify live worker publication.
+                    program
+                        .publish_prepared_effects()
+                        .map_err(|e| e.to_string())?;
+                }
                 LiveProgramStatus::Terminal => {
                     return Err("material continuation terminated".into())
                 }
