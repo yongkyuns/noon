@@ -23,6 +23,7 @@ fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
         max: [25.0, 33.0],
     };
     let parameters = super::super::EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 64,
         world_view_height: 6.4,
@@ -402,6 +403,7 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
             .into(),
     ];
     let values = super::super::EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 100,
         world_view_height: 10.0,
@@ -490,6 +492,7 @@ fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
         max: [24.0, 24.0],
     };
     let values = super::super::EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 100,
         world_view_height: 10.0,

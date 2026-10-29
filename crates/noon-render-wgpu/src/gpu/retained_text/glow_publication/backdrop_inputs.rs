@@ -193,6 +193,7 @@ impl BackdropInputs {
                 viewport,
                 definitions,
                 EffectStackParameters {
+                    shader: None,
                     working_format: wgpu::TextureFormat::Rgba8Unorm,
                     output_height: viewport[1],
                     world_view_height: f64::from(camera.world_size.y),
@@ -543,6 +544,7 @@ impl BackdropInputs {
                 viewport,
                 std::slice::from_ref(&effect.definition),
                 EffectStackParameters {
+                    shader: None,
                     working_format: wgpu::TextureFormat::Rgba8Unorm,
                     output_height: viewport[1],
                     world_view_height: f64::from(camera.world_size.y),

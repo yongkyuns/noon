@@ -4,8 +4,9 @@ use noon_core::{Blur, Color, EffectOffset, EffectUpdate, Glow, Pixels, Shadow};
 mod pixels;
 mod reference;
 
-fn parameters() -> EffectStackParameters {
+fn parameters() -> EffectStackParameters<'static> {
     EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 240,
         world_view_height: 8.0,

@@ -7,6 +7,8 @@ use crate::Color;
 /// Version one consumes one painted source, preserves its bounds, and returns
 /// straight encoded RGB plus a coverage multiplier. The renderer associates
 /// that result with source alpha before applying final scope opacity once.
+/// At covered samples, input.color supplies straight encoded RGB and unit
+/// alpha. Returning it therefore preserves intrinsic source coverage exactly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderProfile {
     PaintedPointwiseV1,

@@ -643,6 +643,14 @@ impl GpuRenderer {
         demand: super::glow_filter::CaptureDemand,
         visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        // #1897: remove with qualified source-coordinate/program admission.
+        if request
+            .definitions
+            .iter()
+            .any(|effect| effect.as_shader().is_some())
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
         if self.target_format == wgpu::TextureFormat::Rgba16Float
             && (visibility.is_some()
                 || request
@@ -654,6 +662,7 @@ impl GpuRenderer {
         }
         let texel_bytes = super::glow_filter::capture_texel_bytes(self.target_format)?;
         let parameters = EffectStackParameters {
+            shader: None,
             working_format: self.target_format,
             output_height: self.viewport_size[1],
             world_view_height: f64::from(self.camera.world_size.y),
@@ -1144,6 +1153,7 @@ impl GpuRenderer {
                 },
                 request.definitions,
                 EffectStackParameters {
+                    shader: None,
                     working_format: self.target_format,
                     output_height: parameters.output_height,
                     world_view_height: parameters.world_view_height,
@@ -1171,6 +1181,7 @@ impl GpuRenderer {
                         revision: scope.revision,
                     },
                     super::SampleParameters {
+                        shader: None,
                         definition: visibility.expect("active private visibility").into(),
                         output_height: parameters.output_height,
                         world_view_height: parameters.world_view_height,

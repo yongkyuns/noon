@@ -230,6 +230,7 @@ impl EffectCaptureTile {
             viewport,
             &[parameters.definition],
             super::EffectStackParameters {
+                shader: None,
                 working_format: wgpu::TextureFormat::Rgba8Unorm,
                 output_height: parameters.output_height,
                 world_view_height: parameters.world_view_height,
@@ -497,11 +498,12 @@ impl EffectCaptureParameters {
             };
         }
         Ok(match &self.definition {
-            noon_core::EffectDefinition::Bloom(_) | noon_core::EffectDefinition::Shader(_) => {
+            noon_core::EffectDefinition::Bloom(_) => {
                 return Err(EffectPrepareError::UnsupportedCapture)
             }
             noon_core::EffectDefinition::NoiseDissolve(_)
-            | noon_core::EffectDefinition::Pixelate(_) => 4,
+            | noon_core::EffectDefinition::Pixelate(_)
+            | noon_core::EffectDefinition::Shader(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
             noon_core::EffectDefinition::Blur(_) | noon_core::EffectDefinition::BackdropBlur(_) => {
                 28
@@ -538,6 +540,7 @@ pub struct GlowParameters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectPrepareError {
     CellSizeExceedsProfile,
+    ShaderProgramNotPrepared,
     Blur(super::gaussian_blur::GaussianBlurPrepareError),
     Parameter(EffectParameterError),
     InvalidScopeOpacity,

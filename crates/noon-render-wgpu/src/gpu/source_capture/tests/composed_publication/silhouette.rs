@@ -61,6 +61,7 @@ fn reference(
             crate::gpu::sample_filter::tests::reference(
                 &pixels,
                 crate::SampleParameters {
+                    shader: None,
                     definition: definition.into(),
                     output_height: SIZE[1],
                     world_view_height: f64::from(SIZE[1]),

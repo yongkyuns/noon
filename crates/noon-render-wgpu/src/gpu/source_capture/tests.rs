@@ -408,6 +408,7 @@ fn qualify(device: &wgpu::Device, queue: &wgpu::Queue, pixels: bool) {
                     .unwrap()
                     .into()],
                 super::super::EffectStackParameters {
+                    shader: None,
                     working_format: wgpu::TextureFormat::Rgba8Unorm,
                     output_height: SIZE[1],
                     world_view_height: 6.0,

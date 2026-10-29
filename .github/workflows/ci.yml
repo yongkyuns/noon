@@ -298,8 +298,8 @@ jobs:
         run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture
       - name: Qualify authored cell sampling and export
         run: cargo test -p noon-export --test pixelate -- --ignored --nocapture
-      - name: Qualify dissolve mask field and premultiplied alpha operator
-        run: cargo test -p noon-render-wgpu --lib gpu::sample_filter::tests -- --include-ignored --nocapture
+      - name: Qualify sampled operators and typed custom shaders
+        run: cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::sample_filter::tests -- --include-ignored --nocapture
       - name: Qualify clipped backdrop replacement and real-shader negative controls
         env:
           NOON_BACKDROP_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-raster-artifacts

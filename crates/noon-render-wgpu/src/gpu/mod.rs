@@ -54,7 +54,9 @@ pub use glow_filter::{
     EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
     EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
-pub use sample_filter::{SampleFilter, SampleParameters, SampleScope};
+pub use sample_filter::{
+    PreparedShaderProgram, SampleFilter, SampleParameters, SampleScope, ShaderSampleContext,
+};
 mod overlay;
 mod path_batching;
 mod presentation;

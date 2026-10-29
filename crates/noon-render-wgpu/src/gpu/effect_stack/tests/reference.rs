@@ -128,6 +128,7 @@ pub(super) fn evaluate(
             input = crate::gpu::sample_filter::tests::reference(
                 &input,
                 crate::SampleParameters {
+                    shader: None,
                     definition: (*definition).into(),
                     output_height: height,
                     world_view_height: world,

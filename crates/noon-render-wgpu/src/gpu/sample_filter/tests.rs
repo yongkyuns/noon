@@ -1,8 +1,9 @@
 use super::*;
 
 const SIZE: [u32; 2] = [24, 20];
-fn parameters(progress: f64) -> SampleParameters {
+fn parameters(progress: f64) -> SampleParameters<'static> {
     SampleParameters {
+        shader: None,
         definition: noon_core::NoiseDissolve::new(7, 0.08)
             .unwrap()
             .with_progress(progress)
@@ -559,7 +560,7 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
     eprintln!("DISSOLVE_OPERATOR_PASS cases={count} channels={} max_error={maximum} source_endpoints_exact=true empty_endpoints_exact=true warmed_bytes=1920 source_revisions=true rebind=true abandoned_retry=true",count*input.len());
 }
 
-fn pixel_parameters(size: f64) -> SampleParameters {
+fn pixel_parameters(size: f64) -> SampleParameters<'static> {
     SampleParameters {
         definition: noon_core::Pixelate::new(
             noon_core::EffectUpdate::default().size(noon_core::Pixels(size)),
@@ -818,3 +819,6 @@ fn cell_grid_has_literal_subpixel_vectors_and_bounded_integer_coordinates() {
         Err(EffectPrepareError::CaptureCoordinatesOutOfRange)
     );
 }
+
+#[cfg(feature = "wgsl-effects")]
+mod shader;

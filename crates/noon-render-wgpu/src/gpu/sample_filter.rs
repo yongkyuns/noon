@@ -2,13 +2,17 @@
 //! pixels, before padding/capacity rounding. No scene or clock lives here.
 use super::{EffectPixelBounds, EffectPrepareError, EffectRasterStats, GaussianBlurCapture};
 use bytemuck::{Pod, Zeroable};
-use std::mem::size_of;
+use std::{mem::size_of, sync::Weak};
+
+mod shader;
+pub use shader::{PreparedShaderProgram, ShaderSampleContext};
 
 #[cfg(test)]
 pub(super) mod tests;
 
 #[derive(Clone, Debug)]
-pub struct SampleParameters {
+pub struct SampleParameters<'a> {
+    pub shader: Option<&'a ShaderSampleContext>,
     pub definition: noon_core::EffectDefinition,
     pub output_height: u32,
     pub world_view_height: f64,
@@ -35,6 +39,7 @@ struct Resources {
 #[derive(Debug, Default)]
 pub struct SampleScope {
     resources: Option<Resources>,
+    shader: Option<Box<shader::ShaderScope>>,
     uniform: Option<Uniform>,
     revision: Option<u64>,
     invalidated: bool,
@@ -56,6 +61,9 @@ impl SampleScope {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+    pub(super) fn retire_shader_program(&mut self) {
+        self.shader = None;
+    }
 }
 #[derive(Debug)]
 struct Program {
@@ -64,6 +72,7 @@ struct Program {
 }
 #[derive(Debug, Default)]
 pub struct SampleFilter {
+    shader_programs: Vec<Weak<PreparedShaderProgram>>,
     program: Option<Program>,
 }
 pub(super) fn checked_domain(
@@ -104,13 +113,39 @@ pub(super) fn checked_domain(
     Ok(domain.map(|v| v as f32))
 }
 
+fn validate_texture(
+    capture: GaussianBlurCapture<'_>,
+    parameters: &SampleParameters<'_>,
+) -> Result<(), EffectPrepareError> {
+    if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity) {
+        return Err(EffectPrepareError::InvalidScopeOpacity);
+    }
+    if !matches!(
+        capture.source.format(),
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+    ) || capture.source.dimension() != wgpu::TextureDimension::D2
+        || capture.source.sample_count() != 1
+        || capture.source.depth_or_array_layers() != 1
+        || capture.source.mip_level_count() != 1
+        || !capture
+            .source
+            .usage()
+            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
+    {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
+    let bytes = u64::from(capture.source.width()) * u64::from(capture.source.height()) * 4;
+    if bytes > parameters.scratch_budget_bytes {
+        return Err(EffectPrepareError::ScratchBudgetExceeded);
+    }
+    Ok(())
+}
+
 fn checked_uniform(
     capture: GaussianBlurCapture<'_>,
     parameters: SampleParameters,
 ) -> Result<Uniform, EffectPrepareError> {
-    if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity) {
-        return Err(EffectPrepareError::InvalidScopeOpacity);
-    }
+    validate_texture(capture, &parameters)?;
     let size = [capture.source.width(), capture.source.height()];
     if parameters.definition.as_pixelate().is_some() && size.into_iter().any(|v| v > 65536) {
         return Err(EffectPrepareError::ExtentExceedsDevice);
@@ -139,24 +174,6 @@ fn checked_uniform(
         }
         _ => return Err(EffectPrepareError::UnsupportedCapture),
     };
-    if !matches!(
-        capture.source.format(),
-        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
-    ) || capture.source.dimension() != wgpu::TextureDimension::D2
-        || capture.source.sample_count() != 1
-        || capture.source.depth_or_array_layers() != 1
-        || capture.source.mip_level_count() != 1
-        || !capture
-            .source
-            .usage()
-            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
-    {
-        return Err(EffectPrepareError::UnsupportedCapture);
-    }
-    let bytes = u64::from(capture.source.width()) * u64::from(capture.source.height()) * 4;
-    if bytes > parameters.scratch_budget_bytes {
-        return Err(EffectPrepareError::ScratchBudgetExceeded);
-    }
     Ok(Uniform {
         control,
         domain,
@@ -201,7 +218,12 @@ pub(super) fn validate_input(
     capture: GaussianBlurCapture<'_>,
     parameters: SampleParameters,
 ) -> Result<(), EffectPrepareError> {
-    checked_uniform(capture, parameters).map(|_| ())
+    if let Some(definition) = parameters.definition.as_shader() {
+        shader::ShaderUniform::new(definition, capture, &parameters)?;
+        validate_texture(capture, &parameters)
+    } else {
+        checked_uniform(capture, parameters).map(|_| ())
+    }
 }
 
 impl SampleFilter {
@@ -213,7 +235,7 @@ impl SampleFilter {
         encoder: &mut wgpu::CommandEncoder,
         scope: &mut SampleScope,
         capture: GaussianBlurCapture<'_>,
-        parameters: SampleParameters,
+        parameters: SampleParameters<'_>,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         if scope
             .output()
@@ -221,17 +243,53 @@ impl SampleFilter {
         {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
+        if parameters.definition.as_shader().is_some() {
+            return self.prepare_shader_encode(device, queue, encoder, scope, capture, parameters);
+        }
         let uniform = checked_uniform(capture, parameters)?;
+        let mut compiles = 0;
+        let program = self.program.get_or_insert_with(|| {
+            compiles = 1;
+            Program::new(device)
+        });
+        let program_changed = scope.shader.is_some();
+        let uniform_changed = program_changed || scope.uniform != Some(uniform);
+        let mut stats = scope.encode_sample(
+            device,
+            queue,
+            encoder,
+            capture,
+            program,
+            bytemuck::bytes_of(&uniform),
+            uniform_changed,
+            program_changed,
+        );
+        stats.pipeline_compiles += compiles;
+        scope.shader = None;
+        scope.uniform = Some(uniform);
+        Ok(stats)
+    }
+}
+
+impl SampleScope {
+    #[allow(clippy::too_many_arguments)]
+    fn encode_sample(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        capture: GaussianBlurCapture<'_>,
+        program: &Program,
+        uniform_bytes: &[u8],
+        uniform_changed: bool,
+        program_changed: bool,
+    ) -> EffectRasterStats {
         let bytes = u64::from(capture.source.width()) * u64::from(capture.source.height()) * 4;
         let mut stats = EffectRasterStats {
             scratch_bytes: bytes,
             ..Default::default()
         };
-        let program = self.program.get_or_insert_with(|| {
-            stats.pipeline_compiles += 1;
-            Program::new(device)
-        });
-        let replace = scope
+        let replace = self
             .resources
             .as_ref()
             .is_none_or(|r| r.output.size() != capture.source.size());
@@ -251,12 +309,12 @@ impl SampleFilter {
             let view = output.create_view(&Default::default());
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Noon sampled image uniform"),
-                size: size_of::<Uniform>() as u64,
+                size: uniform_bytes.len() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             let binding = program.bind(device, &buffer, capture.source);
-            scope.resources = Some(Resources {
+            self.resources = Some(Resources {
                 output,
                 view,
                 buffer,
@@ -267,11 +325,21 @@ impl SampleFilter {
             stats.buffer_allocations += 1;
             stats.bind_group_creations += 1;
         }
-        let r = scope
+        let r = self
             .resources
             .as_mut()
             .expect("prepared sampled image resources");
-        let rebind = r.source != *capture.source;
+        let buffer_changed = r.buffer.size() != uniform_bytes.len() as u64;
+        if buffer_changed {
+            r.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Noon sampled image uniform"),
+                size: uniform_bytes.len() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            stats.buffer_allocations += 1;
+        }
+        let rebind = r.source != *capture.source || program_changed || buffer_changed;
         if rebind {
             r.binding = program.bind(device, &r.buffer, capture.source);
             r.source = capture.source.clone();
@@ -279,12 +347,12 @@ impl SampleFilter {
         }
         let dirty = replace
             || rebind
-            || scope.invalidated
-            || scope.uniform != Some(uniform)
-            || scope.revision != Some(capture.revision);
-        if replace || scope.uniform != Some(uniform) {
-            queue.write_buffer(&r.buffer, 0, bytemuck::bytes_of(&uniform));
-            stats.bytes_uploaded += size_of::<Uniform>();
+            || self.invalidated
+            || uniform_changed
+            || self.revision != Some(capture.revision);
+        if replace || buffer_changed || uniform_changed {
+            queue.write_buffer(&r.buffer, 0, uniform_bytes);
+            stats.bytes_uploaded += uniform_bytes.len();
         }
         if dirty {
             let attachment = Some(wgpu::RenderPassColorAttachment {
@@ -309,14 +377,20 @@ impl SampleFilter {
             pass.draw(0..3, 0..1);
             stats.composite_passes = 1;
         }
-        scope.uniform = Some(uniform);
-        scope.revision = Some(capture.revision);
-        scope.invalidated = false;
-        Ok(stats)
+        self.revision = Some(capture.revision);
+        self.invalidated = false;
+        stats
     }
 }
 impl Program {
     fn new(device: &wgpu::Device) -> Self {
+        Self::from_source(
+            device,
+            include_str!("sample_filter.wgsl"),
+            size_of::<Uniform>() as u64,
+        )
+    }
+    fn from_source(device: &wgpu::Device, source: &str, uniform_size: u64) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon sampled image bindings"),
             entries: &[
@@ -326,7 +400,7 @@ impl Program {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(size_of::<Uniform>() as u64),
+                        min_binding_size: wgpu::BufferSize::new(uniform_size),
                     },
                     count: None,
                 },
@@ -347,7 +421,10 @@ impl Program {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("sample_filter.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon sampled image program"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Noon sampled image mask"),
             layout: Some(&pipeline_layout),

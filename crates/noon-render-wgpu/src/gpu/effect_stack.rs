@@ -3,6 +3,7 @@
 //! attachment registry, scheduler or clock. Authored scope admission and capture
 //! bounds remain with their existing compiler/renderer owners.
 use noon_core::{EffectDefinition, GlowSource};
+use std::sync::Arc;
 
 use super::{
     gaussian_blur::{
@@ -10,14 +11,16 @@ use super::{
     },
     shadow_filter::{ShadowFilter, ShadowScope},
     EffectCaptureParameters, EffectPixelBounds, EffectPrepareError, EffectRasterStats, GlowCapture,
-    GlowFilter, GlowParameters, GlowScope, SampleFilter, SampleParameters, SampleScope,
+    GlowFilter, GlowParameters, GlowScope, PreparedShaderProgram, SampleFilter, SampleParameters,
+    SampleScope,
 };
 
 /// The fixed-quality finite operator profile; no silent truncation of a stack.
 pub use noon_core::MAX_EFFECT_STACK_LEN;
 
 #[derive(Clone, Copy, Debug)]
-pub struct EffectStackParameters {
+pub struct EffectStackParameters<'a> {
+    pub shader: Option<&'a super::ShaderSampleContext>,
     /// Derived raster working format, shared by capture and every active pass.
     pub working_format: wgpu::TextureFormat,
     pub output_height: u32,
@@ -32,15 +35,16 @@ pub struct EffectStackParameters {
     pub source_bounds: Option<EffectPixelBounds>,
 }
 
-impl EffectStackParameters {
+impl<'a> EffectStackParameters<'a> {
     fn dissolve(
         self,
         definition: &EffectDefinition,
         source: &wgpu::Texture,
         opacity: f32,
         budget: u64,
-    ) -> SampleParameters {
+    ) -> SampleParameters<'a> {
         SampleParameters {
+            shader: self.shader,
             definition: definition.clone(),
             output_height: self.output_height,
             world_view_height: self.world_view_height,
@@ -72,10 +76,9 @@ impl PassFilter {
                 Self::Blur(Box::default())
             }
             EffectDefinition::Shadow(_) => Self::Shadow(Box::default()),
-            EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_) => {
-                Self::Sample(Box::default())
-            }
-            EffectDefinition::Shader(_) => Self::Sample(Box::default()),
+            EffectDefinition::NoiseDissolve(_)
+            | EffectDefinition::Pixelate(_)
+            | EffectDefinition::Shader(_) => Self::Sample(Box::default()),
         }
     }
     fn matches(&self, definition: &EffectDefinition) -> bool {
@@ -89,7 +92,9 @@ impl PassFilter {
                 | (Self::Shadow(_), EffectDefinition::Shadow(_))
                 | (
                     Self::Sample(_),
-                    EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_)
+                    EffectDefinition::NoiseDissolve(_)
+                        | EffectDefinition::Pixelate(_)
+                        | EffectDefinition::Shader(_)
                 )
         )
     }
@@ -206,7 +211,9 @@ impl EffectStackScope {
                 effects.iter().enumerate().find_map(|(index, effect)| {
                     (matches!(
                         effect,
-                        EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_)
+                        EffectDefinition::NoiseDissolve(_)
+                            | EffectDefinition::Pixelate(_)
+                            | EffectDefinition::Shader(_)
                     ) && self
                         .passes
                         .get(index)
@@ -222,7 +229,8 @@ impl EffectStackScope {
             return;
         }
         for pass in self.passes.drain(effects.len().min(self.passes.len())..) {
-            if let PassFilter::Sample(mask) = pass.filter {
+            if let PassFilter::Sample(mut mask) = pass.filter {
+                mask.retire_shader_program();
                 self.warm_sample = Some(mask);
             }
         }
@@ -236,7 +244,9 @@ impl EffectStackScope {
             }
             let filter = if matches!(
                 effect,
-                EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_)
+                EffectDefinition::NoiseDissolve(_)
+                    | EffectDefinition::Pixelate(_)
+                    | EffectDefinition::Shader(_)
             ) {
                 self.warm_sample
                     .take()
@@ -281,6 +291,16 @@ pub struct EffectStackFilter {
 }
 
 impl EffectStackFilter {
+    /// Fallible device preparation shared with the ordinary sampled filter.
+    /// Keep the lease alive through the first coherent stack preparation.
+    pub async fn prepare_shader_program(
+        &mut self,
+        device: &wgpu::Device,
+        source: &noon_core::WgslEffectProgram,
+    ) -> Result<(Arc<PreparedShaderProgram>, EffectRasterStats), wgpu::Error> {
+        self.sample.prepare_shader_program(device, source).await
+    }
+
     /// Each pass consumes the preceding output in the declared working format.
     /// Compatibility operators use encoded-premultiplied RGBA8; linear Blur
     /// preserves associated RGBA16Float radiance. Painted glow uses input alpha;
@@ -305,7 +325,8 @@ impl EffectStackFilter {
             budgets,
             active,
             last,
-        } = preflight(device, scope, capture, effects, parameters)?;
+            _programs,
+        } = preflight(device, &self.sample, scope, capture, effects, parameters)?;
         if last.is_none() && scope.passes.is_empty() {
             scope.output = None;
             return Ok(EffectRasterStats::default());
@@ -334,7 +355,8 @@ impl EffectStackFilter {
                     (
                         PassFilter::Sample(filter),
                         definition @ (EffectDefinition::NoiseDissolve(_)
-                        | EffectDefinition::Pixelate(_)),
+                        | EffectDefinition::Pixelate(_)
+                        | EffectDefinition::Shader(_)),
                     ) => self.sample.prepare_encode(
                         device,
                         queue,
@@ -451,10 +473,12 @@ struct PreparedStack {
     budgets: [u64; MAX_EFFECT_STACK_LEN],
     active: [bool; MAX_EFFECT_STACK_LEN],
     last: Option<usize>,
+    _programs: [Option<Arc<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN],
 }
 
 fn preflight(
     device: &wgpu::Device,
+    samples: &SampleFilter,
     scope: &EffectStackScope,
     capture: GlowCapture<'_>,
     effects: &[EffectDefinition],
@@ -491,6 +515,7 @@ fn preflight(
     let mut budgets = [0; MAX_EFFECT_STACK_LEN];
     let mut active = [false; MAX_EFFECT_STACK_LEN];
     let mut total = 0_u64;
+    let mut programs = std::array::from_fn(|_| None);
     let sample_reuse = scope.sample_reuse_index(effects);
     let warm_sample_bytes = scope.sample_candidate_bytes(effects);
     let mut last = None;
@@ -502,6 +527,16 @@ fn preflight(
             scope_opacity: parameters.scope_opacity,
         };
         let cost = values.filter_bytes_per_pixel(parameters.working_format)?;
+        if let Some(shader) = effect.as_shader() {
+            // Pin every program through encoding: a later pass can never lose
+            // its last external lease after earlier passes changed resources.
+            let previous = scope.passes.get(index).and_then(|pass| match &pass.filter {
+                PassFilter::Sample(scope) => Some(scope.as_ref()),
+                _ => None,
+            });
+            programs[index] =
+                Some(samples.shader_program_for_scope(device, shader.program(), previous)?);
+        }
         let sigma = values.sigma_pixels()?;
         if values.is_neutral_at_sigma(sigma) || parameters.scope_opacity == 0.0 {
             budgets[index] = scope
@@ -558,7 +593,8 @@ fn preflight(
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
             if let definition @ (EffectDefinition::NoiseDissolve(_)
-            | EffectDefinition::Pixelate(_)) = effect
+            | EffectDefinition::Pixelate(_)
+            | EffectDefinition::Shader(_)) = effect
             {
                 super::sample_filter::validate_input(
                     GaussianBlurCapture {
@@ -589,6 +625,7 @@ fn preflight(
         return Err(EffectPrepareError::ScratchBudgetExceeded);
     }
     Ok(PreparedStack {
+        _programs: programs,
         budgets,
         active,
         last,
