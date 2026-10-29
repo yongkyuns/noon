@@ -284,6 +284,55 @@ test("network and worker failures remain bounded and detach only owned listeners
   assert.deepEqual(trace.snapshot().events, events);
 });
 
+test("stdout and warning explanations survive a fatal abort without evicting lifecycle evidence", () => {
+  let time = 10;
+  const trace = createBrowserFailureTrace({ maxEvents: 3, now: () => ++time });
+  const browser = new EventEmitter(), context = new EventEmitter(), page = new EventEmitter();
+  const unrelated = () => {};
+  page.on("console", unrelated);
+  const detach = trace.attach(browser, context, page);
+  trace.setPhase("python-startup");
+  const emit = (type, text) => page.emit("console", {
+    type: () => type, text: () => text,
+    location: () => ({ url: "https://example.com/python-worker.js", lineNumber: 17, columnNumber: 3 }),
+    args() { throw new Error("diagnostics must not invoke browser argument RPCs"); },
+  });
+  for (let i = 0; i < 50; i++) emit("log", `startup ${i}`);
+  emit("log", "Fatal Python error: example");
+  emit("warning", "compiler diagnostic");
+  emit("error", "Aborted()");
+  page.emit("close");
+  const snapshot = trace.snapshot();
+  assert.deepEqual(snapshot.events.map(e => e.kind), ["phase", "page-close"]);
+  assert.equal(snapshot.consoleMessageCount, 53);
+  assert.equal(snapshot.consoleMessagesOmitted, 50);
+  assert.deepEqual(snapshot.consoleMessages.map(m => [m.type, m.text]), [
+    ["log", "Fatal Python error: example"], ["warning", "compiler diagnostic"], ["error", "Aborted()"],
+  ]);
+  assert.ok(snapshot.consoleMessages.every(m => m.phase === "python-startup" && m.lineNumber === 17));
+  snapshot.consoleMessages[0].text = "mutated snapshot";
+  assert.equal(trace.snapshot().consoleMessages[0].text, "Fatal Python error: example");
+  detach(); detach();
+  assert.deepEqual(page.listeners("console"), [unrelated]);
+  emit("log", "after detach");
+  assert.equal(trace.snapshot().consoleMessageCount, 53);
+});
+
+test("console evidence bounds text and locations without retaining remote arguments", () => {
+  const trace = createBrowserFailureTrace({ maxEvents: 1 });
+  const browser = new EventEmitter(), context = new EventEmitter(), page = new EventEmitter();
+  const detach = trace.attach(browser, context, page);
+  page.emit("console", {
+    type: () => "log", text: () => "x".repeat(100_000),
+    location: () => ({ url: "u".repeat(1000), lineNumber: 0, columnNumber: 0 }),
+  });
+  const [message] = trace.snapshot().consoleMessages;
+  assert.equal(message.text.length, 2048);
+  assert.equal(message.url.length, 500);
+  assert.equal(message.textTruncated, true);
+  detach();
+});
+
 test("invalid trace configuration and phase are rejected", () => {
   for (const maxEvents of [-1, 0, 129, 1.5]) assert.throws(() => createBrowserFailureTrace({ maxEvents }));
   const trace = createBrowserFailureTrace();

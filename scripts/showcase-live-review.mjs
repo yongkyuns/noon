@@ -207,6 +207,12 @@ async function main() {
   const { seekPausedGallery } = await import("./showcase-playback.mjs");
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+  const selectedIds = process.env.NOON_SHOWCASE_CASES?.split(",").map(id => id.trim()).filter(Boolean);
+  if (selectedIds) {
+    for (const id of selectedIds) assert.ok(manifest.entries.some(entry => entry.id === id), `unknown showcase: ${id}`);
+    manifest.entries = manifest.entries.filter(entry => selectedIds.includes(entry.id));
+    assert.ok(manifest.entries.length, "showcase review requires at least one lesson");
+  }
   const gallery = normalizeShowcaseManifest(manifest);
   const normalizedById = new Map(gallery.examples.map((entry) => [entry.id, entry]));
   const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";

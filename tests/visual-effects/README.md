@@ -1819,3 +1819,50 @@ checked authored emission, Bloom attachment/animation or the public creator
 surface. Rust/WASM compilation is distinct from browser execution evidence.
 The complete M4/M5 host, time/seek/export, extension and performance gates remain
 owned by #1897.
+
+
+### Linear composed Blur capture prerequisite (#1897 M4)
+
+The same retained Gaussian filter now specializes its derived storage by working
+format. Compatibility retains the six packed RGBA8 reconstruction images and one
+RGBA8 output (28 bytes/pixel). Linear Blur uses one RGBA16Float image per axis and
+one RGBA16Float output (24 bytes/pixel), with one attachment per pass and no unit
+clamp, packing, input decoding or output transfer. Its source is already linear
+and alpha-associated. Radius/transparent-border normalization and the final
+once-only scope opacity retain their existing semantics. Programs are shared per
+renderer/format; each capture owns only disposable resources and revisions.
+
+Composed and mixed source captures allocate their existing working format. Tile,
+source, optional original-coverage and multisample budgets use that format's
+actual texel size, and the ordered stack checks every pass before mutating its
+prefix. Unsupported HDR Glow, Shadow, Pixelate, Dissolve, Visibility and backdrop
+routes return an explicit preparation error; they do not run RGBA8 operators on
+float radiance. Spatial and inset capture support remains a separate gate.
+
+`gpu::gaussian_blur::tests::hdr` qualifies 36 already-linear float inputs against
+an independent full two-dimensional f64 Gaussian and then the real Bloom/output
+operator. It checks all float/display channels against the frozen bounds
+`0.006 + 0.004 * abs(expected)` and 2 bytes, respectively. Four source patterns,
+three radii and three opacities cover bright radiance, alpha, edges and low
+values. A real compiled early-clamping shader must fail the same oracle. Resource
+checks cover exact 24-byte storage, clean reuse, opacity-only final work, source
+binding/revision changes, resize, invalidation, clear, format switches and atomic
+budget rejection. A later neutral unsupported operator must reject before an
+ordered prefix allocates or changes its coherent output.
+
+`hdr_captures::authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions`
+runs the ordinary Rust Scene/LiveSession -> source visibility -> retained capture
+-> one/two ordered Blur passes -> painter placement -> real Bloom/SDR route.
+Its 36 authored phases cover geometry groups and geometry/image groups, overlapping
+alpha, a nonblack clear, radius/opacity/child edits, zero radius/opacity, unrelated
+edits, exact restoration, fresh/incremental equality and zero clean work. The
+reference independently decodes authored colors/asset texels, composes literal
+pixel-aligned bounds, applies full two-dimensional convolutions and scope opacity
+once. Native CI preserves raw float/display output and mathematical expectations.
+These authored inputs are unit-valued: their above-one witness occurs after
+Bloom. The separate raw-input proof establishes above-one radiance before Blur.
+
+This slice does not establish public checked emission, camera Bloom authoring,
+HDR text-capture qualification, view/host capability admission, browser execution,
+export/recovery or physical-device performance. The complete M4/M5 goal remains
+open in #1897.

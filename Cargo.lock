@@ -2109,6 +2109,7 @@ dependencies = [
  "noon-text",
  "noon-typst",
  "pollster",
+ "serde_json",
  "swash",
  "wgpu",
 ]

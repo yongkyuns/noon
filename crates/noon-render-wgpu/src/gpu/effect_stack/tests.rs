@@ -6,6 +6,7 @@ mod reference;
 
 fn parameters() -> EffectStackParameters {
     EffectStackParameters {
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 240,
         world_view_height: 8.0,
         scope_opacity: 1.0,
@@ -736,6 +737,7 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
         "the authored scene radius is strictly positive"
     );
     let params = EffectStackParameters {
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 1,
         world_view_height: f64::MAX,
         scope_opacity: 0.37,
@@ -809,4 +811,127 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
         }
     );
     assert_eq!(scope.output(), Some(&output));
+}
+
+#[test]
+fn float_stack_rejects_later_unsupported_pass_before_allocating_or_mutating_prefix() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let image = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("float stack preflight"),
+        size: wgpu::Extent3d {
+            width: 17,
+            height: 13,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let p = EffectStackParameters {
+        working_format: wgpu::TextureFormat::Rgba16Float,
+        ..parameters()
+    };
+    let capture = GlowCapture {
+        source: &image,
+        silhouette: None,
+        revision: 1,
+    };
+    let mut filter = EffectStackFilter::default();
+    let mut scope = EffectStackScope::default();
+    // Even a neutral unsupported pass must be admitted before a prefix installs.
+    let unsupported = [blur(2.0), glow(0.0, GlowSource::Painted)];
+    assert_eq!(
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &unsupported,
+            p
+        ),
+        Err(EffectPrepareError::UnsupportedCapture)
+    );
+    assert!(scope.passes.is_empty());
+    assert_eq!(scope.scratch_bytes(), 0);
+    let initial = render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &[blur(1.25), blur(0.65)],
+        p,
+    )
+    .unwrap();
+    assert_eq!(initial.scratch_bytes, 17 * 13 * 48);
+    assert_eq!(initial.texture_allocations, 6);
+    assert_eq!(initial.pipeline_compiles, 3);
+    let output = scope.output().unwrap().clone();
+    let revision = scope.output_revision();
+    assert_eq!(
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &unsupported,
+            p
+        ),
+        Err(EffectPrepareError::UnsupportedCapture)
+    );
+    assert_eq!(scope.output(), Some(&output));
+    assert_eq!(scope.output_revision(), revision);
+    let clean = render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &[blur(1.25), blur(0.65)],
+        p,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            clean.bytes_uploaded,
+            clean.blur_passes,
+            clean.composite_passes
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &[blur(1.25)],
+            parameters()
+        ),
+        Err(EffectPrepareError::UnsupportedCapture)
+    );
+    assert_eq!(scope.output(), Some(&output));
+    let tile = super::super::EffectCaptureTile::prepare_stack(
+        EffectPixelBounds {
+            min: [4.0, 4.0],
+            max: [12.0, 10.0],
+        },
+        [64, 48],
+        &[blur(1.25), blur(0.65)],
+        p,
+        8192,
+        16 * 1024 * 1024,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        tile.capture_and_scratch_bytes,
+        u64::from(tile.size[0] * tile.size[1]) * (8 + 24 + 24)
+    );
 }

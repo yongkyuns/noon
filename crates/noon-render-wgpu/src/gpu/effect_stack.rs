@@ -1,4 +1,4 @@
-//! Retained ordered composition of the qualified finite LDR operators.
+//! Retained ordered composition of finite compatibility operators and linear Blur.
 //! This is derived GPU work over a caller-owned padded capture, not a scene,
 //! attachment registry, scheduler or clock. Authored scope admission and capture
 //! bounds remain with their existing compiler/renderer owners.
@@ -18,6 +18,8 @@ pub use noon_core::MAX_EFFECT_STACK_LEN;
 
 #[derive(Clone, Copy, Debug)]
 pub struct EffectStackParameters {
+    /// Derived raster working format, shared by capture and every active pass.
+    pub working_format: wgpu::TextureFormat,
     pub output_height: u32,
     pub world_view_height: f64,
     /// Applied once, by the final non-neutral pass.
@@ -275,10 +277,11 @@ pub struct EffectStackFilter {
 }
 
 impl EffectStackFilter {
-    /// Every active pass consumes the preceding encoded-premultiplied RGBA8
-    /// output. Painted glow uses that input alpha; silhouette glow uses the
-    /// original declared geometry mask. Transparent border and sample grid are
-    /// unchanged. Caller must provide the full cumulative padded source extent.
+    /// Each pass consumes the preceding output in the declared working format.
+    /// Compatibility operators use encoded-premultiplied RGBA8; linear Blur
+    /// preserves associated RGBA16Float radiance. Painted glow uses input alpha;
+    /// silhouette glow uses the original geometry mask. Caller provides the full
+    /// cumulative padded extent on the unchanged transparent-border sample grid.
     ///
     /// All profile/capability/budget checks precede resource changes or queue
     /// writes, including checks for later passes. Clean preparation allocates,
@@ -476,6 +479,10 @@ fn preflight(
     {
         return Err(EffectPrepareError::UnsupportedCapture);
     }
+    let linear = capture.source.format() == wgpu::TextureFormat::Rgba16Float;
+    if linear != (parameters.working_format == wgpu::TextureFormat::Rgba16Float) {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
     let pixels = u64::from(size[0]) * u64::from(size[1]);
     let mut budgets = [0; MAX_EFFECT_STACK_LEN];
     let mut active = [false; MAX_EFFECT_STACK_LEN];
@@ -490,6 +497,7 @@ fn preflight(
             world_view_height: parameters.world_view_height,
             scope_opacity: parameters.scope_opacity,
         };
+        let cost = values.filter_bytes_per_pixel(parameters.working_format)?;
         let sigma = values.sigma_pixels()?;
         if values.is_neutral_at_sigma(sigma) || parameters.scope_opacity == 0.0 {
             budgets[index] = scope
@@ -507,7 +515,7 @@ fn preflight(
                     |pass| pass.filter.scratch_bytes(),
                 );
         } else {
-            super::glow_filter::validate_capture(capture.source)?;
+            super::glow_filter::validate_working_capture(capture.source)?;
             values.offset_pixels()?;
             if size.contains(&0) || size.iter().any(|&v| v > limits.max_texture_dimension_2d) {
                 return Err(EffectPrepareError::ExtentExceedsDevice);
@@ -516,8 +524,8 @@ fn preflight(
                 effect,
                 EffectDefinition::Blur(_) | EffectDefinition::Shadow(_)
             ) && sigma > 0.0
-                && (limits.max_color_attachments < 3
-                    || limits.max_color_attachment_bytes_per_sample < 12)
+                && (limits.max_color_attachments < if linear { 1 } else { 3 }
+                    || limits.max_color_attachment_bytes_per_sample < if linear { 8 } else { 12 })
             {
                 return Err(EffectPrepareError::Blur(
                     super::GaussianBlurPrepareError::InsufficientColorAttachments,
@@ -542,7 +550,6 @@ fn preflight(
             {
                 return Err(EffectPrepareError::RevisionExhausted);
             }
-            let cost = values.filter_bytes_per_pixel();
             budgets[index] = pixels
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;

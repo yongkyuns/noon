@@ -21,6 +21,12 @@ const { PNG } = pngjs;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
 normalizeShowcaseManifest(manifest);
+const selectedIds = process.env.NOON_SHOWCASE_CASES?.split(",").map(id => id.trim()).filter(Boolean);
+if (selectedIds) {
+  for (const id of selectedIds) assert.ok(manifest.entries.some(entry => entry.id === id), `unknown showcase: ${id}`);
+  manifest.entries = manifest.entries.filter(entry => selectedIds.includes(entry.id));
+  assert.ok(manifest.entries.length, "showcase capture requires at least one lesson");
+}
 const schedules = new Map(manifest.entries.map(entry => [entry.id, captureSchedule(entry)]));
 const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
 assert.ok(["webgl", "webgpu"].includes(backend));
@@ -152,7 +158,16 @@ try {
   for (const result of report.results) {
     await writeFile(path.join(root, "web/thumbnails/showcase", result.poster), await readFile(path.join(output, result.poster)));
   }
-  await writeFile(path.join(root, "web/thumbnails/showcase/capture-evidence.json"), evidence);
+  if (selectedIds) {
+    for (const entry of manifest.entries) {
+      const single = posterEvidence({ ...manifest, entries: [entry] }, {
+        ...report, results: report.results.filter(result => result.id === entry.id),
+      });
+      await writeFile(path.join(root, `web/thumbnails/showcase/${entry.id}-evidence.json`), json(single));
+    }
+  } else {
+    await writeFile(path.join(root, "web/thumbnails/showcase/capture-evidence.json"), evidence);
+  }
   const decodePage = await context.newPage();
   await decodePage.goto(`${base}/manim-raster-host.html`);
   await decodePage.evaluate(async (paths) => {

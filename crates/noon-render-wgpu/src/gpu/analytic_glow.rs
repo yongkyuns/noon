@@ -397,7 +397,9 @@ impl GpuRenderer {
             || !self.inset_views.is_empty()
             || !matches!(
                 self.target_format,
-                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+                wgpu::TextureFormat::Rgba8Unorm
+                    | wgpu::TextureFormat::Bgra8Unorm
+                    | wgpu::TextureFormat::Rgba16Float
             )
         {
             return Err(EffectPrepareError::UnsupportedCapture);
@@ -481,7 +483,9 @@ impl GpuRenderer {
         }
         if !matches!(
             self.target_format,
-            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+            wgpu::TextureFormat::Rgba8Unorm
+                | wgpu::TextureFormat::Bgra8Unorm
+                | wgpu::TextureFormat::Rgba16Float
         ) {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
@@ -639,7 +643,18 @@ impl GpuRenderer {
         demand: super::glow_filter::CaptureDemand,
         visibility: Option<noon_core::NoiseDissolve>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
+        if self.target_format == wgpu::TextureFormat::Rgba16Float
+            && (visibility.is_some()
+                || request
+                    .definitions
+                    .iter()
+                    .any(|effect| effect.as_backdrop_blur().is_some()))
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
+        let texel_bytes = super::glow_filter::capture_texel_bytes(self.target_format)?;
         let parameters = EffectStackParameters {
+            working_format: self.target_format,
             output_height: self.viewport_size[1],
             world_view_height: f64::from(self.camera.world_size.y),
             scope_opacity: opacity,
@@ -687,7 +702,7 @@ impl GpuRenderer {
                     }
                     let source_bytes = u64::from(scope.tile.size[0])
                         * u64::from(scope.tile.size[1])
-                        * 4
+                        * texel_bytes
                         * (1 + u64::from(scope.silhouette.is_some())
                             + if scope.multisampled.is_some() {
                                 u64::from(PATH_SAMPLE_COUNT)
@@ -746,7 +761,7 @@ impl GpuRenderer {
             && !request.definitions.is_empty()
             && (old_original_mask || (demand.original_by_parent && visibility.is_some()));
         if retain_original_mask {
-            cost_per_pixel += 4;
+            cost_per_pixel += texel_bytes;
         }
         let old = self
             .effect_captures
@@ -796,7 +811,7 @@ impl GpuRenderer {
                 pixels.checked_mul(
                     cost_per_pixel
                         + if key.0 == 2 {
-                            4 * u64::from(PATH_SAMPLE_COUNT)
+                            texel_bytes * u64::from(PATH_SAMPLE_COUNT)
                         } else {
                             0
                         },
@@ -1129,6 +1144,7 @@ impl GpuRenderer {
                 },
                 request.definitions,
                 EffectStackParameters {
+                    working_format: self.target_format,
                     output_height: parameters.output_height,
                     world_view_height: parameters.world_view_height,
                     // Keep the captured/filter image independent of final
@@ -1160,7 +1176,9 @@ impl GpuRenderer {
                         world_view_height: parameters.world_view_height,
                         source_bounds,
                         scope_opacity: 1.0,
-                        scratch_budget_bytes: u64::from(tile.size[0]) * u64::from(tile.size[1]) * 4,
+                        scratch_budget_bytes: u64::from(tile.size[0])
+                            * u64::from(tile.size[1])
+                            * texel_bytes,
                     },
                 )?
             } else {
