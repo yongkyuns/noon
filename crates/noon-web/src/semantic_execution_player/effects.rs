@@ -37,6 +37,19 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn prepare_family_membership(
+        &mut self,
+        family: MobjectTarget<'_>,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.require_completed_live_segment()?;
+        self.with_live_session(|live| {
+            live.prepare_family_membership(family, members, true)
+                .map(|(pending, _)| pending)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn effect_preparation_bytes(
         &self,
         pending: &noon::StagedEffectPublication,
@@ -47,7 +60,7 @@ impl SemanticExecutionPlayer {
         )
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn publish_effect_addition(
         &mut self,
         staged: noon::StagedEffectPublication,

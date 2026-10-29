@@ -3120,21 +3120,15 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_edit_membership(
         &mut self,
         request: noon::SceneMembershipRequest<'_>,
-    ) -> Result<(), AuthoringFailure> {
+        prepare: bool,
+    ) -> Result<Option<noon::StagedEffectPublication>, AuthoringFailure> {
         self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .edit_membership(request)
-        .map(|_| ())
-        .map_err(AuthoringFailure::from)
+        self.with_live_session(|live| match live.edit_membership(request) {
+            Err(noon::LiveSessionError::Publication(
+                noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
+            )) if prepare => live.prepare_membership(request).map(Some),
+            result => result.map(|_| None),
+        })
     }
 
     /// Stage one existing-handle root-membership operation beside an exact

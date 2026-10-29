@@ -4,6 +4,15 @@ use crate::WasmAuthoringFamilyHandle;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = prepareFamilyMembership)]
+    pub fn prepare_family_membership(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        batch: WasmSceneMembershipBatch,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        self.prepare_membership_target(family.semantic_family_ref().into(), batch)
+    }
+
     #[wasm_bindgen(js_name = prepareFamilyEffectAddition)]
     pub fn prepare_family_effect_addition(
         &mut self,
@@ -19,6 +28,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)?;
         Ok(WasmStagedEffectPublication {
             pending: Some(pending),
+            membership: None,
         })
     }
 

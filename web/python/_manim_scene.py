@@ -437,7 +437,7 @@ def _canonical_edit_membership(
     *,
     key: str | None = None,
     spatial_domain: str | None = None,
-) -> None:
+):
     from _manim_updaters import active_callback_membership_context
 
     callback = active_callback_membership_context(scene)
@@ -480,12 +480,36 @@ def _canonical_edit_membership(
     # explicit/default key collisions within this batch before Rust publication.
     if len({item.key for item in binding_reservations.values()}) != len(binding_reservations):
         raise ValueError("duplicate object key in membership batch")
-    engine_call(context.editMembership, batch, operation="Scene." + kind)
-    for member, reservation, handle in reservations:
-        _commit_typed_binding(member, scene, reservation, handle)
-    for value in values:
-        _register_membership_wrappers(scene, value)
-    _sync_membership_wrapper_attachments(scene, kind, values)
+    pending = engine_call(context.editMembership, batch, operation="Scene." + kind)
+
+    def commit():
+        for member, reservation, handle in reservations:
+            _commit_typed_binding(member, scene, reservation, handle)
+        for value in values:
+            _register_membership_wrappers(scene, value)
+        _sync_membership_wrapper_attachments(scene, kind, values)
+
+    return _complete_prepared_publication(scene, context, pending, commit, None)
+
+
+def _complete_prepared_publication(scene, context, pending, commit, result):
+    if pending is None:
+        commit()
+        return result
+    if not (_async_continuation_active(scene) or _synchronous_continuation_active(scene)):
+        pending.free()
+        raise RuntimeError("shader-bearing membership requires a portable or async source barrier")
+    from js import noonPrepareSemanticEffects
+
+    async def publish():
+        await engine_await(noonPrepareSemanticEffects(context, pending), operation="membership")
+
+    if _async_continuation_active(scene):
+        return _SemanticContinuationAwaitable(scene, commit, operation=publish, result=result)
+    from pyodide.ffi import run_sync
+    engine_call(run_sync, noonPrepareSemanticEffects(context, pending), operation="membership")
+    commit()
+    return result
 
 
 def _stage_callback_membership(
@@ -995,7 +1019,7 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
     """Adapt a module-level call without replay or changes to arbitrary callables."""
     if not inspect.ismethod(method):
         return method(*args, **kwargs)
-    if getattr(method, "__func__", None) is _base.Mobject.add_effect:
+    if getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait):
         pending = method(*args, **kwargs)
         return await pending if isinstance(pending, _SemanticContinuationAwaitable) else pending
     scene = method.__self__

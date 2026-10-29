@@ -3464,10 +3464,30 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
-    _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
-    _fork_group_wrapper_references(self)
-    for value in mobjects:
-        self._semantic_member_wrappers[_family_wrapper_key(value)] = value
+
+    def commit():
+        _fork_group_wrapper_references(self)
+        for value in mobjects:
+            self._semantic_member_wrappers[_family_wrapper_key(value)] = value
+
+    try:
+        _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
+    except Exception as error:
+        diagnostic = getattr(error, "rust_cause", None)
+        while diagnostic is not None and diagnostic.code != "publication.effect_preparation_required":
+            diagnostic = diagnostic.cause
+        if diagnostic is None:
+            raise
+        from _manim_scene import _complete_prepared_publication
+        from _manim_reactive import _current_authoring_scene
+        scene = _current_authoring_scene()
+        if scene is None:
+            raise RuntimeError("shader-bearing membership requires its active authoring source") from error
+        batch = _family_membership_batch(context, "add", mobjects)
+        method = context.prepareFamilyMembership if _is_shared_family(self) else context.prepareObjectMembership
+        pending = engine_call(method, _family_query_handle(self), batch)
+        return _complete_prepared_publication(scene, context, pending, commit, self)
+    commit()
     return self
 
 

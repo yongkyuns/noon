@@ -1,5 +1,5 @@
 #[cfg(target_arch = "wasm32")]
-use super::wasm::CanonicalAuthoringSceneContext;
+use super::wasm::{CanonicalAuthoringSceneContext, WasmSceneMembershipBatch};
 #[cfg(target_arch = "wasm32")]
 use crate::{
     authoring_error::js_error, WasmAuthoringMobjectHandle, WasmEffectDefinition, WasmEffectHandle,
@@ -14,12 +14,49 @@ mod family;
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct WasmStagedEffectPublication {
-    pending: Option<noon::StagedEffectPublication>,
+    pub(super) pending: Option<noon::StagedEffectPublication>,
+    pub(super) membership: Option<super::SceneMembershipBatch>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl CanonicalAuthoringSceneContext {
+    fn prepare_membership_target(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        batch: WasmSceneMembershipBatch,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        let batch = batch.into_inner().map_err(js_error)?;
+        if batch.kind != super::SceneMembershipBatchKind::Add {
+            return Err(js_error(
+                "shader-bearing family preparation requires an add batch",
+            ));
+        }
+        let members = batch.family_members().map_err(js_error)?;
+        let pending = self
+            .inner
+            .active_live_player()
+            .map_err(js_error)?
+            .prepare_family_membership(target, &members)
+            .map_err(js_error)?;
+        Ok(WasmStagedEffectPublication {
+            pending: Some(pending),
+            membership: None,
+        })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = prepareObjectMembership)]
+    pub fn prepare_object_membership(
+        &mut self,
+        object: &WasmAuthoringMobjectHandle,
+        batch: WasmSceneMembershipBatch,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        self.prepare_membership_target(object.semantic_mobject().into(), batch)
+    }
+
     #[wasm_bindgen(js_name = effectPreparationResources)]
     pub fn effect_preparation_resources(
         &mut self,
@@ -51,6 +88,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)?;
         Ok(WasmStagedEffectPublication {
             pending: Some(pending),
+            membership: None,
         })
     }
 
@@ -64,9 +102,7 @@ impl CanonicalAuthoringSceneContext {
             .take()
             .ok_or_else(|| JsValue::from_str("effect publication is consumed"))?;
         self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .publish_effect_addition(pending)
+            .publish_prepared_effects(pending, staged.membership.as_ref())
             .map_err(js_error)
     }
 
@@ -163,6 +199,68 @@ impl CanonicalAuthoringSceneContext {
 mod tests {
     use super::super::*;
     use noon::effects::{EffectUpdate, Glow};
+
+    #[cfg(feature = "wgsl-effects")]
+    #[test]
+    fn prepared_membership_revalidates_wrapper_reservations_before_commit() {
+        use noon::effects::{
+            ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderProfile, ShaderSchema,
+            WgslEffectProgram,
+        };
+        for conflict in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let mut incoming = context.scene.circle(0.4).unwrap();
+            let other = context.scene.circle(0.2).unwrap();
+            let program = WgslEffectProgram::prepare(ShaderSchema {
+                profile: ShaderProfile::PaintedPointwiseV1,
+                dependencies: ShaderDependencies { coordinates: ShaderCoordinates::Scene, authored_time: false, seed: false },
+                parameters: Box::new([]),
+            }, "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return input.color; }").unwrap();
+            incoming
+                .add_effect(ShaderEffect::new(program), "material")
+                .unwrap();
+            context.live_player(1.0).unwrap();
+            context
+                .active_live_player()
+                .unwrap()
+                .session_mut_for_test()
+                .require_effect_resource_preparation();
+            let id = ObjectId::new(7);
+            let batch = SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: Some(id),
+                    handle: incoming.clone(),
+                }],
+                bindings: vec![(id, incoming.clone())],
+            };
+            let pending = context
+                .edit_membership_with_preparation(&batch, true)
+                .unwrap()
+                .unwrap();
+            assert!(context.members().unwrap().is_empty());
+            assert!(!context.bindings.contains_key(&id));
+            assert!(!context.identities.contains_key(&incoming.node_id()));
+            if conflict {
+                context.bind_mobject(id, &other).unwrap();
+            }
+            let revision = context.scene.revision();
+            let result = context.publish_prepared_effects(pending, Some(&batch));
+            if conflict {
+                assert!(result.is_err());
+                assert_eq!(context.scene.revision(), revision);
+                assert_eq!(context.members().unwrap(), [other.node_id()]);
+                assert_eq!(context.bindings[&id], other.node_id());
+                assert!(!context.identities.contains_key(&incoming.node_id()));
+            } else {
+                result.unwrap();
+                assert_eq!(context.members().unwrap(), [incoming.node_id()]);
+                assert_eq!(context.bindings[&id], incoming.node_id());
+                assert_eq!(context.identities[&incoming.node_id()], id);
+            }
+        }
+    }
 
     #[test]
     fn family_adapter_preserves_one_live_owner_and_exact_attachment_generations() {

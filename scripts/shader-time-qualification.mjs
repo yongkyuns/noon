@@ -149,8 +149,8 @@ async function qualifyProfileTransition(context, baseUrl, backend) {
   } finally { await page.close(); }
 }
 
-async function qualifyPythonPreparation(context, baseUrl, backend) {
-  if (backend !== "WebGPU") return null;
+async function qualifyPythonPreparation(context, baseUrl, backend, kind = "attachments") {
+  if (backend !== "WebGPU" && kind === "attachments") return null;
   const page = await context.newPage();
   try {
     await page.goto(baseUrl + "/web/manim-raster-host.html");
@@ -159,34 +159,48 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const original = `        for panel, program in zip(panels, programs):
             panel.add_effect(ShaderEffect(program), name="stripes")`;
     assert.ok(lesson.includes(original));
+    const familyMembership = kind === "family" || kind === "object";
+    const addition = index => kind === "scene" ? `self.add(panels[${index}], key="panel-${index}")`
+      : familyMembership ? `family.add(panels[${index}])`
+        : `panels[${index}].add_effect(ShaderEffect(programs[${index}]), name="stripes")`;
+    const rejectedCheck = kind === "scene" ? `            assert panels[0]._scene is None
+            assert "panel-0" not in self._object_key_ids`
+      : familyMembership ? `            assert len(family.submobjects) == 0`
+        : `            try:
+                panels[0].get_effect("stripes")
+            except Exception:
+                pass
+            else:
+                raise AssertionError("failed GPU preparation published a semantic attachment")`;
     let source = lesson.replace("class ShaderMaterial(Scene):", "class ShaderMaterial(MovingCameraScene):")
       .replace('programs = [material("local"), material("scene")]',
       'programs = [material("scene")] * 2').replace(original, `        self.camera.frame.set_view_color_profile("linear_hdr")
         try:
-            panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
+            ${addition(0)}
         except Exception:
             pass
         else:
             raise AssertionError("HDR shader attachment must reject")
         self.camera.frame.set_view_color_profile("compatibility")
         try:
-            panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
+            ${addition(0)}
         except Exception:
-            try:
-                panels[0].get_effect("stripes")
-            except Exception:
-                pass
-            else:
-                raise AssertionError("failed GPU preparation published a semantic attachment")
+${rejectedCheck}
             self.wait(0.25)
-            panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
-        panels[1].add_effect(ShaderEffect(programs[1]), name="stripes")
+            ${addition(0)}
+        bound = ${addition(1)}.set_opacity(1)
+        assert bound is ${familyMembership ? "family" : "panels[1]"}
         try:
             self.camera.frame.set_view_color_profile("linear_hdr")
         except Exception:
             pass
         else:
             raise AssertionError("HDR profile edit must reject while shaders are attached")`);
+    if (kind !== "attachments") source = source
+      .replace("        self.add(*panels)", `        shared = material("scene")
+        for panel in panels:
+            panel.add_effect(ShaderEffect(shared), name="stripes")${familyMembership ? `\n        family = ${kind === "family" ? "VGroup()" : "Rectangle(width=0.01, height=0.01, fill_opacity=0, stroke=None)"}\n        self.add(family)` : ''}`)
+      .replace('programs = [material("scene")] * 2', 'programs = [shared] * 2');
     source = sourceForMode(source);
     const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
     assert.equal(initial.rendererBackend, backend);
@@ -203,7 +217,7 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     });
     const worker = page.workers().find(worker => worker.url().includes("execution-render-worker.js") && !worker.url().includes("capability-probe"));
     assert.ok(worker, "actual Python render worker required");
-    await worker.evaluate(() => {
+    if (backend === "WebGPU") await worker.evaluate(() => {
       globalThis.rejectShader = true;
       globalThis.rejectedShaders = 0;
       const original = GPUDevice.prototype.createShaderModule;
@@ -215,22 +229,31 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
         return original.call(this, descriptor);
       };
     });
-    await page.evaluate(() => noonHostRaster.renderThrough(1, [0, 0.5, 0.75]));
-    const rejected = await page.evaluate(() => noonHostRaster.debugFrame());
-    assert.equal(await worker.evaluate(() => rejectedShaders), 1);
-    assert.equal(rejected.time, 0.5);
-    assert.equal(rejected.objects.flatMap(object => object.effects).length, 0);
-    assert.deepEqual(PNG.sync.read(await page.locator("#scene").screenshot()).data, previous,
-      "failed Python attachment preserves the displayed frame");
-    await worker.evaluate(() => { rejectShader = false; });
+    let rejected = null;
+    if (backend === "WebGPU") {
+      await page.evaluate(() => noonHostRaster.renderThrough(1, [0, 0.5, 0.75]));
+      rejected = await page.evaluate(() => noonHostRaster.debugFrame());
+      assert.equal(await worker.evaluate(() => rejectedShaders), 1);
+      assert.equal(rejected.time, 0.5);
+      assert.equal(rejected.objects.flatMap(object => object.effects).length, 0);
+      assert.deepEqual(PNG.sync.read(await page.locator("#scene").screenshot()).data, previous,
+        "failed Python publication preserves the displayed frame");
+      await worker.evaluate(() => { rejectShader = false; });
+    }
     await page.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
     const recovered = await page.evaluate(() => noonHostRaster.debugFrame());
     assert.equal(recovered.time, 0.75);
     assert.equal(recovered.objects.flatMap(object => object.effects).length, 2);
     const preparationBytes = await author.evaluate(() => shaderPreparationBytes);
-    assert.equal(preparationBytes.length, 3, "failed source, retry and shared-program attachment");
-    assert.ok(preparationBytes[2] < preparationBytes[1] / 2, "shared program uses its installed resource handle");
-    return { backend, sourceMode, rejected, recovered, rejectedModules: 1, preparationBytes };
+    assert.equal(preparationBytes.length, backend === "WebGPU" ? 3 : 2, "first use, optional failed attempt and shared-program reuse");
+    assert.ok(preparationBytes.at(-1) < preparationBytes.at(-2) / 2, "shared program uses its installed resource handle");
+    const pixels = PNG.sync.read(await page.locator("#scene").screenshot()).data;
+    let treatedPixels = 0;
+    for (let at = 0; at < pixels.length; at += 4) {
+      if (pixels[at + 1] > pixels[at] + 40 && pixels[at + 2] > pixels[at] + 30 && pixels[at + 1] > 100) treatedPixels++;
+    }
+    assert.ok(treatedPixels > 500, "published source contains the shader treatment");
+    return { backend, sourceMode, kind, rejected, recovered, rejectedModules: backend === "WebGPU" ? 1 : null, preparationBytes, treatedPixels };
   } finally { await page.close(); }
 }
 
@@ -246,6 +269,9 @@ await qualifyPairedAuthoring({
   async qualifyLifecycle(context, baseUrl, backend) {
     if (sourceMode === "jspi") return {
       backend, pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
+      pythonMembership: [await qualifyPythonPreparation(context, baseUrl, backend, "scene"),
+        await qualifyPythonPreparation(context, baseUrl, backend, "family"),
+        await qualifyPythonPreparation(context, baseUrl, backend, "object")],
       profileTransition: await qualifyProfileTransition(context, baseUrl, backend),
     };
     const images = new Map(), trials = [];
@@ -294,6 +320,9 @@ await qualifyPairedAuthoring({
     return { backend, trials,
       latePreparation: await qualifyLatePreparation(context, baseUrl, backend),
       pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
+      pythonMembership: [await qualifyPythonPreparation(context, baseUrl, backend, "scene"),
+        await qualifyPythonPreparation(context, baseUrl, backend, "family"),
+        await qualifyPythonPreparation(context, baseUrl, backend, "object")],
       profileTransition: await qualifyProfileTransition(context, baseUrl, backend) };
   },
 });

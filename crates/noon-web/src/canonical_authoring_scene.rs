@@ -3792,7 +3792,18 @@ impl CanonicalAuthoringScene {
     }
 
     fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
-        let new_bindings = self.validate_membership_bindings(&batch)?;
+        self.edit_membership_with_preparation(&batch, false)
+            .map(|_| ())
+    }
+
+    fn edit_membership_with_preparation(
+        &mut self,
+        batch: &SceneMembershipBatch,
+        allow_preparation: bool,
+    ) -> Result<Option<noon::StagedEffectPublication>, AuthoringFailure> {
+        #[cfg(not(any(target_arch = "wasm32", test)))]
+        let _ = allow_preparation;
+        let new_bindings = self.validate_membership_bindings(batch)?;
         let mut seen_nodes = batch
             .bindings
             .iter()
@@ -3942,7 +3953,12 @@ impl CanonicalAuthoringScene {
                         .map_err(AuthoringFailure::from)?;
                 }
                 PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                    self.active_live_player()?.live_edit_membership(request)?;
+                    if let Some(pending) = self
+                        .active_live_player()?
+                        .live_edit_membership(request, allow_preparation)?
+                    {
+                        return Ok(Some(pending));
+                    }
                 }
                 PlayerOwnership::Unstarted => {
                     return Err(
@@ -3955,6 +3971,25 @@ impl CanonicalAuthoringScene {
             }
         }
         for (id, node) in new_bindings {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
+        Ok(None)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn publish_prepared_effects(
+        &mut self,
+        pending: noon::StagedEffectPublication,
+        membership: Option<&SceneMembershipBatch>,
+    ) -> Result<(), AuthoringFailure> {
+        let bindings = membership
+            .map(|batch| self.validate_membership_bindings(batch))
+            .transpose()?
+            .unwrap_or_default();
+        self.active_live_player()?
+            .publish_effect_addition(pending)?;
+        for (id, node) in bindings {
             self.bindings.insert(id, node);
             self.identities.insert(node, id);
         }
@@ -6555,10 +6590,21 @@ mod wasm {
 
         /// Consume one complete typed membership request and publish it once.
         #[wasm_bindgen(js_name = editMembership)]
-        pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
-            self.inner
-                .edit_membership(batch.into_inner().map_err(typed_js_error)?)
-                .map_err(typed_js_error)
+        pub fn edit_membership(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<Option<super::effects::WasmStagedEffectPublication>, JsValue> {
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            let pending = self
+                .inner
+                .edit_membership_with_preparation(&batch, true)
+                .map_err(typed_js_error)?;
+            Ok(
+                pending.map(|pending| super::effects::WasmStagedEffectPublication {
+                    pending: Some(pending),
+                    membership: Some(batch),
+                }),
+            )
         }
 
         /// Return the authoritative direct-root semantic identities in painter order.

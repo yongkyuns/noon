@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import operator
+import sys
 from functools import partialmethod
 from typing import TYPE_CHECKING, Any, Callable, Self
 from enum import Enum
@@ -1469,6 +1470,14 @@ def _scene_operations():
     return _manim_scene
 
 
+def _membership_result(pending, result):
+    continuation = getattr(sys.modules.get("_manim_scene"), "_SemanticContinuationAwaitable", ())
+    if isinstance(pending, continuation):
+        pending._result = result
+        return pending
+    return result
+
+
 class Scene:
     """Python authoring facade; semantic operations require the shared Rust host."""
 
@@ -1504,8 +1513,10 @@ class Scene:
 
     def _edit_membership(
         self, kind: str, values: tuple[object, ...] = (), *, key=None
-    ) -> None:
-        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+    ):
+        return _scene_operations()._canonical_edit_membership(
+            self, kind, values, key=key,
+        )
 
     def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
         if not mobjects:
@@ -1515,12 +1526,12 @@ class Scene:
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
         if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
             raise ValueError("an explicit key requires one ordinary Mobject add")
-        self._edit_membership("add", mobjects, key=key)
-        return leaves[0] if len(leaves) == 1 else self
+        return _membership_result(self._edit_membership("add", mobjects, key=key),
+                                  leaves[0] if len(leaves) == 1 else self)
 
     def add_foreground_mobjects(self, *mobjects: object) -> Scene:
         if mobjects:
-            self._edit_membership("add_foreground", mobjects)
+            return _membership_result(self._edit_membership("add_foreground", mobjects), self)
         return self
 
     def add_foreground_mobject(self, mobject: object) -> Scene:
@@ -1528,31 +1539,26 @@ class Scene:
 
     def remove_foreground_mobjects(self, *mobjects: object) -> Scene:
         if mobjects:
-            self._edit_membership("remove_foreground", mobjects)
+            return _membership_result(self._edit_membership("remove_foreground", mobjects), self)
         return self
 
     def remove_foreground_mobject(self, mobject: object) -> Scene:
         return self.remove_foreground_mobjects(mobject)
 
     def bring_to_front(self, *mobjects: object) -> Scene:
-        self.add(*mobjects)
-        return self
+        return _membership_result(self.add(*mobjects), self)
 
     def bring_to_back(self, *mobjects: object) -> Scene:
-        self._edit_membership("bring_to_back", mobjects)
-        return self
+        return _membership_result(self._edit_membership("bring_to_back", mobjects), self)
 
     def remove(self, *mobjects: object) -> Scene:
-        self._edit_membership("remove", mobjects)
-        return self
+        return _membership_result(self._edit_membership("remove", mobjects), self)
 
     def clear(self) -> Scene:
-        self._edit_membership("clear")
-        return self
+        return _membership_result(self._edit_membership("clear"), self)
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
-        self._edit_membership("replace", (old_mobject, new_mobject))
-        return self
+        return _membership_result(self._edit_membership("replace", (old_mobject, new_mobject)), self)
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
         return _scene_operations()._bind_camera_frame(self, mobject)

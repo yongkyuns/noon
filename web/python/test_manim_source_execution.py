@@ -146,6 +146,39 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await task
         self.assertEqual(events, ["material", "continued"])
 
+    async def test_resource_results_suspend_in_assignments_and_chained_calls(self):
+        events, release = [], asyncio.Event()
+        class Target:
+            def add_effect(self):
+                events.append("material")
+                return self
+            def move_to(self):
+                events.append("moved")
+                return self
+        class Base:
+            def add(self, value):
+                events.append("member")
+                return value
+        async def barrier(method, *args, **kwargs):
+            value = method(*args, **kwargs)
+            await release.wait()
+            return value
+        from _manim_source_execution import MODULE_BARRIER_GLOBAL
+        target = Target()
+        _, portable, _ = self.compile_scene("""
+            class Example(Base):
+                def construct(self):
+                    bound = self.add(target.add_effect().move_to())
+                    assert bound is target
+                    events.append("continued")
+        """, {"Base": Base, "target": target, "events": events, MODULE_BARRIER_GLOBAL: barrier})
+        task = asyncio.create_task(portable())
+        await asyncio.sleep(0)
+        self.assertEqual(events, ["material"])
+        release.set()
+        await task
+        self.assertEqual(events, ["material", "moved", "member", "continued"])
+
         with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
             from _manim_scene import await_module_source_barrier
         class UserAwaitable:

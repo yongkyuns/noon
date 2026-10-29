@@ -6,8 +6,9 @@ wrapper that would turn globals into locals. The deferred callbacks themselves
 stay synchronous and are never rewritten.
 
 The original construct definitions are retained. A second, never-executed module compilation
-supplies coroutine code for ordinary ``construct`` methods with direct, statement-
-position ``self.play``/``self.wait`` and ``add_effect`` calls. Binding that code reuses the original
+supplies coroutine code for ordinary ``construct`` methods with direct statement
+``self.play``/``self.wait`` barriers and resource-dependent effect/membership calls,
+including assigned and chained results. Binding that code reuses the original
 function's globals, defaults and closure; class/decorator/module effects are not
 replayed. All barriers still use the canonical Scene implementation and runtime.
 
@@ -27,6 +28,10 @@ from types import CodeType, FunctionType, MethodType
 
 BARRIER_GLOBAL = "_noon_await_source_barrier"
 MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
+RESOURCE_BARRIER_METHODS = frozenset({
+    "add_effect", "add", "add_foreground_mobject", "add_foreground_mobjects",
+    "bring_to_front", "bring_to_back", "replace",
+})
 
 
 @dataclass
@@ -66,12 +71,13 @@ def authoring_source_scope():
         cleanup.callback(_SOURCE_INVOCATION.reset, token)
         yield
 
-# Calls on the scene that cannot suspend the authoring continuation. Unknown
-# methods (including super().construct()) are not silently converted.
+# Known Scene calls, with suspension handled only at the explicit barriers above.
+# Unknown methods (including super().construct()) keep their original host path.
 _SCENE_CALLS = frozenset({
     "play", "wait", "add", "remove", "clear", "on_click", "set_drag_targets",
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
+    "bring_to_front", "bring_to_back", "replace",
 })
 
 
@@ -87,26 +93,19 @@ class _ConstructBody(ast.NodeTransformer):
         if (
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
-            and (call.func.attr == "add_effect" or (
-                isinstance(call.func.value, ast.Name)
+            and (isinstance(call.func.value, ast.Name)
                 and call.func.value.id == self.receiver
                 and call.func.attr in {"play", "wait"}
-            ))
+            )
         ):
             # Inspect arguments as usual, but admit this particular receiver and
             # barrier. A nested call to play/wait is not a statement barrier.
             self.allowed_receivers.add(id(call.func.value))
-            if call.func.attr == "add_effect":
-                if isinstance(call.func.value, ast.Name) and call.func.value.id == self.receiver:
-                    self.unsupported = True
-                self.visit(call.func.value)
-            for arg in call.args:
-                self.visit(arg)
-            for keyword in call.keywords:
-                self.visit(keyword.value)
+            call.args = [self.visit(arg) for arg in call.args]
+            call.keywords = [self.visit(keyword) for keyword in call.keywords]
             self.barriers += 1
             wrapped = ast.Call(
-                func=ast.Name(id=MODULE_BARRIER_GLOBAL if call.func.attr == "add_effect" else BARRIER_GLOBAL, ctx=ast.Load()),
+                func=ast.Name(id=BARRIER_GLOBAL, ctx=ast.Load()),
                 args=[call.func, *call.args],
                 keywords=call.keywords,
             )
@@ -130,6 +129,16 @@ class _ConstructBody(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in RESOURCE_BARRIER_METHODS:
+            self.allowed_receivers.add(id(func.value))
+            if func.attr == "add_effect" and isinstance(func.value, ast.Name) and func.value.id == self.receiver:
+                self.unsupported = True
+            node = self.generic_visit(node)
+            self.barriers += 1
+            return ast.copy_location(ast.Await(value=ast.Call(
+                func=ast.Name(id=MODULE_BARRIER_GLOBAL, ctx=ast.Load()),
+                args=[node.func, *node.args], keywords=node.keywords,
+            )), node)
         if isinstance(func, ast.Name) and func.id in {"super", "locals", "vars", "eval", "exec"}:
             self.unsupported = True
         if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
@@ -161,6 +170,14 @@ class _ConstructBody(ast.NodeTransformer):
 
     visit_Lambda = _visit_callback
     visit_FunctionDef = _visit_callback
+
+    def visit_GeneratorExp(self, node):
+        # A deferred generator cannot suspend its synchronous consumer. Keep the
+        # original synchronous/explicit-async host path for hidden resource calls.
+        if any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+               and child.func.attr in RESOURCE_BARRIER_METHODS for child in ast.walk(node)):
+            self.unsupported = True
+        return self._visit_callback(node)
 
     def visit_AsyncFunctionDef(self, node):
         self.unsupported = True
@@ -218,9 +235,9 @@ class _ModuleBarriers(ast.NodeTransformer):
     def visit_Expr(self, node):
         call = node.value
         if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and (call.func.attr == "add_effect" or (
-                    isinstance(call.func.value, ast.Name)
-                    and call.func.attr in {"play", "wait"}))):
+                and isinstance(call.func.value, ast.Name)
+                and call.func.attr in {"play", "wait"}):
+            call = self.generic_visit(call)
             self.barriers += 1
             wrapped = ast.Call(
                 func=ast.Name(id=MODULE_BARRIER_GLOBAL, ctx=ast.Load()),
@@ -229,7 +246,17 @@ class _ModuleBarriers(ast.NodeTransformer):
             return ast.copy_location(
                 ast.Expr(value=ast.copy_location(ast.Await(value=wrapped), call)), node
             )
-        return node
+        return self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute) and node.func.attr in RESOURCE_BARRIER_METHODS:
+            node = self.generic_visit(node)
+            self.barriers += 1
+            return ast.copy_location(ast.Await(value=ast.Call(
+                func=ast.Name(id=MODULE_BARRIER_GLOBAL, ctx=ast.Load()),
+                args=[node.func, *node.args], keywords=node.keywords,
+            )), node)
+        return self.generic_visit(node)
 
     def visit_FunctionDef(self, node):
         return node
@@ -237,6 +264,7 @@ class _ModuleBarriers(ast.NodeTransformer):
     visit_AsyncFunctionDef = visit_FunctionDef
     visit_ClassDef = visit_FunctionDef
     visit_Lambda = visit_FunctionDef
+    visit_GeneratorExp = visit_FunctionDef
 
 
 def compile_authoring_source(

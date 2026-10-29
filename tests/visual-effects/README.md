@@ -38,15 +38,15 @@ row bindings are prepared again for the new target. A different device requires
 fresh program preparation. Publication also rechecks that any newly executable
 program still matches the modules prepared before the await.
 
-Live Python shader attachments use that same staged transaction. Portable source
-statements suspend automatically; explicit async constructs await `add_effect`,
+Live Python shader attachments and shader-bearing scene/family insertion use that
+same staged transaction. Portable direct calls suspend automatically, including
+assigned/chained results; explicit async constructs await the resource-dependent call,
 and JSPI sources retain blocking syntax. First-use source/schema is preflighted
 before stream registration; reuse sends the existing immutable resource handle.
 GPU readiness precedes fresh CPU admission; frame retention precedes source
 resumption. Cold construction and built-in effect calls stay fluent.
 
-Live insertion of already shader-bearing detached objects, remaining view/
-capability combinations, native Python, recovery and the physical-device performance
+Remaining view/capability combinations, native Python, recovery and the physical-device performance
 matrix remain unqualified; #1897 owns promotion.
 
 ## Current authored GlowPulse extension
