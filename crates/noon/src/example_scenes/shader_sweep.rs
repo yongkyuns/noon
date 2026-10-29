@@ -94,12 +94,6 @@ impl LiveContinuation for ShaderSweep {
                 for (i, target) in targets.iter().enumerate() {
                     live.set_rotation(target, if outward { 0.35 } else { 0.0 })
                         .map_err(message)?;
-                    live.set_translation(
-                        target,
-                        if i == 0 { -3.0 } else { 3.0 },
-                        if outward { 0.45 } else { 0.0 },
-                    )
-                    .map_err(message)?;
                     live.set_effect(
                         target,
                         "stripes",

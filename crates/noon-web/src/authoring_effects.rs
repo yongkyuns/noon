@@ -5,6 +5,24 @@ use noon::effects::Glow;
 use noon::effects::{EffectParameterError, EffectRadius, EffectUpdate, GlowSource};
 use noon::Color;
 
+pub(crate) fn effect_color(color: &[f64]) -> Result<Option<Color>, AuthoringFailure> {
+    match color {
+        [] => Ok(None),
+        [r, g, b, a]
+            if color
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)) =>
+        {
+            // Check before narrowing so an out-of-range f64 cannot round into
+            // an accepted f32. The complete schema is validated in shared Rust.
+            Ok(Some(Color::rgba(
+                *r as f32, *g as f32, *b as f32, *a as f32,
+            )))
+        }
+        _ => Err(noon::AuthoringError::from(EffectParameterError::InvalidColor).into()),
+    }
+}
+
 pub(crate) fn effect_update(
     color: &[f64],
     radius: Option<f64>,
@@ -14,19 +32,7 @@ pub(crate) fn effect_update(
     offset: &[f64],
     offset_pixels: bool,
 ) -> Result<EffectUpdate, AuthoringFailure> {
-    let color = match color {
-        [] => None,
-        [r, g, b, a]
-            if color
-                .iter()
-                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)) =>
-        {
-            // Check before narrowing so an out-of-range f64 cannot round into
-            // an accepted f32. The complete schema is validated in shared Rust.
-            Some(Color::rgba(*r as f32, *g as f32, *b as f32, *a as f32))
-        }
-        _ => return Err(noon::AuthoringError::from(EffectParameterError::InvalidColor).into()),
-    };
+    let color = effect_color(color)?;
     let source = match source {
         None => None,
         Some("painted") => Some(GlowSource::Painted),
@@ -159,7 +165,7 @@ mod wasm {
     /// Immutable definition only; constructor allocates no scene/GPU identity.
     #[wasm_bindgen]
     pub struct WasmEffectDefinition {
-        value: EffectDefinition,
+        pub(super) value: EffectDefinition,
     }
     impl WasmEffectDefinition {
         fn pixelate_value(&self) -> Result<noon_core::Pixelate, JsValue> {
@@ -288,8 +294,11 @@ mod wasm {
         }
         #[wasm_bindgen(getter)]
         pub fn seed(&self) -> Result<u32, JsValue> {
-            Ok(self.mask_value()?.seed())
+            self.value
+                .as_shader()
+                .map_or_else(|| self.mask_value().map(|v| v.seed()), |v| Ok(v.seed()))
         }
+
         #[wasm_bindgen(getter, js_name = offsetX)]
         pub fn offset_x(&self) -> Result<f64, JsValue> {
             Ok(self.shadow_value()?.offset().value()[0])
@@ -446,3 +455,6 @@ pub use wasm::*;
 mod family;
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(target_arch = "wasm32", feature = "wgsl-effects"))]
+mod shader;

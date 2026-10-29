@@ -633,7 +633,7 @@ impl GpuRenderer {
                     .as_ref()
                     .ok_or(EffectPrepareError::PublicationMismatch)?;
                 let analytic = matches!(
-                    row.geometry(),
+                    frame.render_geometry(index),
                     Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
                 ) && row.style.fill.is_some()
                     && row.fill_paint.is_none()
@@ -641,7 +641,29 @@ impl GpuRenderer {
                     && effect.backdrop_blur().is_none()
                     && frame.reveal(index) == 1.0
                     && publication.active_family_animation_indices().is_empty();
-                if !analytic {
+                // The worker may retain an analytic semantic primitive while
+                // preparing its effective geometry as a path mesh. Select the
+                // capture fast path from the actual prepared draw as well.
+                let analytic = analytic
+                    .then(|| {
+                        let scratch = if prepared.geometry_only {
+                            Some(index)
+                        } else {
+                            prepared
+                                .source_geometry_slots
+                                .and_then(|slots| slots.get(index))
+                                .copied()
+                                .flatten()
+                        }?;
+                        let observation = prepared.geometry.observe_object(scratch).ok()?;
+                        matches!(
+                            observation.primitive,
+                            RenderPrimitive::Circle | RenderPrimitive::Rectangle
+                        )
+                        .then_some((scratch, observation))
+                    })
+                    .flatten();
+                let Some((scratch, mut observation)) = analytic else {
                     if prepared.object_indices.get(&object) != Some(&index)
                         || prepared.capture_items(object).is_none()
                         || !prepared.source_is_visible(object)
@@ -650,21 +672,7 @@ impl GpuRenderer {
                     }
                     sources.push((index, Some((object, index, effect.definitions(), None))));
                     continue;
-                }
-                let scratch = if prepared.geometry_only {
-                    index
-                } else {
-                    prepared
-                        .source_geometry_slots
-                        .and_then(|slots| slots.get(index))
-                        .copied()
-                        .flatten()
-                        .ok_or(EffectPrepareError::UnsupportedCapture)?
                 };
-                let mut observation = prepared
-                    .geometry
-                    .observe_object(scratch)
-                    .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                 let geometry = match observation.primitive {
                     RenderPrimitive::Circle => GeometryRef::circle(
                         prepared.geometry.circles[observation.instance_index].radius,

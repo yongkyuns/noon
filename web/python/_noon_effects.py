@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -63,6 +63,9 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
         if size is not None:
             size_pixels = isinstance(size, Pixels)
             engine_call(request.setSize, _number(size.value if size_pixels else size, "size"), size_pixels)
+        if parameters is not None:
+            from _noon_shaders import _write_parameters
+            _write_parameters(request, parameters)
         yield request
     finally:
         request.free()
@@ -373,7 +376,8 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
+        from _noon_shaders import ShaderEffect
+        return {"shader": ShaderEffect, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -429,8 +433,9 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate)):
-        raise TypeError("this effect profile supports Glow, Blur, BackdropBlur, Shadow, NoiseDissolve and Pixelate definitions")
+    from _noon_shaders import ShaderEffect
+    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate, ShaderEffect)):
+        raise TypeError("expected a supported immutable Noon effect definition")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
     _call(value, "addEffect", definition._definition, name, scope=scope)
@@ -445,9 +450,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

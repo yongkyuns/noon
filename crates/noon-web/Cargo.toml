@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 wgsl-effects = ["noon/wgsl-effects"]
-default = ["renderer"]
+default = ["renderer", "wgsl-effects"]
 # Explicit release-profile qualification only; production builds omit the fixtures.
 renderer-smoke = ["renderer", "wgsl-effects"]
 # Opt-in typed replay fixtures for optimized qualification, not production exports.

@@ -469,6 +469,19 @@
           "label": "Compare padded and unpadded read rounds"
         }
       ]
+    },
+    {
+      "id": "showcase-shader-material", "title": "A material that moves",
+      "lesson": "Animate a reusable shader's controls and compare a pattern that follows its object with one fixed in the scene.",
+      "primary_feature": "typed-shader-material", "category": "Appearance",
+      "path": "python/examples/showcase_shader_material.py",
+      "features": ["WgslEffectProgram", "typed parameters", "local and scene coordinates", "set_effect", "exact removal"],
+      "duration": 6, "thumbnail_time": 1.5,
+      "thumbnail": "thumbnails/showcase/showcase-shader-material.png",
+      "thumbnail_alt": "Two tilted teal striped panels compare object-local and scene-space material coordinates",
+      "still_intervals": [[0, 0.5], [2.5, 3], [5, 5.5], [5.5, 6]],
+      "beats": [{"time": 0.5, "label": "Attach the material"}, {"time": 1.5, "label": "Move the object and phase"}, {"time": 4, "label": "Return the controls"}, {"time": 5.6, "label": "Remove the treatment"}],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }

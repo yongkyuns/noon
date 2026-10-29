@@ -5,6 +5,8 @@ import initNoonWeb, {
   WasmAuthoringFamilyHandle,
   WasmEffectDefinition,
   WasmEffectUpdate,
+  WasmShaderParameter,
+  WasmShaderSchema,
   WasmLinearGradient,
   WasmRadialGradient,
   WasmNoisePaint,
@@ -221,6 +223,9 @@ async function initializePyodide() {
   self.noonShadow = (update) => WasmEffectDefinition.shadow(update);
   self.noonNoiseDissolve = (update) => WasmEffectDefinition.noiseDissolve(update);
   self.noonPixelate = (update) => WasmEffectDefinition.pixelate(update);
+  self.noonShaderParameter = WasmShaderParameter;
+  self.noonShaderSchema = (...args) => new WasmShaderSchema(...args);
+  self.noonShaderEffect = (program, update) => WasmEffectDefinition.shader(program, update);
   self.noonLinearGradient = (...args) => new WasmLinearGradient(...args);
   self.noonRadialGradient = (...args) => new WasmRadialGradient(...args);
   self.noonNoisePaint = (...args) => new WasmNoisePaint(...args);
