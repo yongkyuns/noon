@@ -11,7 +11,7 @@ import { browserArgs } from './manim-raster-support.mjs';
 import { createRuntimeBuildIdentity } from './build-runtime-identity.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const {chromium}=playwright;
-const output=process.env.NOON_BROWSER_HDR_ARTIFACTS ?? path.join(root,'browser-smoke-artifacts/direct-view-output');
+const output=process.env.NOON_BROWSER_HDR_ARTIFACTS ?? path.join(root,'ci-artifacts/direct-view-output');
 await mkdir(output,{recursive:true});
 const runtime=JSON.parse(await readFile(root+'/web/runtime-build-identity.json','utf8'));
 assert.deepEqual(await createRuntimeBuildIdentity(root),runtime,'package must match clean source and every runtime file');

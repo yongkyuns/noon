@@ -30,6 +30,6 @@ await qualifyPairedAuthoring({
   directHeldSampleTime:sampleTime===2.75?2.5:undefined,
   stopAtSourceCompletion:sampleTime===5,
  })),
- artifactDirectory:"browser-smoke-artifacts/worker-view-output",prepareContext:disableAuthoringJspi,
+ artifactDirectory:"ci-artifacts/worker-view-output",prepareContext:disableAuthoringJspi,
  qualifyPixels({fixture,rust,python}){return {rust:reference(rust,fixture.sampleTime),python:reference(python,fixture.sampleTime)};},
 });
