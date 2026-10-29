@@ -220,6 +220,23 @@ impl SampleFilter {
         }
     }
 
+    pub(in crate::gpu) fn copy_shader_program_cache_from(
+        &mut self,
+        device: &wgpu::Device,
+        previous: &Self,
+    ) {
+        self.shader_programs = previous
+            .shader_programs
+            .iter()
+            .filter(|entry| {
+                entry
+                    .upgrade()
+                    .is_some_and(|program| program.device == *device)
+            })
+            .cloned()
+            .collect();
+    }
+
     pub(in crate::gpu) fn live_shader_programs(&self) -> usize {
         self.shader_programs
             .iter()

@@ -14,6 +14,12 @@ const identity = JSON.parse(await readFile(root + "/web/runtime-build-identity.j
 assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "exact clean source/package required");
 assert.ok(identity.sourceRevision);
 const times = [0, 0.25, 0.75, 1.5, 2];
+function sourceForMode(source) {
+  if (sourceMode !== "jspi") return source;
+  return source.replace("    def construct(self):\n",
+    "    def construct(self):\n        self.shader_lesson()\n\n    def shader_lesson(self):\n")
+    .replace("        self.wait(0.5)\n", "        self.wait(0.5)\n        from _manim_scene import _synchronous_continuation_active\n        assert _synchronous_continuation_active(self), 'synchronous source required'\n");
+}
 function reference(image, time) {
   // Full source coverage at the center; straight encoded RGB, intrinsic alpha
   // 0.5 and the declared coverage multiplier are composited once on black.
@@ -89,6 +95,53 @@ async function qualifyLatePreparation(context, baseUrl, backend) {
   } finally { await page.close(); }
 }
 
+async function qualifyProfileTransition(context, baseUrl, backend) {
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(baseUrl + "/web/manim-raster-host.html");
+    await page.waitForFunction(() => globalThis.noonHostRaster);
+    const lesson = await readFile(root + "/web/python/examples/showcase_shader_material.py", "utf8");
+    const source = sourceForMode(lesson
+      .replace("class ShaderMaterial(Scene):", "class ShaderMaterial(MovingCameraScene):")
+      .replace("    def construct(self):\n", "    def construct(self):\n        self.camera.frame.set_view_color_profile('linear_hdr')\n")
+      .replace('programs = [material("local"), material("scene")]', 'programs = [material("scene")] * 2')
+      .replace("        for panel, program in zip(panels, programs):", "        self.camera.frame.set_view_color_profile('compatibility')\n        for panel, program in zip(panels, programs):"));
+    const initial = await page.evaluate(source => noonHostRaster.load(source, 6), source);
+    assert.equal(initial.rendererBackend, backend);
+    const worker = page.workers().find(worker => worker.url().includes("execution-render-worker") && !worker.url().includes("capability-probe"));
+    assert.ok(worker);
+    if (backend === "WebGPU") await worker.evaluate(() => {
+      globalThis.profileShaderModules = 0;
+      const original = GPUDevice.prototype.createShaderModule;
+      GPUDevice.prototype.createShaderModule = function (descriptor) {
+        if (descriptor.code.includes("let stripes")) profileShaderModules++;
+        return original.call(this, descriptor);
+      };
+    });
+    await page.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
+    const frame = await page.evaluate(() => noonHostRaster.debugFrame());
+    assert.equal(frame.objects.flatMap(object => object.effects).length, 2);
+    const modules = backend === "WebGPU" ? await worker.evaluate(() => profileShaderModules) : null;
+    if (modules !== null) assert.equal(modules, 1, "working-target changes preserve prepared programs");
+    const pixels = PNG.sync.read(await page.locator("#scene").screenshot()).data;
+    let treatedPixels = 0;
+    for (let at = 0; at < pixels.length; at += 4) {
+      if (pixels[at + 1] > pixels[at] + 40 && pixels[at + 2] > pixels[at] + 30 && pixels[at + 1] > 100) treatedPixels++;
+    }
+    assert.ok(treatedPixels > 500, "the retained picture contains the shader treatment");
+    const compatibleSource = source.replace("self.camera.frame.set_view_color_profile('linear_hdr')",
+      "self.camera.frame.set_view_color_profile('compatibility')");
+    await page.evaluate(source => noonHostRaster.load(source, 6), compatibleSource);
+    await page.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
+    assert.deepEqual(pixels, PNG.sync.read(await page.locator("#scene").screenshot()).data,
+      "transition output matches the same program authored entirely in compatibility color");
+    assert.deepEqual(errors, []);
+    return { backend, sourceMode, modules, treatedPixels, frame };
+  } finally { await page.close(); }
+}
+
 async function qualifyPythonPreparation(context, baseUrl, backend) {
   if (backend !== "WebGPU") return null;
   const page = await context.newPage();
@@ -127,8 +180,7 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
             pass
         else:
             raise AssertionError("HDR profile edit must reject while shaders are attached")`);
-    if (sourceMode === "jspi") source = source.replace("    def construct(self):\n",
-      "    def construct(self):\n        self.shader_lesson()\n\n    def shader_lesson(self):\n");
+    source = sourceForMode(source);
     const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
     assert.equal(initial.rendererBackend, backend);
     const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
@@ -187,6 +239,7 @@ await qualifyPairedAuthoring({
   async qualifyLifecycle(context, baseUrl, backend) {
     if (sourceMode === "jspi") return {
       backend, pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
+      profileTransition: await qualifyProfileTransition(context, baseUrl, backend),
     };
     const images = new Map(), trials = [];
     for (const schedule of [times, [0, 0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]]) {
@@ -233,6 +286,7 @@ await qualifyPairedAuthoring({
     }
     return { backend, trials,
       latePreparation: await qualifyLatePreparation(context, baseUrl, backend),
-      pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend) };
+      pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
+      profileTransition: await qualifyProfileTransition(context, baseUrl, backend) };
   },
 });

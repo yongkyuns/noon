@@ -1351,6 +1351,7 @@ impl NativeGpu {
                 self.config.format
             };
             let mut renderer = GpuRenderer::new(&self.device, &self.queue, format);
+            renderer.copy_effect_program_cache_from(&self.device, &self.renderer);
             renderer.set_viewport(
                 &self.device,
                 &self.queue,

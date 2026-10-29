@@ -23,6 +23,7 @@ pub struct ShaderSweep {
     phase: [ShaderParameterKey; 2],
     stage: u8,
     deferred: Option<[WgslEffectProgram; 2]>,
+    camera: Option<Mobject>,
     retire: bool,
 }
 fn message(error: impl std::fmt::Display) -> String {
@@ -79,6 +80,14 @@ impl LiveContinuation for ShaderSweep {
             0 | 2 | 4 => live.wait_segment(0.5),
             1 | 3 => {
                 if let Some(programs) = self.deferred.take() {
+                    if let Some(camera) = self.camera.take() {
+                        let mut transaction = noon_core::SemanticMutationTransaction::new();
+                        transaction.set_view_color_profile(
+                            camera.node_id(),
+                            noon_core::ViewColorProfile::Compatibility,
+                        );
+                        live.apply(transaction).map_err(message)?;
+                    }
                     let pending = live
                         .prepare_effect_attachments(self.panels.iter().zip(programs).map(
                             |(panel, program)| {
@@ -149,13 +158,25 @@ pub fn program() -> Result<LiveProgram<ShaderSweep>, String> {
 }
 
 /// The same lesson with enrollment after its first wait and explicit retirement.
-/// Qualifies new immutable programs introduced by an ordinary live continuation.
+/// Qualifies new immutable programs after a valid HDR-to-compatibility transition.
 pub fn late_program() -> Result<LiveProgram<ShaderSweep>, String> {
     build_program(true)
 }
 
 fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
     let mut scene = Scene::new();
+    let camera = if late {
+        let camera = scene.camera_frame().map_err(message)?;
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        transaction
+            .set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+        scene
+            .apply_semantic_transaction(transaction)
+            .map_err(message)?;
+        Some(camera)
+    } else {
+        None
+    };
     let mut background = scene.rectangle(16.0, 9.0).map_err(message)?;
     background
         .set_fill(0.035, 0.045, 0.09, 1.0)
@@ -212,6 +233,7 @@ fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
                 .map(|program| program.parameter("phase").expect("declared phase")),
             stage: 0,
             deferred: late.then_some(programs),
+            camera,
             retire: late,
         })
         .map_err(message)

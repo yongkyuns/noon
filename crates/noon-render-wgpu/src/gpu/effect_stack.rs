@@ -305,6 +305,15 @@ impl EffectStackFilter {
         self.sample.live_shader_programs()
     }
 
+    pub(super) fn copy_shader_program_cache_from(
+        &mut self,
+        device: &wgpu::Device,
+        previous: &Self,
+    ) {
+        self.sample
+            .copy_shader_program_cache_from(device, &previous.sample);
+    }
+
     pub(super) fn pin_shader_programs(
         &self,
         device: &wgpu::Device,

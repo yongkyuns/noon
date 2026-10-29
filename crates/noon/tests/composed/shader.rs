@@ -541,6 +541,43 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         .renderer
         .cache_effect_programs(&device, &prepared)
         .unwrap();
+    {
+        let mut hdr = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
+        hdr.copy_effect_program_cache_from(&device, &surface.renderer);
+        let modules = hdr
+            .effect_module_preparation(&device, std::slice::from_ref(&program))
+            .try_ready()
+            .expect("same-device modules survive a working-target replacement");
+        assert_eq!(modules.stats().pipeline_compiles, 0);
+        let mut compatible = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        compatible.copy_effect_program_cache_from(&device, &hdr);
+        assert!(
+            compatible.cache_effect_programs(&device, &modules).is_err(),
+            "cache authority and row proofs are not transferred"
+        );
+        let rows = compatible
+            .effect_program_preparation(&device, &session.resource_publication())
+            .unwrap()
+            .try_ready()
+            .expect("new rows reuse the retained immutable modules");
+        assert_eq!(rows.stats().pipeline_compiles, 0);
+        compatible
+            .commit_effect_programs(&device, &session.resource_publication(), rows)
+            .unwrap();
+        assert_eq!(compatible.resident_effect_program_counts(), [1, 1]);
+        let (other_device, other_queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut other =
+            GpuRenderer::new(&other_device, &other_queue, wgpu::TextureFormat::Rgba8Unorm);
+        other.copy_effect_program_cache_from(&other_device, &compatible);
+        assert!(
+            other
+                .effect_module_preparation(&other_device, std::slice::from_ref(&program))
+                .try_ready()
+                .is_err(),
+            "a different device cannot reuse these programs"
+        );
+    }
     let current = surface
         .renderer
         .effect_program_preparation(&device, &session.resource_publication())

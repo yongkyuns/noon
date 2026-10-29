@@ -841,6 +841,8 @@ mod wasm {
                 return Ok(false);
             }
 
+            self.prepare_working_profile()?;
+
             if self.glow_transport_seen || self.effect_program_task.is_pending() {
                 let publication = self
                     .mirror
@@ -896,37 +898,6 @@ mod wasm {
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());
-            let profile = {
-                let publication = self
-                    .mirror
-                    .renderer_publication(&self.pending_changes)
-                    .map_err(js_error)?;
-                self.view_output
-                    .prepare(
-                        &self.device,
-                        &publication,
-                        !self.mirror.inset_2d_views().is_empty(),
-                        [self.config.width, self.config.height],
-                    )
-                    .map_err(js_error)?
-            };
-            if profile != self.working_profile {
-                let format = if profile == noon_core::ViewColorProfile::LinearHdr {
-                    wgpu::TextureFormat::Rgba16Float
-                } else {
-                    self.config.format
-                };
-                let gpu =
-                    build_retained_gpu_state(&self.mirror, &self.device, &self.queue, format)?;
-                self.preparer = gpu.preparer;
-                self.renderer = gpu.renderer;
-                self.text_gpu = gpu.text_gpu;
-                self.preloaded_geometry_count = gpu.preloaded_geometry_count;
-                self.preload_bytes_uploaded = gpu.preload_bytes_uploaded;
-                self.working_profile = profile;
-                self.pending_changes = FrameChanges::all();
-                self.update_camera()?;
-            }
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
             // Worker transport has already resolved and validated this frame and
@@ -1437,6 +1408,44 @@ mod wasm {
     }
 
     impl WasmRetainedExecutionCanvasRenderer {
+        fn prepare_working_profile(&mut self) -> Result<(), JsValue> {
+            let profile = {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                self.view_output
+                    .prepare(
+                        &self.device,
+                        &publication,
+                        !self.mirror.inset_2d_views().is_empty(),
+                        [self.config.width, self.config.height],
+                    )
+                    .map_err(js_error)?
+            };
+            if profile == self.working_profile {
+                return Ok(());
+            }
+            let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                self.config.format
+            };
+            let mut gpu =
+                build_retained_gpu_state(&self.mirror, &self.device, &self.queue, format)?;
+            gpu.renderer
+                .copy_effect_program_cache_from(&self.device, &self.renderer);
+            self.effect_program_task.cancel();
+            self.preparer = gpu.preparer;
+            self.renderer = gpu.renderer;
+            self.text_gpu = gpu.text_gpu;
+            self.preloaded_geometry_count = gpu.preloaded_geometry_count;
+            self.preload_bytes_uploaded = gpu.preload_bytes_uploaded;
+            self.working_profile = profile;
+            self.pending_changes = FrameChanges::all();
+            self.update_camera()
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
             if !self.drawable
                 || self.webgl_context_lifecycle.is_lost()

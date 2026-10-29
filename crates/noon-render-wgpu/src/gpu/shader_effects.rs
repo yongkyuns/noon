@@ -64,6 +64,20 @@ pub(super) struct EffectPrograms {
 }
 
 impl GpuRenderer {
+    /// A replacement working target can reuse immutable same-device programs.
+    /// Only weak cache entries move; row bindings and cache authority stay fresh.
+    pub fn copy_effect_program_cache_from(&mut self, device: &wgpu::Device, previous: &Self) {
+        let Some(previous) = previous.effect_captures.as_deref() else {
+            return;
+        };
+        if previous.filter.live_shader_programs() != 0 {
+            self.effect_captures
+                .get_or_insert_with(Default::default)
+                .filter
+                .copy_shader_program_cache_from(device, &previous.filter);
+        }
+    }
+
     /// O(1) host fast path before borrowing/cloning a sparse publication delta.
     pub fn effect_programs_current(
         &self,

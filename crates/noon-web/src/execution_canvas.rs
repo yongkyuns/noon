@@ -2793,6 +2793,26 @@ mod wasm {
                 self.source.publish_prepared_effects()?;
                 self.prepared_effect_modules = Some(prepared);
             }
+            let insets = !self.source.inset_2d_views()?.is_empty();
+            let publication = self.source.resource_publication();
+            if prepare_working_profile(
+                &self.device,
+                &self.queue,
+                &self.config,
+                self.pointer_presentation.viewport().unwrap_or(Vec2::new(
+                    self.config.width as f32,
+                    self.config.height as f32,
+                )),
+                &publication,
+                insets,
+                &mut self.view_output,
+                &mut self.working_profile,
+                &mut self.renderer,
+                &mut self.direct_text_gpu,
+                &mut self.direct_preparer,
+            )? {
+                self.effect_program_task.cancel();
+            }
             if !self.effect_program_task.is_pending()
                 && self
                     .renderer
@@ -2800,7 +2820,6 @@ mod wasm {
             {
                 return Ok(true);
             }
-            let publication = self.source.resource_publication();
             let ready = self
                 .effect_program_task
                 .poll(&mut self.renderer, &self.device, &publication)
@@ -2850,22 +2869,6 @@ mod wasm {
                     "intermediate direct endpoint changed during retained preparation",
                 ));
             }
-            prepare_working_profile(
-                &self.device,
-                &self.queue,
-                &self.config,
-                self.pointer_presentation.viewport().unwrap_or(Vec2::new(
-                    self.config.width as f32,
-                    self.config.height as f32,
-                )),
-                &publication,
-                !inset_views.is_empty(),
-                &mut self.view_output,
-                &mut self.working_profile,
-                &mut self.renderer,
-                &mut self.direct_text_gpu,
-                &mut self.direct_preparer,
-            )?;
             self.direct_preparer
                 .set_inset_views_active(!inset_views.is_empty());
             self.renderer
@@ -3013,22 +3016,6 @@ mod wasm {
                 let visibility = direct.query_viewports(&view_bounds);
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
-                prepare_working_profile(
-                    &self.device,
-                    &self.queue,
-                    &self.config,
-                    self.pointer_presentation.viewport().unwrap_or(Vec2::new(
-                        self.config.width as f32,
-                        self.config.height as f32,
-                    )),
-                    &publication,
-                    !inset_views.is_empty(),
-                    &mut self.view_output,
-                    &mut self.working_profile,
-                    &mut self.renderer,
-                    &mut self.direct_text_gpu,
-                    &mut self.direct_preparer,
-                )?;
                 self.direct_preparer
                     .set_inset_views_active(!inset_views.is_empty());
                 self.renderer
@@ -3270,11 +3257,12 @@ mod wasm {
         renderer: &mut GpuRenderer,
         text: &mut RetainedTextGpuState,
         preparer: &mut RetainedFramePreparer,
-    ) -> Result<(), JsValue> {
+    ) -> Result<bool, JsValue> {
         let profile = output
             .prepare(device, publication, insets, [config.width, config.height])
             .map_err(js_error)?;
-        if profile != *working_profile {
+        let changed = profile != *working_profile;
+        if changed {
             let camera = renderer.camera();
             let format = if profile == noon_core::ViewColorProfile::LinearHdr {
                 wgpu::TextureFormat::Rgba16Float
@@ -3282,6 +3270,7 @@ mod wasm {
                 config.format
             };
             let mut replacement = GpuRenderer::new(device, queue, format);
+            replacement.copy_effect_program_cache_from(device, renderer);
             replacement
                 .set_viewport_with_logical_size(device, queue, config.width, config.height, logical)
                 .map_err(js_error)?;
@@ -3291,7 +3280,7 @@ mod wasm {
             *preparer = RetainedFramePreparer::new();
             *working_profile = profile;
         }
-        Ok(())
+        Ok(changed)
     }
 
     async fn initialize_gpu(

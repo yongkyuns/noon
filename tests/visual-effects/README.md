@@ -32,6 +32,9 @@ The shader-time qualification also checks real GPU compilation failure and retry
 Run it with `NOON_SHADER_SOURCE_MODE=jspi` for synchronous source admission;
 the default forces portable suspension. Both reject incompatible HDR attachments
 and view edits before publication. Pending resource work revalidates the view.
+Working-target changes retain weak references to immutable same-device programs;
+row bindings are prepared again for the new target. A different device requires
+fresh program preparation.
 
 Live Python shader attachments use that same staged transaction. Portable source
 statements suspend automatically; explicit async constructs await `add_effect`,
