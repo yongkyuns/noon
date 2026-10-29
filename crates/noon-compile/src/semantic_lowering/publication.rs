@@ -273,6 +273,98 @@ impl PreparedSemanticPublication {
         entries.chain(additions)
     }
 
+    /// Admit the finite shader color profile against final proposed membership.
+    /// A view-profile change has a whole-view dependency closure; otherwise only
+    /// changed shader owners and their proposed ancestors are visited.
+    pub fn validate_shader_view_profile(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+        index: &SemanticExecutionIndex,
+        reachability: &SemanticExecutionReachability,
+        camera: SemanticNodeId,
+    ) -> Result<(), SemanticPublicationLoweringError> {
+        use noon_core::ViewColorProfile;
+        if prepared.node_is_removed(camera)
+            || prepared.proposed_object_state(camera)?.view_color_profile()
+                != ViewColorProfile::LinearHdr
+        {
+            return Ok(());
+        }
+        let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner: camera };
+        let current_hdr = prepared
+            .store()
+            .node(camera)
+            .and_then(|node| node.semantic_object_state())
+            .is_some_and(|state| state.view_color_profile() == ViewColorProfile::LinearHdr);
+        if !current_hdr {
+            let mut pending = reachability
+                .execution_roots()
+                .filter(|root| !prepared.node_is_removed(*root))
+                .map(SemanticTransactionNodeRef::Existing)
+                .collect::<Vec<_>>();
+            let mut seen = HashSet::new();
+            while let Some(owner) = pending.pop() {
+                if !seen.insert(owner) {
+                    continue;
+                }
+                if prepared
+                    .animation_effect_snapshot(owner)?
+                    .iter()
+                    .any(|effect| effect.definition.as_shader().is_some())
+                {
+                    return Err(unsupported().into());
+                }
+                match prepared.family_members(owner) {
+                    Ok(members) => pending.extend(members),
+                    Err(SemanticTransactionReadError::NotFamily(_)) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            return Ok(());
+        }
+        let uses_shader = |effects: Option<&std::sync::Arc<crate::CompiledEffectStack>>| {
+            effects.is_some_and(|stack| {
+                stack
+                    .definitions()
+                    .iter()
+                    .any(|effect| effect.as_shader().is_some())
+            })
+        };
+        let owners = self
+            .entries
+            .iter()
+            .filter(|entry| uses_shader(entry.compiled.effects.as_ref()))
+            .map(|entry| entry.object)
+            .chain(self.values.mutations().iter().filter_map(|patch| {
+                match patch {
+                    ExecutionPatch::SetEffectStack {
+                        object, effects, ..
+                    } if uses_shader(effects.as_ref()) => Some(
+                        index
+                            .semantic_object_id(*object)
+                            .expect("prepared effect owner is indexed")
+                            .into(),
+                    ),
+                    _ => None,
+                }
+            }));
+        let mut pending = owners.collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        while let Some(owner) = pending.pop() {
+            if !seen.insert(owner) {
+                continue;
+            }
+            if owner
+                .existing()
+                .is_some_and(|node| reachability.is_execution_root(node))
+            {
+                return Err(unsupported().into());
+            }
+            pending.extend(prepared.family_parents(owner)?);
+        }
+        Ok(())
+    }
+
     pub fn resource_additions(&self) -> &CompiledResources {
         &self.resource_additions
     }

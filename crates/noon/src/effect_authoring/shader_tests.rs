@@ -12,6 +12,155 @@ use noon_core::{
 };
 use std::sync::Arc;
 
+#[test]
+fn shader_view_rejects_initial_hdr_without_changing_the_scene() {
+    let mut scene = Scene::new();
+    let camera = scene.camera_frame().unwrap();
+    let mut source = scene.circle(0.5).unwrap();
+    source
+        .add_effect(ShaderEffect::new(program()), "material")
+        .unwrap();
+    scene.add(&source).unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+    scene.apply_semantic_transaction(tx).unwrap();
+    let before = source.integration_store().borrow().scene_revision();
+    let error = scene
+        .execution_session()
+        .err()
+        .expect("HDR shader scene must reject");
+    assert!(format!("{error:?}").contains("UnsupportedEffectProfile"));
+    assert_eq!(source.integration_store().borrow().scene_revision(), before);
+}
+
+#[test]
+fn shader_view_rejects_live_profile_or_attachment_before_publication() {
+    for hdr in [false, true] {
+        let mut scene = Scene::new();
+        let camera = scene.camera_frame().unwrap();
+        let mut source = scene.circle(0.5).unwrap();
+        if !hdr {
+            source
+                .add_effect(ShaderEffect::new(program()), "material")
+                .unwrap();
+        } else {
+            let mut tx = SemanticMutationTransaction::new();
+            tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+            scene.apply_semantic_transaction(tx).unwrap();
+        }
+        scene.add(&source).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let frame = session.frame().clone();
+        let nodes = source.integration_store().borrow().len();
+        let mut tx = SemanticMutationTransaction::new();
+        if hdr {
+            tx.create_effect(source.node_id(), "material", ShaderEffect::new(program()));
+        } else {
+            tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+        }
+        let error = scene.live(&mut session).apply(tx).unwrap_err();
+        assert!(format!("{error:?}").contains("UnsupportedEffectProfile"));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(source.integration_store().borrow().len(), nodes);
+        assert!(session.take_frame_changes().is_empty());
+        if hdr {
+            assert!(source.get_effect("material").is_err());
+            assert!(scene
+                .live(&mut session)
+                .prepare_effect_attachments([(
+                    &source,
+                    ShaderEffect::new(program()).into(),
+                    "material"
+                )])
+                .is_err());
+        } else {
+            let mut tx = SemanticMutationTransaction::new();
+            tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+            tx.remove_node(source.get_effect("material").unwrap().node_id());
+            scene.live(&mut session).apply(tx).unwrap();
+            assert!(source.get_effect("material").is_err());
+            assert_eq!(
+                session.resource_publication().color_profile(),
+                noon_core::ViewColorProfile::LinearHdr
+            );
+        }
+    }
+}
+
+#[test]
+fn shader_view_revalidates_a_profile_change_during_external_preparation() {
+    let mut scene = Scene::new();
+    let camera = scene.camera_frame().unwrap();
+    let source = scene.circle(0.5).unwrap();
+    scene.add(&source).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session.require_effect_resource_preparation();
+    let pending = scene
+        .live(&mut session)
+        .prepare_effect_attachments([(&source, ShaderEffect::new(program()).into(), "material")])
+        .unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+    scene.live(&mut session).apply(tx).unwrap();
+    session.take_frame_changes();
+    let before = session.publication_context();
+    let frame = session.frame().clone();
+    let error = scene
+        .live(&mut session)
+        .publish_staged_effects(pending)
+        .unwrap_err();
+    assert!(format!("{error:?}").contains("UnsupportedEffectProfile"));
+    assert!(source.get_effect("material").is_err());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.frame(), &frame);
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn shader_view_admission_uses_final_membership_including_aliases() {
+    for remove_all in [false, true] {
+        let mut scene = Scene::new();
+        let camera = scene.camera_frame().unwrap();
+        let mut source = scene.circle(0.5).unwrap();
+        source
+            .add_effect(ShaderEffect::new(program()), "material")
+            .unwrap();
+        let alias = scene.family(&[(&source).into()]).unwrap();
+        scene
+            .add_many(&[(&source).into(), (&alias).into()])
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let mut tx = SemanticMutationTransaction::new();
+        tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
+        tx.remove_member(scene.root(), source.node_id());
+        if remove_all {
+            tx.remove_member(scene.root(), alias.node_id());
+        }
+        let result = scene.live(&mut session).apply(tx);
+        if remove_all {
+            result.unwrap();
+            assert_eq!(
+                session.resource_publication().color_profile(),
+                noon_core::ViewColorProfile::LinearHdr
+            );
+            let before = session.publication_context();
+            assert!(scene.live(&mut session).add(&source).is_err());
+            assert_eq!(session.publication_context(), before);
+            assert!(
+                source.get_effect("material").is_ok(),
+                "detaching keeps authored identity"
+            );
+        } else {
+            assert!(format!("{result:?}").contains("UnsupportedEffectProfile"));
+            assert_eq!(session.publication_context(), before);
+        }
+    }
+}
+
 fn program() -> WgslEffectProgram {
     let scalar = |name: String, value| ShaderParameterDefinition {
         name: name.into(),

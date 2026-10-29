@@ -188,6 +188,27 @@ impl EffectiveSemanticObject<'_> {
 }
 
 impl ExecutionSession {
+    fn validate_shader_view_profile(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+        publication: &noon_compile::PreparedSemanticPublication,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        let Some(camera) = self
+            .camera_object
+            .and_then(|object| self.execution_index.semantic_object_id(object))
+        else {
+            return Ok(());
+        };
+        publication
+            .validate_shader_view_profile(
+                prepared,
+                &self.execution_index,
+                &self.reachability,
+                camera,
+            )
+            .map_err(ExecutionSessionPublicationError::Lowering)
+    }
+
     pub(crate) fn require_published_store(
         &self,
         store: &SemanticStore,
@@ -660,6 +681,7 @@ impl ExecutionSession {
                     .map_err(ExecutionSessionPublicationError::Lowering)?;
                 (publication, revised)
             };
+        self.validate_shader_view_profile(&prepared, &publication)?;
         if self.require_effect_preparation
             && !external_effects_prepared
             && publication.introduced_shader_programs().next().is_some()

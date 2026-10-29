@@ -56,6 +56,7 @@ impl ExecutionSession {
         let publication =
             prepare_semantic_publication(&prepared, &self.execution_index, &self.reachability)
                 .map_err(ExecutionSessionPublicationError::Lowering)?;
+        self.validate_shader_view_profile(&prepared, &publication)?;
         let mut programs = Vec::new();
         for program in publication.introduced_shader_programs() {
             if !programs.contains(program) {

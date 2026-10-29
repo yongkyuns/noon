@@ -8,6 +8,8 @@ import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+const sourceMode = process.env.NOON_SHADER_SOURCE_MODE ?? "portable";
+assert.ok(["portable", "jspi"].includes(sourceMode));
 const identity = JSON.parse(await readFile(root + "/web/runtime-build-identity.json", "utf8"));
 assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "exact clean source/package required");
 assert.ok(identity.sourceRevision);
@@ -97,8 +99,17 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const original = `        for panel, program in zip(panels, programs):
             panel.add_effect(ShaderEffect(program), name="stripes")`;
     assert.ok(lesson.includes(original));
-    const source = lesson.replace('programs = [material("local"), material("scene")]',
-      'programs = [material("scene")] * 2').replace(original, `        try:
+    let source = lesson.replace("class ShaderMaterial(Scene):", "class ShaderMaterial(MovingCameraScene):")
+      .replace('programs = [material("local"), material("scene")]',
+      'programs = [material("scene")] * 2').replace(original, `        self.camera.frame.set_view_color_profile("linear_hdr")
+        try:
+            panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
+        except Exception:
+            pass
+        else:
+            raise AssertionError("HDR shader attachment must reject")
+        self.camera.frame.set_view_color_profile("compatibility")
+        try:
             panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
         except Exception:
             try:
@@ -109,7 +120,15 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
                 raise AssertionError("failed GPU preparation published a semantic attachment")
             self.wait(0.25)
             panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
-        panels[1].add_effect(ShaderEffect(programs[1]), name="stripes")`);
+        panels[1].add_effect(ShaderEffect(programs[1]), name="stripes")
+        try:
+            self.camera.frame.set_view_color_profile("linear_hdr")
+        except Exception:
+            pass
+        else:
+            raise AssertionError("HDR profile edit must reject while shaders are attached")`);
+    if (sourceMode === "jspi") source = source.replace("    def construct(self):\n",
+      "    def construct(self):\n        self.shader_lesson()\n\n    def shader_lesson(self):\n");
     const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
     assert.equal(initial.rendererBackend, backend);
     const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
@@ -152,20 +171,23 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const preparationBytes = await author.evaluate(() => shaderPreparationBytes);
     assert.equal(preparationBytes.length, 3, "failed source, retry and shared-program attachment");
     assert.ok(preparationBytes[2] < preparationBytes[1] / 2, "shared program uses its installed resource handle");
-    return { backend, rejected, recovered, rejectedModules: 1, preparationBytes };
+    return { backend, sourceMode, rejected, recovered, rejectedModules: 1, preparationBytes };
   } finally { await page.close(); }
 }
 
 await qualifyPairedAuthoring({
   artifactDirectory: "ci-artifacts/shader-time",
-  prepareContext: disableAuthoringJspi,
-  cases: times.map(sampleTime => ({ id: `shader-time-${sampleTime}`, file: "shader_time.py",
+  prepareContext: sourceMode === "portable" ? disableAuthoringJspi : undefined,
+  cases: (sourceMode === "jspi" ? [0] : times).map(sampleTime => ({ id: `shader-time-${sampleTime}`, file: "shader_time.py",
     factory: "createDirectShaderTimeSmokeRenderer", duration: 2, sampleTime,
     playback: "live", objectCount: 1, stopAtSourceCompletion: sampleTime === 2 })),
   qualifyPixels({ fixture, rust, python }) {
     return { rust: reference(rust, fixture.sampleTime), python: reference(python, fixture.sampleTime) };
   },
   async qualifyLifecycle(context, baseUrl, backend) {
+    if (sourceMode === "jspi") return {
+      backend, pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
+    };
     const images = new Map(), trials = [];
     for (const schedule of [times, [0, 0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]]) {
       const page = await context.newPage();
