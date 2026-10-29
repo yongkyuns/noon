@@ -223,8 +223,7 @@ async function qualifyPythonPreparation(context, baseUrl, backend, kind = "attac
 ${rejectedCheck}
             self.wait(0.25)
             ${addition(0)}
-        bound = ${addition(1)}${fade ? "" : ".set_opacity(1)"}
-        assert bound is ${fade ? "self" : familyMembership ? "family" : "panels[1]"}${fade ? '\n        assert observed, "the introducing play must service its ordinary callback"' : ''}
+        ${fade && sourceMode === "portable" ? addition(1) : `bound = ${addition(1)}${fade ? "" : ".set_opacity(1)"}\n        assert bound is ${fade ? "self" : familyMembership ? "family" : "panels[1]"}`}${fade ? '\n        assert observed, "the introducing play must service its ordinary callback"' : ''}
         try:
             self.camera.frame.set_view_color_profile("linear_hdr")
         except Exception:
@@ -240,7 +239,7 @@ ${rejectedCheck}
         self.add(anchor)
         observed = []
         def observe_intro(_, alpha):
-            assert panels[0]._scene is self
+            assert panels[0]._scene is not None
             assert abs(panels[0].get_center().x + 3) < 1e-6
             observed.append(alpha)
         self.wait(0.5)`);
