@@ -267,6 +267,10 @@ jobs:
         env:
           NOON_HDR_BLOOM_ARTIFACT_DIR: ${{ github.workspace }}/hdr-bloom-raster-artifacts
         run: cargo test -p noon-render-wgpu --lib gpu::hdr_bloom::tests -- --include-ignored --nocapture
+      - name: Qualify encoded HDR output presentation
+        env:
+          NOON_HDR_PRESENTATION_ARTIFACTS: ${{ github.workspace }}/hdr-presentation-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::encoded_display::tests -- --include-ignored --nocapture
       - name: Qualify raw and authored linear scene draws
         env:
           NOON_HDR_SCENE_ARTIFACT_DIR: ${{ github.workspace }}/hdr-scene-linear-raster-artifacts
@@ -358,7 +362,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: hdr-bloom-raster-correctness
-          path: hdr-bloom-raster-artifacts
+          path: |
+            hdr-bloom-raster-artifacts
+            hdr-presentation-raster-artifacts
           if-no-files-found: error
           retention-days: 3
       - name: Preserve native linear scene color evidence

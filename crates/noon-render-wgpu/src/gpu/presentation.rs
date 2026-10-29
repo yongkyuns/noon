@@ -1,3 +1,5 @@
+use super::encoded_display::EncodedDisplayPresenter;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputTransfer {
     #[default]
@@ -35,9 +37,7 @@ pub(crate) struct PresentationBridge {
     viewport_size: [u32; 2],
     texture: Option<wgpu::Texture>,
     view: Option<wgpu::TextureView>,
-    bind_group_layout: Option<wgpu::BindGroupLayout>,
-    bind_group: Option<wgpu::BindGroup>,
-    pipeline: Option<wgpu::RenderPipeline>,
+    presenter: Option<EncodedDisplayPresenter>,
 }
 
 impl PresentationBridge {
@@ -68,12 +68,13 @@ impl PresentationBridge {
             viewport_size: [viewport_size[0].max(1), viewport_size[1].max(1)],
             texture: None,
             view: None,
-            bind_group_layout: None,
-            bind_group: None,
-            pipeline: None,
+            presenter: None,
         };
         if transfer == OutputTransfer::BrowserWebGlSrgb {
-            result.initialize_present_pipeline(device, surface_format);
+            result.presenter = Some(
+                EncodedDisplayPresenter::new(device, surface_format, transfer)
+                    .expect("browser presentation uses RGBA8/BGRA8 output"),
+            );
             result.recreate_scene_target(device);
         }
         result
@@ -111,87 +112,9 @@ impl PresentationBridge {
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
     ) {
-        let (Some(pipeline), Some(bind_group)) = (&self.pipeline, &self.bind_group) else {
-            return;
-        };
-        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-            view: surface_view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 0.0,
-                }),
-                store: wgpu::StoreOp::Store,
-            },
-        })];
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Noon browser presentation transfer pass"),
-            color_attachments: &color_attachments,
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-
-    fn initialize_present_pipeline(
-        &mut self,
-        device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
-    ) {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon presentation bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Noon presentation pipeline layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../presentation.wgsl"));
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Noon presentation pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_present"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_present"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        self.bind_group_layout = Some(bind_group_layout);
-        self.pipeline = Some(pipeline);
+        if let Some(presenter) = &self.presenter {
+            presenter.encode_view(encoder, surface_view);
+        }
     }
 
     fn recreate_scene_target(&mut self, device: &wgpu::Device) {
@@ -210,20 +133,13 @@ impl PresentationBridge {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon presentation bind group"),
-            layout: self
-                .bind_group_layout
-                .as_ref()
-                .expect("presentation requires a bind group layout"),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
-        });
+        self.presenter
+            .as_mut()
+            .expect("presentation requires a presenter")
+            .prepare(&texture)
+            .expect("browser scene target is encoded RGBA8");
         self.texture = Some(texture);
         self.view = Some(view);
-        self.bind_group = Some(bind_group);
     }
 }
 

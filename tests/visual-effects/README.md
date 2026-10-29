@@ -1951,3 +1951,39 @@ retained hosts whose working format disagrees with the authored profile reject
 explicitly. Cross-worker transport rejects Bloom until its view/profile metadata
 is qualified. Existing video/file format admission has not been expanded by this
 slice; HDR-derived SDR files need their separate output qualification.
+
+### Encoded SDR surface presentation prerequisite (#1897 M4/M5)
+
+`EncodedDisplayPresenter` consumes the same resolved encoded, alpha-associated
+SDR texture produced by `HdrBloomScope::display_output()`. It point-loads one
+full-size pixel per destination pixel, with no scaling, blending, second tone
+map or intermediate texture. RGBA8/BGRA8 UNORM targets receive those encoded
+values directly. For the corresponding sRGB attachments, one decode immediately
+before the hardware store cancels that store's encoding. Alpha remains unchanged;
+the associated RGB bytes are decoded as stored, without unassociation or another
+premultiplication. The existing browser GL bridge uses this same implementation
+for its drawing-buffer transfer.
+
+The finite public path admits only single-layer, single-mip, single-sample 2D
+encoded RGBA8/BGRA8 UNORM inputs and equally sized RGBA8/BGRA8 UNORM/sRGB render
+targets. Unsupported formats/usages, feedback aliasing, mismatched extents,
+and unprepared output reject before encoding. Sources and destinations belong
+to the constructing device; device replacement creates a new presenter.
+A source replacement creates one binding; unchanged source identity, changed
+pixels, and repeated presentation compile or upload nothing. Clearing retires
+the source/binding while retaining the single format program. A presentation
+still requires one full-view pass for each newly acquired destination.
+
+The native proof uses eight associated-byte roundtrips across both input channel
+orders and all four output formats. RGB tolerance is zero for UNORM and one byte
+for sRGB; alpha tolerance is zero. Sixteen further cases carry actual >1 float
+radiance through the real Bloom operator into those formats and the independent
+full-2D reference, retaining the existing two-byte display bound. Real GPU
+consumers with omitted or extra final decode must violate the same frozen
+one-byte roundtrip bound. Raw RGBA-normalized pixels, literal expectations,
+adapter identity and failure counts are retained for independent checking.
+
+This reusable presentation seam does not yet wire HDR into native windows or
+browser canvases, qualify physical presentation or deliver checked emission.
+Those host/capability, public authoring, extension and remaining M5 gates remain
+open.
