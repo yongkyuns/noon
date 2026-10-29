@@ -4,6 +4,24 @@ use crate::WasmAuthoringFamilyHandle;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = prepareFamilyEffectAddition)]
+    pub fn prepare_family_effect_addition(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        definition: &WasmEffectDefinition,
+        name: &str,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        let pending = self
+            .inner
+            .active_live_player()
+            .map_err(js_error)?
+            .prepare_effect_addition(family.semantic_family_ref(), definition.definition(), name)
+            .map_err(js_error)?;
+        Ok(WasmStagedEffectPublication {
+            pending: Some(pending),
+        })
+    }
+
     #[wasm_bindgen(js_name = liveSetFamilyGlow)]
     pub fn live_set_family_glow(
         &mut self,

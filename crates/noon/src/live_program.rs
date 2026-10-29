@@ -637,6 +637,13 @@ mod tests {
                 // Ordinary controls and detached animation targets must still work.
                 let target = live.target_editor(&self.0[0])?;
                 live.set_translation(&target, 1.0, 0.0)?;
+                let definition = target.get_effect("stripes")?.authored_definition()?;
+                let detached =
+                    live.prepare_effect_attachments([(&target, definition, "detached")])?;
+                assert!(
+                    detached.programs().is_empty(),
+                    "detached authoring needs no GPU work"
+                );
                 return Ok(ContinuationStep::Finished);
             }
             let material = WgslEffectProgram::prepare(ShaderSchema {

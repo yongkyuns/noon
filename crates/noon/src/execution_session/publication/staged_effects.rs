@@ -21,7 +21,8 @@ impl StagedEffectPublication {
     }
 }
 impl ExecutionSession {
-    pub(crate) fn require_effect_resource_preparation(&mut self) {
+    /// Require attached hosts to prepare newly executable shader modules before publication.
+    pub fn require_effect_resource_preparation(&mut self) {
         self.require_effect_preparation = true;
     }
     pub(crate) fn stage_effect_publication(
@@ -35,10 +36,9 @@ impl ExecutionSession {
         if !self.reachability.is_execution_root(root) {
             return Err(ExecutionSessionPublicationError::UnknownObject(root));
         }
-        let mut programs = Vec::new();
         for (index, mutation) in transaction.mutations().iter().enumerate() {
             let SemanticMutation::AddNode {
-                creation: SemanticNodeCreation::Effect { definition, .. },
+                creation: SemanticNodeCreation::Effect { .. },
                 ..
             } = mutation
             else {
@@ -46,11 +46,6 @@ impl ExecutionSession {
                     SemanticPublicationLoweringError::UnsupportedMutation { index },
                 ));
             };
-            if let Some(shader) = definition.as_shader() {
-                if !programs.contains(shader.program()) {
-                    programs.push(shader.program().clone());
-                }
-            }
         }
         let prepared = transaction
             .prepare(store)
@@ -58,8 +53,15 @@ impl ExecutionSession {
         // Validate the final graph through the ordinary compiler before device
         // work. Drop its borrowed proof; publication repeats all CPU admission
         // against the then-current store/runtime after the external await.
-        let _ = prepare_semantic_publication(&prepared, &self.execution_index, &self.reachability)
-            .map_err(ExecutionSessionPublicationError::Lowering)?;
+        let publication =
+            prepare_semantic_publication(&prepared, &self.execution_index, &self.reachability)
+                .map_err(ExecutionSessionPublicationError::Lowering)?;
+        let mut programs = Vec::new();
+        for program in publication.introduced_shader_programs() {
+            if !programs.contains(program) {
+                programs.push(program.clone());
+            }
+        }
         Ok(StagedEffectPublication {
             store: prepared.store().identity(),
             runtime: self.runtime_identity(),

@@ -772,6 +772,36 @@ mod wasm {
             .to_string()
         }
 
+        /// The future owns only immutable source and device work. This method
+        /// returns before awaiting, so rendering/recovery retain normal access.
+        #[wasm_bindgen(js_name = prepareEffectPrograms)]
+        pub fn prepare_effect_programs(&self, bytes: &[u8]) -> Result<js_sys::Promise, JsValue> {
+            let programs =
+                crate::retained_resource_transport::shader_programs::decode_shader_preparation(
+                    bytes,
+                )
+                .map_err(js_error)?;
+            let request = self
+                .renderer
+                .effect_module_preparation(&self.device, &programs);
+            Ok(wasm_bindgen_futures::future_to_promise(async move {
+                let prepared = request.prepare().await.map_err(js_error)?;
+                Ok(crate::gpu_effect_programs::WasmPreparedEffectPrograms { prepared }.into())
+            }))
+        }
+
+        #[wasm_bindgen(js_name = cacheEffectPrograms)]
+        pub fn cache_effect_programs(
+            &mut self,
+            prepared: &crate::gpu_effect_programs::WasmPreparedEffectPrograms,
+        ) -> Result<(), JsValue> {
+            self.renderer
+                .cache_effect_programs(&self.device, &prepared.prepared)
+                .map_err(js_error)?;
+            self.effect_program_task.record(prepared.prepared.stats());
+            Ok(())
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()

@@ -125,6 +125,35 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await task
         self.assertEqual(events[-5:], ["completed", "after play", ("wait", 0.5), "completed", "after wait"])
 
+    async def test_effect_preparation_suspends_before_later_source_calls(self):
+        events, release = [], asyncio.Event()
+        class Target:
+            def add_effect(self, name): events.append(name)
+        async def barrier(method, *args, **kwargs):
+            method(*args, **kwargs)
+            await release.wait()
+        _, portable, _ = self.compile_scene("""
+            class Example:
+                def construct(self):
+                    targets[0].add_effect("material")
+                    events.append("continued")
+        """, {"targets": [Target()], "events": events, BARRIER_GLOBAL: barrier})
+        task = asyncio.create_task(portable())
+        await asyncio.sleep(0)
+        self.assertEqual(events, ["material"])
+        release.set()
+        await task
+        self.assertEqual(events, ["material", "continued"])
+
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import await_source_barrier
+        class UserAwaitable:
+            def __await__(self): raise AssertionError("arbitrary return value was awaited")
+        value = UserAwaitable()
+        class Other:
+            def add_effect(self): return value
+        self.assertIs(await await_source_barrier(Other().add_effect), value)
+
     async def test_move_along_path_is_an_ordered_source_barrier(self):
         events = []
         release = asyncio.Event()

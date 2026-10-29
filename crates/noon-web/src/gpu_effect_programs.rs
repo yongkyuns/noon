@@ -119,3 +119,13 @@ impl EffectProgramTask {
         }
     }
 }
+
+/// Opaque owned device work at the genuine worker boundary. The renderer and
+/// semantic owner are never borrowed while the compilation future is pending.
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub struct WasmPreparedEffectPrograms {
+    pub(crate) prepared: PreparedEffectPrograms,
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+impl WasmPreparedEffectPrograms {}

@@ -7777,9 +7777,12 @@ mod wasm {
             duration: f64,
             session: u32,
         ) -> Result<crate::SemanticExecutionPlayer, JsValue> {
-            self.inner
+            let mut player = self
+                .inner
                 .take_execution_player(duration, session)
-                .map_err(js_error)
+                .map_err(js_error)?;
+            player.require_effect_resource_preparation();
+            Ok(player)
         }
 
         #[wasm_bindgen(js_name = beginLiveExecution)]

@@ -13,7 +13,62 @@ mod family;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub struct WasmStagedEffectPublication {
+    pending: Option<noon::StagedEffectPublication>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WasmStagedEffectPublication {
+    #[wasm_bindgen(js_name = resourceBytes)]
+    pub fn resource_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        crate::retained_resource_transport::shader_programs::encode_shader_preparation(
+            self.pending
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("effect publication is consumed"))?
+                .programs(),
+        )
+        .map_err(js_error)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = prepareEffectAddition)]
+    pub fn prepare_effect_addition(
+        &mut self,
+        object: &WasmAuthoringMobjectHandle,
+        definition: &WasmEffectDefinition,
+        name: &str,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        let pending = self
+            .inner
+            .active_live_player()
+            .map_err(js_error)?
+            .prepare_effect_addition(object.semantic_mobject(), definition.definition(), name)
+            .map_err(js_error)?;
+        Ok(WasmStagedEffectPublication {
+            pending: Some(pending),
+        })
+    }
+
+    #[wasm_bindgen(js_name = publishPreparedEffects)]
+    pub fn publish_prepared_effects(
+        &mut self,
+        staged: &mut WasmStagedEffectPublication,
+    ) -> Result<(), JsValue> {
+        let pending = staged
+            .pending
+            .take()
+            .ok_or_else(|| JsValue::from_str("effect publication is consumed"))?;
+        self.inner
+            .active_live_player()
+            .map_err(js_error)?
+            .publish_effect_addition(pending)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = liveSetGlow)]
     pub fn live_set_glow(
         &mut self,

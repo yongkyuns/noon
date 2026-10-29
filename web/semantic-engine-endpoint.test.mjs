@@ -3122,3 +3122,52 @@ test("finite export retains presentation barriers and rejects competing controls
     assert.equal(active, false);
   } finally { endpoint?.stop(); f.close(); }
 });
+
+
+test("source effect preparation publishes only after GPU readiness and waits for retention", { timeout: 5000 }, async () => {
+  let complete;
+  const completed = new Promise(resolve => { complete = resolve; });
+  const f = fixture("transferable", null, { generation: 9, onComplete: complete, onError: assert.fail });
+  let endpoint, published = 0;
+  f.context.publishPreparedEffects = () => { published++; };
+  f.context.drainReturnedPublicationJson = () => f.player.seekDeltaJson(f.player.time());
+  const staged = { resourceBytes: () => new Uint8Array([1]) };
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, m => m.type === "execution_delta");
+    endpoint = await f.attach(); await ready;
+    const first = await initial;
+    f.render.port2.postMessage({ type: "execution_presented", session: 7, sequence: first.sequence });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await completed;
+
+    let requestReady = nextMatching(f.render.port2, m => m.type === "prepare_effect_programs");
+    const failed = assert.rejects(endpoint.prepareSourceEffects(9, staged), /compiler failed/);
+    let resource = await requestReady;
+    assert.equal(published, 0);
+    f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId, error: "compiler failed" });
+    await failed;
+    assert.equal(published, 0, "failed device work cannot publish CPU state");
+
+    requestReady = nextMatching(f.render.port2, m => m.type === "prepare_effect_programs");
+    const deltaReady = nextMatching(f.render.port2, m => m.type === "execution_delta");
+    let settled = false;
+    const success = endpoint.prepareSourceEffects(9, staged).then(() => { settled = true; });
+    resource = await requestReady;
+    await assert.rejects(endpoint.prepareSourceEffects(9, staged), /current returned source lease/);
+    f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
+    const delta = await deltaReady;
+    assert.equal(published, 1);
+    assert.equal(settled, false, "the source cannot resume before its frame is retained");
+    f.render.port2.postMessage({ type: "execution_presented", session: 7, sequence: delta.sequence });
+    await success;
+
+    requestReady = nextMatching(f.render.port2, m => m.type === "prepare_effect_programs");
+    const cancelled = assert.rejects(endpoint.prepareSourceEffects(9, staged), /stopped before resource preparation/);
+    resource = await requestReady;
+    endpoint.stop();
+    f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
+    await cancelled;
+    assert.equal(published, 1, "late device completion cannot revive a retired source");
+  } finally { endpoint?.stop(); f.close(); }
+});

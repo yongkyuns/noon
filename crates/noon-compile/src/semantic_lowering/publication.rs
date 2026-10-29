@@ -235,18 +235,42 @@ impl PreparedSemanticPublication {
         &self.values
     }
 
-    /// Newly executable shader attachments require external resource admission.
-    /// Parameter edits, reorders and detached semantic copies introduce no module.
-    pub fn introduces_shader_attachments(&self) -> bool {
-        self.entries.iter().any(|entry| {
-            entry.compiled.effects.as_ref().is_some_and(|stack| {
-                stack.definitions().iter().any(|definition| definition.as_shader().is_some())
+    /// Newly executable bindings only. Detached edits and parameter changes do
+    /// not require a GPU module, and unrelated execution rows are never visited.
+    pub fn introduced_shader_programs(
+        &self,
+    ) -> impl Iterator<Item = &noon_core::WgslEffectProgram> {
+        let entries = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.compiled.effects.as_ref())
+            .flat_map(|stack| stack.definitions())
+            .filter_map(|definition| definition.as_shader().map(|shader| shader.program()));
+        let additions = self
+            .values
+            .mutations()
+            .iter()
+            .filter_map(|patch| match patch {
+                ExecutionPatch::SetEffectStack {
+                    expected,
+                    effects: Some(stack),
+                    ..
+                } => Some((expected, stack)),
+                _ => None,
             })
-        }) || self.values.mutations().iter().any(|patch| {
-            matches!(patch, ExecutionPatch::SetEffectStack { expected, effects: Some(stack), .. }
-                if stack.attachments().iter().zip(stack.definitions()).any(|(attachment, definition)|
-                    !expected.contains(attachment) && definition.as_shader().is_some()))
-        })
+            .flat_map(|(expected, stack)| {
+                stack
+                    .attachments()
+                    .iter()
+                    .zip(stack.definitions())
+                    .filter_map(move |(attachment, definition)| {
+                        (!expected.contains(attachment))
+                            .then(|| definition.as_shader())
+                            .flatten()
+                            .map(|shader| shader.program())
+                    })
+            });
+        entries.chain(additions)
     }
 
     pub fn resource_additions(&self) -> &CompiledResources {

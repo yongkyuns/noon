@@ -21,6 +21,26 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.add_effect(object, definition, name))
     }
 
+    pub(crate) fn require_effect_resource_preparation(&mut self) {
+        self.session.require_effect_resource_preparation();
+    }
+
+    pub(crate) fn prepare_effect_addition<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        definition: EffectDefinition,
+        name: &str,
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.with_live_session(|live| live.prepare_effect_attachments([(object, definition, name)]))
+    }
+
+    pub(crate) fn publish_effect_addition(
+        &mut self,
+        staged: noon::StagedEffectPublication,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.publish_staged_effects(staged))
+    }
+
     pub(crate) fn live_set_effect<'owner>(
         &mut self,
         object: impl Into<MobjectTarget<'owner>>,

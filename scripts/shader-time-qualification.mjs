@@ -87,6 +87,61 @@ async function qualifyLatePreparation(context, baseUrl, backend) {
   } finally { await page.close(); }
 }
 
+async function qualifyPythonPreparation(context, baseUrl, backend) {
+  if (backend !== "WebGPU") return null;
+  const page = await context.newPage();
+  try {
+    await page.goto(baseUrl + "/web/manim-raster-host.html");
+    await page.waitForFunction(() => globalThis.noonHostRaster);
+    const lesson = await readFile(root + "/web/python/examples/showcase_shader_material.py", "utf8");
+    const original = `        for panel, program in zip(panels, programs):
+            panel.add_effect(ShaderEffect(program), name="stripes")`;
+    assert.ok(lesson.includes(original));
+    const source = lesson.replace(original, `        try:
+            panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
+        except Exception:
+            try:
+                panels[0].get_effect("stripes")
+            except Exception:
+                pass
+            else:
+                raise AssertionError("failed GPU preparation published a semantic attachment")
+            self.wait(0.25)
+            panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
+        panels[1].add_effect(ShaderEffect(programs[1]), name="stripes")`);
+    const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
+    assert.equal(initial.rendererBackend, backend);
+    const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
+    const worker = page.workers().find(worker => worker.url().includes("execution-render-worker.js") && !worker.url().includes("capability-probe"));
+    assert.ok(worker, "actual Python render worker required");
+    await worker.evaluate(() => {
+      globalThis.rejectShader = true;
+      globalThis.rejectedShaders = 0;
+      const original = GPUDevice.prototype.createShaderModule;
+      GPUDevice.prototype.createShaderModule = function (descriptor) {
+        if (rejectShader && descriptor.code.includes("let stripes")) {
+          rejectedShaders++;
+          descriptor = { ...descriptor, code: descriptor.code + "\ninvalid generated WGSL" };
+        }
+        return original.call(this, descriptor);
+      };
+    });
+    await page.evaluate(() => noonHostRaster.renderThrough(1, [0, 0.5, 0.75]));
+    const rejected = await page.evaluate(() => noonHostRaster.debugFrame());
+    assert.equal(await worker.evaluate(() => rejectedShaders), 1);
+    assert.equal(rejected.time, 0.5);
+    assert.equal(rejected.objects.flatMap(object => object.effects).length, 0);
+    assert.deepEqual(PNG.sync.read(await page.locator("#scene").screenshot()).data, previous,
+      "failed Python attachment preserves the displayed frame");
+    await worker.evaluate(() => { rejectShader = false; });
+    await page.evaluate(() => noonHostRaster.renderThrough(2, [0, 0.5, 0.75]));
+    const recovered = await page.evaluate(() => noonHostRaster.debugFrame());
+    assert.equal(recovered.time, 0.75);
+    assert.equal(recovered.objects.flatMap(object => object.effects).length, 2);
+    return { backend, rejected, recovered, rejectedModules: 1 };
+  } finally { await page.close(); }
+}
+
 await qualifyPairedAuthoring({
   artifactDirectory: "ci-artifacts/shader-time",
   prepareContext: disableAuthoringJspi,
@@ -140,6 +195,8 @@ await qualifyPairedAuthoring({
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
-    return { backend, trials, latePreparation: await qualifyLatePreparation(context, baseUrl, backend) };
+    return { backend, trials,
+      latePreparation: await qualifyLatePreparation(context, baseUrl, backend),
+      pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend) };
   },
 });

@@ -30,9 +30,15 @@ Parameter edits and detached animation targets need no new module preparation;
 headless prepared prefixes explicitly reject this resource-dependent operation.
 The shader-time qualification also checks real GPU compilation failure and retry.
 
-Python-worker attachment publication still needs the same pre-publication resource
-barrier. Native Python, broader recovery and the physical-device performance
-matrix are also unqualified; #1897 owns promotion.
+Live Python shader attachments use that same staged transaction. Portable source
+statements suspend automatically; explicit async constructs await `add_effect`,
+and JSPI sources retain blocking syntax. Only immutable source/schema crosses the
+existing worker port. GPU readiness precedes fresh CPU admission; frame retention
+precedes source resumption. Cold construction and built-in effect calls stay fluent.
+
+Live insertion of already shader-bearing detached objects, broader capability/
+profile changes, native Python, recovery and the physical-device performance
+matrix remain unqualified; #1897 owns promotion.
 
 ## Current authored GlowPulse extension
 

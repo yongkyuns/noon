@@ -662,7 +662,7 @@ impl ExecutionSession {
             };
         if self.require_effect_preparation
             && !external_effects_prepared
-            && publication.introduces_shader_attachments()
+            && publication.introduced_shader_programs().next().is_some()
         {
             return Err(ExecutionSessionPublicationError::ExternalEffectPreparationRequired);
         }

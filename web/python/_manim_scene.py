@@ -809,7 +809,7 @@ def _finish_async_continuation_construct(scene: _base.Scene) -> None:
     try:
         if pending:
             raise RuntimeError(
-                "async construct must await every supported Scene.play/Scene.wait continuation"
+                "async construct must await every supported continuation or shader attachment"
             )
     finally:
         setattr(scene, _ASYNC_CONTINUATION_MODE, False)
@@ -975,6 +975,12 @@ def _require_portable_barrier_admission(scene: _base.Scene) -> None:
 
 async def await_source_barrier(method, /, *args, **kwargs):
     """Yield at one compiled host call, using the existing canonical awaitable."""
+    function = getattr(method, "__func__", None)
+    if function not in (_base.Scene.play, _base.Scene.wait):
+        pending = method(*args, **kwargs)
+        if function is _base.Mobject.add_effect and isinstance(pending, _SemanticContinuationAwaitable):
+            return await pending
+        return pending
     scene = getattr(method, "__self__", None)
     if (not isinstance(scene, _base.Scene)
             or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
@@ -995,6 +1001,8 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
     """Adapt a module-level call without replay or changes to arbitrary callables."""
     if not inspect.ismethod(method):
         return method(*args, **kwargs)
+    if getattr(method, "__func__", None) is _base.Mobject.add_effect:
+        return await await_source_barrier(method, *args, **kwargs)
     scene = method.__self__
     invocation = current_source_invocation()
     from _manim_source_execution import has_portable_scene_methods
@@ -1025,24 +1033,29 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
 class _SemanticContinuationAwaitable:
     """One consumed Python await over the worker-owned semantic endpoint lease."""
 
-    def __init__(self, scene: _base.Scene, on_complete=None) -> None:
+    def __init__(self, scene: _base.Scene, on_complete=None, *, operation=None, result=None) -> None:
         self._scene = scene
         self._on_complete = on_complete
+        self._operation = operation
+        self._result = result
         self._consumed = False
         getattr(scene, _ASYNC_CONTINUATION_PENDING).add(self)
 
     def __await__(self):
         if self._consumed:
-            raise RuntimeError("a Scene.play/Scene.wait continuation can be awaited only once")
+            raise RuntimeError("a source operation can be awaited only once")
         self._consumed = True
         return self._wait().__await__()
 
     async def _wait(self) -> _base.Scene:
         try:
-            await _await_semantic_continuation(self._scene)
+            if self._operation is None:
+                await _await_semantic_continuation(self._scene)
+            else:
+                await self._operation()
             if self._on_complete is not None:
                 self._on_complete()
-            return self._scene
+            return self._scene if self._result is None else self._result
         finally:
             getattr(self._scene, _ASYNC_CONTINUATION_PENDING).discard(self)
 

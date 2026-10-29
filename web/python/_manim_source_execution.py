@@ -7,7 +7,7 @@ stay synchronous and are never rewritten.
 
 The original construct definitions are retained. A second, never-executed module compilation
 supplies coroutine code for ordinary ``construct`` methods with direct, statement-
-position ``self.play``/``self.wait`` calls. Binding that code reuses the original
+position ``self.play``/``self.wait`` and ``add_effect`` calls. Binding that code reuses the original
 function's globals, defaults and closure; class/decorator/module effects are not
 replayed. All barriers still use the canonical Scene implementation and runtime.
 
@@ -87,13 +87,17 @@ class _ConstructBody(ast.NodeTransformer):
         if (
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name)
-            and call.func.value.id == self.receiver
-            and call.func.attr in {"play", "wait"}
+            and (call.func.attr == "add_effect" or (
+                isinstance(call.func.value, ast.Name)
+                and call.func.value.id == self.receiver
+                and call.func.attr in {"play", "wait"}
+            ))
         ):
             # Inspect arguments as usual, but admit this particular receiver and
             # barrier. A nested call to play/wait is not a statement barrier.
             self.allowed_receivers.add(id(call.func.value))
+            if call.func.attr == "add_effect":
+                self.visit(call.func.value)
             for arg in call.args:
                 self.visit(arg)
             for keyword in call.keywords:
@@ -212,8 +216,9 @@ class _ModuleBarriers(ast.NodeTransformer):
     def visit_Expr(self, node):
         call = node.value
         if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name)
-                and call.func.attr in {"play", "wait"}):
+                and (call.func.attr == "add_effect" or (
+                    isinstance(call.func.value, ast.Name)
+                    and call.func.attr in {"play", "wait"}))):
             self.barriers += 1
             wrapped = ast.Call(
                 func=ast.Name(id=MODULE_BARRIER_GLOBAL, ctx=ast.Load()),
@@ -246,10 +251,10 @@ def compile_authoring_source(
     has_construct = any(
         code.co_name == "construct"
         and not code.co_flags & (inspect.CO_COROUTINE | inspect.CO_GENERATOR)
-        and {"play", "wait"}.intersection(code.co_names)
+        and {"play", "wait", "add_effect"}.intersection(code.co_names)
         for code in originals
     )
-    has_module_barrier = bool({"play", "wait"}.intersection(original.co_names))
+    has_module_barrier = bool({"play", "wait", "add_effect"}.intersection(original.co_names))
     # Static, explicit-async and export-only source retains the fast path.
     if not has_construct and not has_module_barrier:
         return original, {}

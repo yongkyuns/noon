@@ -147,6 +147,19 @@ async function initializePyodide() {
     return token;
   };
   self.noonAwaitSemanticContinuation = (context) => awaitSemanticContinuation(context);
+  self.noonPrepareSemanticEffects = async (context, staged) => {
+    try {
+      const continuation = activeAuthoringRun?.continuation;
+      if (!continuation || continuation.context !== context || continuation.terminal ||
+          continuation.preparedPlayback || continuation.endpoint === null) {
+        throw new Error("shader resource preparation requires the active render endpoint");
+      }
+      await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+      throw error;
+    } finally { if (!fatalAuthoringFailure) staged.free(); }
+  };
   self.noonSetSemanticContinuationCallbackSession = (context, sessionId) => {
     if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
       throw new TypeError("semantic continuation callback session must be a non-negative safe integer");

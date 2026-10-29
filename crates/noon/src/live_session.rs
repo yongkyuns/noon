@@ -665,7 +665,9 @@ impl<'a> LiveSession<'a> {
             .stage_effect_publication(&mut self.store.borrow_mut(), self.root, transaction)
             .map_err(Into::into)
     }
-    pub(crate) fn publish_staged_effects(
+    /// Host acknowledgement after preparing the staged immutable resources.
+    /// Fresh canonical validation runs before either live authority commits.
+    pub fn publish_staged_effects(
         &mut self,
         staged: crate::StagedEffectPublication,
     ) -> Result<(), LiveSessionError> {

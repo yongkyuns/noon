@@ -353,9 +353,9 @@ impl LiveSession<'_> {
 
     /// Stage one atomic batch of named attachments for the existing program's
     /// publication-preparation barrier. No attachment/revision is visible yet.
-    pub fn prepare_effect_attachments<'owner, T>(
+    pub fn prepare_effect_attachments<'owner, 'name, T>(
         &mut self,
-        attachments: impl IntoIterator<Item = (T, EffectDefinition, &'owner str)>,
+        attachments: impl IntoIterator<Item = (T, EffectDefinition, &'name str)>,
     ) -> Result<crate::StagedEffectPublication, LiveSessionError>
     where
         T: Into<MobjectTarget<'owner>>,
