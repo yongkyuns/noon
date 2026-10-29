@@ -40,7 +40,7 @@ use std::{
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
     RasterImageResourceArena, RasterImageResourceHandle, RasterImageResourceLookup,
-    SemanticImageContent, TextResourceArena,
+    SemanticClickIndicate, SemanticImageContent, TextResourceArena,
 };
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
@@ -90,6 +90,7 @@ impl DynamicProperties {
             Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectThreshold
             | Property::EffectOffset
             | Property::EffectProgress
             | Property::EffectSoftness
@@ -141,6 +142,9 @@ pub struct CompiledObject {
     pub fill_paint: Option<Arc<noon_core::SemanticPaint>>,
     /// Whether this object can draw; its query geometry remains available.
     pub draw_enabled: bool,
+    /// Authored native click action, retained with this time-qualified execution row.
+    /// Ordinary rows allocate no binding payload.
+    pub click_indicate: Option<Arc<SemanticClickIndicate>>,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
     pub effects: Option<Arc<CompiledEffectStack>>,
     pub id: ObjectId,
@@ -168,11 +172,12 @@ pub struct CompiledEffect {
 }
 
 impl CompiledEffect {
-    /// Ordinary timeline channels owned by one lowered glow attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 8] = [
+    /// Ordinary timeline channels owned by one lowered appearance attachment.
+    pub const PARAMETER_PROPERTIES: [Property; 9] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
+        Property::EffectThreshold,
         Property::EffectOffset,
         Property::EffectProgress,
         Property::EffectSoftness,
@@ -192,6 +197,7 @@ impl CompiledEffect {
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
             + usize::from(update.intensity.is_some())
+            + usize::from(update.threshold.is_some())
             + usize::from(update.offset.is_some())
             + usize::from(update.progress.is_some())
             + usize::from(update.softness.is_some())
@@ -201,6 +207,7 @@ impl CompiledEffect {
             (update.color.is_some(), Property::EffectColor),
             (update.radius.is_some(), Property::EffectRadius),
             (update.intensity.is_some(), Property::EffectIntensity),
+            (update.threshold.is_some(), Property::EffectThreshold),
             (update.offset.is_some(), Property::EffectOffset),
             (update.progress.is_some(), Property::EffectProgress),
             (update.softness.is_some(), Property::EffectSoftness),
@@ -215,9 +222,9 @@ impl CompiledEffect {
                             property,
                             self.definition,
                         )
-                        .expect("glow property"),
+                        .expect("checked appearance parameter"),
                         to: noon_core::EffectTrackValue::from_definition(property, target)
-                            .expect("glow property"),
+                            .expect("checked appearance parameter"),
                         end_behavior: noon_core::EffectTrackEndBehavior::Sample,
                     },
                 ));
@@ -280,6 +287,7 @@ impl CompiledObject {
             view_color_profile: None,
             fill_paint: None,
             draw_enabled: true,
+            click_indicate: None,
             id,
             content: content.into(),
             text_bounds: None,
@@ -1093,6 +1101,8 @@ pub struct CompiledScene {
     // generation may reclaim other retired capacity off the live-edit path.
     objects: Vec<CompiledObject>,
     live_object_count: usize,
+    /// Derived interest aggregate; the binding itself belongs to its compiled row.
+    click_indicate_count: usize,
     /// Tracks are segmented by stable execution channel. Mutating one channel never
     /// relocates payloads belonging to another channel. Each channel vector remains
     /// sorted by start time and TrackId for deterministic evaluation.
@@ -1187,6 +1197,7 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
 pub enum CompileError {
     InvalidComposedSource(CompiledComposedSourceError),
     InvalidZIndex(ObjectId),
+    InvalidClickIndicate(ObjectId),
     TooManyObjects(usize),
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
@@ -1205,6 +1216,11 @@ impl std::fmt::Display for CompileError {
             Self::InvalidZIndex(id) => {
                 write!(formatter, "object {} has non-finite z-index", id.get())
             }
+            Self::InvalidClickIndicate(id) => write!(
+                formatter,
+                "object {} requires a valid click Indicate binding on analytic circle or rectangle content",
+                id.get()
+            ),
             Self::TooManyObjects(count) => {
                 write!(formatter, "scene contains too many objects: {count}")
             }
@@ -1255,6 +1271,7 @@ impl std::error::Error for CompileError {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
     InvalidComposedSource(CompiledComposedSourceError),
+    InvalidClickIndicate(ObjectId),
     InvalidEffectAttachmentChange {
         object: ObjectId,
     },
@@ -1316,6 +1333,11 @@ impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidComposedSource(error) => error.fmt(formatter),
+            Self::InvalidClickIndicate(id) => write!(
+                formatter,
+                "object {} requires a valid click Indicate binding on analytic circle or rectangle content",
+                id.get()
+            ),
             Self::InvalidInset2DView(object) => write!(formatter, "inset display {} cannot capture itself as its camera", object.get()),
             Self::ReplaySealed => formatter
                 .write_str("sealed replay is read-only; discard its retention before editing"),
@@ -1508,6 +1530,7 @@ impl CompiledScene {
                         | Property::EffectColor
                         | Property::EffectRadius
                         | Property::EffectIntensity
+                        | Property::EffectThreshold
                         | Property::EffectOffset
                         | Property::EffectProgress
                         | Property::EffectSoftness
@@ -1600,6 +1623,12 @@ impl CompiledScene {
         let mut objects = Vec::with_capacity(object_count);
 
         for (index, mut object) in source_objects.into_iter().enumerate() {
+            validate_click_indicate_binding(
+                object.id,
+                is_click_indicate_target(&object.content),
+                object.click_indicate.as_deref(),
+            )
+            .map_err(|_| CompileError::InvalidClickIndicate(object.id))?;
             if let Some(gradient) = &object.fill_paint {
                 if !continuous_fill_content_supported(&object.content)
                     || object.spatial.is_some()
@@ -1679,6 +1708,10 @@ impl CompiledScene {
         }
 
         let live_object_count = objects.len();
+        let click_indicate_count = objects
+            .iter()
+            .filter(|object| object.click_indicate.is_some())
+            .count();
         let mut painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
         painter_order.sort_by(|&a, &b| {
             objects[a as usize]
@@ -1706,6 +1739,7 @@ impl CompiledScene {
             painter_ranks,
             objects,
             live_object_count,
+            click_indicate_count,
             tracks: tracks_by_channel,
             track_count,
             object_indices,
@@ -1755,6 +1789,20 @@ impl CompiledScene {
 
     pub const fn live_object_count(&self) -> usize {
         self.live_object_count
+    }
+
+    /// Resolve the authored click action in the currently selected execution revision.
+    /// Retired rows are excluded; visibility and driver admission remain runtime policy.
+    pub fn click_indicate_binding(&self, object: ObjectId) -> Option<SemanticClickIndicate> {
+        self.objects[self.object_index(object)? as usize]
+            .click_indicate
+            .as_deref()
+            .copied()
+    }
+
+    /// Constant-time pointer-interest query over live compiled membership.
+    pub const fn has_click_indicate_bindings(&self) -> bool {
+        self.click_indicate_count != 0
     }
 
     /// Retired execution rows retained for same-identity re-entry or replay.
@@ -2145,6 +2193,15 @@ impl CompiledScene {
             ExecutionPatch::SetDrawEnabled { object, enabled } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].draw_enabled != *enabled),
+            ExecutionPatch::SetClickIndicate { object, binding } => {
+                self.object_index(*object).is_none_or(|index| {
+                    self.objects[index as usize]
+                        .click_indicate
+                        .as_deref()
+                        .copied()
+                        != *binding
+                })
+            }
             ExecutionPatch::SetViewColorProfile { object, profile } => {
                 self.object_index(*object).is_none_or(|index| {
                     self.objects[index as usize].view_color_profile != Some(*profile)
@@ -2286,6 +2343,7 @@ impl CompiledScene {
                 object.dynamic = DynamicProperties::default();
                 object.live = true;
                 if let Some(index) = self.retired_object_indices.remove(&object.id) {
+                    self.click_indicate_count += usize::from(object.click_indicate.is_some());
                     self.objects[index as usize] = object;
                     let spatial = self.objects[index as usize].spatial.as_deref().cloned();
                     self.update_spatial_anchor_group(index, None, spatial.as_ref());
@@ -2303,6 +2361,7 @@ impl CompiledScene {
                 }
                 let index = u32::try_from(self.objects.len())
                     .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
+                self.click_indicate_count += usize::from(object.click_indicate.is_some());
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 let spatial = self.objects[index as usize].spatial.as_deref().cloned();
@@ -2339,6 +2398,7 @@ impl CompiledScene {
 
                 let object = &mut self.objects[index as usize];
                 debug_assert!(object.live);
+                self.click_indicate_count -= usize::from(object.click_indicate.is_some());
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
                 self.refresh_cairo_path_control_points(index);
@@ -2404,6 +2464,21 @@ impl CompiledScene {
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 self.objects[index as usize].draw_enabled = *enabled;
             }
+            ExecutionPatch::SetClickIndicate { object, binding } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?
+                    as usize;
+                validate_click_indicate_binding(
+                    *object,
+                    is_click_indicate_target(&self.objects[index].content),
+                    binding.as_ref(),
+                )?;
+                let row = &mut self.objects[index];
+                self.click_indicate_count -= usize::from(row.click_indicate.is_some());
+                self.click_indicate_count += usize::from(binding.is_some());
+                row.click_indicate = binding.map(Arc::new);
+            }
             ExecutionPatch::SetZIndex { object, value } => {
                 let index = self
                     .object_index(*object)
@@ -2421,6 +2496,11 @@ impl CompiledScene {
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_execution_content(*object, content, *text_bounds)?;
+                validate_click_indicate_binding(
+                    *object,
+                    is_click_indicate_target(content),
+                    self.objects[index as usize].click_indicate.as_deref(),
+                )?;
                 validate_execution_content_resource(
                     &self.resources,
                     None,
@@ -2812,6 +2892,7 @@ impl CompiledScene {
                             | Property::EffectColor
                             | Property::EffectRadius
                             | Property::EffectIntensity
+                            | Property::EffectThreshold
                             | Property::EffectOffset
                             | Property::EffectProgress
                             | Property::EffectSoftness
@@ -3253,6 +3334,11 @@ fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchErro
 }
 
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
+    validate_click_indicate_binding(
+        object.id,
+        is_click_indicate_target(&object.content),
+        object.click_indicate.as_deref(),
+    )?;
     if object.fill_paint.is_some()
         && (!continuous_fill_content_supported(&object.content) || object.spatial.is_some())
     {
@@ -3271,6 +3357,24 @@ fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchE
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
     execution_patch::validate_fill_paint(object.id, object.fill_paint.as_deref())?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
+}
+
+fn is_click_indicate_target(content: &ObjectContentRef) -> bool {
+    matches!(
+        content.geometry(),
+        Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+    )
+}
+
+fn validate_click_indicate_binding(
+    object: ObjectId,
+    analytic_target: bool,
+    binding: Option<&SemanticClickIndicate>,
+) -> Result<(), CompilePatchError> {
+    if binding.is_some_and(|binding| !binding.is_valid() || !analytic_target) {
+        return Err(CompilePatchError::InvalidClickIndicate(object));
+    }
+    Ok(())
 }
 
 pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> bool {
@@ -3614,6 +3718,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectSoftness => 20,
         Property::EffectSeed => 21,
         Property::EffectSize => 22,
+        Property::EffectThreshold => 23,
     }
 }
 

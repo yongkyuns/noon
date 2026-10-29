@@ -28,6 +28,7 @@ impl PreparedComposedSource {
             content: SemanticExecutionContent::Composed(self.source),
             fill_paint: None,
             effects: self.effects,
+            click_indicate: None,
             base_transform: Transform2D::IDENTITY,
             base_style: Style {
                 fill: None,
@@ -146,6 +147,11 @@ pub(super) fn prepare_initial(
         )
         .map_err(|_| error(owner, "duplicate source member"))?;
         let effects = store.animation_effect_snapshot(owner)?;
+        if effects.iter().any(|effect| {
+            effect.definition.input_role() == noon_core::EffectInputRole::AuthoredView
+        }) {
+            return Err(SemanticLoweringError::UnsupportedEffectProfile { owner });
+        }
         let effects = if effects.is_empty() {
             None
         } else {

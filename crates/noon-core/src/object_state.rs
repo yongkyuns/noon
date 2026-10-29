@@ -2,8 +2,10 @@
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
 mod backdrop_blur;
+mod bloom;
 mod blur;
 pub use backdrop_blur::BackdropBlur;
+pub use bloom::Bloom;
 mod shadow;
 pub use shadow::Shadow;
 pub(crate) mod effect_parameters;

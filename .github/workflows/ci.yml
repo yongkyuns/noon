@@ -25,6 +25,7 @@ on:
       - "scripts/python-editor-*.mjs"
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
+      - "scripts/callback-continuation-proof*.mjs"
       - "scripts/paired-authoring-qualification.mjs"
       - "scripts/table-*"
       - "scripts/manim-table-*"
@@ -111,6 +112,8 @@ on:
       - "crates/noon/tests/authored_view_color_raster.rs"
       - "crates/noon/tests/retained_color_assets/**"
       - "crates/noon/tests/hdr_captures/**"
+      - "crates/noon/tests/view_bloom/**"
+      - "crates/noon-export/tests/view_bloom.rs"
       - "crates/noon/tests/pixelate.rs"
       - "crates/noon/tests/composed/**"
       - "crates/noon/tests/composed_effects.rs"
@@ -129,6 +132,7 @@ on:
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"
       - "crates/noon-runtime/src/replay.rs"
+      - "crates/noon-runtime/src/replay/**"
   workflow_dispatch:
 
 permissions:
@@ -271,11 +275,14 @@ jobs:
           NOON_VISIBLE_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/visible-view-color-raster-artifacts
           NOON_RETAINED_ASSET_ARTIFACT_DIR: ${{ github.workspace }}/retained-asset-color-raster-artifacts
           NOON_RETAINED_TEXT_ARTIFACT_DIR: ${{ github.workspace }}/retained-text-color-raster-artifacts
+          NOON_VIEW_BLOOM_ARTIFACTS: ${{ github.workspace }}/authored-camera-bloom-artifacts
+          NOON_EXPORT_VIEW_BLOOM_ARTIFACTS: ${{ github.workspace }}/native-camera-bloom-artifacts
           NOON_HDR_COMPOSED_ARTIFACTS: ${{ github.workspace }}/hdr-composed-raster-artifacts
           NOON_GLYPH_WORKING_COLOR_ARTIFACT_DIR: ${{ github.workspace }}/glyph-working-color-raster-artifacts
         run: |
           cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture
           cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture
+          cargo test -p noon-export --test view_bloom -- --ignored --nocapture
           cargo test -p noon-render-wgpu --lib glyph_working_color_matches -- --ignored --nocapture
       - name: Qualify ordered effect composition against independent RGBA references
         run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
@@ -367,6 +374,8 @@ jobs:
             glyph-working-color-raster-artifacts
             hdr-gaussian-raster-artifacts
             hdr-composed-raster-artifacts
+            authored-camera-bloom-artifacts
+            native-camera-bloom-artifacts
           if-no-files-found: error
           retention-days: 3
       - name: Preserve native glyph coverage evidence
@@ -511,6 +520,8 @@ jobs:
         run: node scripts/playground-layout-smoke.mjs
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
+      - name: Test callback continuation qualification harness
+        run: node --test scripts/callback-continuation-proof.test.mjs
       - name: Test shared semantic authoring and runtime
         run: node scripts/shared-authoring-smoke.mjs
       - name: Test native browser input signals

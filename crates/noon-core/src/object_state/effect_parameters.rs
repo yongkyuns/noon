@@ -142,6 +142,7 @@ pub enum EffectParameter {
     Offset,
     Radius,
     Intensity,
+    Threshold,
     Source,
     Progress,
     Softness,
@@ -156,6 +157,7 @@ pub enum EffectParameterError {
     InvalidRadius,
     InvalidSize,
     InvalidIntensity,
+    InvalidThreshold,
     InvalidProgress,
     InvalidSoftness,
     InvalidView,
@@ -174,6 +176,7 @@ impl std::fmt::Display for EffectParameterError {
             Self::InvalidSize => f.write_str("effect cell size must be finite and non-negative"),
             Self::InvalidRadius => f.write_str("effect radius must be finite and non-negative"),
             Self::InvalidIntensity => f.write_str("effect intensity must be finite and in [0, 8]"),
+            Self::InvalidThreshold => f.write_str("Bloom threshold must be finite and in [0, 64]"),
             Self::InvalidProgress => f.write_str("effect progress must be finite and in [0, 1]"),
             Self::InvalidSoftness => f.write_str("effect softness must be finite and in [0, 1]"),
             Self::InvalidView => f.write_str("effect requires a positive finite uniform 2D view"),
@@ -211,6 +214,7 @@ pub struct EffectUpdate {
     pub offset: Option<EffectOffset>,
     pub radius: Option<EffectRadius>,
     pub intensity: Option<f64>,
+    pub threshold: Option<f64>,
     pub source: Option<GlowSource>,
     pub progress: Option<f64>,
     pub softness: Option<f64>,
@@ -219,6 +223,11 @@ pub struct EffectUpdate {
 }
 
 impl EffectUpdate {
+    pub fn threshold(mut self, value: f64) -> Self {
+        self.threshold = Some(value);
+        self
+    }
+
     pub fn color(mut self, value: Color) -> Self {
         self.color = Some(value);
         self
@@ -231,6 +240,12 @@ impl EffectUpdate {
 
     /// Validate supplied fields before choosing a finite definition.
     pub fn validate(self) -> Result<(), EffectParameterError> {
+        if self
+            .threshold
+            .is_some_and(|v| !v.is_finite() || !(0.0..=64.0).contains(&v))
+        {
+            return Err(EffectParameterError::InvalidThreshold);
+        }
         if let Some(c) = self.color {
             if ![c.red, c.green, c.blue, c.alpha]
                 .into_iter()
@@ -322,6 +337,7 @@ impl EffectUpdate {
             EffectParameter::Offset,
             EffectParameter::Radius,
             EffectParameter::Intensity,
+            EffectParameter::Threshold,
             EffectParameter::Source,
             EffectParameter::Progress,
             EffectParameter::Softness,
@@ -338,6 +354,7 @@ impl EffectUpdate {
             EffectParameter::Offset => self.offset.is_some(),
             EffectParameter::Radius => self.radius.is_some(),
             EffectParameter::Intensity => self.intensity.is_some(),
+            EffectParameter::Threshold => self.threshold.is_some(),
             EffectParameter::Source => self.source.is_some(),
             EffectParameter::Progress => self.progress.is_some(),
             EffectParameter::Softness => self.softness.is_some(),

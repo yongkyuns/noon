@@ -168,8 +168,17 @@ assert.ok(
 );
 assert.match(
   runtimeReadyBody,
-  /await prepared\.ready;\s*if \(runPhaseMetrics !== null\) \{\s*runPhaseMetrics\.renderPreparation = \{\s*startedAtMs: prepared\.startedAtMs,\s*readyAtMs: prepared\.readyAtMs,/,
+  /if \(runPhaseMetrics !== null\) \{\s*runPhaseMetrics\.renderPreparation = \{\s*startedAtMs: prepared\.startedAtMs,\s*readyAtMs: prepared\.readyAtMs,/,
   "cold authored Run must retain render-preparation boundaries alongside its source-run interval",
+);
+// Freshness validation may run after readiness; timing must still describe the
+// actual prepared owner, before engine attachment. Executable attachment tests
+// verify that stale runs publish neither these metrics nor an active player.
+const preparationReady = runtimeReadyBody.indexOf("await prepared.ready;");
+const preparationMetrics = runtimeReadyBody.indexOf("runPhaseMetrics.renderPreparation = {");
+assert.ok(
+  preparationReady >= 0 && preparationMetrics > preparationReady && preparationMetrics < semanticStart,
+  "render-preparation metrics must follow readiness and precede engine attachment",
 );
 assert.match(
   preparationBody,
@@ -218,7 +227,7 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   bootBody,
   /scheduleStartupAutoplay|(?:await|void) runScene\(\)/,
-  "initial main boot must not directly autoplay a Python scene before the post-paint preload",
+  "initial main boot must not directly autoplay a Python scene before the post-paint preload starts",
 );
 assert.match(
   bootBody,

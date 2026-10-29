@@ -501,3 +501,5 @@ fn visible_retained_view_profile_matches_independent_bloom_pixels() {
 }
 
 mod hdr_captures;
+
+mod view_bloom;

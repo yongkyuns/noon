@@ -8,7 +8,13 @@ const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const start = main.indexOf("async function updateWorkerMetrics() {");
 const end = main.indexOf('document.addEventListener("visibilitychange"', start);
 assert.ok(start >= 0 && end > start);
-const source = main.slice(start, end);
+// Status owns the playing/paused/buffering decision consumed by telemetry.
+// Exercise those production functions too; a no-op status mock would bypass
+// the very observation that decides whether frame-rate evidence is current.
+const statusStart = main.indexOf("function setRuntimeStatus(");
+const statusEnd = main.indexOf("function setBusy(", statusStart);
+assert.ok(statusStart >= 0 && statusEnd > statusStart);
+const source = `${main.slice(statusStart, statusEnd)}\n${main.slice(start, end)}`;
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -42,10 +48,11 @@ function fixture() {
     presentationRate: new PresentationRate(), patchStatus: { dataset: { state: "running" } },
     document: { visibilityState: "visible" },
     busyDepth: 1, activeSourceContinuation: {}, playerNeedsRestart: false,
+    sceneRunPromise: {}, playbackDurationSeconds: 4, preparedPlaybackPlayer: null,
     generations: { diagnostics: { runGeneration: 1 } },
-    status: { dataset: {} }, METRICS_POLL_MS: 500, PLAYBACK_POLL_MS: 100,
+    status: { dataset: {} }, statusText: { textContent: "" }, METRICS_POLL_MS: 500, PLAYBACK_POLL_MS: 100,
     performance: { now: () => wall },
-    setPlaybackRuntimeStatus() {}, formatBytes: String,
+    formatBytes: String,
     playbackControls: { observe: value => observations.push({ ...value }) },
     showError: error => errors.push(error), clearTimeout() {},
   };
@@ -178,3 +185,77 @@ test("a current telemetry failure does not prevent subsequent clock observations
   assert.equal(f.observations.at(-1)?.time, 0.3);
   assert.equal(f.telemetry.length, 1, "an error must not trigger a telemetry retry storm");
 });
+
+const preparedState = overrides => ({
+  preparedPlayback: true, time: 0.5, playing: true, preparedFrontier: 4,
+  durationSeconds: null, buffering: false, ...overrides,
+});
+const readyReport = (presentedFrames, sampledAtMs) => {
+  const value = report(600);
+  Object.assign(value.metrics, { ready: true, presentedFrames, sampledAtMs,
+    presentationIntervalMs: { p95: 16.7, max: 33.4 } });
+  return value;
+};
+
+for (const [label, state, phase] of [
+  ["source-owned wait", { time: 0.5, playing: false }, "playing"],
+  ["prepared running", preparedState({}), "playing"],
+  ["prepared paused", preparedState({ playing: false }), "paused"],
+  ["prepared buffering", preparedState({ buffering: true }), "buffering"],
+  ["prepared paused while buffering", preparedState({ playing: false, buffering: true }), "paused"],
+  ["prepared exact terminal", preparedState({ time: 4, durationSeconds: 4 }), "finished"],
+]) {
+  test(`${label} publishes the actual phase before delayed renderer telemetry`, async () => {
+    const f = fixture();
+    f.initial.setState(state);
+    await f.api.poll();
+    // Keep the source pending in every case. Preparation still being active
+    // must not force an independent paused/buffering/finished reader to play.
+    assert.equal(f.context.status.dataset.playbackPhase, phase);
+    assert.equal(f.context.status.dataset.playbackPlaying, String(phase === "playing"));
+    assert.match(f.context.statusText.textContent, new RegExp(`^${phase}`, "i"));
+    assert.deepEqual(f.observations.at(-1), state);
+    f.telemetry[0].resolve(readyReport(10, 100));
+    await flush();
+    assert.equal(f.context.metricFrameGap.value, phase === "playing" ? "16.7 / 33.4 ms" : "—");
+    assert.equal(f.context.metricFps.value, "—", "one telemetry sample is not an FPS measurement");
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+for (const [phase, state] of [
+  ["paused", preparedState({ playing: false })],
+  ["buffering", preparedState({ buffering: true })],
+  ["finished", preparedState({ time: 4, durationSeconds: 4 })],
+]) {
+  test(`late renderer telemetry cannot restore a rate after prepared playback is ${phase}`, async () => {
+    const f = fixture();
+    f.initial.setState(preparedState({}));
+    await f.api.poll();
+    f.telemetry[0].resolve(readyReport(10, 100));
+    await flush();
+    f.setWall(500);
+    await f.api.poll();
+    f.telemetry[1].resolve(readyReport(70, 1100));
+    await flush();
+    assert.equal(f.context.metricFps.value, "60.0");
+    assert.equal(f.context.metricFrameGap.value, "16.7 / 33.4 ms");
+
+    f.setWall(1000);
+    await f.api.poll(); // Start a slow render reply while the reader is playing.
+    f.initial.setState(state);
+    f.setWall(1100);
+    await f.api.poll(); // The ready Rust observation must not wait for telemetry.
+    assert.equal(f.telemetry.length, 3, "one pending render request, not a backlog");
+    assert.equal(f.context.status.dataset.playbackPhase, phase);
+    assert.equal(f.context.status.dataset.playbackPlaying, "false");
+    assert.equal(f.context.metricFps.value, "—");
+    assert.equal(f.context.metricFrameGap.value, "—");
+    f.telemetry[2].resolve(readyReport(130, 2100));
+    await flush();
+    assert.equal(f.context.metricFps.value, "—");
+    assert.equal(f.context.metricFrameGap.value, "—");
+    assert.deepEqual(f.observations.at(-1), state);
+    assert.deepEqual(f.errors, []);
+  });
+}

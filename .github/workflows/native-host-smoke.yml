@@ -294,6 +294,21 @@ jobs:
               --test effects -- --include-ignored --nocapture --test-threads=1
           } 2>&1 | tee capture-proof/tests.log
 
+      - name: Qualify prefix identity, incremental lifecycle, interactions, and pixels
+        run: |
+          set -euo pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-runtime --features prepared-prefix \
+            --test prefix_interactions --test prefix_bindings \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee capture-proof/prefix-interactions.log
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon --no-default-features \
+            --features prepared-prefix \
+            --test prepared_prefix_identity --test prepared_prefix_incremental \
+            --test prepared_prefix_lifecycle --test prepared_prefix_raster \
+            --test prepared_prefix_interactions --test prepared_prefix_bindings \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee -a capture-proof/prefix-interactions.log
+
       - name: Check formatting and lint the native capture package
         run: |
           cargo fmt --all -- --check

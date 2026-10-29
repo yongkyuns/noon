@@ -367,6 +367,7 @@ impl SemanticExecutionIndex {
                 fill_paint: state.fill_paint,
                 semantic_id,
                 effects: state.effects,
+                click_indicate: state.click_indicate,
                 execution_id: self.ensure_object(semantic_id),
                 content: SemanticExecutionContent::Object(state.content),
                 base_transform: state.base_transform,
@@ -472,6 +473,8 @@ pub struct SemanticExecutionObject {
     pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    /// Authored native action lowered with the object's time-qualified values.
+    pub click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
@@ -919,6 +922,7 @@ pub(super) struct LoweredObjectState {
     pub view_color_profile: Option<noon_core::ViewColorProfile>,
     pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub(super) effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    pub(super) click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
     pub(super) base_style: Style,
@@ -971,7 +975,20 @@ fn lower_effect_stack(
     if effects.len() > noon_core::MAX_EFFECT_STACK_LEN {
         return Err(unsupported());
     }
-    validate_effect_source_profile(owner, state, store)?;
+    let view_effect = effects.iter().any(|&id| {
+        store.semantic_effect_state(id).is_ok_and(|effect| {
+            effect.definition().input_role() == noon_core::EffectInputRole::AuthoredView
+        })
+    });
+    if view_effect {
+        if state.role() != SemanticObjectRole::Camera2D
+            || state.view_color_profile() != noon_core::ViewColorProfile::LinearHdr
+        {
+            return Err(unsupported());
+        }
+    } else {
+        validate_effect_source_profile(owner, state, store)?;
+    }
     let mut lowered = Vec::with_capacity(effects.len());
     let mut visibility = None;
     for &attachment in effects {
@@ -1145,14 +1162,31 @@ pub(super) fn lower_object_state(
             .then_some(state.view_color_profile()),
         fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
         effects: None,
+        click_indicate: click_indicate_binding(state).map(std::sync::Arc::new),
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
-        presentation: state.presentation(),
+        presentation: if state.role() == SemanticObjectRole::Camera2D {
+            noon_core::SemanticPresentation {
+                draw_enabled: false,
+                ..state.presentation()
+            }
+        } else {
+            state.presentation()
+        },
         signal_bindings: state.signal_bindings().to_vec(),
         decimal_number: state.decimal_number().cloned(),
         spatial,
     })
+}
+
+pub(super) fn click_indicate_binding(
+    state: &SemanticObjectState,
+) -> Option<noon_core::SemanticClickIndicate> {
+    match state.click_action() {
+        Some(noon_core::SemanticClickAction::Indicate(binding)) => Some(binding),
+        _ => None,
+    }
 }
 
 pub(super) fn lower_semantic_transform(

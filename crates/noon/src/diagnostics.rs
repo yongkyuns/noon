@@ -5,6 +5,9 @@ use serde_json::{json, Value};
 
 fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
     let definition = match effect.definition {
+        noon_core::EffectDefinition::Bloom(v) => {
+            json!({"kind":"bloom","radius":v.radius(),"threshold":v.threshold(),"intensity":v.intensity()})
+        }
         noon_core::EffectDefinition::Pixelate(v) => json!({"kind":"pixelate","size":v.size()}),
         noon_core::EffectDefinition::Glow(glow) => {
             json!({ "kind": "glow", "color": glow.color(), "radius": glow.radius(), "intensity": glow.intensity(), "source": match glow.source() { noon_core::GlowSource::Painted => "painted", noon_core::GlowSource::Silhouette => "silhouette" } })

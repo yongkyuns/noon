@@ -12,6 +12,7 @@ export class PlaygroundPlaybackControls {
   #restartButton;
   #undoDragButton;
   #scrubber;
+  #preparedSeek;
   #timeOutput;
   #liveStatus;
   #audioControls;
@@ -25,6 +26,11 @@ export class PlaygroundPlaybackControls {
   #audioMuted = false;
   #sections = [];
   #durationSeconds;
+  // Constant-size UI observations, never a source cursor or a second clock.
+  #preparedFrontier = null;
+  #buffering = false;
+  #seekNotice = null;
+  #confirmedTimeSeconds = 0;
   #timeSeconds = 0;
   #playing = true;
   #externalBusy = false;
@@ -100,10 +106,21 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.step = "any";
     this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
+    // An open prefix has usable history but no total duration. Use an absolute
+    // seconds input instead of a percentage slider whose denominator keeps moving.
+    this.#preparedSeek = document.createElement("input");
+    this.#preparedSeek.type = "number";
+    this.#preparedSeek.className = "playback-prepared-seek";
+    this.#preparedSeek.min = "0";
+    this.#preparedSeek.step = "any";
+    this.#preparedSeek.setAttribute("aria-label", "Seek prepared history in seconds");
+    this.#preparedSeek.addEventListener("change", this.#handlePreparedSeek);
     this.#liveStatus = document.createElement("span");
     this.#liveStatus.className = "playback-live-status";
     this.#liveStatus.textContent = "Duration pending";
-    timeline.append(this.#scrubber, this.#liveStatus);
+    this.#liveStatus.setAttribute("role", "status");
+    this.#liveStatus.setAttribute("aria-live", "polite");
+    timeline.append(this.#scrubber, this.#preparedSeek, this.#liveStatus);
 
     this.#timeOutput = document.createElement("output");
     this.#timeOutput.className = "playback-time";
@@ -159,6 +176,9 @@ export class PlaygroundPlaybackControls {
   }
 
   setDuration(durationSeconds) {
+    if (this.#preparedFrontier !== null) {
+      throw new Error("prepared duration comes from adopted terminal history, not source completion");
+    }
     this.#durationSeconds = validateDuration(durationSeconds);
     if (this.#controllable) this.#timeSeconds = Math.min(this.#timeSeconds, this.#durationSeconds);
     this.#render();
@@ -184,9 +204,12 @@ export class PlaygroundPlaybackControls {
   // A read-only observation must not fight a user's in-flight scrub or command.
   observe(state) {
     if (this.#destroyed || this.#seekActive || this.#commandPending) return;
+    // Prepared state already distinguishes an open frontier from the adopted
+    // final endpoint. Ordinary source-driven progress still has no replay range.
+    if (state.preparedPlayback === true || this.#preparedFrontier !== null) this.sync(state);
     // A continuation's current play/wait endpoint is not its full duration.
     // Only the completed source result may set the replay range via setDuration.
-    this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag,
+    else this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag,
       hasAudio: state.hasAudio, audioReady: state.audioReady, audioMuted: state.audioMuted,
       audioVolume: state.audioVolume, sections: state.sections,
       ...(state.hasAudio ? { durationSeconds: state.durationSeconds } : {}),
@@ -205,31 +228,44 @@ export class PlaygroundPlaybackControls {
     this.#desiredSeek = null;
   }
 
-  sync({ time, playing, durationSeconds = undefined, canUndoTranslationDrag = undefined,
-    hasAudio = undefined, audioReady = undefined, audioMuted = undefined,
-    audioVolume = undefined, sections = undefined }) {
-    if (this.#controllable && durationSeconds !== undefined) {
-      this.#durationSeconds = validateDuration(durationSeconds);
-    }
+  sync(state) {
+    const { time, playing, durationSeconds, canUndoTranslationDrag,
+      hasAudio, audioReady, audioMuted, audioVolume, sections } = state;
     if (!Number.isFinite(time) || time < 0) {
       throw new TypeError("playback state time must be finite and non-negative");
     }
     if (typeof playing !== "boolean") {
       throw new TypeError("playback state playing must be boolean");
     }
-    this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
+    if (canUndoTranslationDrag !== undefined && typeof canUndoTranslationDrag !== "boolean") {
+      throw new TypeError("canUndoTranslationDrag must be boolean when provided");
+    }
+    const prepared = state.preparedPlayback === true || this.#preparedFrontier !== null;
+    let duration = this.#durationSeconds;
+    if (prepared) {
+      // Validate the entire observation before changing controls. It is a reader
+      // capability, not inferred from Python completion or the bootstrap horizon.
+      validatePreparedState(state);
+      duration = durationSeconds;
+    } else if (this.#controllable && durationSeconds !== undefined) {
+      duration = validateDuration(durationSeconds);
+    }
+    this.#durationSeconds = duration;
+    if (prepared) {
+      this.#preparedFrontier = state.preparedFrontier;
+      this.#buffering = state.buffering;
+    }
+    this.#confirmedTimeSeconds = this.#controllable && duration !== null ? Math.min(time, duration) : time;
+    this.#timeSeconds = this.#confirmedTimeSeconds;
     this.#playing = playing;
-    if (hasAudio !== undefined) this.#hasAudio = hasAudio === true;
+    if (prepared) this.#hasAudio = false;
+    else if (hasAudio !== undefined) this.#hasAudio = hasAudio === true;
     if (audioReady !== undefined) this.#audioReady = audioReady === true;
     if (audioMuted !== undefined) this.#audioMuted = audioMuted === true;
     if (audioVolume !== undefined) this.#volume.value = String(audioVolume);
     if (sections !== undefined) this.#sections = sections;
-    if (canUndoTranslationDrag !== undefined) {
-      if (typeof canUndoTranslationDrag !== "boolean") {
-        throw new TypeError("canUndoTranslationDrag must be boolean when provided");
-      }
-      this.#canUndoTranslationDrag = canUndoTranslationDrag;
-    }
+    this.#seekNotice = null;
+    if (canUndoTranslationDrag !== undefined) this.#canUndoTranslationDrag = canUndoTranslationDrag;
     this.#render();
   }
 
@@ -243,7 +279,9 @@ export class PlaygroundPlaybackControls {
     ) {
       return;
     }
+    if (this.#preparedFrontier !== null) return; // Prepared observations require their readiness metadata.
     this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
+    this.#confirmedTimeSeconds = this.#timeSeconds;
     this.#renderTime();
   }
 
@@ -254,6 +292,7 @@ export class PlaygroundPlaybackControls {
     this.#restartButton.removeEventListener("click", this.#handleRestart);
     this.#undoDragButton.removeEventListener("click", this.#handleUndoDrag);
     this.#scrubber.removeEventListener("input", this.#handleSeekInput);
+    this.#preparedSeek.removeEventListener("change", this.#handlePreparedSeek);
     this.#previousSection.removeEventListener("click", this.#handlePreviousSection);
     this.#nextSection.removeEventListener("click", this.#handleNextSection);
     this.#muteButton.removeEventListener("click", this.#handleMute);
@@ -276,11 +315,29 @@ export class PlaygroundPlaybackControls {
   };
 
   #handleUndoDrag = () => {
-    if (!this.#undoDragSupported) return;
+    if (!this.#undoDragSupported || this.#preparedFrontier !== null) return;
     void this.#runCommand(async (generation) => {
       const result = await this.#player.undoTranslationDrag();
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
+  };
+
+  #handlePreparedSeek = () => {
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending ||
+        this.#preparedFrontier === null || this.#durationSeconds !== null) return;
+    const value = this.#preparedSeek.value.trim();
+    const target = value === "" ? NaN : Number(value);
+    if (!Number.isFinite(target) || target < 0 || target >= this.#preparedFrontier) {
+      this.#seekNotice = `Choose a time from 0 to before ${this.#preparedFrontier} s`;
+      this.#preparedSeek.value = String(this.#timeSeconds);
+      this.#render();
+      return;
+    }
+    // Never manufacture an epsilon/last-frame target at the still-open frontier.
+    // Rust revalidates the exact absolute request through the existing seek API.
+    this.#seekNotice = null;
+    this.#desiredSeek = target;
+    void this.#drainSeek();
   };
 
   #handlePreviousSection = () => this.#handleSection(true);
@@ -306,7 +363,8 @@ export class PlaygroundPlaybackControls {
   };
 
   #handleSeekInput = () => {
-    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending) return;
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending ||
+        this.#durationSeconds === null) return;
     const target = Number(this.#scrubber.value);
     if (!Number.isFinite(target)) return;
     const bounded = Math.min(Math.max(target, 0), this.#durationSeconds);
@@ -346,18 +404,22 @@ export class PlaygroundPlaybackControls {
         this.#desiredSeek = null;
         const result = await this.#player.seek(target);
         if (generation !== this.#controlGeneration) break;
-        if (this.#desiredSeek === null) {
-          if (!this.#destroyed) this.sync(result);
-        } else if (typeof result.playing === "boolean") {
-          // Keep the latest user-selected playhead visible while an older seek
-          // completion is superseded by another queued direct seek.
-          this.#playing = result.playing;
-          this.#renderDisabled();
+        if (this.#destroyed) break;
+        const desired = this.#desiredSeek;
+        this.sync(result);
+        if (desired !== null && this.#durationSeconds !== null) {
+          // Keep the latest slider request visible, but remember the successful
+          // receipt so a later rejection cannot leave a fictitious playhead.
+          this.#timeSeconds = desired;
+          this.#renderTime();
         }
       }
     } catch (error) {
       if (generation === this.#controlGeneration) {
         this.#desiredSeek = null;
+        this.#timeSeconds = this.#confirmedTimeSeconds;
+        this.#preparedSeek.value = String(this.#timeSeconds);
+        this.#renderTime();
         this.#reportError(error);
       }
     } finally {
@@ -388,35 +450,50 @@ export class PlaygroundPlaybackControls {
       "aria-label",
       !this.#controllable ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
     );
-    this.#scrubber.hidden = !this.#controllable;
+    const open = this.#preparedFrontier !== null && this.#durationSeconds === null;
+    this.#scrubber.hidden = !this.#controllable || open;
+    this.#preparedSeek.hidden = !this.#controllable || !open;
+    this.#preparedSeek.max = String(this.#preparedFrontier ?? 0);
+    this.#preparedSeek.title = open ? `Seek from 0 to before ${this.#preparedFrontier} seconds` : "";
+    this.#liveStatus.hidden = this.#controllable && !open;
+    const status = this.#unavailableReason !== null ? "Replay unavailable" : open
+      ? this.#seekNotice ?? `${this.#buffering ? "Buffering · " : ""}Prepared before ${this.#preparedFrontier} s · total unknown`
+      : "Duration pending";
+    if (this.#liveStatus.textContent !== status) this.#liveStatus.textContent = status;
+    this.#scrubber.max = String(this.#durationSeconds ?? 1);
+    this.#undoDragButton.hidden = !this.#undoDragSupported || this.#preparedFrontier !== null;
+    this.#root.dataset.undoSupport = String(!this.#undoDragButton.hidden);
+    this.#root.dataset.buffering = String(this.#buffering);
+    this.#root.dataset.durationKnown = String(this.#controllable && this.#durationSeconds !== null);
+
     this.#audioControls.hidden = !this.#hasAudio;
     this.#previousSection.hidden = this.#sections.length === 0;
     this.#nextSection.hidden = this.#sections.length === 0;
     this.#sectionNames.textContent = this.#sections.map(section => section.name).join(" · ");
     this.#muteButton.textContent = this.#audioMuted ? "Unmute" : "Mute";
     this.#muteButton.setAttribute("aria-pressed", String(this.#audioMuted));
-    this.#liveStatus.hidden = this.#controllable;
-    this.#liveStatus.textContent = this.#unavailableReason !== null ? "Replay unavailable" : "Duration pending";
-    this.#scrubber.max = String(this.#durationSeconds);
     this.#renderTime();
     this.#renderDisabled();
   }
 
   #renderTime() {
     if (this.#destroyed) return;
-    const time = this.#controllable
-      ? Math.min(this.#timeSeconds, this.#durationSeconds) : this.#timeSeconds;
+    const known = this.#controllable && this.#durationSeconds !== null;
+    const time = known ? Math.min(this.#timeSeconds, this.#durationSeconds) : this.#timeSeconds;
     this.#root.dataset.elapsedSeconds = String(time);
     // Keep the layout slot, but do not draw a percentage thumb before the total
     // is known. Expanding a segment-sized range makes forward time jump back.
-    this.#scrubber.value = String(Math.min(time, this.#durationSeconds));
+    this.#scrubber.value = String(known ? Math.min(time, this.#durationSeconds) : 0);
+    // Polling must not overwrite an unfinished numeric edit. This value is only
+    // a proposed seek; the output remains the last observed engine time.
+    if (document.activeElement !== this.#preparedSeek) this.#preparedSeek.value = String(this.#desiredSeek ?? time);
     this.#scrubber.setAttribute(
       "aria-valuetext",
-      this.#controllable
+      known
         ? `${formatTime(time)} seconds of ${formatTime(this.#durationSeconds)} seconds`
         : `${formatTime(time)} seconds elapsed · total duration not yet known`,
     );
-    this.#timeOutput.value = this.#controllable
+    this.#timeOutput.value = known
       ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
       : this.#unavailableReason !== null ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
   }
@@ -429,12 +506,14 @@ export class PlaygroundPlaybackControls {
     const blockCommands = !this.#controllable || busy;
     this.#playButton.disabled = blockCommands;
     this.#restartButton.disabled = blockCommands;
-    this.#undoDragButton.disabled = blockCommands || !this.#canUndoTranslationDrag;
+    this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
+    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending || this.#durationSeconds === null;
+    // Buffering is reader readiness, not a command lock: pause and rewind stay usable.
+    this.#preparedSeek.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
     this.#previousSection.disabled = blockCommands;
     this.#nextSection.disabled = blockCommands;
     this.#muteButton.disabled = this.#externalBusy;
     this.#volume.disabled = this.#externalBusy;
-    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
     this.#root.dataset.busy = String(busy);
     this.#root.dataset.playing = String(this.#playing);
     this.#root.setAttribute("aria-busy", String(busy));
@@ -460,6 +539,9 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("data-playing");
   root.removeAttribute("data-controllable");
   root.removeAttribute("data-elapsed-seconds");
+  root.removeAttribute("data-buffering");
+  root.removeAttribute("data-duration-known");
+  root.removeAttribute("data-undo-support");
   root.removeAttribute("title");
   root.setAttribute("aria-label", "Animation playback controls");
 
@@ -533,7 +615,8 @@ function installStyles() {
     .playback-restart { min-width: 2.25rem; }
     .playback-button:hover:not(:disabled) { background: #20283a; }
     .playback-button:focus-visible,
-    .playback-scrubber:focus-visible {
+    .playback-scrubber:focus-visible,
+    .playback-prepared-seek:focus-visible {
       outline: 2px solid var(--accent-strong);
       outline-offset: 2px;
     }
@@ -546,6 +629,17 @@ function installStyles() {
       min-width: 0;
       accent-color: var(--accent);
       cursor: pointer;
+    }
+    .playback-prepared-seek {
+      box-sizing: border-box;
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 0.4rem;
+      padding: 0.3rem 0.4rem;
+      background: #111722;
+      color: #dbe2ef;
+      font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .playback-time {
       min-width: 6.2rem;
@@ -568,6 +662,10 @@ function installStyles() {
       font-size: 0.68rem;
       white-space: nowrap;
       text-overflow: ellipsis;
+    }
+    .playback-controls[data-duration-known="false"] .playback-live-status {
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .playback-controls [hidden] { display: none !important; }
     .playback-audio-controls {
@@ -622,6 +720,17 @@ function installStyles() {
 
 function formatTime(seconds) {
   return seconds.toFixed(2);
+}
+
+function validatePreparedState(state) {
+  const { time, preparedFrontier, durationSeconds, buffering } = state;
+  if (state.preparedPlayback !== true || state.replaySupported !== true ||
+      !Number.isFinite(preparedFrontier) || preparedFrontier <= 0 ||
+      time > preparedFrontier || typeof buffering !== "boolean" ||
+      (durationSeconds !== null && (!Number.isFinite(durationSeconds) ||
+       durationSeconds !== preparedFrontier || buffering))) {
+    throw new TypeError("prepared playback state requires a valid reader frontier, terminal duration and buffering status");
+  }
 }
 
 function validateDuration(durationSeconds) {

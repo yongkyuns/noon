@@ -38,6 +38,8 @@ pub struct HdrBloomParameters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HdrBloomPrepareError {
     InvalidRadius,
+    InvalidView,
+    UnsupportedViewEffectStack,
     InvalidThreshold,
     InvalidIntensity,
     UnsupportedCapture,
@@ -194,6 +196,14 @@ pub struct HdrBloomFilter {
     programs: Option<Programs>,
 }
 impl HdrBloomFilter {
+    /// Maximum retained texture requirement with Bloom enabled, excluding the
+    /// caller-owned source. Neutral scopes may use less; hosts can reserve this
+    /// maximum for later activation.
+    pub fn required_scratch_bytes(size: [u32; 2]) -> Option<u64> {
+        u64::from(size[0])
+            .checked_mul(u64::from(size[1]))
+            .and_then(|pixels| pixels.checked_mul(BYTES_PER_PIXEL))
+    }
     /// The adapter must be the one that created `device`. Query its actual
     /// format usages, including downlevel/WebGL restrictions. Unsupported
     /// adapters get a typed preparation error with no pipelines or allocations.
@@ -211,6 +221,62 @@ impl HdrBloomFilter {
             programs: None,
         }
     }
+    /// Resolve the selected authored camera's effective Bloom attachment through
+    /// this same retained operator. Camera-frame paint and opacity never scale
+    /// the composed output. No attachment means zero added Bloom energy while
+    /// the explicit HDR view still resolves its linear base to SDR.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scope: &mut HdrBloomScope,
+        publication: &noon_runtime::RendererPublication<'_>,
+        capture: HdrBloomCapture<'_>,
+        world_view_height: f64,
+        scratch_budget_bytes: u64,
+    ) -> Result<HdrBloomStats, HdrBloomPrepareError> {
+        let camera = publication
+            .primary_view()
+            .ok_or(HdrBloomPrepareError::InvalidView)?;
+        if publication.view_color_profile(camera) != Some(noon_core::ViewColorProfile::LinearHdr) {
+            return Err(HdrBloomPrepareError::InvalidView);
+        }
+        let bloom = match publication.view_effects() {
+            Some(stack)
+                if stack.input_role() == noon_core::EffectInputRole::AuthoredView
+                    && stack.len() == 1 =>
+            {
+                stack.definitions()[0]
+                    .as_bloom()
+                    .ok_or(HdrBloomPrepareError::UnsupportedViewEffectStack)?
+            }
+            Some(_) => return Err(HdrBloomPrepareError::UnsupportedViewEffectStack),
+            None => noon_core::Bloom::new(
+                noon_core::EffectUpdate::default()
+                    .radius(noon_core::Pixels(0.0))
+                    .intensity(0.0),
+            )
+            .expect("checked identity Bloom"),
+        };
+        let sigma_pixels = bloom
+            .radius()
+            .to_output_pixels(capture.source.height(), world_view_height)
+            .map_err(|_| HdrBloomPrepareError::InvalidView)?;
+        self.prepare(
+            device,
+            queue,
+            scope,
+            capture,
+            HdrBloomParameters {
+                sigma_pixels,
+                threshold: bloom.threshold() as f32,
+                intensity: bloom.intensity() as f32,
+                scratch_budget_bytes,
+            },
+        )
+    }
+
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,

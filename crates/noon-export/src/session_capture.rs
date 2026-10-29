@@ -94,7 +94,7 @@ impl SessionCapture {
             receipt,
             width: self.options.width,
             height: self.options.height,
-            format: CapturePixelFormat::RendererRgba8UnormOpaque,
+            format: self.gpu.pixel_format(),
             rgba: self.gpu.pixels(),
         })
     }

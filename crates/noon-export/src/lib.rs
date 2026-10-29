@@ -110,11 +110,13 @@ impl CaptureOptions {
 }
 
 /// Output has tightly packed, top-down RGBA8 rows and opaque alpha. These are
-/// direct Rgba8Unorm renderer bytes, not a claim of an HDR/linear/sRGB conversion.
-/// A video sink must explicitly choose and validate its color conversion.
+/// compatibility renderer bytes or an explicitly identified HDR-to-SDR resolve.
+/// A video sink must separately qualify its color conversion for each profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapturePixelFormat {
     RendererRgba8UnormOpaque,
+    /// Linear HDR composed output resolved once with Reinhard and sRGB transfer.
+    LinearHdrSdrRgba8Opaque,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -207,7 +209,7 @@ where
                             observation: sample.observation,
                             width: options.width,
                             height: options.height,
-                            format: CapturePixelFormat::RendererRgba8UnormOpaque,
+                            format: gpu.pixel_format(),
                             rgba: gpu.pixels(),
                             work,
                         })

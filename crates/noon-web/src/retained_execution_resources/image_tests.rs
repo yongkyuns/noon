@@ -45,6 +45,7 @@ fn image_handle(delta: &RetainedExecutionDeltaEnvelope) -> TransportImageResourc
     }
 }
 
+#[cfg(feature = "renderer")]
 fn family_delta(retained: RetainedExecutionDeltaEnvelope) -> RetainedFamilyExecutionDeltaEnvelope {
     RetainedFamilyExecutionDeltaEnvelope {
         retained,
@@ -58,6 +59,7 @@ fn family_delta(retained: RetainedExecutionDeltaEnvelope) -> RetainedFamilyExecu
     }
 }
 
+#[cfg(feature = "renderer")]
 #[test]
 fn rejected_family_delta_does_not_run_resident_preparation() {
     let (bytes, initial) = initial();
@@ -84,6 +86,7 @@ fn rejected_family_delta_does_not_run_resident_preparation() {
     assert_eq!(mirror.frame().unwrap(), &before);
 }
 
+#[cfg(feature = "renderer")]
 #[test]
 fn stale_family_delta_does_not_advance_resident_mesh_history() {
     let (bytes, initial) = initial();
@@ -124,6 +127,7 @@ fn stale_family_delta_does_not_advance_resident_mesh_history() {
         .is_none());
 }
 
+#[cfg(feature = "renderer")]
 #[test]
 fn resident_preload_failure_does_not_reject_an_admitted_delta() {
     let (bytes, initial) = initial();

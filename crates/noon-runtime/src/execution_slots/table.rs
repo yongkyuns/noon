@@ -83,6 +83,11 @@ impl ExecutionSlotTable {
         Self::default()
     }
 
+    /// Total object capacity already reserved in both storage and lookup tables.
+    pub fn reserved_object_capacity(&self) -> usize {
+        self.slots.capacity().min(self.object_slots.capacity())
+    }
+
     pub fn from_compiled(compiled: &CompiledScene) -> Self {
         let mut table = Self::new();
         for object in compiled.objects().iter().filter(|object| object.live) {
@@ -92,6 +97,21 @@ impl ExecutionSlotTable {
         }
         table.last_mutation = ExecutionSlotMutationStats::default();
         table
+    }
+
+    /// Explicit capacity maintenance for a bounded historical reader. It changes
+    /// allocation capacity only, not identities, membership, or mutation stats.
+    pub fn reserve_object_capacity(&mut self, total: usize) -> Result<(), ExecutionSlotError> {
+        if total > u32::MAX as usize {
+            return Err(ExecutionSlotError::CapacityExhausted);
+        }
+        self.slots
+            .try_reserve_exact(total.saturating_sub(self.slots.len()))
+            .map_err(|_| ExecutionSlotError::CapacityExhausted)?;
+        self.object_slots
+            .try_reserve(total.saturating_sub(self.object_slots.len()))
+            .map_err(|_| ExecutionSlotError::CapacityExhausted)?;
+        Ok(())
     }
 
     pub fn insert_object(

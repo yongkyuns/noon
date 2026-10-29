@@ -93,6 +93,9 @@ jobs:
       - name: Run fast Rust tests
         run: cargo test --workspace --all-features --lib --test family
 
+      - name: Check prepared playback browser input on WASM
+        run: cargo check --locked -p noon-web --features prepared-prefix --target wasm32-unknown-unknown
+
   web-preflight:
     name: Web static and unit checks
     runs-on: ubuntu-latest

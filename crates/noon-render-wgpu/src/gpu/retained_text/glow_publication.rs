@@ -243,6 +243,9 @@ impl RetainedEffectPublication {
                 }
                 if (row.effects.is_some()
                     || row.content.composed_source().is_some() && row.style.opacity != 1.0)
+                    && row.effects.as_ref().is_none_or(|stack| {
+                        stack.input_role() != noon_core::EffectInputRole::AuthoredView
+                    })
                     && (frame.is_drawable(index)
                         || (row.content.composed_source().is_some() && frame.is_present(index)))
                 {
@@ -291,6 +294,9 @@ impl RetainedEffectPublication {
                     .filter(|row| {
                         (row.effects.is_some()
                             || row.content.composed_source().is_some() && row.style.opacity != 1.0)
+                            && row.effects.as_ref().is_none_or(|stack| {
+                                stack.input_role() != noon_core::EffectInputRole::AuthoredView
+                            })
                             && (frame.is_drawable(index)
                                 || (row.content.composed_source().is_some()
                                     && frame.is_present(index)))
@@ -377,6 +383,11 @@ impl GpuRenderer {
         publication: &RendererPublication<'_>,
         visible: &'a [usize],
     ) -> Result<&'a [usize], EffectPrepareError> {
+        if (publication.color_profile() == noon_core::ViewColorProfile::LinearHdr)
+            != (self.target_format == wgpu::TextureFormat::Rgba16Float)
+        {
+            return Err(EffectPrepareError::UnsupportedCapture);
+        }
         if self
             .retained_effects
             .context
