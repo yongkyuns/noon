@@ -499,3 +499,198 @@ fn shader_time_wait_pixels_and_seek_use_authored_time_without_source_recapture()
     }
     eprintln!("ordinary shader canonical time:6 images, max byte error{overall_maximum}; independent coverage gain; exact seek; no source recapture or allocation on forward time changes");
 }
+
+#[test]
+#[ignore = "requires a real adapter; owned GPU compilation, stale work and retirement"]
+fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_churn() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut scene = Scene::new();
+    let mut object = scene.rectangle(1.6, 1.2).unwrap();
+    object.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    object.disable_stroke().unwrap();
+    scene.add(&object).unwrap();
+    let mut hidden = scene.rectangle(1.0, 1.0).unwrap();
+    hidden.set_translation(20.0, 0.0).unwrap();
+    scene.add(&hidden).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut surface = Surface::new(&device, &queue);
+    let input = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let program = program(ShaderCoordinates::LocalNormalized, SOURCE);
+    let definition = |program: &WgslEffectProgram| {
+        ShaderEffect::new(program.clone())
+            .with_parameter(
+                &program.parameter("weight").unwrap(),
+                ShaderValue::Vector2([0.0; 2]),
+            )
+            .unwrap()
+            .with_parameter(
+                &program.parameter("phase").unwrap(),
+                ShaderValue::Scalar(0.7),
+            )
+            .unwrap()
+    };
+    scene
+        .live(&mut session)
+        .add_effect(&object, definition(&program), "material")
+        .unwrap();
+    let preparation = surface
+        .renderer
+        .effect_program_preparation(&device, &session.resource_publication())
+        .unwrap();
+    let preparation = preparation
+        .try_ready()
+        .expect_err("new module must be prepared asynchronously");
+    // Input/parameter work may commit while device validation awaits. The request
+    // owns only immutable modules, so it neither borrows nor rewrites this source.
+    scene
+        .live(&mut session)
+        .set_effect(
+            &object,
+            "material",
+            EffectUpdate::default().shader_parameter(
+                &program.parameter("phase").unwrap(),
+                ShaderValue::Scalar(0.6),
+            ),
+        )
+        .unwrap();
+    let prepared = pollster::block_on(preparation.prepare()).unwrap();
+    assert_eq!(prepared.stats().pipeline_compiles, 1);
+    let context = session.publication_context();
+    let changes = session.resource_publication().changes().clone();
+    surface
+        .renderer
+        .cache_effect_programs(&device, &prepared)
+        .unwrap();
+    let current = surface
+        .renderer
+        .effect_program_preparation(&device, &session.resource_publication())
+        .unwrap()
+        .try_ready()
+        .expect("newer parameter publication reuses compiled module");
+    assert!(surface
+        .renderer
+        .commit_effect_programs(&device, &session.resource_publication(), prepared)
+        .is_err());
+    assert_eq!(session.publication_context(), context);
+    assert_eq!(session.resource_publication().changes(), &changes);
+    assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 1]);
+    assert_eq!(readback(&device, &queue, &surface.target), input);
+    let work = surface
+        .renderer
+        .commit_effect_programs(&device, &session.resource_publication(), current)
+        .unwrap();
+    assert_eq!(work.pipeline_compiles, 0);
+    assert_eq!(surface.renderer.resident_effect_program_counts(), [1, 1]);
+    let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let expected: Vec<_> = input
+        .iter()
+        .map(|&v| (f64::from(v) * 0.6).round() as u8)
+        .collect();
+    assert!(actual
+        .iter()
+        .zip(&expected)
+        .all(|(a, b)| a.abs_diff(*b) <= 2));
+    let old = surface
+        .renderer
+        .effect_program_preparation(&device, &session.resource_publication())
+        .unwrap()
+        .try_ready()
+        .unwrap();
+    surface.renderer.reset_retained_effect_publication();
+    assert!(
+        surface
+            .renderer
+            .commit_effect_programs(&device, &session.resource_publication(), old)
+            .is_err(),
+        "reset cache must reject even an equal-context token"
+    );
+    assert_eq!(readback(&device, &queue, &surface.target), actual);
+    assert_eq!(
+        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        actual
+    );
+    assert_eq!(surface.program_stats.pipeline_compiles, 1);
+    scene
+        .live(&mut session)
+        .remove_effect(&object, "material")
+        .unwrap();
+    assert_eq!(
+        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        input
+    );
+    assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 0]);
+    for index in 0..16 {
+        let source = format!("{SOURCE}\nfn marker() -> u32 {{ return {index}u; }}");
+        let program = WgslEffectProgram::prepare(program.schema().clone(), source).unwrap();
+        scene
+            .live(&mut session)
+            .add_effect(&object, definition(&program), "material")
+            .unwrap();
+        let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+        let expected: Vec<_> = input
+            .iter()
+            .map(|&v| (f64::from(v) * 0.7).round() as u8)
+            .collect();
+        assert!(actual
+            .iter()
+            .zip(&expected)
+            .all(|(a, b)| a.abs_diff(*b) <= 2));
+        assert_eq!(surface.program_stats.pipeline_compiles, 1);
+        assert_eq!(surface.renderer.resident_effect_program_counts(), [1, 1]);
+        scene
+            .live(&mut session)
+            .remove_effect(&object, "material")
+            .unwrap();
+        assert_eq!(
+            surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+            input
+        );
+        assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 0]);
+    }
+    let good = WgslEffectProgram::prepare(
+        program.schema().clone(),
+        format!("{SOURCE}\nfn marker() -> u32 {{ return 100u; }}"),
+    )
+    .unwrap();
+    let bad = WgslEffectProgram::prepare(
+        program.schema().clone(),
+        format!("{SOURCE}\nfn fs_sample() -> f32 {{ return 1.0; }}"),
+    )
+    .unwrap();
+    scene
+        .live(&mut session)
+        .add_effect(&object, definition(&good), "material")
+        .unwrap();
+    scene
+        .live(&mut session)
+        .add_effect(&hidden, definition(&bad), "material")
+        .unwrap();
+    let before = session.publication_context();
+    let changes = session.resource_publication().changes().clone();
+    let preparation = surface
+        .renderer
+        .effect_program_preparation(&device, &session.resource_publication())
+        .unwrap();
+    assert!(
+        pollster::block_on(preparation.prepare()).is_err(),
+        "a valid first program cannot install a partially failed batch"
+    );
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.resource_publication().changes(), &changes);
+    assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 0]);
+    assert_eq!(readback(&device, &queue, &surface.target), input);
+    for source in [&object, &hidden] {
+        scene
+            .live(&mut session)
+            .remove_effect(source, "material")
+            .unwrap();
+    }
+    assert_eq!(
+        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        input
+    );
+    eprintln!("owned shader preparation: stale context and reset rejected; current module reused; pending changes/last image retained;16 real program enrollment/retirement cycles; partial two-program failure installs neither");
+}

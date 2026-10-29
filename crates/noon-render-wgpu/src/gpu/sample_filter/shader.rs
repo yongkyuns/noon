@@ -204,6 +204,22 @@ impl SampleFilter {
         ))
     }
 
+    pub(in crate::gpu) fn remember_shader_program(&mut self, program: &Arc<PreparedShaderProgram>) {
+        self.shader_programs
+            .retain(|entry| entry.strong_count() > 0);
+        let key = Arc::downgrade(program);
+        if !self.shader_programs.iter().any(|entry| entry.ptr_eq(&key)) {
+            self.shader_programs.push(key);
+        }
+    }
+
+    pub(in crate::gpu) fn live_shader_programs(&self) -> usize {
+        self.shader_programs
+            .iter()
+            .filter(|entry| entry.strong_count() > 0)
+            .count()
+    }
+
     pub(in crate::gpu) fn shader_program(
         &self,
         device: &wgpu::Device,

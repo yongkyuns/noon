@@ -291,6 +291,20 @@ pub struct EffectStackFilter {
 }
 
 impl EffectStackFilter {
+    pub(super) fn shader_program(
+        &self,
+        device: &wgpu::Device,
+        source: &noon_core::WgslEffectProgram,
+    ) -> Result<Arc<PreparedShaderProgram>, EffectPrepareError> {
+        self.sample.shader_program(device, source)
+    }
+    pub(super) fn remember_shader_program(&mut self, program: &Arc<PreparedShaderProgram>) {
+        self.sample.remember_shader_program(program);
+    }
+    pub(super) fn live_shader_programs(&self) -> usize {
+        self.sample.live_shader_programs()
+    }
+
     pub(super) fn pin_shader_programs(
         &self,
         device: &wgpu::Device,

@@ -10,6 +10,9 @@ use noon_runtime::RendererPublication;
 
 use super::{EffectPrepareError, GpuRenderer, PreparedShaderProgram, ShaderSampleContext};
 
+mod preparation;
+pub use preparation::{EffectProgramPreparation, PreparedEffectPrograms};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EffectProgramStats {
     pub rows_examined: usize,
@@ -53,24 +56,41 @@ struct PathBounds {
 
 #[derive(Debug, Default)]
 pub(super) struct EffectPrograms {
+    authority: Arc<()>,
     context: Option<PublicationContext>,
     device: Option<wgpu::Device>,
     rows: BTreeMap<usize, ResidentRow>,
 }
 
 impl GpuRenderer {
-    /// Prepare new immutable effect programs before preparing/encoding a frame.
-    /// Parameter-only publications retain the same programs. Residency follows
-    /// attached execution rows even when those rows are temporarily offscreen.
-    /// All row changes commit together after every requested program succeeds.
-    pub async fn prepare_effect_programs(
-        &mut self,
+    /// O(1) host fast path before borrowing/cloning a sparse publication delta.
+    pub fn effect_programs_current(
+        &self,
+        device: &wgpu::Device,
+        context: PublicationContext,
+    ) -> bool {
+        self.effect_programs.device.as_ref() == Some(device)
+            && self.effect_programs.context == Some(context)
+    }
+
+    /// Inspect only new/changed rows. The request owns immutable source/program
+    /// leases, so an asynchronous host never borrows the live publication.
+    pub fn effect_program_preparation(
+        &self,
         device: &wgpu::Device,
         publication: &RendererPublication<'_>,
-    ) -> Result<EffectProgramStats, EffectProgramPrepareError> {
+    ) -> Result<EffectProgramPreparation, EffectPrepareError> {
+        let mut request = EffectProgramPreparation {
+            authority: Arc::clone(&self.effect_programs.authority),
+            device: device.clone(),
+            context: publication.context(),
+            rows: Vec::new(),
+            stats: EffectProgramStats::default(),
+            missing: false,
+        };
         let same_device = self.effect_programs.device.as_ref() == Some(device);
         if same_device && self.effect_programs.context == Some(publication.context()) {
-            return Ok(EffectProgramStats::default());
+            return Ok(request);
         }
         let full = !same_device
             || self.effect_programs.context.is_none()
@@ -90,11 +110,8 @@ impl GpuRenderer {
                     .flatten()
                     .copied(),
             );
-        let mut edits = Vec::new();
-        let mut stats = EffectProgramStats::default();
-        let mut fresh = super::analytic_glow::EffectCaptureGpu::default();
         for index in indices {
-            stats.rows_examined += 1;
+            request.stats.rows_examined += 1;
             let previous = self.effect_programs.rows.get(&index);
             let row = publication
                 .frame()
@@ -111,7 +128,7 @@ impl GpuRenderer {
             });
             if shader_count == 0 {
                 if previous.is_some() {
-                    edits.push((index, None));
+                    request.rows.push((index, None));
                 }
                 continue;
             }
@@ -120,9 +137,7 @@ impl GpuRenderer {
                 || publication.color_profile() != ViewColorProfile::Compatibility
                 || self.target_format == wgpu::TextureFormat::Rgba16Float
             {
-                return Err(EffectProgramPrepareError::Profile(
-                    EffectPrepareError::UnsupportedCapture,
-                ));
+                return Err(EffectPrepareError::UnsupportedCapture);
             }
             let sources = || {
                 stack
@@ -143,45 +158,106 @@ impl GpuRenderer {
             }) {
                 continue;
             }
-            let filter = &mut self
-                .effect_captures
-                .as_deref_mut()
-                .unwrap_or(&mut fresh)
-                .filter;
-            let mut programs = Vec::with_capacity(shader_count);
-            for source in sources() {
-                let (program, work) = filter
-                    .prepare_shader_program(device, source)
-                    .await
-                    .map_err(EffectProgramPrepareError::Gpu)?;
-                stats.pipeline_compiles += work.pipeline_compiles;
-                programs.push(program);
-            }
-            edits.push((
+            let programs = sources()
+                .map(|source| {
+                    let program = self
+                        .effect_captures
+                        .as_deref()
+                        .and_then(|cache| cache.filter.shader_program(device, source).ok());
+                    request.missing |= program.is_none();
+                    (source.clone(), program)
+                })
+                .collect();
+            request.rows.push((
                 index,
-                Some(ResidentRow {
+                Some(preparation::RowRequest {
                     object: row.id,
                     programs,
-                    path_bounds: None,
                 }),
             ));
         }
-        if self.effect_captures.is_none()
-            && !edits.is_empty()
-            && edits.iter().any(|(_, row)| row.is_some())
+        Ok(request)
+    }
+
+    /// Make validated immutable modules available to a newer publication without
+    /// installing stale row bindings. The caller keeps this lease through replanning.
+    pub fn cache_effect_programs(
+        &mut self,
+        device: &wgpu::Device,
+        prepared: &PreparedEffectPrograms,
+    ) -> Result<(), EffectPrepareError> {
+        if prepared.device != *device
+            || !Arc::ptr_eq(&prepared.authority, &self.effect_programs.authority)
         {
-            self.effect_captures = Some(Box::new(fresh));
+            return Err(EffectPrepareError::PublicationMismatch);
         }
-        for (index, next) in edits {
-            if let Some(row) = next {
+        for (_, row) in &prepared.rows {
+            if let Some(row) = row {
+                let cache = self.effect_captures.get_or_insert_with(Default::default);
+                for program in &row.programs {
+                    cache.filter.remember_shader_program(program);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Install row residency only for the exact current publication/device/cache.
+    /// Failed or stale preparation never consumes runtime changes or old output.
+    pub fn commit_effect_programs(
+        &mut self,
+        device: &wgpu::Device,
+        publication: &RendererPublication<'_>,
+        prepared: PreparedEffectPrograms,
+    ) -> Result<EffectProgramStats, EffectPrepareError> {
+        if prepared.context != publication.context() {
+            return Err(EffectPrepareError::PublicationMismatch);
+        }
+        self.cache_effect_programs(device, &prepared)?;
+        for (index, row) in prepared.rows {
+            if let Some(mut row) = row {
+                if let Some(old) = self
+                    .effect_programs
+                    .rows
+                    .get_mut(&index)
+                    .filter(|old| old.object == row.object)
+                {
+                    row.path_bounds = old.path_bounds.take();
+                }
                 self.effect_programs.rows.insert(index, row);
             } else {
                 self.effect_programs.rows.remove(&index);
             }
         }
-        self.effect_programs.context = Some(publication.context());
+        self.effect_programs.context = Some(prepared.context);
         self.effect_programs.device = Some(device.clone());
-        Ok(stats)
+        Ok(prepared.stats)
+    }
+
+    /// Native/initialization convenience over the same owned preparation seam.
+    pub async fn prepare_effect_programs(
+        &mut self,
+        device: &wgpu::Device,
+        publication: &RendererPublication<'_>,
+    ) -> Result<EffectProgramStats, EffectProgramPrepareError> {
+        let prepared = self
+            .effect_program_preparation(device, publication)
+            .map_err(EffectProgramPrepareError::Profile)?
+            .prepare()
+            .await?;
+        self.commit_effect_programs(device, publication, prepared)
+            .map_err(EffectProgramPrepareError::Profile)
+    }
+
+    /// Diagnostic observation: attached shader rows and live cached device programs.
+    /// The latter scans only the program cache; ordinary preparation never uses it.
+    pub fn resident_effect_program_counts(&self) -> [usize; 2] {
+        [
+            self.effect_programs.rows.len(),
+            self.effect_captures
+                .as_deref()
+                .map_or(0, |cache| cache.filter.live_shader_programs()),
+        ]
     }
 
     fn shader_path_bounds(&mut self, index: usize, path: &Arc<VectorPath>) -> Option<Rect> {

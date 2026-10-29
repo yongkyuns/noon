@@ -43,7 +43,9 @@ pub use hdr_bloom::{
 mod glow_filter;
 mod sample_filter;
 mod shader_effects;
-pub use shader_effects::{EffectProgramPrepareError, EffectProgramStats};
+pub use shader_effects::{
+    EffectProgramPreparation, EffectProgramPrepareError, EffectProgramStats, PreparedEffectPrograms,
+};
 mod shadow_filter;
 pub use effect_stack::{
     EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,

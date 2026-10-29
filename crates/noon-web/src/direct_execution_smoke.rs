@@ -1670,3 +1670,12 @@ pub async fn create_direct_shader_sweep_smoke_renderer(
     let program = noon::example_scenes::shader_sweep::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepLateSmokeRenderer)]
+pub async fn create_direct_shader_sweep_late_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::late_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}

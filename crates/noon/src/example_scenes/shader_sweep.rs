@@ -22,6 +22,8 @@ pub struct ShaderSweep {
     panels: [Mobject; 2],
     phase: [ShaderParameterKey; 2],
     stage: u8,
+    deferred: Option<[WgslEffectProgram; 2]>,
+    retire: bool,
 }
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -76,6 +78,12 @@ impl LiveContinuation for ShaderSweep {
         let segment = match self.stage {
             0 | 2 | 4 => live.wait_segment(0.5),
             1 | 3 => {
+                if let Some(programs) = self.deferred.take() {
+                    for (panel, program) in self.panels.iter().zip(programs) {
+                        live.add_effect(panel, ShaderEffect::new(program), "stripes")
+                            .map_err(message)?;
+                    }
+                }
                 let outward = self.stage == 1;
                 let targets = self
                     .panels
@@ -121,7 +129,13 @@ impl LiveContinuation for ShaderSweep {
                     AnimationOptions::new(),
                 )
             }
-            5 => return Ok(ContinuationStep::Finished),
+            5 if self.retire => {
+                for panel in &self.panels {
+                    live.remove_effect(panel, "stripes").map_err(message)?;
+                }
+                live.wait_segment(0.5)
+            }
+            5 | 6 => return Ok(ContinuationStep::Finished),
             _ => return Err("shader sweep resumed after completion".into()),
         }
         .map_err(message)?;
@@ -131,6 +145,16 @@ impl LiveContinuation for ShaderSweep {
 }
 
 pub fn program() -> Result<LiveProgram<ShaderSweep>, String> {
+    build_program(false)
+}
+
+/// The same lesson with enrollment after its first wait and explicit retirement.
+/// Qualifies new immutable programs introduced by an ordinary live continuation.
+pub fn late_program() -> Result<LiveProgram<ShaderSweep>, String> {
+    build_program(true)
+}
+
+fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
     let mut scene = Scene::new();
     let mut background = scene.rectangle(16.0, 9.0).map_err(message)?;
     background
@@ -150,9 +174,11 @@ pub fn program() -> Result<LiveProgram<ShaderSweep>, String> {
         panel
             .set_translation(if i == 0 { -3.0 } else { 3.0 }, 0.0)
             .map_err(message)?;
-        panel
-            .add_effect(ShaderEffect::new(program.clone()), "stripes")
-            .map_err(message)?;
+        if !late {
+            panel
+                .add_effect(ShaderEffect::new(program.clone()), "stripes")
+                .map_err(message)?;
+        }
         scene.add(&panel).map_err(message)?;
         panels.push(panel);
     }
@@ -185,6 +211,8 @@ pub fn program() -> Result<LiveProgram<ShaderSweep>, String> {
                 .each_ref()
                 .map(|program| program.parameter("phase").expect("declared phase")),
             stage: 0,
+            deferred: late.then_some(programs),
+            retire: late,
         })
         .map_err(message)
 }
