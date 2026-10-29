@@ -23,13 +23,16 @@ an independent coverage reference, different presentation cadences and seek/repl
 on WebGPU and WebGL2. It requires a clean renderer-smoke browser package.
 
 Late Rust attachments use `live.prepare_effect_attachments(...)`; shader-bearing
-scene/family edits use `prepare_membership`/`prepare_family_membership`. Both yield
+scene/family edits use `prepare_membership`/`prepare_family_membership`; an ordinary
+shader-bearing introducer uses `prepare_composition`. These yield
 `ContinuationStep::Publish`: native, direct-WASM and offscreen hosts prepare owned
 immutable modules before the normal publisher revalidates and commits the batch.
 The existing retention barrier then admits the frame before source resumption.
 Parameter edits and detached animation targets need no new module preparation;
 headless prepared prefixes explicitly reject this resource-dependent operation.
 The shader-time qualification also checks real GPU compilation failure and retry.
+Composition preparation retains the original request and captures activation
+state only when fresh admission succeeds; cancellation publishes nothing.
 Run it with `NOON_SHADER_SOURCE_MODE=jspi` for synchronous source admission or
 `NOON_SHADER_SOURCE_MODE=async` for explicitly awaited constructs;
 the default forces portable suspension. All reject incompatible HDR attachments
@@ -39,18 +42,22 @@ row bindings are prepared again for the new target. A different device requires
 fresh program preparation. Publication also rechecks that any newly executable
 program still matches the modules prepared before the await.
 
-Live Python shader attachments and shader-bearing scene/family insertion use that
+Live Python shader attachments, shader-bearing scene/family insertion and ordinary
+introducing `Scene.play(FadeIn(...))` use that
 same staged transaction. Portable direct calls suspend automatically, including
 assigned/chained results; explicit async constructs await the resource-dependent call,
 and JSPI sources retain blocking syntax. First-use source/schema is preflighted
 before stream registration; reuse sends the existing immutable resource handle.
 GPU readiness precedes fresh CPU admission; frame retention precedes source
 resumption. Cold construction and built-in effect calls stay fluent.
+Prepared plays use the existing continuation and callback channel. Callback
+sparse reads still require JSPI; portable plays retain statement-call syntax.
 
 Native windowless export opts into source validation with `noon-export/wgsl-effects`.
 The existing export host prepares staged modules before publication; its GPU test
-compares 20 exact-time frames after late insertion with cold authoring, including
-an HDR-to-compatibility transition and later retirement.
+compares 20 exact-time frames after late insertion or FadeIn with cold authoring,
+including an HDR-to-compatibility transition and later retirement. Independent
+invisible/halfway alpha references also cover the introducing animation.
 
 Remaining view/capability combinations, native Python, broader recovery and the
 physical-device performance matrix remain unqualified; #1897 owns promotion.

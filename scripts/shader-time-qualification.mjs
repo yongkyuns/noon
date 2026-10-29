@@ -28,14 +28,33 @@ const materialLesson = await readFile(root + "/web/python/examples/showcase_shad
 const materialAttachment = `        for panel, program in zip(panels, programs):
             panel.add_effect(ShaderEffect(program), name="stripes")`;
 assert.ok(materialLesson.includes(materialAttachment));
-const fadeSource = sourceForMode(materialLesson
+const fadeLesson = materialLesson
   .replace("class ShaderMaterial(Scene):", "class ShaderMaterial(MovingCameraScene):")
   .replace("    def construct(self):\n", "    def construct(self):\n        self.camera.frame.set_view_color_profile('linear_hdr')\n")
   .replace(materialAttachment, `        self.camera.frame.set_view_color_profile('compatibility')
         self.play(*(FadeIn(panel) for panel in panels), run_time=1, rate_func=linear)`)
   .replace('        programs = [material("local"), material("scene")]\n', '')
   .replace("        self.add(*panels)", `        programs = [material("local"), material("scene")]
-${materialAttachment}`));
+${materialAttachment}`);
+const fadeSource = sourceForMode(fadeLesson);
+
+async function qualifyColdFade(context, baseUrl, backend) {
+  const page = await context.newPage();
+  try {
+    await page.goto(baseUrl + "/web/manim-raster-host.html");
+    await page.waitForFunction(() => globalThis.noonHostRaster);
+    const source = sourceForMode(fadeLesson.replace("        self.wait(0.5)\n", ""));
+    const initial = await page.evaluate(source => noonHostRaster.load(source, 6.5), source);
+    assert.equal(initial.rendererBackend, backend);
+    const invisible = fadeReference(PNG.sync.read(await page.locator("#scene").screenshot()), 0.5);
+    await page.evaluate(() => noonHostRaster.renderThrough(1, [0, 0.5]));
+    const halfway = fadeReference(PNG.sync.read(await page.locator("#scene").screenshot()), 1);
+    const frame = await page.evaluate(() => noonHostRaster.debugFrame());
+    assert.equal(frame.time, 0.5);
+    assert.equal(frame.objects.flatMap(object => object.effects).length, 2);
+    return { backend, sourceMode, invisible, halfway, frame };
+  } finally { await page.close(); }
+}
 
 function fadeReference(image, time) {
   if (![0.5, 1, 7].includes(time)) return null;
@@ -321,6 +340,7 @@ await qualifyPairedAuthoring({
         await qualifyPythonPreparation(context, baseUrl, backend, "family"),
         await qualifyPythonPreparation(context, baseUrl, backend, "object")],
       pythonFade: await qualifyPythonPreparation(context, baseUrl, backend, "fade"),
+      coldFade: await qualifyColdFade(context, baseUrl, backend),
       profileTransition: sourceMode === "jspi" ? await qualifyProfileTransition(context, baseUrl, backend) : null,
     };
     const images = new Map(), trials = [];
@@ -373,6 +393,7 @@ await qualifyPairedAuthoring({
         await qualifyPythonPreparation(context, baseUrl, backend, "family"),
         await qualifyPythonPreparation(context, baseUrl, backend, "object")],
       pythonFade: await qualifyPythonPreparation(context, baseUrl, backend, "fade"),
+      coldFade: await qualifyColdFade(context, baseUrl, backend),
       profileTransition: await qualifyProfileTransition(context, baseUrl, backend) };
   },
 });
