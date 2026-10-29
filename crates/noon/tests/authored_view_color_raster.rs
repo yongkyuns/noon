@@ -600,6 +600,7 @@ fn animated_material_targets_reach_independent_pre_bloom_and_display_pixels() {
     }
 }
 
+#[cfg(feature = "native-text")]
 #[test]
 #[ignore = "requires a real native float/blending adapter; absence fails qualification"]
 fn first_active_family_publication_and_cached_seek_keep_hdr_material() {
