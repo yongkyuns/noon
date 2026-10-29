@@ -254,11 +254,18 @@ export async function attachSemanticEngine(
       return Promise.resolve();
     }
     if (pendingPresentation !== null) {
+      // Resource preparation and continuation progression may retain the same
+      // first frame. Both consume its one acknowledgement, not another barrier.
+      if (samePublication(pendingPresentation.publication, requiredPublication)) {
+        return pendingPresentation.promise;
+      }
       throw new Error("semantic endpoint already awaits a renderer publication");
     }
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       pendingPresentation = { publication: requiredPublication, resolve, reject };
     });
+    pendingPresentation.promise = promise;
+    return promise;
   };
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||

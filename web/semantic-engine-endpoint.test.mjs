@@ -724,14 +724,19 @@ test("external samples wake only active interactions and serialize presented del
   }
 });
 
-test("one external sample crosses continuation segments with the returned player", async () => {
+for (const prepareEffects of [false, true]) {
+test(`one external sample crosses continuation segments with the returned player (prepare effects=${prepareEffects})`, async () => {
   let endpoint;
   let stage = 0;
+  let preparation;
   const f = fixture("transferable", null, {
     generation: 32,
     onComplete: () => {
       stage += 1;
-      setImmediate(() => endpoint.startContinuation(32));
+      setImmediate(() => {
+        if (prepareEffects) preparation = endpoint.prepareSourceEffects(32, { startsSegment: true });
+        else endpoint.startContinuation(32);
+      });
     },
     onError: (_generation, error) => { throw error; },
   }, { pacing: "external_samples" });
@@ -744,6 +749,8 @@ test("one external sample crosses continuation segments with the returned player
     });
   };
   const delta = () => nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+  f.context.effectPreparationResources = () => new Uint8Array([1]);
+  f.context.publishPreparedEffects = () => {};
   try {
     f.player.driveLiveSegmentToAuthoredTime = (target) => {
       f.stats().authoredSampleTimes.push(target);
@@ -761,10 +768,19 @@ test("one external sample crosses continuation segments with the returned player
     await ready;
     acknowledge(await initial);
 
+    const resources = prepareEffects
+      ? nextMatching(f.render.port2, m => m.type === "prepare_effect_programs") : null;
+    const released = prepareEffects
+      ? nextMatching(f.render.port2, m => m.type === "release_effect_programs") : null;
     const sampled = request(f.control.port2, "sample_to_authored_time", 63, { time: 1.5 });
     acknowledge(await delta()); // first segment endpoint
     acknowledge(await delta()); // first segment completion
+    if (resources !== null) {
+      const resource = await resources;
+      f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
+    }
     acknowledge(await delta()); // next segment authored/resume publication
+    if (released !== null) { await released; await preparation; }
     acknowledge(await delta()); // requested frame in the next segment
     const sampleResult = await sampled;
     assert.equal(sampleResult.time, 1.5);
@@ -777,6 +793,7 @@ test("one external sample crosses continuation segments with the returned player
     assert.equal(f.stats().completedSegments, 1);
   } finally { endpoint?.stop(); f.close(); }
 });
+}
 
 for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]) {
   test(`external sampling completion: time=${time}, stop=${stopAtSourceCompletion}`, { timeout: 2_000 }, async () => {
