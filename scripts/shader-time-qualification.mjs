@@ -113,8 +113,8 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
     assert.equal(initial.rendererBackend, backend);
     const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
-    const author = page.workers().find(worker => worker.url().includes("python-worker.js"));
-    assert.ok(author);
+    const author = page.workers().find(worker => worker.url().includes("python-worker"));
+    assert.ok(author, "actual Python authoring worker required");
     await author.evaluate(() => {
       globalThis.shaderPreparationBytes = [];
       const original = MessagePort.prototype.postMessage;
