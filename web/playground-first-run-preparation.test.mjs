@@ -84,8 +84,8 @@ assert.match(
 );
 assert.match(
   runtimeReadyBody,
-  /nextPlayer\.terminate\(\);\s*adoptRuntimeCanvas\(nextPlayer\);/,
-  "failed engine attachment must terminate the candidate and adopt its fresh canvas",
+  /nextPlayer\.terminate\(\);\s*if \(runToken === null \|\| isCurrentRun\(runToken\)\) adoptRuntimeCanvas\(nextPlayer\);/,
+  "failed attachment must retire its candidate but only a current or unscoped run may adopt its canvas",
 );
 
 const runSceneStart = main.indexOf("async function runScene()");

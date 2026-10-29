@@ -97,6 +97,7 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
       return;
     }
     renderer.advanceDirectRealtime(timestamp);
+    options.onDemand?.();
     presentPending();
     schedule();
   }
@@ -108,6 +109,7 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
     }
     const wallTimeMs = now();
     renderer.advanceDirectRealtime(wallTimeMs);
+    options.onDemand?.();
     presentPending();
     schedule();
   }
@@ -116,6 +118,8 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
 
   return {
     wake() {
+      if (!running) return;
+      options.onDemand?.();
       schedule();
     },
     stop() {

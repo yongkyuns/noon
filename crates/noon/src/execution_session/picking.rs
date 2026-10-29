@@ -11,6 +11,8 @@ use noon_runtime::{FrameState, SpatialQueryStats};
 
 use super::{ExecutionSession, ExecutionSessionInputError, NativePointerInputToken};
 
+mod identity;
+
 /// Why a potentially filled candidate cannot be decided by the initial picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerFillUnsupported {
@@ -81,7 +83,10 @@ impl ExecutionSession {
     /// geometry return `Unsupported` when encountered as an eligible potentially
     /// filled candidate. The query never calls their bounding box a precise hit.
     /// Groups are traversed by the existing lowering/index; returned identities
-    /// are semantic leaves, never execution slots or frontend wrapper IDs.
+    /// are semantic leaves, never execution slots or frontend wrapper IDs. During
+    /// sealed replay they belong to the selected historical revision, even when
+    /// the corresponding object has since been deleted from the authored store.
+    /// A historical hit grants no permission to mutate a deleted source object.
     ///
     /// The eligibility predicate is native, candidate-local filtering for a
     /// caller's declared targets. Returning false permits picking through that
@@ -139,7 +144,7 @@ impl ExecutionSession {
             let Some(index) = self.runtime.frame_index_for_object(object) else {
                 continue;
             };
-            let Some(target) = self.execution_index.semantic_object_id(object) else {
+            let Some(target) = self.interaction_semantic_object_id(object) else {
                 continue;
             };
             let frame = self.runtime.frame();

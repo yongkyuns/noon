@@ -68,6 +68,15 @@ jobs:
           rustup install
           rustup show active-toolchain
           rustc --version --verbose
+      # Match main CI's debug-info policy on the disk-limited Linux runner.
+      # This does not disable debug assertions or change the native test suite.
+      - name: Bound Linux native test debug artifacts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo 'CARGO_PROFILE_DEV_DEBUG=0' >> "$GITHUB_ENV"
+          echo 'CARGO_PROFILE_TEST_DEBUG=0' >> "$GITHUB_ENV"
+          df -h .
       - name: Cache Cargo sources
         uses: actions/cache@v6
         with:

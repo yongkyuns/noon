@@ -171,22 +171,170 @@ for (const action of ["clear", "accept", "dispose"]) {
   }
 }
 
-test("actual edit boundary freezes pixels before hiding or retiring the renderer", async () => {
+// Execute the real profile/retirement helpers with the edit boundary. A stubbed
+// profile predicate would hide the difference between an ordinary warm renderer
+// and a prepared reader that must be retired before another source is authored.
+async function editBoundaryFixture({ prepared = false, pause = Promise.resolve() } = {}) {
   const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
-  const start = main.indexOf("let editStopPromise = null;");
-  const end = main.indexOf("function sameSemanticContinuation", start);
-  const code = main.slice(start, end);
-  const order = [], canvas = { style: {} };
-  const retained = { pause() { order.push("pause"); return Promise.resolve(); } };
-  const context = { canvas, player: retained, playerNeedsRestart: false, sceneRunPromise: null,
-    activeSourceContinuation: null, authoringClient: null, runtimePreparation: null,
-    previousPreview: { hold(source) { assert.equal(source, canvas); assert.equal(source.style.visibility, undefined); order.push("snapshot"); } },
-    playbackControls: { setControllable(value) { assert.equal(value, false); }, setBusy() {} },
-    generations: { invalidateRun() {} }, stopMetricsPolling() {}, status: { dataset: {} },
-    diagnosticPanel: { invalidate() {} }, setRuntimeStatus() {}, setTimeout, clearTimeout,
-    discardEarlyContinuationRuntime() { assert.fail("completed renderer should retain its warm owner"); } };
-  await vm.runInNewContext(code + "\nstopForSourceEdit()", context);
-  assert.deepEqual(order, ["snapshot", "pause"]);
-  assert.equal(canvas.style.visibility, "hidden");
+  const section = (first, next) => {
+    const start = main.indexOf(first);
+    const end = main.indexOf(next, start + first.length);
+    assert.ok(start >= 0 && end > start, `missing production section: ${first}`);
+    return main.slice(start, end);
+  };
+  const code = [
+    section("function isPreparedPlayback(", "function playbackPresentation("),
+    section("function adoptRuntimeCanvas(", "function createRuntimeClient("),
+    section("function discardEarlyContinuationRuntime(", "function sameSemanticContinuation("),
+  ].join("\n");
+  const f = fixture(), order = [];
+  const canvas = f.canvas;
+  canvas.style = {};
+  f.preview.accept(canvas, identity());
+  const replacementCanvas = { style: {} };
+  let terminated = 0, authoringTerminated = 0, pollsStopped = 0;
+  const retained = {
+    canvas,
+    pause() {
+      assert.equal(f.copies.length, 1, "freeze pixels before pausing");
+      assert.equal(canvas.style.visibility, "hidden");
+      order.push("pause");
+      return pause;
+    },
+    terminate() {
+      assert.equal(f.copies.length, 1, "freeze pixels before retiring");
+      terminated += 1;
+      order.push("terminate");
+      this.canvas = replacementCanvas;
+    },
+  };
+  const client = { terminate() { authoringTerminated += 1; } };
+  const controls = {
+    setControllable(value) { assert.equal(value, false); },
+    setBusy(value) { assert.equal(value, true); },
+    destroy() { order.push("destroy-controls"); },
+  };
+  const context = {
+    canvas, player: retained, preparedPlaybackPlayer: prepared ? retained : null,
+    playerNeedsRestart: false, sceneRunPromise: null, activeSourceContinuation: null,
+    authoringClient: client, runtimePreparation: null, playbackControls: controls,
+    previousPreview: { hold(source) {
+      assert.equal(source, canvas);
+      assert.equal(source.style.visibility, undefined, "freeze before hiding");
+      assert.equal(terminated, 0, "freeze before renderer retirement");
+      order.push("snapshot");
+      f.preview.hold(source);
+    } },
+    generations: { invalidateRun() {} },
+    stopMetricsPolling() { pollsStopped += 1; },
+    status: { dataset: {} }, diagnosticPanel: { invalidate() {} }, setRuntimeStatus() {},
+    setTimeout() { assert.fail("a completed source needs no cancellation watchdog"); },
+    clearTimeout() { assert.fail("no watchdog should be allocated"); },
+  };
+  const stop = vm.runInNewContext(`${code}\n(() => stopForSourceEdit())`, context);
+  return { ...f, context, order, retained, client, controls, replacementCanvas, stop,
+    counts: () => ({ terminated, authoringTerminated, pollsStopped }) };
+}
+
+function assertStopped(context) {
+  assert.equal(context.status.dataset.playbackControls, "unavailable");
+  assert.equal(context.status.dataset.playbackPhase, "stopped");
   assert.equal(context.status.dataset.playbackPlaying, "false");
+}
+
+test("actual edit boundary freezes pixels before hiding or retiring the renderer", async () => {
+  const f = await editBoundaryFixture();
+  await f.stop();
+  assert.deepEqual(f.order, ["snapshot", "pause"]);
+  assert.equal(f.canvas.style.visibility, "hidden");
+  assert.equal(f.context.player, f.retained);
+  assert.equal(f.context.canvas, f.canvas);
+  assert.equal(f.context.authoringClient, f.client);
+  assert.deepEqual(f.counts(), { terminated: 0, authoringTerminated: 0, pollsStopped: 1 });
+  assertStopped(f.context);
 });
+
+test("completed prepared edit freezes before retiring its reader and keeps the warm interpreter", async () => {
+  const f = await editBoundaryFixture({ prepared: true });
+  const stopping = f.stop();
+  assert.deepEqual(f.order, ["snapshot", "terminate", "destroy-controls"]);
+  assert.equal(f.context.player, null);
+  assert.equal(f.context.preparedPlaybackPlayer, null);
+  assert.equal(f.context.playbackControls, null);
+  assert.equal(f.context.canvas, f.replacementCanvas);
+  assert.equal(f.context.canvas.style.visibility, "");
+  assert.equal(f.context.playerNeedsRestart, false);
+  assert.equal(f.context.authoringClient, f.client);
+  assertStopped(f.context);
+  await stopping;
+  assert.deepEqual(f.counts(), { terminated: 1, authoringTerminated: 0, pollsStopped: 1 });
+  assert.equal(f.overlay.hidden, true, "an unfinished optional encode must not block retirement");
+  f.encode(); await flush();
+  assert.equal(f.overlay.hidden, false);
+  assert.equal(f.overlay.dataset.runGeneration, "1");
+});
+
+test("another reader's prepared identity cannot retire the ordinary active renderer", async () => {
+  const f = await editBoundaryFixture();
+  const foreign = {};
+  f.context.preparedPlaybackPlayer = foreign;
+  await f.stop();
+  assert.deepEqual(f.order, ["snapshot", "pause"]);
+  assert.equal(f.context.player, f.retained);
+  assert.equal(f.context.preparedPlaybackPlayer, foreign);
+  assert.equal(f.counts().terminated, 0);
+});
+
+test("a failed completed renderer is frozen and retired rather than paused", async () => {
+  const f = await editBoundaryFixture();
+  f.context.playerNeedsRestart = true;
+  await f.stop();
+  assert.deepEqual(f.order, ["snapshot", "terminate", "destroy-controls"]);
+  assert.equal(f.context.player, null);
+  assert.equal(f.context.playerNeedsRestart, false);
+  assert.equal(f.context.authoringClient, f.client);
+  assert.equal(f.counts().authoringTerminated, 0);
+});
+
+test("repeated edits share the actual pending pause without recapturing pixels", async () => {
+  const pause = deferred();
+  const f = await editBoundaryFixture({ pause: pause.promise });
+  const first = f.stop(), second = f.stop();
+  assert.equal(second, first);
+  assert.deepEqual(f.order, ["snapshot", "pause"]);
+  assert.equal(f.copies.length, 1);
+  assertStopped(f.context);
+  let settled = false;
+  void first.then(() => { settled = true; });
+  await flush();
+  assert.equal(settled, false, "edit stop must await the real pause acknowledgement");
+  pause.resolve(); await first;
+  assert.equal(settled, true);
+  assert.equal(f.context.player, f.retained);
+});
+
+for (const replaced of [false, true]) {
+  test(`late pause rejection retires only the original renderer (replaced=${replaced})`, async () => {
+    const pause = deferred();
+    const f = await editBoundaryFixture({ pause: pause.promise });
+    const stopping = f.stop();
+    const successor = { canvas: { style: {} } }, successorControls = {};
+    if (replaced) {
+      f.context.player = successor;
+      f.context.canvas = successor.canvas;
+      f.context.playbackControls = successorControls;
+      f.context.preparedPlaybackPlayer = successor;
+    }
+    pause.reject(new Error("original pause failed"));
+    await stopping;
+    assert.deepEqual(f.order, replaced
+      ? ["snapshot", "pause", "terminate"]
+      : ["snapshot", "pause", "terminate", "destroy-controls"]);
+    assert.equal(f.context.player, replaced ? successor : null);
+    assert.equal(f.context.canvas, replaced ? successor.canvas : f.replacementCanvas);
+    assert.equal(f.context.playbackControls, replaced ? successorControls : null);
+    assert.equal(f.context.preparedPlaybackPlayer, replaced ? successor : null);
+    assert.equal(f.context.authoringClient, f.client);
+    assert.deepEqual(f.counts(), { terminated: 1, authoringTerminated: 0, pollsStopped: replaced ? 1 : 2 });
+  });
+}
