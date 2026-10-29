@@ -975,12 +975,6 @@ def _require_portable_barrier_admission(scene: _base.Scene) -> None:
 
 async def await_source_barrier(method, /, *args, **kwargs):
     """Yield at one compiled host call, using the existing canonical awaitable."""
-    function = getattr(method, "__func__", None)
-    if function not in (_base.Scene.play, _base.Scene.wait):
-        pending = method(*args, **kwargs)
-        if function is _base.Mobject.add_effect and isinstance(pending, _SemanticContinuationAwaitable):
-            return await pending
-        return pending
     scene = getattr(method, "__self__", None)
     if (not isinstance(scene, _base.Scene)
             or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
@@ -1002,7 +996,8 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
     if not inspect.ismethod(method):
         return method(*args, **kwargs)
     if getattr(method, "__func__", None) is _base.Mobject.add_effect:
-        return await await_source_barrier(method, *args, **kwargs)
+        pending = method(*args, **kwargs)
+        return await pending if isinstance(pending, _SemanticContinuationAwaitable) else pending
     scene = method.__self__
     invocation = current_source_invocation()
     from _manim_source_execution import has_portable_scene_methods

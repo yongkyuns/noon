@@ -97,6 +97,8 @@ class _ConstructBody(ast.NodeTransformer):
             # barrier. A nested call to play/wait is not a statement barrier.
             self.allowed_receivers.add(id(call.func.value))
             if call.func.attr == "add_effect":
+                if isinstance(call.func.value, ast.Name) and call.func.value.id == self.receiver:
+                    self.unsupported = True
                 self.visit(call.func.value)
             for arg in call.args:
                 self.visit(arg)
@@ -104,7 +106,7 @@ class _ConstructBody(ast.NodeTransformer):
                 self.visit(keyword.value)
             self.barriers += 1
             wrapped = ast.Call(
-                func=ast.Name(id=BARRIER_GLOBAL, ctx=ast.Load()),
+                func=ast.Name(id=MODULE_BARRIER_GLOBAL if call.func.attr == "add_effect" else BARRIER_GLOBAL, ctx=ast.Load()),
                 args=[call.func, *call.args],
                 keywords=call.keywords,
             )

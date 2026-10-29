@@ -1472,7 +1472,7 @@ __noon_namespace = {
 }
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
+if __noon_portable_constructs or MODULE_BARRIER_GLOBAL in __noon_code.co_names:
     __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
 with authoring_source_scope():
     await execute_authoring_module(__noon_code, __noon_namespace)
