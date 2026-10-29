@@ -28,6 +28,7 @@ impl PreparedComposedSource {
             content: SemanticExecutionContent::Composed(self.source),
             fill_paint: None,
             effects: self.effects,
+            click_indicate: None,
             base_transform: Transform2D::IDENTITY,
             base_style: Style {
                 fill: None,

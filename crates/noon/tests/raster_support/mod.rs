@@ -114,7 +114,7 @@ impl Raster {
         }
     }
     pub fn capture(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
-        self.capture_frame(publication, false, None)
+        self.capture_frame(publication, false, None, None)
     }
 
     // Shared support is compiled independently by non-interactive integration tests.
@@ -124,7 +124,16 @@ impl Raster {
         publication: &RendererPublication<'_>,
         overlay: Option<noon_render_wgpu::AnalyticOverlay>,
     ) -> Vec<u8> {
-        self.capture_frame(publication, true, overlay)
+        self.capture_frame(publication, true, overlay, None)
+    }
+
+    #[allow(dead_code)]
+    pub fn capture_visible(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        visible_indices: &[usize],
+    ) -> Vec<u8> {
+        self.capture_frame(publication, false, None, Some(visible_indices))
     }
 
     fn capture_frame(
@@ -132,6 +141,7 @@ impl Raster {
         publication: &RendererPublication<'_>,
         interactive: bool,
         overlay: Option<noon_render_wgpu::AnalyticOverlay>,
+        visible_indices: Option<&[usize]>,
     ) -> Vec<u8> {
         self.last_overlay_upload_bytes = if interactive {
             self.overlay
@@ -140,14 +150,19 @@ impl Raster {
         } else {
             0
         };
-        let prepared = self
-            .preparer
-            .prepare_publication(
+        let metrics = TextDeviceMetrics::uniform(self.layout.height() as f32 / WORLD_SIZE).unwrap();
+        let prepared = match visible_indices {
+            Some(indices) => self.preparer.prepare_publication_visible(
                 &self.device,
                 publication,
-                TextDeviceMetrics::uniform(self.layout.height() as f32 / WORLD_SIZE).unwrap(),
-            )
-            .unwrap();
+                indices,
+                metrics,
+            ),
+            None => self
+                .preparer
+                .prepare_publication(&self.device, publication, metrics),
+        }
+        .unwrap();
         self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
         self.last_scene_path_batches = prepared
             .geometry_render_chunks()

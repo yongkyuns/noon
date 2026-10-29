@@ -23,6 +23,9 @@ pub enum SemanticCompiledSceneError {
     InvalidPresentation {
         node: SemanticNodeId,
     },
+    InvalidClickIndicate {
+        node: SemanticNodeId,
+    },
     UnsupportedSignalBindings {
         node: SemanticNodeId,
         count: usize,
@@ -51,6 +54,12 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             Self::InvalidPresentation { node } => write!(
                 formatter,
                 "semantic object {}:{} contains a non-finite z-index",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidClickIndicate { node } => write!(
+                formatter,
+                "semantic object {}:{} requires a valid analytic click Indicate binding without signal drivers",
                 node.slot(),
                 node.generation()
             ),
@@ -213,6 +222,18 @@ fn materialize_semantic_projection(
                 (ObjectContentRef::Composed(source.clone()), None)
             }
         };
+        if (object.click_indicate.is_some() && !object.signal_bindings.is_empty())
+            || crate::validate_click_indicate_binding(
+                object.execution_id,
+                crate::is_click_indicate_target(&content),
+                object.click_indicate.as_deref(),
+            )
+            .is_err()
+        {
+            return Err(SemanticCompiledSceneError::InvalidClickIndicate {
+                node: object.semantic_id,
+            });
+        }
         if let Some(paint) = object.fill_paint.as_deref() {
             if let Some(image) = paint.as_image() {
                 let store = store.ok_or(SemanticCompiledSceneError::Resource {
@@ -232,6 +253,7 @@ fn materialize_semantic_projection(
             fill_paint: object.fill_paint.clone(),
             draw_enabled: object.presentation.draw_enabled,
             effects: object.effects.clone(),
+            click_indicate: object.click_indicate.clone(),
             id: object.execution_id,
             content,
             text_bounds,
@@ -401,6 +423,10 @@ fn materialize_semantic_projection(
         family_order,
         family_ranks,
         live_object_count: objects.len(),
+        click_indicate_count: objects
+            .iter()
+            .filter(|object| object.click_indicate.is_some())
+            .count(),
         painter_ranks: painter_order.iter().copied().map(Some).collect(),
         painter_order,
         objects,

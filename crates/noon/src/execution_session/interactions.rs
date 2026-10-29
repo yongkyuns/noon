@@ -248,7 +248,8 @@ impl ExecutionSession {
             .semantic_object_state_checked(node)
             .ok()
             .filter(|state| state.signal_bindings().is_empty())
-            .and_then(|state| state.click_action());
+            .and_then(|state| state.click_action())
+            .filter(|action| !matches!(action, SemanticClickAction::Indicate(_)));
         if let Some(binding) = binding.filter(|_| self.semantic_object_is_reachable(node)) {
             self.interaction_bindings.insert(node, binding);
         } else {
@@ -295,26 +296,31 @@ impl ExecutionSession {
         let Some(node) = click.and_then(|click| click.target()) else {
             return Ok(None);
         };
-        let Some(binding) = self.interaction_bindings.bindings.get(&node) else {
-            return Ok(None);
-        };
         // Keep the current conservative callback/effective-driver admission.
         // Indicate also delegates channel arbitration to the ordinary Runtime.
         if self.pending_callback.is_some() {
             return Ok(None);
         }
-        let Some(object) = self.execution_object_id(node) else {
+        let Some(object) = self.interaction_execution_object_id(node) else {
             return Ok(None);
         };
         if self.runtime.object_has_effective_driver(object) {
             return Ok(None);
         }
-        match *binding {
-            SemanticClickAction::Indicate(indication) => self
+        // Historical readers select Indicate from their displayed compiled row,
+        // never the producer's current binding or semantic arena.
+        if let Some(indication) = self.runtime.click_indicate_binding(object) {
+            return self
                 .runtime
                 .prepare_click_indicate(object, indication)
                 .map(|animation| animation.map(Box::new).map(PreparedClickAction::Animation))
-                .map_err(ExecutionSessionInputError::Interaction),
+                .map_err(ExecutionSessionInputError::Interaction);
+        }
+        let Some(binding) = self.interaction_bindings.bindings.get(&node) else {
+            return Ok(None);
+        };
+        match *binding {
+            SemanticClickAction::Indicate(_) => unreachable!("Indicate lives in compiled history"),
             SemanticClickAction::GlowPulse(binding) => {
                 if !self.runtime.can_prepare_click_glow_pulse(object) {
                     return Ok(None);

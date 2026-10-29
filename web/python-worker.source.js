@@ -42,6 +42,7 @@ import initNoonWeb, {
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
+import { createPreparedInterpreterDriver } from "./prepared-interpreter-driver.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
@@ -130,6 +131,10 @@ async function initializePyodide() {
     authoringStore.createValueTracker(initial);
   self.noonRegisterSemanticExecution = (context) => {
     const continuation = activeAuthoringRun?.continuation;
+    if (activeAuthoringRun?.preparedPlayback &&
+        (!continuation || continuation.context !== context || continuation.terminal)) {
+      throw new Error("prepared source must return its original context after a readable play or wait barrier");
+    }
     if (continuation?.context === context) return continuation.contextId;
     // Registration is the authoring-run publication boundary. It retains a
     // returned runtime for renderer recovery, but invalidates one only when
@@ -146,6 +151,11 @@ async function initializePyodide() {
     }
     if (activeAuthoringRun === null) {
       throw new Error("semantic continuation callback session requires an active Python authoring run");
+    }
+    if (activeAuthoringRun.preparedPlayback) {
+      const error = new Error("prepared playback does not support required Python callbacks");
+      activeAuthoringRun.preparedDriver.cancel(error);
+      throw error;
     }
     const existing = activeAuthoringRun.continuationCallbackSession;
     if (existing !== null && (existing.context !== context || existing.sessionId !== sessionId)) {
@@ -606,23 +616,35 @@ function registerContinuationContext(context) {
   if (activeAuthoringRun === null) {
     throw new Error("semantic continuation requires an active Python authoring run");
   }
+  if (activeAuthoringRun.preparedPlayback &&
+      ["failed", "cancelled", "finished"].includes(activeAuthoringRun.preparedDriver.state())) {
+    throw new Error("prepared source invocation is retired");
+  }
+  if (activeAuthoringRun.preparedPlayback &&
+      (typeof context.livePrepareSegment !== "function" ||
+       typeof context.createPreparedExecutionPlayer !== "function")) {
+    throw new Error("prepared playback requires a prepared-prefix enabled engine build");
+  }
   if (activeAuthoringRun.continuation !== null) {
     if (activeAuthoringRun.continuation.context !== context) {
       throw new Error("one Python authoring run cannot suspend multiple semantic contexts");
     }
     return activeAuthoringRun.continuation;
   }
-  context.prepareExecutionRun();
+  if (activeAuthoringRun.preparedPlayback) invokePreparedEngine(() => context.prepareExecutionRun());
+  else context.prepareExecutionRun();
   const callbackSession = activeAuthoringRun.continuationCallbackSession;
   if (callbackSession !== null && callbackSession.context !== context) {
     throw new Error("semantic continuation callback session belongs to another context");
   }
   const contextId = `semantic-${nextSemanticContext++}`;
   const generation = nextContinuationGeneration++;
+  const preparedPlayback = activeAuthoringRun.preparedPlayback === true;
   const entry = {
     context,
     endpoints: new Set(),
     released: false,
+    preparedPlayback,
     ...(callbackSession === null ? {} : { callbackSessionId: callbackSession.sessionId }),
   };
   const continuation = {
@@ -637,6 +659,12 @@ function registerContinuationContext(context) {
     callbackCommit: null,
     committedCallbackPlayer: null,
     terminal: false,
+    preparedPlayback,
+    preparedDriver: preparedPlayback ? activeAuthoringRun.preparedDriver : null,
+    preparedPlayer: null,
+    preparedAttachmentStarted: false,
+    preparedBootstrapObserved: false,
+    preparedReady: preparedPlayback ? preparedEndpointReady() : null,
   };
   semanticContexts.set(contextId, entry);
   activeAuthoringRun.continuation = continuation;
@@ -646,9 +674,11 @@ function registerContinuationContext(context) {
     semanticExecution: {
       context_id: contextId,
       continuation_generation: generation,
+      ...(preparedPlayback ? { prepared_playback: true } : {}),
       ...(callbackSession === null ? {} : { callback_session_id: callbackSession.sessionId }),
     },
-    duration: Number(context.liveHandoffDuration()),
+    duration: Number(preparedPlayback
+      ? invokePreparedEngine(() => context.liveHandoffDuration()) : context.liveHandoffDuration()),
   });
   return continuation;
 }
@@ -660,6 +690,7 @@ function awaitSemanticContinuation(context) {
     if (continuation.terminal) {
       throw new Error("semantic continuation is terminal");
     }
+    if (continuation.preparedPlayback) return continuation.preparedDriver.awaitSegment(context);
     if (continuation.pending !== null) {
       throw new Error("semantic continuation already has a pending await");
     }
@@ -677,6 +708,90 @@ function awaitSemanticContinuation(context) {
     }
   }
   return result;
+}
+
+function preparedEndpointReady() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  // Cancellation can arrive before the driver's first queued preparation task.
+  // Its rejection is still awaited there, without a worker-fatal orphan promise.
+  void promise.catch(() => {});
+  return { promise, resolve, reject };
+}
+
+function invokePreparedEngine(callback) {
+  if (fatalAuthoringFailure) throw new Error("prepared engine is retired after a fatal failure");
+  try { return callback(); }
+  catch (error) {
+    // These typed calls bypass the Python facade's trap reporter. A trapped
+    // WASM instance cannot be unwound, freed or reused by host recovery.
+    if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+    throw error;
+  }
+}
+
+function requirePreparedContinuation(run, context, signal = null) {
+  signal?.throwIfAborted();
+  const continuation = run.continuation;
+  const entry = continuation && semanticContexts.get(continuation.contextId);
+  if (activeAuthoringRun !== run || !continuation?.preparedPlayback ||
+      continuation.context !== context || continuation.terminal || !entry || entry.released) {
+    throw new Error("prepared source context or invocation is retired");
+  }
+  return continuation;
+}
+
+function deliverPreparedSourcePrefix(continuation) {
+  const player = continuation.preparedPlayer;
+  const capacity = invokePreparedEngine(() => player.pendingSourceObjectCapacity());
+  if (capacity === undefined) return false; // Completed zero-duration segment.
+  invokePreparedEngine(() => player.reservePrefixObjectCapacity(capacity));
+  if (!invokePreparedEngine(() => player.deliverSourcePrefix())) throw new Error("prepared source lost its retained suffix");
+  // Future history is not a presentation. No transport/presentation await is
+  // needed to release this source barrier, even while the reader is paused.
+  continuation.endpoint.sourcePrefixDelivered();
+  return true;
+}
+
+function createPreparedSourceDriver(run) {
+  return createPreparedInterpreterDriver({
+    async prepareSegment(context, signal) {
+      const continuation = requirePreparedContinuation(run, context, signal);
+      if (!continuation.preparedBootstrapObserved) {
+        await continuation.preparedReady.promise;
+        requirePreparedContinuation(run, context, signal);
+        continuation.preparedBootstrapObserved = true;
+        return;
+      }
+      invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context));
+      deliverPreparedSourcePrefix(continuation);
+    },
+    needsPreparation() {
+      const continuation = requirePreparedContinuation(run, run.continuation?.context);
+      if (!continuation.preparedPlayer) throw new Error("prepared source has no attached reader");
+      return invokePreparedEngine(() => continuation.preparedPlayer.needsPreparation(run.preparationLookaheadSeconds));
+    },
+    finishSource(resultJson, signal) {
+      if (run.continuation === null) throw new Error("prepared source produced no readable play or wait interval");
+      const continuation = requirePreparedContinuation(run, run.continuation?.context, signal);
+      const descriptor = JSON.parse(resultJson)?.semantic_execution;
+      if (descriptor?.context_id !== continuation.contextId ||
+          descriptor.continuation_generation !== continuation.generation ||
+          descriptor.callback_session_id != null) {
+        throw new Error("prepared source must return its original context without Python callbacks");
+      }
+      if (!continuation.preparedBootstrapObserved || !continuation.preparedPlayer) {
+        throw new Error("prepared source produced no readable play or wait interval");
+      }
+      // runAuthoringSource includes the existing construct/finally/tear_down and
+      // per-run globals cleanup. Seal only after that entire operation succeeds.
+      invokePreparedEngine(() => continuation.preparedPlayer.finishSourcePreparation(continuation.context));
+      if (!deliverPreparedSourcePrefix(continuation)) {
+        throw new Error("prepared source did not deliver its explicit final endpoint");
+      }
+      continuation.terminal = true;
+    },
+  });
 }
 
 function continuationEvent(kind, value = {}) {
@@ -949,6 +1064,11 @@ function completeContinuation(continuation, generation) {
 function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
+  if (continuation.preparedPlayback) {
+    continuation.preparedDriver.cancel(error);
+    continuation.preparedReady.reject(error);
+    if (!fatalAuthoringFailure) invokePreparedEngine(() => continuation.preparedPlayer?.stopSourcePreparation());
+  }
   continuation.committedCallbackPlayer = null;
   if (continuation.callbackCommit !== null) {
     continuation.callbackCommit.reject(error instanceof Error ? error : new Error(String(error)));
@@ -1023,6 +1143,9 @@ async function handleContinuationControl(request) {
     failContinuation(continuation, new Error(request.reason));
     entry.released = true;
     continuation.endpoint?.stop();
+    if (continuation.preparedPlayback && continuation.endpoint === null) {
+      retireSemanticContext(request.contextId, entry);
+    }
     post("semantic_continuation_cancelled", { requestId });
   } catch (error) {
     if (request?.type === "attach_semantic_execution") {
@@ -1040,19 +1163,30 @@ async function handleRequest(request) {
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
     if (request.type === "run") {
-      const run = { requestId, continuation: null, continuationCallbackSession: null };
+      const run = {
+        requestId, continuation: null, continuationCallbackSession: null,
+        preparedPlayback: request.preparedPlayback === true,
+        preparationLookaheadSeconds: request.preparationLookaheadSeconds ?? 1,
+        preparedDriver: null,
+      };
       activeAuthoringRun = run;
+      if (run.preparedPlayback) run.preparedDriver = createPreparedSourceDriver(run);
       let completed = false;
       try {
         const workerRunStartedAtMs = performance.now();
-        const resultJson = await runAuthoringSource(
+        const execute = () => runAuthoringSource(
           pyodide,
           request.source,
           request.context,
           requestId,
         );
+        let resultJson = await (run.preparedDriver ? run.preparedDriver.run(execute) : execute());
         const workerRunCompletedAtMs = performance.now();
-        if (run.continuation !== null) {
+        if (run.preparedPlayback) {
+          const result = JSON.parse(resultJson);
+          result.semantic_execution.prepared_playback = true;
+          resultJson = JSON.stringify(result);
+        } else if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
         }
         post("result", {
@@ -1068,9 +1202,18 @@ async function handleRequest(request) {
       } finally {
         if (!completed && run.continuation !== null) {
           const entry = semanticContexts.get(run.continuation.contextId);
-          if (entry) entry.released = true;
           failContinuation(run.continuation, new Error("Python authoring continuation failed"));
-          run.continuation.endpoint?.stop();
+          if (fatalAuthoringFailure) {
+            // The fatal channel owns worker retirement. Never call back into
+            // a trapped WASM engine while the Python source unwinds.
+          } else if (!run.preparedPlayback) {
+            if (entry) entry.released = true;
+            run.continuation.endpoint?.stop();
+          } else if (entry && run.continuation.endpoint === null &&
+                     !run.continuation.preparedAttachmentStarted) {
+            entry.released = true;
+            retireSemanticContext(run.continuation.contextId, entry);
+          }
         }
         if (activeAuthoringRun === run) activeAuthoringRun = null;
       }
@@ -1106,6 +1249,18 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     if (continuation.endpoint !== null) {
       throw new Error("semantic continuation endpoint is already attached");
     }
+  }
+  if (entry.preparedPlayback) {
+    if (!continuationOnly || !continuation?.preparedPlayback || request.replaceExistingEndpoint) {
+      throw new Error("prepared playback cannot reattach or replace its endpoint");
+    }
+    if (request.callbackSessionId != null || entry.callbackSessionId !== undefined || request.pacing !== "realtime") {
+      throw new Error("prepared playback requires realtime pacing without Python callbacks");
+    }
+    return attachPreparedSemanticExecution(request, entry, continuation);
+  }
+  if (request.initiallyPaused && continuationOnly) {
+    throw new Error("source-owned semantic continuations cannot start paused");
   }
   if (request.callbackSessionId !== null && request.callbackSessionId !== undefined) {
     if (entry.callbackSessionId !== undefined && entry.callbackSessionId !== request.callbackSessionId) {
@@ -1166,6 +1321,53 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
   );
   entry.endpoints.add(endpoint);
   if (continuationOnly) continuation.endpoint = endpoint;
+}
+
+async function attachPreparedSemanticExecution(request, entry, continuation) {
+  if (continuation.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
+  if (!Number.isInteger(request.session) || request.session < 0 || request.session > 0xffffffff ||
+      !["shared", "transferable"].includes(request.transportMode) ||
+      !Number.isSafeInteger(request.sharedSlotCapacity) || request.sharedSlotCapacity <= 0) {
+    throw new Error("prepared source attachment requires a valid transport and u32 session");
+  }
+  continuation.preparedAttachmentStarted = true;
+  const run = activeAuthoringRun;
+  let endpoint;
+  try {
+    requirePreparedContinuation(run, entry.context);
+    // Complete the actual first source receipt once. This keeps the canonical
+    // context's source player; only its separate reader goes to the endpoint.
+    invokePreparedEngine(() => entry.context.livePrepareSegment());
+    continuation.preparedPlayer = invokePreparedEngine(() => entry.context.createPreparedExecutionPlayer(request.session));
+    endpoint = await attachSemanticEngine(entry.context, request, () => {
+      // This reader is single-use. A control-port stop owns retirement even if
+      // a concurrent explicit release arrived while the source was still active.
+      entry.released = true;
+      entry.endpoints.delete(endpoint);
+      continuation.preparedPlayer = null;
+      failContinuation(continuation, new Error("prepared playback endpoint stopped"));
+      retireSemanticContext(request.contextId, entry);
+    }, null, null, null, null, null, {
+      player: continuation.preparedPlayer,
+      wakeSource: () => continuation.preparedDriver.wake(),
+    });
+    entry.endpoints.add(endpoint);
+    requirePreparedContinuation(run, entry.context);
+    continuation.endpoint = endpoint;
+    continuation.preparedReady.resolve();
+  } catch (error) {
+    entry.released = true;
+    failContinuation(continuation, error);
+    if (!fatalAuthoringFailure && endpoint) endpoint.stop();
+    else if (!fatalAuthoringFailure && continuation.preparedPlayer !== null) {
+      // Preflight may reject before the endpoint takes ownership. Its onStop
+      // clears this handle whenever it has already freed the prepared player.
+      invokePreparedEngine(() => continuation.preparedPlayer.free());
+      continuation.preparedPlayer = null;
+    }
+    retireSemanticContext(request.contextId, entry);
+    throw error;
+  }
 }
 
 function retireSemanticContext(token, entry) {
@@ -1362,6 +1564,13 @@ function validateRequest(request) {
     if (!isRecord(request.context)) {
       throw new Error("Python authoring context must be an object");
     }
+    if (request.preparedPlayback !== undefined && typeof request.preparedPlayback !== "boolean") {
+      throw new Error("preparedPlayback must be a boolean");
+    }
+    if (request.preparationLookaheadSeconds !== undefined &&
+        (!Number.isFinite(request.preparationLookaheadSeconds) || request.preparationLookaheadSeconds <= 0)) {
+      throw new Error("preparationLookaheadSeconds must be positive and finite");
+    }
     return;
   }
   if (request.type === "release_semantic_execution") {
@@ -1387,9 +1596,6 @@ function validateRequest(request) {
     }
     if (typeof request.initiallyPaused !== "boolean") {
       throw new Error("semantic attachment has an invalid initially-paused state");
-    }
-    if (request.initiallyPaused && request.continuationGeneration !== undefined) {
-      throw new Error("source-owned semantic continuations cannot start paused");
     }
     if (request.pacing !== "realtime" && request.pacing !== "external_samples") {
       throw new Error("semantic attachment has invalid pacing");

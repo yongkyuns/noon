@@ -19,7 +19,7 @@ use super::SemanticExecutionProjection;
 /// semantic `SemanticNodeId` remains authoritative. Native input routing is derived
 /// from signal-owned semantic declarations while the same dependency closure is
 /// lowered, so platform hosts never need execution signal identity.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticReactiveProjection {
     graph: ReactiveGraphDefinition,
     signal_ids: HashMap<SemanticNodeId, SignalId>,
