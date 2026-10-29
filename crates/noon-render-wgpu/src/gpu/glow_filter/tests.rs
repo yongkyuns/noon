@@ -1,6 +1,7 @@
 use super::*;
 use noon_core::{Color, EffectUpdate, Pixels};
 
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 fn only_effect(stack: &noon_compile::CompiledEffectStack) -> noon_compile::CompiledEffect {
     assert_eq!(stack.len(), 1, "single-effect reference fixture");
     stack.iter().next().unwrap()

@@ -183,7 +183,7 @@ fn typed_shader_pixels_coordinates_time_alpha_and_program_lifetime() {
             assert_eq!(first.pipeline_compiles, usize::from(count == 0));
             let (same, reused) =
                 pollster::block_on(filter.prepare_shader_program(&device, &program)).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&lease, &same));
+            assert!(crate::gpu::GpuLease::ptr_eq(&lease, &same));
             assert_eq!(reused.pipeline_compiles, 0);
             for opacity in [1.0, 0.5, 0.125] {
                 let mut midpoint = None;
@@ -436,7 +436,7 @@ fn typed_shader_pixels_coordinates_time_alpha_and_program_lifetime() {
     assert_eq!(stack_scope.scratch_bytes(), 0);
     let (stack_lease, _) =
         pollster::block_on(stack_filter.prepare_shader_program(&device, &stack_program)).unwrap();
-    let weak = std::sync::Arc::downgrade(&stack_lease);
+    let weak = crate::gpu::GpuLease::downgrade(&stack_lease);
     let mut first_order = Vec::new();
     let mut ordered_maximum = 0;
     for order in 0..2 {

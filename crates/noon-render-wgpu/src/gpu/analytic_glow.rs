@@ -7,12 +7,7 @@
 
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
-// Prepared captures lease backend GPU resources. WASM resources stay within
-// their owning context; native leases retain their Send/Sync sharing contract.
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc as CaptureSourceLease;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc as CaptureSourceLease;
+use super::GpuLease as CaptureSourceLease;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{EffectDefinition, GeometryRef, GlowSource, ObjectId, Transform2D, Vec2};

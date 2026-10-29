@@ -8,7 +8,9 @@ use noon_core::{
 };
 use noon_runtime::RendererPublication;
 
-use super::{EffectPrepareError, GpuRenderer, PreparedShaderProgram, ShaderSampleContext};
+use super::{
+    EffectPrepareError, GpuLease, GpuRenderer, PreparedShaderProgram, ShaderSampleContext,
+};
 
 mod preparation;
 pub use preparation::{EffectProgramPreparation, PreparedEffectPrograms};
@@ -44,7 +46,7 @@ impl std::error::Error for EffectProgramPrepareError {
 #[derive(Debug)]
 struct ResidentRow {
     object: ObjectId,
-    programs: Vec<Arc<PreparedShaderProgram>>,
+    programs: Vec<GpuLease<PreparedShaderProgram>>,
     path_bounds: Option<Box<PathBounds>>,
 }
 

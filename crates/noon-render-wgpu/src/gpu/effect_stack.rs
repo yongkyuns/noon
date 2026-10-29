@@ -2,8 +2,8 @@
 //! This is derived GPU work over a caller-owned padded capture, not a scene,
 //! attachment registry, scheduler or clock. Authored scope admission and capture
 //! bounds remain with their existing compiler/renderer owners.
+use super::GpuLease;
 use noon_core::{EffectDefinition, GlowSource};
-use std::sync::Arc;
 
 use super::{
     gaussian_blur::{
@@ -295,10 +295,10 @@ impl EffectStackFilter {
         &self,
         device: &wgpu::Device,
         source: &noon_core::WgslEffectProgram,
-    ) -> Result<Arc<PreparedShaderProgram>, EffectPrepareError> {
+    ) -> Result<GpuLease<PreparedShaderProgram>, EffectPrepareError> {
         self.sample.shader_program(device, source)
     }
-    pub(super) fn remember_shader_program(&mut self, program: &Arc<PreparedShaderProgram>) {
+    pub(super) fn remember_shader_program(&mut self, program: &GpuLease<PreparedShaderProgram>) {
         self.sample.remember_shader_program(program);
     }
     pub(super) fn live_shader_programs(&self) -> usize {
@@ -310,7 +310,7 @@ impl EffectStackFilter {
         device: &wgpu::Device,
         scope: Option<&EffectStackScope>,
         definitions: &[EffectDefinition],
-    ) -> Result<[Option<Arc<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN], EffectPrepareError>
+    ) -> Result<[Option<GpuLease<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN], EffectPrepareError>
     {
         if definitions.len() > MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
@@ -340,7 +340,7 @@ impl EffectStackFilter {
         &mut self,
         device: &wgpu::Device,
         source: &noon_core::WgslEffectProgram,
-    ) -> Result<(Arc<PreparedShaderProgram>, EffectRasterStats), wgpu::Error> {
+    ) -> Result<(GpuLease<PreparedShaderProgram>, EffectRasterStats), wgpu::Error> {
         self.sample.prepare_shader_program(device, source).await
     }
 
@@ -516,7 +516,7 @@ struct PreparedStack {
     budgets: [u64; MAX_EFFECT_STACK_LEN],
     active: [bool; MAX_EFFECT_STACK_LEN],
     last: Option<usize>,
-    _programs: [Option<Arc<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN],
+    _programs: [Option<GpuLease<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN],
 }
 
 fn preflight(

@@ -1,5 +1,12 @@
 use std::mem::size_of;
 
+// Backend GPU leases stay in their browser context; native jobs may share them
+// across threads. CPU semantic/resource values continue to use ordinary Arc.
+#[cfg(target_arch = "wasm32")]
+pub(super) use std::rc::{Rc as GpuLease, Weak as WeakGpuLease};
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) use std::sync::{Arc as GpuLease, Weak as WeakGpuLease};
+
 use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};

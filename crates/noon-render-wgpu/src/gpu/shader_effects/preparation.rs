@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct RowRequest {
     pub object: ObjectId,
-    pub programs: Vec<(WgslEffectProgram, Option<Arc<PreparedShaderProgram>>)>,
+    pub programs: Vec<(WgslEffectProgram, Option<GpuLease<PreparedShaderProgram>>)>,
 }
 
 #[derive(Debug)]

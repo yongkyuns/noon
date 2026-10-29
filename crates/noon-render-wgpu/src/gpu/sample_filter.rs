@@ -1,8 +1,9 @@
 //! Disposable pointwise mask resources. Source bounds are relative to capture
 //! pixels, before padding/capacity rounding. No scene or clock lives here.
+use super::WeakGpuLease;
 use super::{EffectPixelBounds, EffectPrepareError, EffectRasterStats, GaussianBlurCapture};
 use bytemuck::{Pod, Zeroable};
-use std::{mem::size_of, sync::Weak};
+use std::mem::size_of;
 
 mod shader;
 pub use shader::{PreparedShaderProgram, ShaderSampleContext};
@@ -72,7 +73,7 @@ struct Program {
 }
 #[derive(Debug, Default)]
 pub struct SampleFilter {
-    shader_programs: Vec<Weak<PreparedShaderProgram>>,
+    shader_programs: Vec<WeakGpuLease<PreparedShaderProgram>>,
     program: Option<Program>,
     // Real backend-failure tests corrupt generated WGSL after Core validation.
     // This hook and its storage are absent from production builds.

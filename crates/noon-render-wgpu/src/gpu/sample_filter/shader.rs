@@ -1,9 +1,7 @@
 //! GPU specialization of the existing sampled-image pass. Programs are prepared
 //! fallibly before publication; ordinary parameter samples only pack uniforms.
-use std::{
-    mem::size_of,
-    sync::{Arc, Weak},
-};
+use crate::gpu::{GpuLease, WeakGpuLease};
+use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
@@ -74,7 +72,7 @@ pub(super) struct ShaderUniform {
 
 #[derive(Debug)]
 pub(super) struct ShaderScope {
-    program: Arc<PreparedShaderProgram>,
+    program: GpuLease<PreparedShaderProgram>,
     uniform: ShaderUniform,
 }
 
@@ -169,7 +167,7 @@ impl SampleFilter {
         &mut self,
         device: &wgpu::Device,
         source: &WgslEffectProgram,
-    ) -> Result<(Arc<PreparedShaderProgram>, EffectRasterStats), wgpu::Error> {
+    ) -> Result<(GpuLease<PreparedShaderProgram>, EffectRasterStats), wgpu::Error> {
         if let Ok(program) = self.shader_program(device, source) {
             return Ok((program, EffectRasterStats::default()));
         }
@@ -193,14 +191,14 @@ impl SampleFilter {
         if let Some(error) = errors.into_iter().flatten().next() {
             return Err(error);
         }
-        let program = Arc::new(PreparedShaderProgram {
+        let program = GpuLease::new(PreparedShaderProgram {
             program,
             source: source.clone(),
             device: device.clone(),
         });
         self.shader_programs
             .retain(|entry| entry.strong_count() > 0);
-        self.shader_programs.push(Arc::downgrade(&program));
+        self.shader_programs.push(GpuLease::downgrade(&program));
         Ok((
             program,
             EffectRasterStats {
@@ -210,10 +208,13 @@ impl SampleFilter {
         ))
     }
 
-    pub(in crate::gpu) fn remember_shader_program(&mut self, program: &Arc<PreparedShaderProgram>) {
+    pub(in crate::gpu) fn remember_shader_program(
+        &mut self,
+        program: &GpuLease<PreparedShaderProgram>,
+    ) {
         self.shader_programs
             .retain(|entry| entry.strong_count() > 0);
-        let key = Arc::downgrade(program);
+        let key = GpuLease::downgrade(program);
         if !self.shader_programs.iter().any(|entry| entry.ptr_eq(&key)) {
             self.shader_programs.push(key);
         }
@@ -230,10 +231,10 @@ impl SampleFilter {
         &self,
         device: &wgpu::Device,
         source: &WgslEffectProgram,
-    ) -> Result<Arc<PreparedShaderProgram>, EffectPrepareError> {
+    ) -> Result<GpuLease<PreparedShaderProgram>, EffectPrepareError> {
         self.shader_programs
             .iter()
-            .filter_map(Weak::upgrade)
+            .filter_map(WeakGpuLease::upgrade)
             .find(|p| p.device == *device && p.source.module() == source.module())
             .ok_or(EffectPrepareError::ShaderProgramNotPrepared)
     }
@@ -243,13 +244,13 @@ impl SampleFilter {
         device: &wgpu::Device,
         source: &WgslEffectProgram,
         scope: Option<&SampleScope>,
-    ) -> Result<Arc<PreparedShaderProgram>, EffectPrepareError> {
+    ) -> Result<GpuLease<PreparedShaderProgram>, EffectPrepareError> {
         let current = scope
             .and_then(|scope| scope.shader.as_ref())
             .filter(|state| {
                 state.program.device == *device && state.program.source.module() == source.module()
             })
-            .map(|state| Arc::clone(&state.program));
+            .map(|state| GpuLease::clone(&state.program));
         current.map_or_else(|| self.shader_program(device, source), Ok)
     }
 
@@ -275,7 +276,7 @@ impl SampleFilter {
         let program_changed = scope
             .shader
             .as_ref()
-            .is_none_or(|state| !Arc::ptr_eq(&state.program, &program));
+            .is_none_or(|state| !GpuLease::ptr_eq(&state.program, &program));
         let uniform_changed = scope
             .shader
             .as_ref()
