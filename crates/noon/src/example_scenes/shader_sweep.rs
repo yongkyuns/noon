@@ -210,3 +210,37 @@ fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
         })
         .map_err(message)
 }
+
+/// A shader reads canonical authored seconds during an ordinary bounded wait.
+/// Shared with shader_time.py and browser cadence/seek qualification.
+pub fn authored_time_session() -> Result<crate::SceneExecution, String> {
+    let program = WgslEffectProgram::prepare(
+        ShaderSchema {
+            profile: ShaderProfile::PaintedPointwiseV1,
+            dependencies: ShaderDependencies {
+                coordinates: ShaderCoordinates::LocalNormalized,
+                authored_time: true,
+                seed: false,
+            },
+            parameters: Box::new([]),
+        },
+        "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return vec4<f32>(input.color.rgb, 0.2 + 0.25 * input.time); }",
+    ).map_err(message)?;
+    let mut scene = Scene::new();
+    let mut panel = scene.rectangle(4.0, 2.0).map_err(message)?;
+    panel.set_fill(0.5, 0.75, 1.0, 0.5).map_err(message)?;
+    panel.disable_stroke().map_err(message)?;
+    scene.add(&panel).map_err(message)?;
+    scene
+        .add_effect(&panel, ShaderEffect::new(program), "clock")
+        .map_err(message)?;
+    let mut session = scene.execution_session().map_err(message)?;
+    scene
+        .live(&mut session)
+        .declare_and_activate_composition(
+            &AnimationCompositionRequest::Wait { duration: 2.0 },
+            AnimationOptions::new(),
+        )
+        .map_err(message)?;
+    scene.into_execution_with_session(session).map_err(message)
+}

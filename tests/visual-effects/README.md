@@ -1,5 +1,32 @@
 # Visual-effects contract fixtures
 
+## Candidate typed WGSL profile
+
+`WgslEffectProgram` prepares immutable trusted source and a versioned
+`PaintedPointwiseV1` schema. `ShaderEffect` uses the ordinary named attachment,
+parameter animation, removal and seek paths. The shader receives straight encoded
+RGB and returns RGB plus a coverage multiplier; the renderer associates coverage
+and applies object/group opacity once. This finite profile uses compatibility
+color output, not HDR or arbitrary render/compute passes.
+
+Declare local normalized, scene or output-pixel coordinates and any authored-time
+or seed dependency. Typed parameter keys bind to their defining schema; edits
+reuse immutable programs. Source point morphs are unsupported, and composed groups
+require scene or output-pixel coordinates because they have no intrinsic local
+box. Invalid source/schema/coordinate declarations reject before mutation.
+
+See [the animated material lesson](../../web/python/examples/showcase_shader_material.py),
+[the authored-time example](../../web/python/examples/shader_time.py), and their
+[shared Rust builders](../../crates/noon/src/example_scenes/shader_sweep.rs).
+`node scripts/shader-time-qualification.mjs` checks ordinary Rust/Pyodide pixels,
+an independent coverage reference, different presentation cadences and seek/replay
+on WebGPU and WebGL2. It requires a clean renderer-smoke browser package.
+
+Device compilation is still performed after semantic/runtime publication. This
+is an open atomic-publication requirement, even when the previous rendered image
+and GPU cache remain intact on failure. Native Python, broader recovery and the
+physical-device performance matrix are also unqualified; #1897 owns promotion.
+
 ## Current authored GlowPulse extension
 
 `GlowPulse(obj, intensity=2.0)` is an ordinary authored animation for one supported

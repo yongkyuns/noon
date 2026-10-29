@@ -41,6 +41,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs
+  node --check scripts/shader-time-qualification.mjs
   node --check scripts/gaussian-blur-qualification.mjs
   node --test scripts/gaussian-blur-reference.test.mjs
   node --test scripts/dissolve-mask-reference.test.mjs
