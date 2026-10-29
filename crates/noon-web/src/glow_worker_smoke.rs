@@ -160,7 +160,7 @@ fn runtime(
         .into(),
     };
     source.effects = Some(Arc::new(
-        noon_compile::CompiledEffectStack::new([effect]).unwrap(),
+        noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap(),
     ));
     let objects = vec![
         CompiledObject::new(
@@ -453,7 +453,9 @@ fn fixture() -> Fixture {
         runtime
             .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object: ObjectId::new(2),
-                effects: Arc::new(noon_compile::CompiledEffectStack::new([effect]).unwrap()),
+                effects: Arc::new(
+                    noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap(),
+                ),
             })
             .unwrap();
         let publication = runtime.take_renderer_publication();

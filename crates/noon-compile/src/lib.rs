@@ -162,7 +162,7 @@ pub struct CompiledObject {
 
 /// One static attachment lowered from the existing generational semantic node.
 /// This is execution data, not a second attachment allocator or mutable scene.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CompiledEffect {
     pub attachment: noon_core::SemanticNodeId,
     pub definition: noon_core::EffectDefinition,
@@ -189,8 +189,8 @@ impl CompiledEffect {
         &self,
         update: noon_core::EffectUpdate,
     ) -> Result<Vec<(Property, TrackValues)>, noon_core::EffectParameterError> {
-        update.prepare(self.definition)?;
-        let target = update.apply_to(self.definition)?;
+        let target = update.apply_to(self.definition.clone())?;
+        noon_core::EffectValue::validate_effect_transition(&self.definition, &target)?;
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
             + usize::from(update.intensity.is_some())
@@ -217,10 +217,10 @@ impl CompiledEffect {
                         attachment: self.attachment,
                         from: noon_core::EffectTrackValue::from_definition(
                             property,
-                            self.definition,
+                            &self.definition,
                         )
                         .expect("checked appearance parameter"),
-                        to: noon_core::EffectTrackValue::from_definition(property, target)
+                        to: noon_core::EffectTrackValue::from_definition(property, &target)
                             .expect("checked appearance parameter"),
                         end_behavior: noon_core::EffectTrackEndBehavior::Sample,
                     },
@@ -3070,8 +3070,8 @@ pub(crate) fn validate_effect_track_attachment(
                 ))
             };
         }
-        if from.update().prepare(effect.definition).is_err()
-            || to.update().prepare(effect.definition).is_err()
+        if from.update().prepare(effect.definition.clone()).is_err()
+            || to.update().prepare(effect.definition.clone()).is_err()
         {
             return Err(noon_core::TimelineError::InvalidEffectValues(
                 track.property,
@@ -4549,7 +4549,9 @@ mod tests {
             Transform2D::IDENTITY,
             Style::default(),
         );
-        compiled.effects = Some(Arc::new(CompiledEffectStack::new([effect]).unwrap()));
+        compiled.effects = Some(Arc::new(
+            CompiledEffectStack::new([effect.clone()]).unwrap(),
+        ));
         let mut channels = vec![
             (
                 Property::Position,

@@ -2555,7 +2555,7 @@ mod tests {
     fn effect_stack(
         effect: &noon_compile::CompiledEffect,
     ) -> Arc<noon_compile::CompiledEffectStack> {
-        Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
+        Arc::new(noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap())
     }
 
     #[test]
@@ -2786,7 +2786,7 @@ mod tests {
         changed.swap(0, 7);
         changed[1].definition = EffectUpdate::default()
             .intensity(1.25)
-            .apply_to(changed[1].definition)
+            .apply_to(changed[1].definition.clone())
             .unwrap();
         frame.objects[0].effects = Some(Arc::new(CompiledEffectStack::new(changed).unwrap()));
         let delta = encoder
@@ -3215,7 +3215,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(effect.attachment)),
-            Some(*effect)
+            Some(effect.as_ref().clone())
         );
     }
 
@@ -3257,7 +3257,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(effect.attachment)),
-            Some(*effect)
+            Some(effect.as_ref().clone())
         );
     }
 
@@ -3303,7 +3303,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(effect.attachment)),
-            Some(*effect)
+            Some(effect.as_ref().clone())
         );
         assert!(mirror.frame().unwrap().objects[1].effects.is_none());
 
@@ -3312,7 +3312,7 @@ mod tests {
             attachment: effect.attachment,
             definition: EffectUpdate::default()
                 .intensity(1.25)
-                .apply_to(effect.definition)
+                .apply_to(effect.definition.clone())
                 .unwrap(),
         });
         frame.objects[0].effects = Some(effect_stack(&changed));
@@ -3335,7 +3335,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(changed.attachment)),
-            Some(*changed)
+            Some(changed.as_ref().clone())
         );
 
         // Removing the exact effect clears its renderer-derived scope; the old
@@ -3459,7 +3459,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(valid.attachment)),
-            Some(*valid)
+            Some(valid.as_ref().clone())
         );
         let next_sequence = mirror.next_sequence;
         let mut delta = encoder
@@ -3493,7 +3493,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(valid.attachment)),
-            Some(*valid)
+            Some(valid.as_ref().clone())
         );
 
         frame.objects[1].effects = Some(effect_stack(&valid));
@@ -3620,7 +3620,7 @@ mod tests {
                         .effects
                         .as_ref()
                         .and_then(|stack| stack.get(effect.attachment)),
-                    Some(*effect)
+                    Some(effect.as_ref().clone())
                 );
                 assert_eq!(installed.style, frame.objects[0].style);
 
@@ -3628,7 +3628,7 @@ mod tests {
                     attachment: effect.attachment,
                     definition: EffectUpdate::default()
                         .intensity(1.5)
-                        .apply_to(effect.definition)
+                        .apply_to(effect.definition.clone())
                         .unwrap(),
                 });
                 frame.objects[0].effects = Some(effect_stack(&changed));
@@ -3673,7 +3673,7 @@ mod tests {
                         .effects
                         .as_ref()
                         .and_then(|stack| stack.get(changed.attachment)),
-                    Some(*changed)
+                    Some(changed.as_ref().clone())
                 );
                 assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
             }

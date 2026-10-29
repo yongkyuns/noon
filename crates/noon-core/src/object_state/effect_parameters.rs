@@ -371,8 +371,8 @@ impl EffectUpdate {
         self,
         captured: T,
     ) -> Result<PreparedEffectUpdate<T>, EffectParameterError> {
-        let target = self.apply_to(captured)?;
-        captured.validate_effect_transition(target)?;
+        let target = self.apply_to(captured.clone())?;
+        captured.validate_effect_transition(&target)?;
         Ok(PreparedEffectUpdate {
             captured,
             target,
@@ -387,22 +387,22 @@ pub(crate) mod sealed {
 
 /// Closed value operations for the finite built-ins and their shared definition.
 /// External shader schemas are a separate checked resource surface.
-pub trait EffectValue: sealed::Sealed + Copy {
+pub trait EffectValue: sealed::Sealed + Clone {
     #[doc(hidden)]
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError>;
     /// Validate replacement of a persistent value while retaining its attachment
     /// and any compatible drivers. This need not permit interpolation between
     /// the values: a dissolve seed is discrete and has no animation channel.
     #[doc(hidden)]
-    fn validate_effect_value_update(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_value_update(&self, target: &Self) -> Result<(), EffectParameterError> {
         self.validate_effect_transition(target)
     }
     #[doc(hidden)]
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError>;
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError>;
     #[doc(hidden)]
     fn sample_effect_parameters(
-        self,
-        target: Self,
+        &self,
+        target: &Self,
         request: EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError>;
@@ -410,22 +410,22 @@ pub trait EffectValue: sealed::Sealed + Copy {
 
 /// Immutable captured endpoints. Runtime supplies progress and owns all clocks,
 /// attachment identity and publication; this value samples requested fields only.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PreparedEffectUpdate<T: EffectValue = EffectDefinition> {
     captured: T,
     target: T,
     request: EffectUpdate,
 }
 impl<T: EffectValue> PreparedEffectUpdate<T> {
-    pub const fn writes(self, parameter: EffectParameter) -> bool {
+    pub const fn writes(&self, parameter: EffectParameter) -> bool {
         self.request.writes(parameter)
     }
-    pub fn sample(self, alpha: f64) -> Result<EffectUpdate, EffectParameterError> {
+    pub fn sample(&self, alpha: f64) -> Result<EffectUpdate, EffectParameterError> {
         if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
             return Err(EffectParameterError::InvalidProgress);
         }
         self.captured
-            .sample_effect_parameters(self.target, self.request, alpha)
+            .sample_effect_parameters(&self.target, self.request, alpha)
     }
 }
 

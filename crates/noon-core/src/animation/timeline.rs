@@ -536,9 +536,8 @@ pub enum EffectTrackValue {
 impl EffectTrackValue {
     pub fn from_definition(
         property: Property,
-        definition: impl Into<crate::EffectDefinition>,
+        definition: &crate::EffectDefinition,
     ) -> Option<Self> {
-        let definition = definition.into();
         match property {
             Property::EffectColor => definition.color().map(Self::Color),
             Property::EffectOffset => definition.as_shadow().map(|v| Self::Offset(v.offset())),

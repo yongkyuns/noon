@@ -798,7 +798,7 @@ fn click_glow_pulse_pixels_restore_and_retire() {
             );
             assert_eq!(
                 original.authored_definition().unwrap(),
-                original_definition.unwrap()
+                original_definition.clone().unwrap()
             );
         } else {
             assert!(source.get_effect("glow").is_err());

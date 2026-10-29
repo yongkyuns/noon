@@ -121,16 +121,16 @@ impl CompiledEffectStack {
         let index = self.attachments.iter().position(|&id| id == attachment)?;
         Some(CompiledEffect {
             attachment,
-            definition: self.definitions[index],
+            definition: self.definitions[index].clone(),
         })
     }
     pub fn iter(&self) -> impl ExactSizeIterator<Item = CompiledEffect> + DoubleEndedIterator + '_ {
         self.attachments
             .iter()
             .zip(&self.definitions)
-            .map(|(&attachment, &definition)| CompiledEffect {
+            .map(|(&attachment, definition)| CompiledEffect {
                 attachment,
-                definition,
+                definition: definition.clone(),
             })
     }
     /// Replace an already validated parameter value without changing topology.
@@ -176,8 +176,8 @@ pub(crate) fn validate_change(
                     return Err(CompilePatchError::InvalidEffectAttachmentChange { object });
                 }
                 noon_core::EffectValue::validate_effect_value_update(
-                    old.definition,
-                    effect.definition,
+                    &old.definition,
+                    &effect.definition,
                 )
                 .map_err(|_| CompilePatchError::InvalidEffectAttachmentChange { object })?;
             }
@@ -252,19 +252,20 @@ mod visibility_tests {
         };
         let named = CompiledEffect {
             attachment: SemanticNodeId::new(10, 4),
-            ..mask
+            ..mask.clone()
         };
-        let mut private = CompiledEffectStack::new_with_visibility([mask], Some(id)).unwrap();
-        let ordinary = CompiledEffectStack::new([mask]).unwrap();
-        assert_eq!(private.visibility(), Some(mask));
+        let mut private =
+            CompiledEffectStack::new_with_visibility([mask.clone()], Some(id)).unwrap();
+        let ordinary = CompiledEffectStack::new([mask.clone()]).unwrap();
+        assert_eq!(private.visibility(), Some(mask.clone()));
         assert!(ordinary.visibility().is_none());
         for (effects, role) in [
-            (vec![mask], SemanticNodeId::new(9, 4)),
-            (vec![mask, named], id),
+            (vec![mask.clone()], SemanticNodeId::new(9, 4)),
+            (vec![mask.clone(), named.clone()], id),
             (
                 vec![CompiledEffect {
                     definition: noon_core::Glow::default().into(),
-                    ..mask
+                    ..mask.clone()
                 }],
                 id,
             ),
@@ -278,21 +279,21 @@ mod visibility_tests {
             crate::execution_patch::validate_effect_values(object, Some(&private), &ordinary)
                 .is_err()
         );
-        let forged = CompiledEffectStack::new([mask, named]).unwrap();
+        let forged = CompiledEffectStack::new([mask.clone(), named]).unwrap();
         assert!(validate_change(object, Some(&private), &[id], Some(&forged)).is_err());
         assert!(!private.replace(CompiledEffect {
             definition: noon_core::Glow::default().into(),
-            ..mask
+            ..mask.clone()
         }));
         let updated = CompiledEffect {
             definition: noon_core::NoiseDissolve::default()
                 .with_progress(0.5)
                 .unwrap()
                 .into(),
-            ..mask
+            ..mask.clone()
         };
-        assert!(private.replace(updated));
-        assert_eq!(private.visibility(), Some(updated));
+        assert!(private.replace(updated.clone()));
+        assert_eq!(private.visibility(), Some(updated.clone()));
         let same_role = CompiledEffectStack::new_with_visibility([updated], Some(id)).unwrap();
         crate::execution_patch::validate_effect_values(object, Some(&private), &same_role).unwrap();
     }
@@ -314,18 +315,20 @@ mod backdrop_tests {
     fn prefix_input_has_exact_binding_and_only_trailing_visibility_in_this_profile() {
         let blur = effect(1, BackdropBlur::default());
         let mask = effect(2, NoiseDissolve::default());
-        let stack = CompiledEffectStack::new([blur]).unwrap();
+        let stack = CompiledEffectStack::new([blur.clone()]).unwrap();
         assert_eq!(stack.input_role(), EffectInputRole::PainterPrefix);
-        assert_eq!(stack.backdrop_blur(), Some(blur));
-        assert!(
-            CompiledEffectStack::new_with_visibility([blur, mask], Some(mask.attachment)).is_ok()
-        );
+        assert_eq!(stack.backdrop_blur(), Some(blur.clone()));
+        assert!(CompiledEffectStack::new_with_visibility(
+            [blur.clone(), mask.clone()],
+            Some(mask.attachment)
+        )
+        .is_ok());
         for definitions in [
-            vec![blur, mask],
-            vec![mask, blur],
-            vec![blur, effect(3, Blur::default())],
-            vec![effect(3, Blur::default()), blur],
-            vec![blur, effect(3, BackdropBlur::default())],
+            vec![blur.clone(), mask.clone()],
+            vec![mask, blur.clone()],
+            vec![blur.clone(), effect(3, Blur::default())],
+            vec![effect(3, Blur::default()), blur.clone()],
+            vec![blur.clone(), effect(3, BackdropBlur::default())],
         ] {
             assert_eq!(
                 CompiledEffectStack::new(definitions),
@@ -337,14 +340,14 @@ mod backdrop_tests {
             definition: Blur::default().into(),
             ..blur
         }));
-        assert_eq!(next.backdrop_blur(), Some(blur));
+        assert_eq!(next.backdrop_blur(), Some(blur.clone()));
         let updated = CompiledEffect {
             definition: BackdropBlur::new(EffectUpdate::default().radius(Pixels(8.0)))
                 .unwrap()
                 .into(),
             ..blur
         };
-        assert!(next.replace(updated));
+        assert!(next.replace(updated.clone()));
         assert_eq!(next.backdrop_blur(), Some(updated));
         let channels = blur
             .parameter_channels(EffectUpdate::default().radius(0.4))

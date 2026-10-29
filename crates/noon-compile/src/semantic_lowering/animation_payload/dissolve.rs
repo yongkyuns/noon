@@ -21,8 +21,10 @@ pub(super) fn channels(
         .ok_or(EffectTargetLoweringError::UnsupportedTopology)?;
     let initial = effective
         .and_then(|values| values.get(binding.attachment))
-        .map_or(binding.definition, |value| value.definition)
-        .as_noise_dissolve()
+        .map_or_else(
+            || binding.definition.as_noise_dissolve(),
+            |value| value.definition.as_noise_dissolve(),
+        )
         .ok_or(EffectTargetLoweringError::UnsupportedTopology)?;
     let target = style
         .resolve(initial)

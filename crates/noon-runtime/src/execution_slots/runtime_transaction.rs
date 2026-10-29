@@ -833,7 +833,7 @@ mod tests {
     }
 
     fn stack(effect: Arc<noon_compile::CompiledEffect>) -> Arc<noon_compile::CompiledEffectStack> {
-        Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
+        Arc::new(noon_compile::CompiledEffectStack::new([effect.as_ref().clone()]).unwrap())
     }
 
     fn enroll_temporary_glow(
@@ -852,7 +852,7 @@ mod tests {
             .prepare_click_glow_pulse(
                 object,
                 noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false),
-                *glow,
+                glow.as_ref().clone(),
                 true,
                 proposed,
             )

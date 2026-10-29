@@ -207,7 +207,7 @@ mod wasm {
             })
         }
         pub(crate) fn definition(&self) -> EffectDefinition {
-            self.value
+            self.value.clone()
         }
     }
 

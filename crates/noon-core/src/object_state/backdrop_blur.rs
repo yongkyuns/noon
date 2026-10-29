@@ -21,16 +21,16 @@ impl EffectValue for BackdropBlur {
     fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
         self.0.apply_effect_update(update).map(Self)
     }
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
-        self.0.validate_effect_transition(target.0)
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
+        self.0.validate_effect_transition(&target.0)
     }
     fn sample_effect_parameters(
-        self,
-        target: Self,
+        &self,
+        target: &Self,
         request: EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
-        self.0.sample_effect_parameters(target.0, request, alpha)
+        self.0.sample_effect_parameters(&target.0, request, alpha)
     }
 }
 
@@ -52,7 +52,7 @@ mod tests {
             EffectInputRole::Painted
         );
         assert_eq!(
-            EffectDefinition::from(Blur::default()).validate_effect_transition(definition),
+            EffectDefinition::from(Blur::default()).validate_effect_transition(&definition),
             Err(EffectParameterError::IncompatibleDefinition)
         );
         assert_eq!(

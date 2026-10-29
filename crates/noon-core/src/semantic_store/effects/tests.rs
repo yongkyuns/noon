@@ -559,9 +559,9 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
     let pending_effects = prepared.animation_effect_snapshot(copied).unwrap();
     assert_eq!(pending_effects.len(), 2);
     for (snapshot, source) in pending_effects.iter().zip([first, second]) {
-        let copy = snapshot.copy_provenance.unwrap();
+        let copy = snapshot.copy_provenance.as_ref().unwrap();
         assert_eq!(copy.source_attachment(), source);
-        assert_eq!(copy.copied_definition(), snapshot.definition);
+        assert_eq!(copy.copied_definition(), &snapshot.definition);
         assert!(!copy.writes_parameter(EffectParameter::Intensity));
     }
     let result = prepared.commit();
@@ -595,11 +595,11 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
         .unwrap();
     let prepared = tx.prepare(&mut store).unwrap();
     let frozen_effects = prepared.animation_effect_snapshot(frozen).unwrap();
-    let frozen_intent = frozen_effects[0].copy_provenance.unwrap();
+    let frozen_intent = frozen_effects[0].copy_provenance.as_ref().unwrap();
     assert_eq!(frozen_intent.source_attachment(), first);
     assert!(frozen_intent.writes_parameter(EffectParameter::Intensity));
     let independent_effects = prepared.animation_effect_snapshot(independent).unwrap();
-    let independent_intent = independent_effects[0].copy_provenance.unwrap();
+    let independent_intent = independent_effects[0].copy_provenance.as_ref().unwrap();
     assert_eq!(independent_intent.source_attachment(), copy_ids[0]);
     assert!(!independent_intent.writes_parameter(EffectParameter::Intensity));
     assert_eq!(
@@ -638,6 +638,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     let staged_snapshot = prepared.animation_effect_snapshot(copied).unwrap();
     assert!(staged_snapshot[0]
         .copy_provenance
+        .as_ref()
         .unwrap()
         .writes_parameter(EffectParameter::Intensity));
     drop(prepared);

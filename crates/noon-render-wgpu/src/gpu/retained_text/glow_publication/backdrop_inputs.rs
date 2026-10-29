@@ -524,7 +524,7 @@ impl BackdropInputs {
             let stack = row.effects.as_ref().unwrap();
             let effect = stack.backdrop_blur().unwrap();
             let sigma = crate::EffectCaptureParameters {
-                definition: effect.definition,
+                definition: effect.definition.clone(),
                 output_height: viewport[1],
                 world_view_height: f64::from(camera.world_size.y),
                 scope_opacity: crate::pack_style(row).opacity,
@@ -541,7 +541,7 @@ impl BackdropInputs {
             let Some(window) = EffectCaptureTile::prepare_stack_input(
                 EffectPixelBounds::from_world_rect(bounds, camera, viewport),
                 viewport,
-                &[effect.definition],
+                std::slice::from_ref(&effect.definition),
                 EffectStackParameters {
                     working_format: wgpu::TextureFormat::Rgba8Unorm,
                     output_height: viewport[1],

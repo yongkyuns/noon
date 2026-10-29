@@ -93,9 +93,9 @@ impl RetainedEffectPublication {
             return Ok(false);
         };
         let mut active = false;
-        for &definition in effects.definitions() {
+        for definition in effects.definitions() {
             let parameters = crate::EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: view.1[1],
                 world_view_height: f64::from(view.0.world_size.y),
                 scope_opacity: opacity,
@@ -791,13 +791,12 @@ impl GpuRenderer {
                 let prefix = self.retained_effects.backdrops.entries.get(&index).cloned();
                 let backdrop = definitions
                     .iter()
-                    .copied()
                     .find(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix);
                 let painted = backdrop.map(|_| {
                     definitions
                         .iter()
-                        .copied()
                         .filter(|d| d.input_role() == noon_core::EffectInputRole::Painted)
+                        .cloned()
                         .collect::<Vec<_>>()
                 });
                 let definitions = painted.as_deref().unwrap_or(definitions);
@@ -817,7 +816,7 @@ impl GpuRenderer {
                 };
                 let demand = if let Some(definition) = backdrop.filter(|_| prefix.is_some()) {
                     let sigma = crate::EffectCaptureParameters {
-                        definition,
+                        definition: definition.clone(),
                         output_height: self.viewport_size[1],
                         world_view_height: f64::from(self.camera.world_size.y),
                         scope_opacity: crate::pack_style(&frame.objects[index]).opacity,
@@ -881,7 +880,7 @@ impl GpuRenderer {
                         text_state,
                         index,
                         object,
-                        definition,
+                        definition.clone(),
                         super::super::source_capture::PainterPrefixCaptureRequest {
                             anchor: prefix.anchor,
                             candidates: prefix.candidates,

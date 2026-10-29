@@ -4099,7 +4099,7 @@ impl ExecutionSession {
                         if effect.name.authored() == Some("glow")
                             && effect.definition.as_glow().is_some() =>
                     {
-                        let destination = effect.definition;
+                        let destination = effect.definition.clone();
                         Some(
                             noon_core::EffectUpdate::default()
                                 .intensity(0.0)
@@ -4769,7 +4769,7 @@ impl ExecutionSession {
                         .or_insert_with(|| (Vec::new(), None));
                     entry.0.push(noon_compile::CompiledEffect {
                         attachment,
-                        definition: *definition,
+                        definition: definition.clone(),
                     });
                     if name.is_visibility() {
                         entry.1 = Some(attachment);

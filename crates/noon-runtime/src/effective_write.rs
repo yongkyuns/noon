@@ -154,7 +154,7 @@ impl EffectivePropertyWrite {
                     .ok_or(noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
                 glow.definition = noon_core::EffectUpdate::default()
                     .intensity(intensity)
-                    .apply_to(glow.definition)
+                    .apply_to(glow.definition.clone())
                     .map_err(|_| noon_compile::CompilePatchError::InvalidEffectUpdate { object })?;
                 std::sync::Arc::make_mut(&mut effects).replace(glow);
                 ExecutionPatch::SetEffects { object, effects }
@@ -263,7 +263,7 @@ pub(crate) fn apply_effective_property_to_row(
             };
             let next = noon_core::EffectUpdate::default()
                 .intensity(intensity)
-                .apply_to(glow.definition)
+                .apply_to(glow.definition.clone())
                 .expect("preflighted glow intensity");
             if next != glow.definition {
                 glow.definition = next;

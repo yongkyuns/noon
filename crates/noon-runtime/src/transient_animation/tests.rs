@@ -180,7 +180,7 @@ fn glow_runtime(intensity: f64) -> (SceneInstance, ObjectId, noon_compile::Compi
         },
     );
     compiled.effects = Some(std::sync::Arc::new(
-        noon_compile::CompiledEffectStack::new([glow]).unwrap(),
+        noon_compile::CompiledEffectStack::new([glow.clone()]).unwrap(),
     ));
     (
         SceneInstance::new(CompiledScene::compile_objects(vec![compiled], &[]).unwrap()),
@@ -194,7 +194,13 @@ fn neutral_glow_tick_invalidates_prepared_work_without_a_pixel_epoch() {
     let (mut runtime, object, glow) = glow_runtime(0.0);
     let binding = SemanticClickGlowPulse::new(0.0, 1.0, RateFunction::ThereAndBack, false);
     let activation = runtime
-        .prepare_click_glow_pulse(object, binding, glow, false, runtime.publication_context())
+        .prepare_click_glow_pulse(
+            object,
+            binding,
+            glow.clone(),
+            false,
+            runtime.publication_context(),
+        )
         .unwrap()
         .unwrap();
     runtime.start_transient_animation(activation).unwrap();
@@ -217,7 +223,13 @@ fn neutral_glow_completion_cannot_reuse_an_old_activation() {
     let (mut runtime, object, glow) = glow_runtime(0.0);
     let binding = SemanticClickGlowPulse::new(0.0, 1.0, RateFunction::ThereAndBack, false);
     let activation = runtime
-        .prepare_click_glow_pulse(object, binding, glow, false, runtime.publication_context())
+        .prepare_click_glow_pulse(
+            object,
+            binding,
+            glow.clone(),
+            false,
+            runtime.publication_context(),
+        )
         .unwrap()
         .unwrap();
     let stale = activation.clone();
@@ -236,7 +248,13 @@ fn glow_tick_preserves_other_parameters_and_restores_only_captured_intensity() {
     let (mut runtime, object, glow) = glow_runtime(0.4);
     let binding = SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false);
     let activation = runtime
-        .prepare_click_glow_pulse(object, binding, glow, false, runtime.publication_context())
+        .prepare_click_glow_pulse(
+            object,
+            binding,
+            glow.clone(),
+            false,
+            runtime.publication_context(),
+        )
         .unwrap()
         .unwrap();
     runtime.start_transient_animation(activation).unwrap();

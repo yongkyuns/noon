@@ -7,7 +7,7 @@ use std::mem::size_of;
 #[cfg(test)]
 pub(super) mod tests;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SampleParameters {
     pub definition: noon_core::EffectDefinition,
     pub output_height: u32,

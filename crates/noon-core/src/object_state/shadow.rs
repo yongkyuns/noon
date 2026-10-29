@@ -53,7 +53,7 @@ impl EffectValue for Shadow {
             offset: update.offset.unwrap_or(self.offset),
         })
     }
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
         if !self.radius.same_unit(target.radius) {
             return Err(EffectParameterError::DiscreteTransition(
                 EffectParameter::Radius,
@@ -67,8 +67,8 @@ impl EffectValue for Shadow {
         Ok(())
     }
     fn sample_effect_parameters(
-        self,
-        target: Self,
+        &self,
+        target: &Self,
         request: EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
@@ -90,7 +90,7 @@ impl EffectValue for Shadow {
                 .map(|_| self.offset.interpolate(target.offset, alpha)),
             ..EffectUpdate::default()
         };
-        update.apply_to(self)?;
+        update.apply_to(*self)?;
         Ok(update)
     }
 }

@@ -35,13 +35,13 @@ pub struct EffectStackParameters {
 impl EffectStackParameters {
     fn dissolve(
         self,
-        definition: EffectDefinition,
+        definition: &EffectDefinition,
         source: &wgpu::Texture,
         opacity: f32,
         budget: u64,
     ) -> SampleParameters {
         SampleParameters {
-            definition,
+            definition: definition.clone(),
             output_height: self.output_height,
             world_view_height: self.world_view_height,
             source_bounds: self.source_bounds.unwrap_or(EffectPixelBounds {
@@ -62,7 +62,7 @@ enum PassFilter {
     Sample(Box<SampleScope>),
 }
 impl PassFilter {
-    fn new(definition: EffectDefinition) -> Self {
+    fn new(definition: &EffectDefinition) -> Self {
         match definition {
             EffectDefinition::Bloom(_) => {
                 unreachable!("authored-view input rejected by capture preflight")
@@ -77,7 +77,7 @@ impl PassFilter {
             }
         }
     }
-    fn matches(&self, definition: EffectDefinition) -> bool {
+    fn matches(&self, definition: &EffectDefinition) -> bool {
         matches!(
             (self, definition),
             (Self::Glow(_), EffectDefinition::Glow(_))
@@ -179,7 +179,7 @@ impl EffectStackScope {
         self.passes
             .iter()
             .zip(effects)
-            .filter(|(pass, effect)| pass.filter.matches(**effect))
+            .filter(|(pass, effect)| pass.filter.matches(effect))
             .map(|(pass, _)| pass.filter.scratch_bytes())
             .sum::<u64>()
             + self.sample_candidate_bytes(effects)
@@ -209,7 +209,7 @@ impl EffectStackScope {
                     ) && self
                         .passes
                         .get(index)
-                        .is_none_or(|pass| !pass.filter.matches(*effect)))
+                        .is_none_or(|pass| !pass.filter.matches(effect)))
                     .then_some(index)
                 })
             })
@@ -225,7 +225,7 @@ impl EffectStackScope {
                 self.warm_sample = Some(mask);
             }
         }
-        for (index, &effect) in effects.iter().enumerate() {
+        for (index, effect) in effects.iter().enumerate() {
             if self
                 .passes
                 .get(index)
@@ -314,7 +314,7 @@ impl EffectStackFilter {
         let mut input = capture.source.clone();
         let mut revision = capture.revision;
         if last.is_some() {
-            for (index, (&effect, &budget)) in effects.iter().zip(&budgets).enumerate() {
+            for (index, (effect, &budget)) in effects.iter().zip(&budgets).enumerate() {
                 if !active[index] {
                     continue;
                 }
@@ -352,7 +352,7 @@ impl EffectStackFilter {
                             filter,
                             capture,
                             GlowParameters {
-                                definition,
+                                definition: *definition,
                                 output_height: parameters.output_height,
                                 world_view_height: parameters.world_view_height,
                                 scope_opacity: opacity,
@@ -419,7 +419,7 @@ impl EffectStackFilter {
                                 source: capture.source,
                                 revision,
                             },
-                            definition,
+                            *definition,
                             parameters.output_height,
                             parameters.world_view_height,
                             opacity,
@@ -493,9 +493,9 @@ fn preflight(
     let sample_reuse = scope.sample_reuse_index(effects);
     let warm_sample_bytes = scope.sample_candidate_bytes(effects);
     let mut last = None;
-    for (index, &effect) in effects.iter().enumerate() {
+    for (index, effect) in effects.iter().enumerate() {
         let values = EffectCaptureParameters {
-            definition: effect,
+            definition: effect.clone(),
             output_height: parameters.output_height,
             world_view_height: parameters.world_view_height,
             scope_opacity: parameters.scope_opacity,

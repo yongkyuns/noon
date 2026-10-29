@@ -490,9 +490,9 @@ impl GpuRenderer {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
         let mut own_capture = demand.isolate || (composed.is_some() && opacity != 1.0);
-        for &definition in request.definitions {
+        for definition in request.definitions {
             let parameters = crate::EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: self.viewport_size[1],
                 world_view_height: f64::from(self.camera.world_size.y),
                 scope_opacity: opacity,

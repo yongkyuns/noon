@@ -162,12 +162,13 @@ fn attachment_channels(
     if effective.attachment != initial.attachment {
         return Err(EffectTargetLoweringError::StaleAttachment);
     }
-    let authored_source = initial.definition;
+    let authored_source = &initial.definition;
     let copy_intent = destination
         .copy_provenance
+        .as_ref()
         .filter(|copy| copy.source_attachment() == initial.attachment);
-    let initial = effective.definition;
-    let destination = destination.definition;
+    let initial = &effective.definition;
+    let destination = &destination.definition;
     // The attachment kind and discrete parameters cannot change in-place.
     use noon_core::EffectValue;
     effective
@@ -301,7 +302,7 @@ pub(super) fn prepared_effective(
         {
             values.push(crate::CompiledEffect {
                 attachment: effect.attachment,
-                definition: effect.definition,
+                definition: effect.definition.clone(),
             });
         } else {
             return Err(EffectTargetLoweringError::MissingEffectiveValue);
@@ -395,7 +396,7 @@ mod tests {
         } else {
             EffectDefinition::Glow(noon_core::Glow::default())
         };
-        let value = noon_core::EffectTrackValue::from_definition(property, definition).unwrap();
+        let value = noon_core::EffectTrackValue::from_definition(property, &definition).unwrap();
         TrackValues::Effect {
             attachment,
             from: value,

@@ -1508,11 +1508,11 @@ impl SceneInstance {
                         };
                         let next = noon_core::EffectTrackValue::from_definition(
                             channel.property,
-                            base.definition,
+                            &base.definition,
                         )
                         .expect("glow channel")
                         .update()
-                        .apply_to(current.definition)
+                        .apply_to(current.definition.clone())
                         .expect("validated base glow");
                         if current.definition != next {
                             current.definition = next;
@@ -3100,7 +3100,7 @@ fn apply_effect_channel(
     if effect.attachment != attachment {
         return false; // an old generation can never control a replacement
     }
-    let current = *effect;
+    let current = &*effect;
     let patch = if restore_base
         || (tracks.last().is_some_and(|last| last.id == track.id)
             && track.reconciled
@@ -3109,7 +3109,7 @@ fn apply_effect_channel(
         let Some(base) = base.filter(|base| base.attachment == attachment) else {
             return false;
         };
-        noon_core::EffectTrackValue::from_definition(track.property, base.definition)
+        noon_core::EffectTrackValue::from_definition(track.property, &base.definition)
             .expect("validated effect channel")
             .update()
     } else {
@@ -3117,7 +3117,7 @@ fn apply_effect_channel(
             .expect("validated glow endpoints and normalized timing")
     };
     let next = patch
-        .apply_to(current.definition)
+        .apply_to(current.definition.clone())
         .expect("validated single-channel glow update");
     if current.definition == next {
         return false;

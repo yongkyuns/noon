@@ -1568,8 +1568,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     // Publish this mutation's disjoint channels in order. The
                     // final value was validated before any semantic commit.
                     for parameter in update.parameters() {
-                        debug_assert!(!next.definition().parameter_changed(prepared, parameter));
-                        if previous.parameter_changed(next.definition(), parameter) {
+                        debug_assert!(!next.definition().parameter_changed(&prepared, parameter));
+                        if previous.parameter_changed(&next.definition(), parameter) {
                             impacts.push(SemanticMutationImpact::EffectParameter {
                                 owner,
                                 effect,

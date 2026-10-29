@@ -395,7 +395,7 @@ impl SceneInstance {
     ) -> std::sync::Arc<noon_compile::CompiledEffectStack> {
         let mut effective = std::sync::Arc::clone(base);
         for binding in base.iter() {
-            let value = self.prepare_effective_attachment_value(object_index, binding);
+            let value = self.prepare_effective_attachment_value(object_index, &binding);
             if value != binding {
                 std::sync::Arc::make_mut(&mut effective).replace(value);
             }
@@ -406,7 +406,7 @@ impl SceneInstance {
     fn prepare_effective_attachment_value(
         &self,
         object_index: usize,
-        base: noon_compile::CompiledEffect,
+        base: &noon_compile::CompiledEffect,
     ) -> noon_compile::CompiledEffect {
         let previous = self.compiled.objects()[object_index]
             .effects
@@ -416,7 +416,7 @@ impl SceneInstance {
             .effects
             .as_ref()
             .and_then(|stack| stack.get(base.attachment))
-            .unwrap_or(base);
+            .unwrap_or_else(|| base.clone());
         effective.definition = base
             .definition
             .discrete_parameters()
@@ -425,9 +425,9 @@ impl SceneInstance {
         // Persistent edits own only the authored parameters they change. Preserve
         // another parameter's effective driver, including an input-owned pulse.
         for property in noon_compile::CompiledEffect::PARAMETER_PROPERTIES {
-            let next = noon_core::EffectTrackValue::from_definition(property, base.definition);
-            let old = previous.and_then(|value| {
-                noon_core::EffectTrackValue::from_definition(property, value.definition)
+            let next = noon_core::EffectTrackValue::from_definition(property, &base.definition);
+            let old = previous.as_ref().and_then(|value| {
+                noon_core::EffectTrackValue::from_definition(property, &value.definition)
             });
             if next != old {
                 if let Some(next) = next {
@@ -450,7 +450,7 @@ impl SceneInstance {
             let tracks = self.compiled.channel_tracks(channel);
             group.cursor = crate::upper_bound_start(tracks, self.frame.time, &mut 0);
             crate::apply_effect_channel(
-                Some(&base),
+                Some(base),
                 &mut effective,
                 tracks,
                 &group,

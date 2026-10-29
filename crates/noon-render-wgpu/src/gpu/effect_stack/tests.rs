@@ -626,7 +626,7 @@ fn maximum_stack_shares_programs_and_churn_stays_within_the_retained_budget() {
     };
     let mut filter = EffectStackFilter::default();
     let mut scope = EffectStackScope::default();
-    let mut effects = [blur(1.0); MAX_EFFECT_STACK_LEN];
+    let mut effects: [_; MAX_EFFECT_STACK_LEN] = std::array::from_fn(|_| blur(1.0));
     let mut params = EffectStackParameters {
         scratch_budget_bytes: 17 * 13 * 28 * 8,
         ..parameters()
@@ -757,7 +757,7 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
             &device,
             &queue,
             capture,
-            &[tiny],
+            std::slice::from_ref(&tiny),
             params
         )
         .unwrap(),
@@ -772,7 +772,7 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
         },
         [17, 13],
         EffectCaptureParameters {
-            definition: tiny,
+            definition: tiny.clone(),
             output_height: params.output_height,
             world_view_height: params.world_view_height,
             scope_opacity: params.scope_opacity

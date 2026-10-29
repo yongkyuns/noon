@@ -113,7 +113,7 @@ fn mask_preflight_is_atomic_and_clean_preparation_reuses_resources() {
     invalid.push((p, EffectPrepareError::CaptureCoordinatesOutOfRange));
     for (p, error) in invalid {
         assert_eq!(
-            prepare(&mut filter, &mut scope, &device, &queue, &source, p),
+            prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone()),
             Err(error)
         );
         assert_eq!(scope.output(), Some(&output));
@@ -375,9 +375,15 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
                             p.scope_opacity = opacity;
                             p.source_bounds = bounds;
                             let first_in_scope = scope.output().is_none();
-                            let work =
-                                prepare(&mut filter, &mut scope, &device, &queue, &texture, p)
-                                    .unwrap();
+                            let work = prepare(
+                                &mut filter,
+                                &mut scope,
+                                &device,
+                                &queue,
+                                &texture,
+                                p.clone(),
+                            )
+                            .unwrap();
                             assert_eq!(work.texture_allocations, usize::from(first_in_scope));
                             assert_eq!(work.buffer_allocations, usize::from(first_in_scope));
                             if count > 0 {
@@ -737,7 +743,8 @@ fn pixelate_pixels_formats_fractional_cells_and_warm_reuse_match_independent_cel
                     p.source_bounds.min = origin;
                     p.scope_opacity = opacity;
                     let work =
-                        prepare(&mut filter, &mut scope, &device, &queue, &source, p).unwrap();
+                        prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone())
+                            .unwrap();
                     if count > 0 {
                         assert_eq!(work.pipeline_compiles, 0);
                     }
@@ -762,7 +769,8 @@ fn pixelate_pixels_formats_fractional_cells_and_warm_reuse_match_independent_cel
                         assert_eq!(actual, input);
                     }
                     let again =
-                        prepare(&mut filter, &mut scope, &device, &queue, &source, p).unwrap();
+                        prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone())
+                            .unwrap();
                     assert_eq!(
                         (
                             again.bytes_uploaded,
