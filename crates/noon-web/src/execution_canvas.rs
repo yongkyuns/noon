@@ -771,6 +771,17 @@ mod wasm {
             }
         }
 
+        fn resource_publication(&self) -> RendererPublication<'_> {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().resource_publication()
+                }
+                DirectSourceAuthority::Program(program) => program.session().resource_publication(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.reader.resource_publication(),
+            }
+        }
+
         fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
@@ -1055,7 +1066,7 @@ mod wasm {
             );
             let mut renderer = GpuRenderer::new(&device, &queue, config.format);
             {
-                let publication = self.source.session().resource_publication();
+                let publication = self.source.resource_publication();
                 renderer
                     .prepare_effect_programs(&device, &publication)
                     .await
@@ -1132,7 +1143,7 @@ mod wasm {
             );
             let mut renderer = GpuRenderer::new(&device, &queue, config.format);
             {
-                let publication = self.source.session().resource_publication();
+                let publication = self.source.resource_publication();
                 renderer
                     .prepare_effect_programs(&device, &publication)
                     .await
@@ -2676,7 +2687,7 @@ mod wasm {
             };
             result.update_camera()?;
             {
-                let publication = result.source.session().resource_publication();
+                let publication = result.source.resource_publication();
                 result
                     .renderer
                     .prepare_effect_programs(&result.device, &publication)
