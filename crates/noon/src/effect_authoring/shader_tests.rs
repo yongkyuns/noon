@@ -27,8 +27,7 @@ fn shader_view_rejects_initial_hdr_without_changing_the_scene() {
     let before = source.integration_store().borrow().scene_revision();
     let error = scene
         .execution_session()
-        .err()
-        .expect("HDR shader scene must reject");
+        .expect_err("HDR shader scene must reject");
     assert!(format!("{error:?}").contains("UnsupportedEffectProfile"));
     assert_eq!(source.integration_store().borrow().scene_revision(), before);
 }
