@@ -87,6 +87,11 @@ test("selection change and disposal prevent a queued explicit Run from reviving 
 });
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
+const hookStart = main.indexOf("async function runPlaygroundTestHook(");
+const hookEnd = main.indexOf("async function loadDemoAuthoringSource(", hookStart);
+const profileStart = main.indexOf("function isPreparedPlayback(");
+const profileEnd = main.indexOf("function playbackPresentation(", profileStart);
+assert.ok(hookStart >= 0 && hookEnd > hookStart && profileStart >= 0 && profileEnd > profileStart);
 const runStart = main.indexOf("async function runScene()");
 const runEnd = main.indexOf("const runRequestRouter =", runStart);
 const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
@@ -98,7 +103,9 @@ assert.ok(runStart >= 0 && runEnd > runStart && hideStart >= 0 && hideEnd > hide
 // Execute the actual Run and navigation handlers: worker retirement rejects an
 // in-flight authoring request, as it does when Safari caches a gallery document.
 function navigationFixture() {
-  const errors = [], clients = [], owners = [], timers = new Map();
+  const errors = [], clients = [], owners = [], requests = [], timers = new Map();
+  const authoringStarts = [];
+  const authoringStart = index => authoringStarts[index] ??= deferred();
   let timerId = 0, fullscreenDisposals = 0, diagnosticInvalidations = 0, diagnosticDisposals = 0;
   const diagnosticBegins = [];
   const window = new EventTarget();
@@ -107,7 +114,7 @@ function navigationFixture() {
     window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,
-    authoringClient: null,
+    authoringClient: null, preparedPlaybackPlayer: null,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
     latestRunPhaseMetrics: null, canvas: { id: "original", style: {} }, playbackDurationSeconds: 1,
     document: { querySelector: () => diagnostics },
@@ -129,9 +136,14 @@ function navigationFixture() {
     disposeFullscreen: () => { fullscreenDisposals += 1; },
     ensureAuthoringClient() {
       if (context.authoringClient === null || context.authoringClient === undefined) {
-        const gate = deferred();
+        const gate = deferred(), index = clients.length;
         const client = {
-          terminated: false, run: () => gate.promise,
+          terminated: false,
+          run(source, sourceContext, options) {
+            requests.push({ source, sourceContext, options });
+            authoringStart(index).resolve();
+            return gate.promise;
+          },
           terminate() {
             this.terminated = true;
             gate.reject(new Error("Python authoring client was terminated"));
@@ -160,11 +172,21 @@ function navigationFixture() {
     clearTimer(id) { timers.delete(id); },
   });
   vm.runInNewContext(
-    main.slice(discardStart, discardEnd) + main.slice(runStart, runEnd) + main.slice(hideStart, hideEnd),
+    main.slice(hookStart, hookEnd) + main.slice(profileStart, profileEnd) +
+      main.slice(discardStart, discardEnd) + main.slice(runStart, runEnd) + main.slice(hideStart, hideEnd),
     context,
   );
   return {
-    context, errors, clients, owners, timers,
+    context, errors, clients, owners, requests, timers,
+    async waitForAuthoring(run, index = 0) {
+      assert.ok(run && typeof run.then === "function", "an actual Run must be pending");
+      // Observe the request, not an assumed number of startup microtasks. A
+      // missing harness dependency fails with its original cause, not a hang.
+      await Promise.race([authoringStart(index).promise, run.then(result => {
+        throw new Error("Run settled before its authoring request", { cause: result?.error });
+      })]);
+      assert.deepEqual(errors, []);
+    },
     get fullscreenDisposals() { return fullscreenDisposals; },
     get diagnosticInvalidations() { return diagnosticInvalidations; },
     get diagnosticDisposals() { return diagnosticDisposals; },
@@ -186,7 +208,7 @@ test("leaving the gallery retires a pending Python run without publishing a Pyth
       f.context.activeSourceContinuation = {};
     }
     const run = f.context.runScene();
-    await flush(); // Reach pending authoring after the retained replay pause.
+    await f.waitForAuthoring(run);
     f.dispatch("pagehide", false);
     assert.equal((await run).stale, true);
     assert.deepEqual(f.errors, []);
@@ -207,7 +229,7 @@ test("edited Run retires pre-continuation warmup before admitting its replacemen
   assert.ok(start >= 0 && end > start);
   vm.runInNewContext(main.slice(start, end), f.context);
   const original = f.context.runScene();
-  await flush();
+  await f.waitForAuthoring(original);
   assert.equal(f.clients.length, 1);
   f.context.sceneSourceEditor.value = "edited source";
   let current = true;
@@ -223,7 +245,7 @@ test("edited Run retires pre-continuation warmup before admitting its replacemen
   });
   const replacement = router.request(() => current);
   try {
-    await flush();
+    await f.waitForAuthoring(replacement, 1);
     assert.equal(f.clients.length, 2, "edited source must not wait for old warmup to publish");
     assert.equal(f.clients[0].terminated, true);
     assert.equal((await original).stale, true);
@@ -242,8 +264,9 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
   for (let cycle = 0; cycle < 3; cycle += 1) {
     let run;
     if (cycle === 0) run = f.context.runScene();
-    else if (cycle === 1) { run = f.context.sourceRestart.runNow(); await flush(); }
+    else if (cycle === 1) run = f.context.sourceRestart.runNow();
     else { f.context.sourceRestart.edited(); f.tick(); await flush(); run = f.context.sceneRunPromise; }
+    await f.waitForAuthoring(run, cycle);
     assert.equal(f.clients.length, cycle + 1, "restored controls must start a fresh authoring request");
     f.dispatch("pagehide", true);
     await run;
@@ -279,6 +302,169 @@ test("navigation cancels a queued edit restart before the cached document return
   assert.equal(f.diagnosticDisposals, 0);
   assert.equal(f.clients.length, 0, "restoration must not launch a cancelled edit timer");
   assert.equal(f.timers.size, 0);
+  assert.deepEqual(f.errors, []);
+});
+
+// These gates deliberately outlive the initial call. Navigation must win both
+// resolution and rejection without inventing a source failure or starting work.
+test("delayed startup options admit one authoring request and unchanged Runs join it", async () => {
+  const f = navigationFixture(), entered = deferred(), options = deferred();
+  let calls = 0, payload;
+  f.context.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+    authoringRunOptions(value) { calls += 1; payload = value; entered.resolve(); return options.promise; },
+  };
+  const run = f.context.runScene();
+  await entered.promise;
+  const pending = f.context.sceneRunPromise;
+  const joined = f.context.runScene();
+  try {
+    assert.equal(f.context.sceneRunPromise, pending);
+    assert.equal(calls, 1);
+    assert.equal(payload.exampleId, "one");
+    assert.equal(payload.runGeneration, f.context.activeRunRequest.token.runGeneration);
+    assert.equal(f.clients.length, 0);
+    assert.equal(f.owners.length, 0);
+    options.resolve({});
+    await f.waitForAuthoring(run);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.requests[0].source, "source");
+    assert.equal(f.requests[0].options.preparedPlayback, false);
+    assert.equal(f.requests[0].options.preparationLookaheadSeconds, 1);
+    assert.equal(f.requests[0].sourceContext.playground.run_generation, payload.runGeneration);
+  } finally {
+    options.resolve({});
+    f.dispatch("pagehide", false);
+    await Promise.all([run, joined]);
+  }
+  assert.deepEqual(f.errors, []);
+});
+
+for (const persisted of [false, true]) {
+  for (const outcome of ["resolve", "reject"]) {
+    test(`navigation during startup options ignores late ${outcome} (cached=${persisted})`, async () => {
+      const f = navigationFixture(), entered = deferred(), options = deferred();
+      f.context.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+        authoringRunOptions() { entered.resolve(); return options.promise; },
+      };
+      const run = f.context.runScene();
+      let replacement = null;
+      try {
+        await entered.promise;
+        assert.equal(f.clients.length, 0);
+        assert.equal(f.owners.length, 0);
+        f.dispatch("pagehide", persisted);
+        if (persisted) f.dispatch("pageshow", true);
+        const status = JSON.stringify([f.context.status, f.context.patchStatus, f.context.runtimeStatus]);
+        options[outcome](outcome === "resolve" ? {} : new Error("obsolete startup options"));
+        await flush();
+        assert.equal(f.clients.length, 0, "retired startup must not invoke Python");
+        assert.equal(f.owners.length, 0, "retired startup must not allocate a render owner");
+        const result = await run;
+        assert.equal(result.stale, true);
+        assert.equal(result.stage, outcome === "resolve" ? "before-authoring-options" : "error");
+        assert.equal(f.context.sceneRunPromise, null);
+        assert.equal(f.context.activeRunRequest, null);
+        assert.equal(JSON.stringify([f.context.status, f.context.patchStatus, f.context.runtimeStatus]), status);
+        assert.deepEqual(f.errors, []);
+        delete f.context.__NOON_PLAYGROUND_TEST_HOOKS__;
+        replacement = f.context.sourceRestart.runNow();
+        if (persisted) {
+          await f.waitForAuthoring(replacement);
+          assert.equal(f.clients.length, 1, "cached return still permits an explicit fresh Run");
+          assert.equal(f.requests.length, 1);
+        } else {
+          await replacement;
+          assert.equal(f.clients.length, 0, "permanent departure cannot be restarted");
+        }
+      } finally {
+        options.resolve({});
+        f.dispatch("pagehide", false);
+        await run;
+        await replacement;
+      }
+      assert.deepEqual(f.errors, []);
+    });
+
+    test(`navigation during source retirement ignores late ${outcome} (cached=${persisted})`, async () => {
+      const f = navigationFixture(), entered = deferred(), pause = deferred();
+      const owner = f.context.ensureRuntimePreparation().candidate;
+      f.context.player = owner; f.context.runtimePreparation = null;
+      owner.retireExecutionSource = () => { entered.resolve(); return pause.promise; };
+      const run = f.context.runScene();
+      try {
+        await entered.promise;
+        assert.equal(f.clients.length, 0, "authoring waits for the actual retirement acknowledgement");
+        f.dispatch("pagehide", persisted);
+        if (persisted) f.dispatch("pageshow", true);
+        const canvas = f.context.canvas;
+        const status = JSON.stringify([f.context.status, f.context.patchStatus, f.context.runtimeStatus]);
+        assert.equal(owner.terminations, 1);
+        pause[outcome](outcome === "resolve" ? undefined : new Error("obsolete source retirement"));
+        await flush();
+        assert.equal(f.clients.length, 0);
+        const result = await run;
+        assert.equal(result.stale, true);
+        assert.equal(result.stage, outcome === "resolve" ? "after-source-retirement" : "error");
+        assert.equal(owner.terminations, 1, "late retirement rejection must not retire its owner twice");
+        assert.equal(f.context.canvas, canvas);
+        assert.equal(f.context.player, null);
+        assert.equal(f.context.activeRunRequest, null);
+        assert.equal(f.context.sceneRunPromise, null);
+        assert.equal(JSON.stringify([f.context.status, f.context.patchStatus, f.context.runtimeStatus]), status);
+        assert.deepEqual(f.errors, []);
+      } finally {
+        pause.resolve();
+        f.dispatch("pagehide", false);
+        await run;
+      }
+    });
+  }
+}
+
+for (const asynchronous of [false, true]) {
+  test(`current startup failure stays visible and fails authoring admission (async=${asynchronous})`, async () => {
+    const f = navigationFixture(), failure = new Error("current startup failure");
+    f.context.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+      authoringRunOptions() {
+        if (asynchronous) return Promise.reject(failure);
+        throw failure;
+      },
+    };
+    const run = f.context.runScene();
+    await assert.rejects(f.waitForAuthoring(run), error => error.cause === failure);
+    assert.equal((await run).error, failure);
+    assert.deepEqual(f.errors, [failure]);
+    assert.equal(f.clients.length, 0);
+    assert.equal(f.owners.length, 0);
+    assert.equal(f.context.sceneRunPromise, null);
+    assert.equal(f.context.activeRunRequest, null);
+    f.dispatch("pagehide", false);
+  });
+}
+
+test("navigation after replacing a prepared reader retires each owner once", async () => {
+  const f = navigationFixture();
+  const previous = f.context.ensureRuntimePreparation().candidate;
+  f.context.player = previous; f.context.preparedPlaybackPlayer = previous;
+  f.context.runtimePreparation = null;
+  let pauses = 0;
+  previous.pause = () => { pauses += 1; return Promise.resolve(); };
+  const run = f.context.runScene();
+  try {
+    await f.waitForAuthoring(run);
+    assert.equal(pauses, 0, "a prepared reader must retire rather than pause for reuse");
+    assert.equal(previous.terminations, 1);
+    assert.equal(f.context.preparedPlaybackPlayer, null);
+    assert.equal(f.owners.length, 2);
+    assert.equal(f.requests.length, 1);
+  } finally {
+    f.dispatch("pagehide", false);
+    await run;
+  }
+  assert.equal(previous.terminations, 1);
+  assert.equal(f.owners[1].terminations, 1);
+  assert.equal(f.clients[0].terminated, true);
+  assert.equal(f.context.canvas, f.owners[1].canvas);
   assert.deepEqual(f.errors, []);
 });
 

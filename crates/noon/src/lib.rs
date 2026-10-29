@@ -276,6 +276,8 @@ pub use latex_authoring::{
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
+#[cfg(feature = "prepared-prefix")]
+pub use live_program::{PreparedSource, PreparedSourceError, PreparedSourceStatus};
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
@@ -452,6 +454,11 @@ pub mod prelude {
 }
 
 pub use family_gradient::color_gradient;
+
+#[cfg(feature = "prepared-prefix")]
+pub use execution_session::PrefixReader;
+#[cfg(feature = "prepared-prefix")]
+pub use noon_runtime::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher};
 
 #[cfg(all(test, feature = "diagnostics"))]
 mod object_member_queries;

@@ -1,18 +1,12 @@
 //! Genuine worker input envelope; the collection receipt is never refreshed here.
-use crate::browser_pointer_input::{BrowserPointerInput, BrowserPointerTarget};
-use crate::worker_pointer_presentation::WorkerPointerReceipt;
+#[cfg(test)]
+use crate::browser_pointer_input::BrowserPointerInput;
+use crate::browser_pointer_input::BrowserPointerTarget;
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::ExecutionSession;
 use noon_core::{NativePointerId, NativePointerInput, Vec2};
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct WorkerPointerInput {
-    pub input: BrowserPointerInput,
-    pub presentation: Option<WorkerPointerReceipt>,
-}
 
 /// Borrowed input adapter for one player-owned semantic store/session pair.
 /// It owns no pointer policy, target set, or source state: all occurrences
@@ -33,8 +27,47 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
             .refresh_pointer_hover(frame, frame.view())
             .map(|_| ())
     }
-    fn session(&self) -> &ExecutionSession {
-        self.session
+    fn has_native_pointer_subscribers(&self) -> bool {
+        self.session.has_native_pointer_subscribers()
+    }
+    fn translation_drag_active(&self) -> bool {
+        self.session.translation_drag_active()
+    }
+    fn inspection_camera(
+        &self,
+    ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
+        self.session.inspection_camera()
+    }
+    fn capture_pointer_frame(
+        &self,
+        view: noon::integration::PointerFrameView,
+    ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError> {
+        self.session.capture_pointer_frame(view)
+    }
+    fn validate_pointer_frame(
+        &self,
+        frame: &noon::integration::PointerFrameSnapshot,
+        view: noon::integration::PointerFrameView,
+        validation: crate::browser_pointer_input::PointerFrameValidation,
+    ) -> Result<(), noon::integration::PointerFrameError> {
+        match validation {
+            crate::browser_pointer_input::PointerFrameValidation::Input => {
+                frame.validate_current(&*self.session, view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::Presentation => {
+                frame.validate_presentation(&*self.session, view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(&*self.session, view)
+            }
+        }
+    }
+    fn pointer_input_token_for_frame(
+        &self,
+        frame: &noon::integration::PointerFrameSnapshot,
+        view: noon::integration::PointerFrameView,
+    ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
+        frame.input_token(&*self.session, view)
     }
 
     fn configure_pointer(
@@ -111,11 +144,10 @@ fn submit_test_frame(
     let view = PointerFrameView::new(
         input.view_revision,
         viewport,
-        target.session().camera().map_err(|e| e.to_string())?,
+        target.inspection_camera().map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     let frame = target
-        .session()
         .capture_pointer_frame(view)
         .map_err(|e| e.to_string())?;
     submit_presented_browser_pointer_input(target, binding, sequence, input, &frame)

@@ -22,6 +22,8 @@ mod matrix;
 mod numbers;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+mod prepared;
 mod provisional_geometry;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
@@ -110,7 +112,10 @@ impl WasmLiveSegmentDrive {
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl WasmExecutionWake {
-    fn from_plan(plan: BrowserExecutionWakePlan, timer_after_milliseconds: Option<f64>) -> Self {
+    pub(crate) fn from_plan(
+        plan: BrowserExecutionWakePlan,
+        timer_after_milliseconds: Option<f64>,
+    ) -> Self {
         Self {
             present_now: plan.present_now(),
             cadence: plan.cadence(),
@@ -4294,127 +4299,37 @@ impl SemanticExecutionPlayer {
             .inspection_camera()
             .map_err(|e| e.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
-        let pointer_frame = self.worker_pointer_presentation.capture(&self.session)?;
-        #[cfg(any(target_arch = "wasm32", test))]
-        let pointer_refresh = self.worker_pointer_presentation.needs_delta(&self.session);
+        let (pointer_frame, pointer_refresh) = {
+            let target = pointer_input::PlayerPointerTarget {
+                session: &mut self.session,
+                semantics: self
+                    .semantics
+                    .as_ref()
+                    .ok_or("execution player lost its semantic store")?,
+                translation_drag_undo: &mut self.translation_drag_undo,
+            };
+            (
+                self.worker_pointer_presentation.capture(&target)?,
+                self.worker_pointer_presentation.needs_delta(&target),
+            )
+        };
         #[cfg(not(any(target_arch = "wasm32", test)))]
         let pointer_refresh = false;
         let inset_2d_views = self.session.inset_2d_views().map_err(|e| e.to_string())?;
         let publication = self.session.take_renderer_publication();
-        let mut changes = publication.changes().clone();
-        if changes.is_empty()
-            && (self.finite_export.is_some()
+        let Some(mut delta) = self.encoder.encode_renderer_publication(
+            &publication,
+            camera,
+            snapshot || !self.snapshot_sent,
+            self.finite_export.is_some()
                 || presentation != self.last_sent_selection_overlay
-                || pointer_refresh)
-        {
-            // Presentation-only transport work, not authored/runtime dirtiness.
-            // Reuse the existing sequence and backpressure; never invent a row.
-            changes = noon_runtime::FrameChanges::presentation_redraw();
-        }
-        let frame = publication.frame();
-        let publication_context = publication.context();
-        let planned = publication.planned_family_frame();
-        let plans = publication.family_animation_plans();
-        let painter_order = publication.painter_order();
-
-        let mut delta = if snapshot || changes.is_all() || !self.snapshot_sent {
-            let indices = painter_order
-                .iter()
-                .map(|&index| index as usize)
-                .collect::<Vec<_>>();
-            let text_handles = indices
-                .iter()
-                .filter_map(|&index| frame.objects[index].content.text())
-                .collect::<Vec<_>>();
-            let mut delta = self
-                .encoder
-                .encode_planned_snapshot_indices_with_context(
-                    &planned,
-                    plans,
-                    camera,
-                    publication_context,
-                    indices,
-                )
-                .map_err(|e| e.to_string())?;
-            self.encoder
-                .attach_resource_additions(
-                    &mut delta,
-                    text_handles,
-                    publication.text_resources(),
-                    publication.geometry_resources(),
-                    publication.font_resources(),
-                    publication.raster_image_resources(),
-                )
-                .map_err(|error| error.to_string())?;
-            self.snapshot_sent = true;
-            delta
-        } else if changes.is_structural() || changes.has_painter_order_change() {
-            let text_handles = changes
-                .object_indices()
-                .iter()
-                .filter_map(|&index| frame.objects.get(index)?.content.text())
-                .collect::<Vec<_>>();
-            let Some(mut delta) = self
-                .encoder
-                .encode_planned_incremental_with_painter_order_and_context(
-                    &planned,
-                    plans,
-                    &changes,
-                    camera,
-                    publication_context,
-                    painter_order,
-                )
-                .map_err(|e| e.to_string())?
-            else {
-                return Ok(None);
-            };
-            self.encoder
-                .attach_resource_additions(
-                    &mut delta,
-                    text_handles,
-                    publication.text_resources(),
-                    publication.geometry_resources(),
-                    publication.font_resources(),
-                    publication.raster_image_resources(),
-                )
-                .map_err(|error| error.to_string())?;
-            delta
-        } else {
-            let text_handles = changes
-                .object_indices()
-                .iter()
-                .filter_map(|&index| frame.objects.get(index)?.content.text())
-                .collect::<Vec<_>>();
-            let Some(mut delta) = self
-                .encoder
-                .encode_planned_incremental_with_context(
-                    &planned,
-                    plans,
-                    &changes,
-                    camera,
-                    publication_context,
-                )
-                .map_err(|e| e.to_string())?
-            else {
-                return Ok(None);
-            };
-            self.encoder
-                .attach_resource_additions(
-                    &mut delta,
-                    text_handles,
-                    publication.text_resources(),
-                    publication.geometry_resources(),
-                    publication.font_resources(),
-                    publication.raster_image_resources(),
-                )
-                .map_err(|error| error.to_string())?;
-            delta
+                || pointer_refresh,
+        )?
+        else {
+            return Ok(None);
         };
-        debug_assert_eq!(delta.retained.publication_context, publication_context);
+        self.snapshot_sent = true;
         delta.retained.inset_2d_views = inset_2d_views;
-        delta
-            .replace_transient_presentations(frame, publication.transient_presentations())
-            .map_err(|error| error.to_string())?;
         delta.selection_overlay = overlay;
         #[cfg(any(target_arch = "wasm32", test))]
         {
@@ -5837,8 +5752,9 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
-        let envelope: pointer_input::WorkerPointerInput = serde_json::from_str(json)
-            .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
+        let envelope: crate::worker_pointer_presentation::WorkerPointerInput =
+            serde_json::from_str(json)
+                .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
         let Self {
             session,
             semantics,
@@ -5968,8 +5884,16 @@ impl SemanticExecutionPlayer {
     pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
         let receipt =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session: &mut self.session,
+            semantics: self
+                .semantics
+                .as_ref()
+                .ok_or("execution player lost its semantic store")?,
+            translation_drag_undo: &mut self.translation_drag_undo,
+        };
         self.worker_pointer_presentation
-            .note_presented(&mut self.session, receipt)
+            .note_presented(&mut target, receipt)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -6023,36 +5947,9 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaTransportJson))]
     pub fn drain_delta_transport_json(&mut self) -> Result<Option<String>, String> {
-        #[derive(Serialize)]
-        struct Header<'a> {
-            channel: &'a str,
-            session: u32,
-            sequence: u64,
-            snapshot: bool,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            pointer_view: Option<crate::worker_pointer_presentation::PointerPresentationView>,
-        }
-
-        let Some(delta) = self.compact_delta(false)? else {
-            return Ok(None);
-        };
-        let header = Header {
-            channel: &delta.retained.channel,
-            session: delta.retained.session,
-            sequence: delta.retained.sequence,
-            snapshot: delta.retained.snapshot,
-            pointer_view: delta.pointer_view,
-        };
-        // One serialization buffer; no duplicated body or retained metadata.
-        let mut bytes = serde_json::to_vec(&header).map_err(|error| error.to_string())?;
-        if bytes.len() > 512 {
-            return Err("worker publication metadata exceeds its bounded header".into());
-        }
-        bytes.push(b'\n');
-        serde_json::to_writer(&mut bytes, &delta).map_err(|error| error.to_string())?;
-        String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|error| error.to_string())
+        self.compact_delta(false)?
+            .map(|delta| delta.encode_worker_carrier())
+            .transpose()
     }
 
     /// Drain one callback-published retained delta together with an exact,

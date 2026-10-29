@@ -67,10 +67,7 @@ impl Fixture {
     fn present(&mut self) {
         let frame = self
             .host
-            .capture(
-                self.execution.session(),
-                self.execution.session().camera().unwrap(),
-            )
+            .capture(&self.execution, self.execution.session().camera().unwrap())
             .unwrap();
         self.execution.session_mut().take_renderer_publication();
         self.host.did_present(frame);
@@ -98,10 +95,7 @@ fn capture_alone_never_authorizes_input_or_consumes_publication() {
     let wake = f.execution.session().wake_state();
     let captured = f
         .host
-        .capture(
-            f.execution.session(),
-            f.execution.session().camera().unwrap(),
-        )
+        .capture(&f.execution, f.execution.session().camera().unwrap())
         .unwrap();
     assert!(captured.is_some());
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
@@ -291,10 +285,7 @@ fn hidden_view_retires_receipt_and_preserves_revision_high_watermark() {
     assert!(f.host.viewport().is_none());
     assert!(f
         .host
-        .capture(
-            f.execution.session(),
-            f.execution.session().camera().unwrap()
-        )
+        .capture(&f.execution, f.execution.session().camera().unwrap())
         .unwrap()
         .is_none());
     assert!(f.host.set_view(8, SIZE).is_err());
@@ -363,11 +354,7 @@ fn manual_camera_mismatch_cannot_mint_a_receipt_or_spin_forever() {
         center: Vec2::new(2.0, 0.0),
         height: 8.0,
     };
-    assert!(f
-        .host
-        .capture(f.execution.session(), camera)
-        .unwrap()
-        .is_none());
+    assert!(f.host.capture(&f.execution, camera).unwrap().is_none());
     f.host.did_present(None);
     assert!(!f.host.refresh_pending);
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
@@ -450,7 +437,7 @@ fn binding_reset_is_revalidated_before_positional_admission() {
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
     let frame = host
-        .capture(execution.session(), execution.session().camera().unwrap())
+        .capture(&execution, execution.session().camera().unwrap())
         .unwrap();
     host.did_present(frame);
     let mut binding = None;
@@ -630,12 +617,12 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
     let frame = host
-        .capture(execution.session(), execution.session().camera().unwrap())
+        .capture(&execution, execution.session().camera().unwrap())
         .unwrap();
     execution.session_mut().take_renderer_publication();
     host.did_present(frame);
     let displayed = execution.session().publication_context();
-    assert!(!host.needs_refresh(execution.session()));
+    assert!(!host.needs_refresh(&execution));
     execution
         .session_mut()
         .set_native_state_input(source, NativeInputValue::Scalar(1.0))
@@ -648,7 +635,7 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
         .is_empty());
     assert!(!execution.session().wake_state().frame_pending());
     for _ in 0..128 {
-        assert!(!host.needs_refresh(execution.session()));
+        assert!(!host.needs_refresh(&execution));
         assert!(
             !execution.session().wake_state().frame_pending(),
             "a dormant pointer view must not request receipt-only refreshes"
@@ -686,7 +673,7 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
     let frame = host
-        .capture(execution.session(), execution.session().camera().unwrap())
+        .capture(&execution, execution.session().camera().unwrap())
         .unwrap();
     execution.session_mut().take_renderer_publication();
     host.did_present(frame);
@@ -705,7 +692,7 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
         .take_renderer_publication()
         .changes()
         .is_empty());
-    assert!(host.needs_refresh(execution.session()));
+    assert!(host.needs_refresh(&execution));
 
     // A stale occurrence triggers cancellation and a fresh presentation; it
     // must never be silently replayed against the newly published receipt.
@@ -736,7 +723,7 @@ fn callback_barrier_does_not_create_a_receipt_only_redraw_loop() {
         .session_mut()
         .begin_required_callback_phase(0.0, [f.target])
         .unwrap();
-    assert!(!f.host.needs_refresh(f.execution.session()));
+    assert!(!f.host.needs_refresh(&f.execution));
     f.execution
         .session_mut()
         .commit_required_callback_phase(phase.finish())
@@ -760,6 +747,6 @@ fn direct_static_pointer_motion_observes_hover_without_a_redraw() {
     assert!(f.send(outside).unwrap());
     assert_eq!(f.execution.session().hovered_pointer_target(), None);
     assert_eq!(f.execution.session().publication_context(), publication);
-    assert!(!f.host.needs_refresh(f.execution.session()));
+    assert!(!f.host.needs_refresh(&f.execution));
     assert_eq!(f.execution.session().frame().time, 0.0);
 }

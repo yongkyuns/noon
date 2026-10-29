@@ -700,6 +700,198 @@ full lifecycle contract. #1661 separately addresses wait-time observation. These
 issues carry dated evidence and repair status; their existence is not a claim
 that every history domain has been implemented or qualified.
 
+### Experimental completed-prefix delivery
+
+The opt-in `prepared-prefix` experiment keeps the producer's sole Semantic Scene
+and uses the existing runtime evaluator in an independent derived history reader.
+After one explicit execution bootstrap, completed extensions transfer only new
+compiler-owned row/track revisions. Appending future history does not advance the
+reader or replace its displayed frame. Source-owner segment/callback admission
+precedes extraction; a tokenless wait needs its actual continuation boundary too.
+The advertised interval is half-open `[start, prepared_frontier)`, since further
+source statements may still mutate the frontier's exact timestamp. Only one
+ordered, scope-bound stream may extend a reader; budgets and failures preserve
+already-published history. New suffix conversion uses a sparse reverse overlay,
+not a copy of the source scene or a rewind of either execution cursor.
+
+The experimental 2D slice admits sparse creation, removal/re-entry, order/content
+changes and ordinary property tracks. New physical rows are installed as inactive
+slots; they become visible only through historical revision selection. Source
+resource closures carry only not-yet-delivered immutable handles and dependencies.
+A new-slot capacity reservation is an explicit bounded maintenance barrier, never
+an implicit whole-scene relocation during append. It may be O(existing storage);
+ordinary suffix extraction/installation remains proportional to newly touched
+payloads and ordering neighbours. Resource/payload limits count entries, not bytes.
+An empty reactive runtime installed by semantic lowering is admissible; actual
+signals or reactive bindings, including later enrollment, require their own history
+policy.
+Family channels, spatial/glow plans, reactive/causal native input and host callbacks
+remain outside admission. The opt-in cooperative `PreparedSource` may consume an
+ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
+call invokes at most one continuation and completes its actual admitted segment
+headlessly using the shared evaluator/completion path. One pending reader/batch
+applies backpressure; no further source invocation occurs until it is taken.
+Retention admits the producer publication, not a displayed-frame receipt. Failure
+is terminal and never retries user code; cancellation releases only source-owned
+state while already-delivered history remains usable. An unwinding panic leaves
+that source owner terminally failed before propagating its original payload;
+source-owned unpublished output is released even if final cleanup panics. This
+is not rollback of external side effects or in-process recovery from abort/trap
+configurations, which require host-context teardown. Zero-duration waits yield,
+and sources with no positive readable interval are explicitly unsupported here.
+This is a work-count bound, not preemption of a long user call or resource operation.
+Explicitly sealed
+source completion can publish a terminal batch; only reader adoption changes the
+ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
+presentation or establish physical-device performance. Implementation and
+qualification remain in #2211; this is not another scene or rendering authority.
+
+The opt-in direct Rust/WASM canvas can own this reader instead of a live source,
+using the same retained renderer, presentation receipts, pointer normalization and
+wake driver. Incremental delivery is typed and in-process; the producer remains
+outside the canvas. User pause and missing-prefix buffering suppress only authored
+time wakes, not independent effects. At an unavailable frontier the host retains
+its last valid sample and sleeps until explicit delivery, without an epsilon seek
+or a busy timer. Resume reanchors the existing host wake clock so buffered wall
+time is not charged to playback. This does not install the reader in the Python
+playground, admit arbitrary source continuations or change the default viewer.
+A browser task driver may schedule one cooperative Rust preparation call per
+macrotask and wake the existing presentation driver after typed delivery. It owns
+only task handles/cancellation, never authored time, source semantics or batches.
+The native path calls the same producer directly without browser infrastructure.
+The producer's `prepare_until` demand gate admits another continuation only below
+an absolute requested frontier, while preserving pending-output backpressure. An
+unknown segment may overshoot that target once; this does not bound resource bytes
+or discard history required for rewind. The canvas derives a positive look-ahead
+from its reader, not from a JavaScript timeline clock. Satisfied demand sleeps with
+no preparation timer until the existing playback/control driver reports progress.
+A missing open frontier admits one refill even when the last rendered sample still
+predates a long static wait, preventing a demand/buffering deadlock. Rejected
+nonfinite demand performs no user work. Terminal delivery and explicit cancellation
+remain distinct from temporary demand satisfaction.
+The optional canonical interpreter context can complete its actual pending segment
+headlessly through the same player-owned receipt, admission and semantic completion
+path. A thin Python `LiveExecution.prepare()` request does not supply a guessed
+endpoint or authorize presentation. The existing context retains the sole source
+runtime; typed Rust prefix extraction supplies a separate historical reader without
+leasing the source player to it. Source callbacks/causal state are rejected before
+headless advancement, and pending or transferred source ownership cannot publish a
+prefix. Explicit source sealing remains distinct from finishing an individual
+segment. Host orchestration must retain/deliver each extracted batch, yield interpreter
+work and stop on errors; this bridge provides no retry, source scheduler or new wire
+format. A frame/debug observation is never fed back as engine authority.
+An opt-in interpreter suspension driver may hold the existing canonical Python
+continuation after its segment has been completed and adopted. A typed Rust canvas
+query decides whether to resume source under the same look-ahead/open-frontier
+policy; JavaScript receives a boolean, not an authored cursor or history payload.
+One macrotask yields between continuation releases. Satisfied demand keeps no
+scheduled preparation task. The driver is single-use, rejects overlapping barriers
+and latches failure/cancellation even when source catches the rejected await. It
+reuses the existing complete control event and never automatically retries user
+statements. Asynchronous host bootstrap/cleanup must observe its abort signal
+before publishing after a wait; neither arbitrary Python execution nor such host
+work is preempted. The admitted ordinary construct path uses the existing portable
+source compiler, with no second rewrite or source-language engine. This same-context
+host integration remains opt-in and does not change the default viewer.
+Hard byte budgets, preemption of heavy source work and restart/recovery policy
+remain separate qualifications.
+
+The canonical interpreter context can construct that prepared worker host after
+its actual first segment completes, without leasing away its source runtime.
+The host may retain one source-bound publisher cursor and one undelivered suffix;
+these are delivery metadata, not another semantic scene or source evaluator.
+Source identity/scope and pending-output admission are checked before completing
+or sealing the source. Completion extracts at most one suffix; adoption is a
+separate typed Rust operation. Capacity rejection keeps the same suffix for
+explicit reservation and retry, never repeating Python or completion. Zero-duration
+completion invents no readable range. Only adopting an explicitly finished suffix
+exposes the exact endpoint. Cancellation drops unpublished delivery state without
+revoking earlier history; the caller still cancels/releases the interpreter.
+A failure after source completion begins closes that delivery binding rather than
+automatically retrying partially completed work. None of these operations is a
+presentation acknowledgment.
+
+An explicitly prepared Python run uses the same production authoring worker,
+canonical context and source generation. Its single-use interpreter driver wraps
+the whole source invocation and yields at ordinary play/wait barriers. The existing
+execution endpoint owns the independent prepared reader in that WASM context;
+the source runtime remains with the interpreter. Rust look-ahead demand resumes
+the suspended stack, and one retained suffix must be adopted before another
+segment completes. Prefix delivery neither waits for nor fabricates presentation.
+Only selected frame output uses the existing bounded render transport. The first
+actual presentation receipt admits the Rust playback clock; pure typed status
+observations do not start it. Pausing commits elapsed interior static-wait time
+through the same clock and reader, without selecting an unavailable open frontier.
+Source failure retires preparation and preserves already-adopted history; explicit
+cancellation retires the endpoint and releases its reader. Late attachment results
+cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
+rather than reconciling it into the source's latest-state player. This bounded
+profile rejects causal input, host callbacks, looping, and sources without an
+initial readable interval. A receiver restart still requires a fresh source run;
+it must reject before destroying the existing historical player. The gallery and
+default viewer do not opt into this experimental run option.
+
+At the genuine execution-to-render-worker boundary, an opt-in prepared player
+may own the independent reader in the producing execution context. It encodes
+only that reader's selected RendererPublication with the existing retained
+codec, resource residency and input presentation receipts. The rendering worker
+remains a derived GPU/presentation consumer; prefix batches and the source
+runtime do not become a second cross-context history protocol. Initial resource
+bootstrap is empty and selected immutable closures accompany the initial delta.
+Future append alone sends no render publication. A drained delta is owned by the
+host for ordered, backpressured delivery; neither consumption nor extraction
+acknowledges display. Rebootstrapping that stream with an incomplete inventory is
+rejected. Full worker restart/rehydration still requires its own lifecycle
+qualification. Single-context/native
+hosts continue to borrow publications directly without this transport.
+
+The reader distinguishes monotonic forward playback from an explicit seek.
+Direct, typed presentation effects use the existing Runtime's bounded Indicate
+admission against the displayed historical target, not the producer's current
+membership. Effects advance on session time while authored time may stay paused;
+they do not modify retained history or source semantics. Appending future history
+preserves the displayed effect. Forward playback within one execution revision
+preserves disjoint effects, while authored channel conflicts, a crossed execution
+revision, or an explicit seek supersede them under the existing runtime policy.
+
+Authored click-Indicate declarations are lowered into their existing compiled
+object rows and retained by ordinary reversible execution history. Preparing a
+bound action reads the declaration in the displayed revision, including its
+absence, replacement or removal. Binding-only publications retain one touched
+row without dirtying renderer-facing values. Shared session dispatch reads that
+same execution projection, with a maintained live-binding count for constant-time
+input interest; it keeps no producer-current binding map. Future appended rows
+remain inactive until their creation revision is displayed.
+
+Live GlowPulse and playback-control declarations remain with their canonical
+semantic owner and are rejected by prepared-source admission. The historical
+reader admits only compiled Indicate presentation effects: it reuses shared
+pointer preparation and metadata commit, rejecting causal writes or a semantic
+lifecycle action before acknowledging input. It never invents or borrows a
+mutable SemanticStore. Ordinary live sources continue to retire temporary glow
+attachments through their original SceneExecution/LiveProgram store-session pair.
+
+The public prefix reader owns an ordinary `ExecutionSession`, not a second input
+engine. Its runtime-layer `PrefixReceiver` owns only stream/readiness metadata,
+bound to that runtime incarnation and sealed history scope. Bootstrap moves the
+one derived runtime into the session; it does not clone the producer session or
+retain its mutable semantic identity/reachability maps. Initial and newly delivered
+physical identities are pinned in the existing derived slot table. Those pins
+are not live membership: picking still observes the selected historical revision.
+New-slot map/storage reservation is explicit, and append registers only new rows.
+
+Pointer admission, picking, click synthesis, hover/selection, inspection and bound
+Indicate dispatch delegate to the existing session APIs. The public reader exposes
+neither mutable session/runtime access nor authoring/causal input operations.
+Readiness and monotonic advance are checked before ordinary session evaluation;
+explicit seeking cancels transient interaction through the same session policy.
+Future or terminal delivery preserves the displayed publication and pending
+pointer gesture. Frame snapshots retain the existing runtime/view/inspection
+qualification and do not assert that a host actually presented a frame. Hosts
+must keep that association themselves. General injected animations and causal
+edits require separate admission; browser/native shell adoption and end-to-end
+latency qualification are still outstanding in #2211.
+
 ### Identity generations, revisions, versions and sequences
 
 Identity validity, authored/execution revisioning, effective publication, external event ordering, and GPU lifetime are distinct domains. They must not collapse into one ambiguous global generation counter:

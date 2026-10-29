@@ -7,6 +7,8 @@ description = "Ergonomic language-neutral authoring facade for Noon"
 
 [features]
 wgsl-effects = ["noon-core/wgsl-effects"]
+# Experimental #2211; not enabled by default.
+prepared-prefix = ["noon-runtime/prepared-prefix"]
 image-decode = ["dep:image"]
 # Convenience product configuration. Geometry-only consumers disable defaults.
 default = ["native-text", "typst", "bundled-fonts", "image-decode", "code"]

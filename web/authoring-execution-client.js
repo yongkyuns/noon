@@ -23,6 +23,7 @@ export class AuthoringExecutionClient {
   #player = null;
   #preparedPlayer = null;
   #mode = null;
+  #preparedPlayback = false;
   #rendererBackend = "";
   #loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS;
   #transportMode = null;
@@ -134,7 +135,7 @@ export class AuthoringExecutionClient {
     if (typeof initiallyPaused !== "boolean") {
       throw new TypeError("initiallyPaused must be a boolean");
     }
-    if (initiallyPaused && semantic.continuationGeneration !== null) {
+    if (initiallyPaused && semantic.continuationGeneration !== null && !semantic.preparedPlayback) {
       throw new Error("source-owned semantic continuations cannot start paused");
     }
     validateSemanticPacing(pacing);
@@ -173,12 +174,14 @@ export class AuthoringExecutionClient {
         initialPointerView,
         callbackSessionId: semantic.callbackSessionId,
         continuationGeneration: semantic.continuationGeneration,
+        preparedPlayback: semantic.preparedPlayback,
       });
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       if (this.#preparedPlayer === player) {
         this.#preparedPlayer = null;
       }
       this.#player = player;
+      this.#preparedPlayback = ready.engine.preparedPlayback === true;
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
@@ -208,6 +211,9 @@ export class AuthoringExecutionClient {
       await this.#transition;
     }
     this.#requireStarted();
+    if (this.#preparedPlayback) {
+      throw new Error("prepared playback retains its historical player after source completion; use a fresh Run to replace it");
+    }
     const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
@@ -364,6 +370,9 @@ export class AuthoringExecutionClient {
   async restart() {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
+    if (this.#preparedPlayback) {
+      throw new Error("prepared playback receiver recovery requires a fresh Run");
+    }
     const ready = await this.#runTransition(async () => {
       const player = this.#player;
       const mode = this.#mode;
@@ -429,6 +438,7 @@ export class AuthoringExecutionClient {
       this.#canvas = activePlayer.canvas;
     }
     this.#player = null;
+    this.#preparedPlayback = false;
     this.#mode = null;
     this.#rendererBackend = "";
     this.#transportMode = null;
@@ -724,10 +734,15 @@ function validateSemanticExecutionDescriptor(descriptor) {
        descriptor.continuationGeneration <= 0)) {
     throw new TypeError("semantic continuation generation must be a positive safe integer");
   }
+  const preparedPlayback = descriptor.preparedPlayback ?? false;
+  if (typeof preparedPlayback !== "boolean") {
+    throw new TypeError("preparedPlayback must be a boolean");
+  }
   return {
     contextId: descriptor.contextId,
     callbackSessionId: descriptor.callbackSessionId ?? null,
     continuationGeneration: descriptor.continuationGeneration ?? null,
+    preparedPlayback,
   };
 }
 

@@ -93,6 +93,18 @@ pub(crate) struct TransientAnimations {
 }
 
 impl SceneInstance {
+    /// Authored action selected by the current execution revision. Historical
+    /// evaluation restores this metadata together with the object's other state.
+    pub fn click_indicate_binding(&self, object: ObjectId) -> Option<SemanticClickIndicate> {
+        self.compiled.click_indicate_binding(object)
+    }
+
+    /// Constant-size input-interest query over live compiled rows. No authored
+    /// store lookup or whole-scene scan is required on the pointer path.
+    pub fn has_click_indicate_bindings(&self) -> bool {
+        self.compiled.has_click_indicate_bindings()
+    }
+
     /// Validate the deterministic seek before its scene owner retires any input
     /// attachment. Reserve both lifecycle and seek publication epochs up front.
     pub fn preflight_interaction_seek(&self, time: f64) -> Result<(), crate::EvaluationError> {

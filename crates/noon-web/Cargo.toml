@@ -15,6 +15,8 @@ default = ["renderer"]
 renderer-smoke = ["renderer", "wgsl-effects"]
 # Opt-in typed replay fixtures for optimized qualification, not production exports.
 replay-smoke = []
+# Experimental historical input adapter; no default viewer switch.
+prepared-prefix = ["noon/prepared-prefix"]
 renderer = [
     "dep:noon-render-wgpu",
     "dep:wgpu",

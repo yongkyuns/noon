@@ -10,3 +10,7 @@ readme = "README.md"
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 noon-compile = { path = "../noon-compile" }
+
+[features]
+# Experimental #2211; not enabled by default.
+prepared-prefix = ["noon-compile/prepared-prefix"]
