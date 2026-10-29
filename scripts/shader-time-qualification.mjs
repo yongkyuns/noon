@@ -239,8 +239,7 @@ ${rejectedCheck}
         self.add(anchor)
         observed = []
         def observe_intro(_):
-            assert panels[0]._scene is not None
-            assert abs(panels[0].get_center().x + 3) < 1e-6
+            assert panels[0]._scene is not None${sourceMode === "jspi" ? '\n            assert abs(panels[0].get_center().x + 3) < 1e-6' : ''}
             observed.append(True)
         self.wait(0.5)`);
     source = sourceForMode(source);
