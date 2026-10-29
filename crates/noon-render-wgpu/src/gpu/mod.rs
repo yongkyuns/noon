@@ -55,9 +55,13 @@ pub use glow_filter::{
     EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
 pub use sample_filter::{SampleFilter, SampleParameters, SampleScope};
+mod encoded_display;
 mod overlay;
 mod path_batching;
 mod presentation;
+pub use encoded_display::{
+    DisplayPresentationError, DisplayPresentationStats, EncodedDisplayPresenter,
+};
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
 mod inset_capture;
 mod mesh;
