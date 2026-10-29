@@ -14,6 +14,68 @@ use noon_export::{capture_frames, Backends, CaptureOptions, SessionCapture};
 
 const BACKGROUND: [u8; 4] = [24, 48, 64, 255];
 
+#[cfg(feature = "wgsl-effects")]
+#[test]
+#[ignore = "requires native GPU; staged shader publication through the actual export host"]
+fn shader_bearing_insertion_exports_the_same_exact_time_frames_as_cold_authoring() {
+    let capture = |late| {
+        let mut program = if late {
+            noon::example_scenes::shader_sweep::late_program()
+        } else {
+            noon::example_scenes::shader_sweep::program()
+        }
+        .unwrap();
+        let mut frames = BTreeMap::new();
+        capture_frames(
+            &mut program,
+            &mut RustHostCallbackTable::new(),
+            ExportFrameOptions {
+                frame_rate: FrameRate::new(4, 1).unwrap(),
+                start_frame: 0,
+                stop: ExportStop::SourceEnd,
+                max_frames: 32,
+                max_transitions_per_sample: 64,
+                final_hold_seconds: 0.0,
+            },
+            options(320, 180),
+            |frame| {
+                assert_eq!(
+                    frame.observation.requested_time,
+                    frame.frame.source_sample.index() as f64 / 4.0
+                );
+                frames.insert(frame.frame.source_sample.index(), frame.rgba.to_vec());
+                Ok::<_, Infallible>(())
+            },
+        )
+        .unwrap();
+        frames
+    };
+    let cold = capture(false);
+    let staged = capture(true);
+    assert!(
+        staged[&0] != cold[&0],
+        "detached panels cannot appear early"
+    );
+    for index in 2..22 {
+        assert_eq!(
+            maximum_error(&staged[&index], &cold[&index]),
+            0,
+            "exact frame {index}/4"
+        );
+    }
+    assert!(
+        staged[&3].as_chunks::<4>().0.iter().any(|pixel| {
+            i32::from(pixel[1]) > i32::from(pixel[0]) + 40
+                && i32::from(pixel[2]) > i32::from(pixel[0]) + 30
+        }),
+        "the comparison must contain the shader treatment"
+    );
+    assert!(
+        staged[&22] != cold[&21],
+        "late retirement removes the shader"
+    );
+}
+
 fn options(width: u32, height: u32) -> CaptureOptions {
     let mut options = CaptureOptions::new(width, height);
     options.backends = if cfg!(target_os = "macos") {

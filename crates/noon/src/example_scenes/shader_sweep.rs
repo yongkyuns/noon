@@ -209,8 +209,8 @@ fn build_program(late: bool) -> Result<LiveProgram<ShaderSweep>, String> {
             0.0,
             2.5,
         ),
-        ("LOCAL: follows the object", 18.0, -3.0, -2.0),
-        ("SCENE: stays in the world", 18.0, 3.0, -2.0),
+        ("LOCAL: follows the object", 18.0, -3.0, -2.3),
+        ("SCENE: stays in the world", 18.0, 3.0, -2.3),
     ] {
         let mut label = scene
             .text(

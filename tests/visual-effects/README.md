@@ -30,8 +30,9 @@ The existing retention barrier then admits the frame before source resumption.
 Parameter edits and detached animation targets need no new module preparation;
 headless prepared prefixes explicitly reject this resource-dependent operation.
 The shader-time qualification also checks real GPU compilation failure and retry.
-Run it with `NOON_SHADER_SOURCE_MODE=jspi` for synchronous source admission;
-the default forces portable suspension. Both reject incompatible HDR attachments
+Run it with `NOON_SHADER_SOURCE_MODE=jspi` for synchronous source admission or
+`NOON_SHADER_SOURCE_MODE=async` for explicitly awaited constructs;
+the default forces portable suspension. All reject incompatible HDR attachments
 and view edits before publication. Pending resource work revalidates the view.
 Working-target changes retain weak references to immutable same-device programs;
 row bindings are prepared again for the new target. A different device requires
@@ -46,8 +47,13 @@ before stream registration; reuse sends the existing immutable resource handle.
 GPU readiness precedes fresh CPU admission; frame retention precedes source
 resumption. Cold construction and built-in effect calls stay fluent.
 
-Remaining view/capability combinations, native Python, recovery and the physical-device performance
-matrix remain unqualified; #1897 owns promotion.
+Native windowless export opts into source validation with `noon-export/wgsl-effects`.
+The existing export host prepares staged modules before publication; its GPU test
+compares 20 exact-time frames after late insertion with cold authoring, including
+an HDR-to-compatibility transition and later retirement.
+
+Remaining view/capability combinations, native Python, broader recovery and the
+physical-device performance matrix remain unqualified; #1897 owns promotion.
 
 ## Current authored GlowPulse extension
 

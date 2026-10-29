@@ -33,8 +33,8 @@ class ShaderMaterial(Scene):
         for text, size, x, y in [
             ("A MATERIAL THAT MOVES", 36, 0, 3.1),
             ("Animate the controls. Keep the objects editable.", 20, 0, 2.5),
-            ("LOCAL: follows the object", 18, -3, -2),
-            ("SCENE: stays in the world", 18, 3, -2),
+            ("LOCAL: follows the object", 18, -3, -2.3),
+            ("SCENE: stays in the world", 18, 3, -2.3),
         ]:
             self.add(Text(text, font_size=size, color=Color(0.85, 0.9, 0.96))
                      .move_to((x, y, 0)))

@@ -25,7 +25,7 @@ const report = {
   sourceRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   testSourceSha256: hash(await readFile(fileURLToPath(import.meta.url))),
-  pythonSourceSha256: hash(await readFile(path.join(root, "web/python/examples/glass_lens.py"))),
+  pythonSourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_glass_lens.py"))),
   runtimeBuild, graphicsProfile: "software correctness; no physical performance claim", browsers: [], profiles: [], status: "running",
 };
 const server = await serveRepository(root, 0);
@@ -219,7 +219,7 @@ async function waitWorker(worker, predicate, label) {
 async function pythonProfile(context, backend) {
   const page = await context.newPage(); page.setDefaultTimeout(60_000);
   const errors = []; page.on("pageerror", error => errors.push(String(error)));
-  const source = await readFile(path.join(root, "web/python/examples/glass_lens.py"), "utf8");
+  const source = await readFile(path.join(root, "web/python/examples/showcase_glass_lens.py"), "utf8");
   await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
   const state = await page.evaluate(async ({ source, boundaries }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
