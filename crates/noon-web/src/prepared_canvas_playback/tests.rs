@@ -77,6 +77,37 @@ fn prepared_canvas_frontier_buffers_without_speculative_frame_or_busy_wake() {
 }
 
 #[test]
+fn prepared_clock_rejects_backwards_explicit_advance_but_ignores_stale_raf_sample() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback
+        .append(next(&mut source, &mut publisher, false))
+        .unwrap();
+    // The timer crossed an authored deadline slightly after the next RAF's
+    // timestamp was sampled. The latter must not rewind history or fail.
+    playback.advance_clock_sample(1.0005).unwrap();
+    assert_eq!(playback.reader.frame().time, 1.0005);
+    playback.reader.take_renderer_publication();
+    let before_frame = playback.reader.frame().clone();
+    let before_publication = playback.reader.publication_context();
+    assert!(playback.advance(1.0004349999999904).is_err());
+    assert_eq!(playback.reader.frame(), &before_frame);
+    playback.advance_clock_sample(1.0004349999999904).unwrap();
+    assert_eq!(playback.reader.frame(), &before_frame);
+    assert_eq!(playback.reader.publication_context(), before_publication);
+    assert!(!playback.wake_state().frame_pending());
+
+    // Invalid wall-derived values still fail closed without becoming a no-op
+    // success. Newer samples continue normally after a stale callback.
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(playback.advance_clock_sample(invalid).is_err());
+        assert_eq!(playback.reader.publication_context(), before_publication);
+    }
+    playback.advance_clock_sample(1.25).unwrap();
+    assert_eq!(playback.reader.frame().time, 1.25);
+    assert!(!playback.buffering());
+}
+
+#[test]
 fn prepared_canvas_delivery_reanchors_without_charging_buffered_wall_time() {
     let (mut source, mut publisher, mut playback, _) = fixture();
     playback.reader.take_renderer_publication();

@@ -149,7 +149,7 @@ impl PreparedExecutionPlayer {
         };
         if let Some(target) = target {
             self.playback
-                .advance(target)
+                .advance_clock_sample(target)
                 .map_err(|error| error.to_string())?;
         }
         self.playback

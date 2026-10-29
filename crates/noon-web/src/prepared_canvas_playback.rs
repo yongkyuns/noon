@@ -56,6 +56,20 @@ impl PreparedCanvasPlayback {
         self.buffering = false;
         Ok(())
     }
+    /// A browser timer may deliver a later wall sample than the timestamp
+    /// attached to the next RAF callback. Both are host clock observations, not
+    /// explicit history seeks: ignore a stale sample without replaying a frame.
+    /// The strict advance() contract below still rejects backwards requests,
+    /// and malformed times are never converted into valid samples.
+    pub(crate) fn advance_clock_sample(&mut self, requested: f64) -> Result<(), PrefixError> {
+        if !requested.is_finite() {
+            return self.advance(requested);
+        }
+        if requested < self.reader.frame().time {
+            return Ok(());
+        }
+        self.advance(requested)
+    }
     pub(crate) fn advance(&mut self, requested: f64) -> Result<(), PrefixError> {
         // Preserve the reader's typed error and rejection atomicity; min(end)
         // must not turn NaN/infinity or a backwards timestamp into valid time.

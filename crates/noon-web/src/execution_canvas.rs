@@ -732,6 +732,17 @@ mod wasm {
             }
         }
 
+        /// Realtime browser callbacks may be observed out of timestamp order
+        /// across timer/performance.now and RAF. A prepared reader must ignore
+        /// only such stale clock samples; explicit advance and seek stay strict.
+        fn drive_from_clock(&mut self, requested_time: f64) -> Result<(), JsValue> {
+            #[cfg(feature = "prepared-prefix")]
+            if let DirectSourceAuthority::Prepared(playback) = &mut self.authority {
+                return playback.advance_clock_sample(requested_time).map_err(js_error);
+            }
+            self.drive_to(requested_time)
+        }
+
         fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, callbacks } => {
@@ -1497,7 +1508,7 @@ mod wasm {
                     if !self.source.frame_pending() {
                         let target = self
                             .bound_transport_target(self.source.bounded_realtime_target(target));
-                        self.source.drive_to(target)?;
+                        self.source.drive_from_clock(target)?;
                         let camera = self.source.inspection_camera().map_err(js_error)?;
                         self.sync_camera(camera)?;
                     }
@@ -1691,7 +1702,7 @@ mod wasm {
                 self.bound_transport_target(self.source.bounded_realtime_target(target_time));
             let (pending, camera) = {
                 let direct = &mut self.source;
-                direct.drive_to(target_time)?;
+                direct.drive_from_clock(target_time)?;
                 direct.advance_interactions(wall_time_ms / 1_000.0)?;
                 let camera = direct.inspection_camera().map_err(js_error)?;
                 (direct.frame_pending(), camera)
