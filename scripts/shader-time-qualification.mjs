@@ -9,7 +9,7 @@ import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const sourceMode = process.env.NOON_SHADER_SOURCE_MODE ?? "portable";
-assert.ok(["portable", "jspi"].includes(sourceMode));
+assert.ok(["portable", "jspi", "async"].includes(sourceMode));
 const identity = JSON.parse(await readFile(root + "/web/runtime-build-identity.json", "utf8"));
 assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "exact clean source/package required");
 assert.ok(identity.sourceRevision);
@@ -160,9 +160,12 @@ async function qualifyPythonPreparation(context, baseUrl, backend, kind = "attac
             panel.add_effect(ShaderEffect(program), name="stripes")`;
     assert.ok(lesson.includes(original));
     const familyMembership = kind === "family" || kind === "object";
-    const addition = index => kind === "scene" ? `self.add(panels[${index}], key="panel-${index}")`
+    const addition = index => {
+      const call = kind === "scene" ? `self.add(panels[${index}], key="panel-${index}")`
       : familyMembership ? `family.add(panels[${index}])`
         : `panels[${index}].add_effect(ShaderEffect(programs[${index}]), name="stripes")`;
+      return sourceMode === "async" ? `(await ${call})` : call;
+    };
     const rejectedCheck = kind === "scene" ? `            assert panels[0]._scene is None
             assert "panel-0" not in self._object_key_ids`
       : familyMembership ? `            assert len(family.submobjects) == 0`
@@ -201,7 +204,10 @@ ${rejectedCheck}
         for panel in panels:
             panel.add_effect(ShaderEffect(shared), name="stripes")${familyMembership ? `\n        family = ${kind === "family" ? "VGroup()" : "Rectangle(width=0.01, height=0.01, fill_opacity=0, stroke=None)"}\n        self.add(family)` : ''}`)
       .replace('programs = [material("scene")] * 2', 'programs = [shared] * 2');
-    source = sourceForMode(source);
+    source = sourceMode === "async" ? source
+      .replace("    def construct(self):", "    async def construct(self):")
+      .replaceAll("self.wait(", "await self.wait(")
+      .replaceAll("self.play(", "await self.play(") : sourceForMode(source);
     const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
     assert.equal(initial.rendererBackend, backend);
     const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
@@ -259,20 +265,20 @@ ${rejectedCheck}
 
 await qualifyPairedAuthoring({
   artifactDirectory: "ci-artifacts/shader-time",
-  prepareContext: sourceMode === "portable" ? disableAuthoringJspi : undefined,
-  cases: (sourceMode === "jspi" ? [0] : times).map(sampleTime => ({ id: `shader-time-${sampleTime}`, file: "shader_time.py",
+  prepareContext: sourceMode !== "jspi" ? disableAuthoringJspi : undefined,
+  cases: (sourceMode !== "portable" ? [0] : times).map(sampleTime => ({ id: `shader-time-${sampleTime}`, file: "shader_time.py",
     factory: "createDirectShaderTimeSmokeRenderer", duration: 2, sampleTime,
     playback: "live", objectCount: 1, stopAtSourceCompletion: sampleTime === 2 })),
   qualifyPixels({ fixture, rust, python }) {
     return { rust: reference(rust, fixture.sampleTime), python: reference(python, fixture.sampleTime) };
   },
   async qualifyLifecycle(context, baseUrl, backend) {
-    if (sourceMode === "jspi") return {
+    if (sourceMode !== "portable") return {
       backend, pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
       pythonMembership: [await qualifyPythonPreparation(context, baseUrl, backend, "scene"),
         await qualifyPythonPreparation(context, baseUrl, backend, "family"),
         await qualifyPythonPreparation(context, baseUrl, backend, "object")],
-      profileTransition: await qualifyProfileTransition(context, baseUrl, backend),
+      profileTransition: sourceMode === "jspi" ? await qualifyProfileTransition(context, baseUrl, backend) : null,
     };
     const images = new Map(), trials = [];
     for (const schedule of [times, [0, 0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]]) {
