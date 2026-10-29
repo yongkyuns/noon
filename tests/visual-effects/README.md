@@ -59,8 +59,9 @@ compares 20 exact-time frames after late insertion or FadeIn with cold authoring
 including an HDR-to-compatibility transition and later retirement. Independent
 invisible/halfway alpha references also cover the introducing animation.
 
-Remaining view/capability combinations, native Python, broader recovery and the
-physical-device performance matrix remain unqualified; #1897 owns promotion.
+Remaining view/capability combinations, broader recovery and the physical-device
+performance matrix remain unqualified; #1897 owns promotion. Native-Python
+integration depends on the current SDK work in [#2015](https://github.com/yongkyuns/noon/issues/2015).
 
 ## Current authored GlowPulse extension
 
@@ -438,27 +439,16 @@ and exact removal. Existing CI owns both native and browser qualification.
 
 ## Historical M0 contract and evidence
 
-M0 work for [#1897](https://github.com/yongkyuns/noon/issues/1897).
-`docs/architecture.md` is the sole architecture/roadmap authority; this is an
-acceptance specification and reference-fixture description, not another roadmap.
-Inspection base: `9028672c1691d3a318c87da50e8b08e0802245f0`. The subsequent API
-review checked the unchanged public authoring hooks at `6f7b7f008c45288bf3b92a417078b907d5e4ef5c`.
-
-**M0 design review:** the named leaf-glow contract below is the implementation
-baseline. This is a design decision, not enabled effects or a merge qualification.
-The authored Rust subset is implemented and tested through the actual shared
-owners. The complete paired source review is in `authoring_review.py` and
-`authoring_review.rs`; it includes proposed M1–M4 operations and is **syntax-checked,
-not executed as a supported cross-language product**. Do not add mock operations
-to make those sources appear to run. The existing native declaration example
-remains the executable proof of the supported M0 subset.
-
-M0's four design/reference deliverables are separate from the later runtime and
-GPU implementation gates in #1897. Required PR checks and human acceptance remain
-separate from this recorded review. No rendered-glow, direct-seek, pulse-lifecycle,
-cross-host binding execution or physical-performance result follows from declaration tests.
-The separate leaf-adapter section records implemented binding source and its
-validation boundary without reclassifying the future-feature review programs.
+The M0 review for [#1897](https://github.com/yongkyuns/noon/issues/1897) froze
+the named leaf-glow contract below. `docs/architecture.md` remains the sole
+architecture/roadmap authority. `authoring_review.py` and `authoring_review.rs`
+contain proposed M1–M4 operations and are syntax-checked design fixtures;
+they are not executable cross-host qualification. Do not add mocks to make them
+appear supported. The implemented surfaces and their actual execution/oracle
+boundaries are documented separately below; declaration tests alone do not
+establish rendering, seek, lifecycle or performance acceptance.
+`qualification.json` retains the frozen baseline; the API review checked
+`6f7b7f008c45288bf3b92a417078b907d5e4ef5c`.
 
 ## Linear-gradient values and reference boundary
 
@@ -1147,7 +1137,7 @@ removing the exact `WasmEffectDefinition` class export must make `check-web-pack
 without confusing `WasmEffectUpdate` for that missing class. Preserve red/green logs
 and source/package hashes; these are correctness controls, not performance runs.
 
-## Qualification baseline and implementation handoff
+## Qualification baseline
 
 `qualification.json` retains the exact G0-G6 corpus, reference quality, views,
 targets, budgets and repeated-pair protocol. Every device flag is false; the base
@@ -1182,25 +1172,19 @@ passes, upload ranges/bytes, CPU time and resident/peak/in-flight memory. Radius
 view or topology changes may resize affected local targets. Absent effects add no
 passes, targets, global scan or unconditional time updates.
 
-| Existing owner | Reuse / missing prerequisite |
+| Existing owner | Responsibility |
 | --- | --- |
-| `noon-core::object_state::glow` | Implemented typed values, validation and partial interpolation; not an attachment registry |
-| SemanticStore and canonical transactions | Implemented named leaf attachment identity/order, atomic creation/removal/copy and partial updates in the existing arena; generic scope/program resources remain later |
-| `animation/timeline.rs`, composition and time maps | Reuse shared timing. Existing scalar `Property::Appearance` is NOT an effect map; add finite parameter-channel addressing |
-| Scene/live/target and effective capture | Implemented authored setters, handles, independent object/target/family copies; live execution rejects unsupported effects, and effect channels/capture/cleanup remain later |
-| Runtime/session | Still need actual activation, write leases, ownership-safe pulse cleanup, seek and wake/sleep |
-| Python authoring adapters | Only coercion/signatures/return values/exception mapping; no Python effects state or interpolation |
-| Retained renderer, presentation/inset and Cairo colour | Minimal primitive mask/filter work, safe source bounds and local parameter updates; no new renderer |
-| Existing native/web/offscreen hosts | Same semantic/runtime path, capability queries and resource-generation recovery |
-
-The M0 source review, first-glow decisions, independent references and reuse
-inventory are recorded here. Actual execution tests of those decisions belong to
-the named implementation promotions, not to a mock scene added to satisfy a test.
-M0 merge still requires applicable repository CI; neither this review nor old-head
-performance evidence establishes a current-head merge pass.
+| Core effect values | Typed definitions, checked parameters and partial interpolation |
+| SemanticStore and canonical transactions | Named attachment identity/order, atomic creation/removal/copy and updates |
+| Compiler tracks, composition and time maps | Parameter addressing and ordinary animation timing; Appearance remains its separate channel |
+| Scene/live/target and effective capture | Authoring, activation-time values, independent copies and atomic resource-dependent publication |
+| Runtime/session | Driver leases, pulse cleanup, effective values, seek and wake/sleep |
+| Python adapters | Coercion, signatures, return values, exceptions and host callbacks; shared Rust owns effects semantics |
+| Retained renderer | Source/filter resources, bounds, format admission and local preparation/uploads |
+| Native/web/offscreen hosts | Platform capabilities, resource readiness, presentation and GPU lifecycle |
 
 
-### M1 ordinary parameter-channel integration (still guarded at Scene orchestration)
+### Ordinary parameter-channel integration
 
 `CompiledEffect::parameter_channels` derives only requested color, radius and
 intensity endpoints from a coherent activation-time runtime value. These become
@@ -1226,13 +1210,10 @@ allocation. Zero intensity must produce bit-exact ordinary rendering. Raster
 capture origins preserve the output 2x2 derivative-quad grid; integer pixel
 alignment alone can change SDF antialiasing as capture bounds move.
 
-These are actual ordinary runtime-track and GPU-publication tests, not yet a
-complete public `Scene.play`/Python-worker test. Normal Scene execution remains
-guarded pending semantic target activation/completion, live attachment setters,
-automatic host preparation and worker serialization. The source-alpha oracle still
-uses production primitive rasterization; GPU timing and physical-hardware
-performance are separate acceptance requirements. Pixel tolerances remain 2
-RGBA8 bytes and mask error remains 1e-5.
+These targeted runtime/GPU tests complement the ordinary Rust/Python execution
+qualification. Their source-alpha oracle uses production primitive rasterization;
+GPU timing and physical performance remain separate acceptance requirements.
+Pixel tolerances are 2 RGBA8 bytes and mask error is 1e-5.
 
 ## Retained ordered raster operators
 
@@ -1677,18 +1658,15 @@ These finite correctness/recovery profiles do not close #1897. Remaining host,
 physical-device performance and failure/capability qualification, native Python
 and creator support documentation remain required.
 
-### Linear HDR bloom renderer prerequisite (#1897 M4, not scene completion)
+### Linear HDR Bloom operator and color contract
 
 `gpu::HdrBloomFilter` processes an actual linear alpha-associated
 `Rgba16Float` image. Its caller must provide finite nonnegative radiance,
 alpha in [0,1], RGB <= 64*alpha and transparent black when alpha is zero.
 It cannot reconstruct emission from an already clamped compatibility frame.
-No scene property, Python placeholder, second scene/clock or browser transport
-is introduced by this prerequisite. Scene-owned emission, complete linear
-compositing, view attachment/animation, paired public authoring, seek/export and
-browser capability/recovery evidence remain required before HDR/bloom is a
-supported creator feature. The ordinary encoded-premultiplied LDR path does not
-call this operator and retains its existing color contract.
+Scene emission and camera Bloom use the authored/host integrations described
+below. The ordinary encoded-premultiplied LDR path does not call this operator
+and retains its existing color contract.
 
 The finite operator is deliberately specified independently of its WGSL:
 
@@ -1764,9 +1742,8 @@ path and continuous-paint pipelines choose the same specialization. Other target
 formats retain the original helper. An offscreen float scene target must never
 inherit the WebGL drawing buffer's presentation decode; display transfer still
 belongs after HDR resolution. This target contract expects **already-linear
-packed source values**. Authored Color decoding, checked emission and semantic
-view/Bloom controls still require integration; this is not a public scene HDR
-feature or a claim of spatial/image/text/profile support.
+packed source values**. Authored color decoding and retained asset preparation
+are separate consumers of the selected view profile, described below.
 
 The native float-draw oracle uses the ordinary frame preparer, uploads and painter
 submission, with two pixel-aligned rectangle/path layers. Sixteen profiles vary
@@ -1781,7 +1758,7 @@ and must fail the linear oracle. A clean same-frame upload must remain zero.
 This numerical raster-input proof does not substitute for the required paired
 public Rust/Python authoring, authored-time/seek/export or browser HDR gates.
 
-The in-progress authored view contract uses `ViewColorProfile` on the existing
+The authored view contract uses `ViewColorProfile` on the existing
 semantic 2D camera. Compatibility is the default; LinearHdr declares the shared
 linear-radiance/display contract. The ordinary semantic transaction validates the
 camera role and supports transaction-local creation, staged reads and atomic
@@ -1821,15 +1798,6 @@ An actual draw omitting the profile consumer must fail the linear oracle by more
 than 0.05. A clean same-publication repeat must upload zero bytes. Raw pixels,
 mathematical expectations and a manifest can be retained with
 `NOON_AUTHORED_VIEW_ARTIFACT_DIR` and are collected by native CI.
-
-This is a finite planar color-preparation proof, not a public HDR creator surface.
-Composed filter captures and native/browser/export hosts still need profile
-integration; finite ordinary retained input qualification follows below.
-Checked emission, Bloom view attachment/animation, explicit view-ambiguity and
-capability admission, paired Python/direct-WASM/export evidence and the remaining
-M4/M5 gates are open. The authored test does not yet claim radiance above one,
-physical-device performance, or browser HDR execution.
-
 
 The canonical `RetainedFramePreparer` now propagates that same publication profile
 through ordinary geometry, mixed scratch geometry, outlines and the candidate
@@ -1875,12 +1843,9 @@ not claim to replace the font rasterization oracle. Native CI preserves the raw
 float images, expectations, coverage source and manifests alongside the existing
 linear-scene proof.
 
-These input proofs do not yet qualify HDR composed/filter/backdrop/inset/spatial
-captures, host format selection/final presentation, explicit view capabilities,
-checked authored emission, Bloom attachment/animation or the public creator
-surface. Rust/WASM compilation is distinct from browser execution evidence.
-The complete M4/M5 host, time/seek/export, extension and performance gates remain
-owned by #1897.
+These input oracles qualify color preparation. Composed Blur, host presentation,
+authored emission and camera Bloom have separate proofs below. Backdrop/inset/
+spatial HDR and the remaining physical/performance gates are not promoted.
 
 
 ### Linear composed Blur capture prerequisite (#1897 M4)
@@ -1924,10 +1889,9 @@ once. Native CI preserves raw float/display output and mathematical expectations
 These authored inputs are unit-valued: their above-one witness occurs after
 Bloom. The separate raw-input proof establishes above-one radiance before Blur.
 
-This slice does not establish public checked emission, camera Bloom authoring,
-HDR text-capture qualification, view/host capability admission, browser execution,
-export/recovery or physical-device performance. The complete M4/M5 goal remains
-open in #1897.
+This composed-Blur proof does not qualify HDR text captures, unsupported operator
+routes or broader view capabilities. Host and emission integration follows below;
+the remaining M5 gates stay open in #1897.
 
 
 ### Authored camera Bloom and native capture integration (#1897 M4)
@@ -1966,13 +1930,9 @@ normal capture-host proof covers persistent edits, zero energy, removal and
 Compatibility/HDR/Compatibility transitions over a nonblack authored clear,
 with independent display expectations and exact restored output.
 
-This is native capture integration, not the complete M4 creator release. Checked
-emission, native interactive/browser/Python host wiring, broader view/capture
-capabilities, the public WGSL extension and remaining M5 gates stay open. Ordinary
-retained hosts whose working format disagrees with the authored profile reject
-explicitly. Cross-worker transport rejects Bloom until its view/profile metadata
-is qualified. Existing video/file format admission has not been expanded by this
-slice; HDR-derived SDR files need their separate output qualification.
+Hosts whose working format disagrees with the authored profile reject explicitly.
+Native interactive and browser/Python integration is described below. HDR-derived
+SDR video/file admission remains a separate output qualification.
 
 ### Encoded SDR surface presentation prerequisite (#1897 M4/M5)
 
@@ -2005,10 +1965,8 @@ consumers with omitted or extra final decode must violate the same frozen
 one-byte roundtrip bound. Raw RGBA-normalized pixels, literal expectations,
 adapter identity and failure counts are retained for independent checking.
 
-This reusable presentation seam does not yet wire HDR into native windows or
-browser canvases, qualify physical presentation or deliver checked emission.
-Those host/capability, public authoring, extension and remaining M5 gates remain
-open.
+Native and browser hosts reuse this presenter. Its numerical proof does not
+establish physical presentation or performance acceptance.
 
 ### Native window HDR and viewer-overlay integration (#1897 M4/M5)
 
@@ -2051,10 +2009,10 @@ and viewer edits upload no source geometry. Separate native-window CI advances
 an ordinary authored Bloom animation to its exact endpoint and presents it.
 
 `cargo run -p noon-native --example camera_bloom` is an ordinary Rust creator
-example. Browser/Python HDR hosts, checked emission, broader view/capture profiles,
-public WGSL extensions, physical presentation/performance and remaining M5
-qualification remain open. New-device resource recreation is not a claim of
-automatic OS/device-loss recovery.
+example. Browser/Python HDR and checked emission use the shared output owner
+described below. Broader view/capture profiles and physical/performance gates
+remain open. New-device recreation does not qualify automatic OS/device-loss
+recovery.
 
 
 ### Candidate checked material emission (#1897 M4)
@@ -2089,7 +2047,7 @@ f64 material values independently of opacity. Completion combines material and
 other style endpoints in one transaction; seeks recover captured source values
 before the first track and authored values after reconciliation.
 
-This candidate does **not** complete emission authoring. Leaf callback writes use
+Leaf callback writes use
 checked f64 values through the existing effective-write vocabulary and ownership
 receipt; completion preserves continuing callback domains independently of opacity.
 Native scalar-graph bindings and family/provisional callback emission remain
@@ -2119,6 +2077,6 @@ identity. `node scripts/worker-view-output-qualification.mjs` compares both host
 byte-for-byte on WebGPU/WebGL2 and checks an independent f64 interior reference.
 The gallery's `showcase_bloom_emission.py` demonstrates radiance first, camera
 spread second, and restoration. Neither path adds a shader clock or host engine.
-Broader composed/input/recovery/performance gates, full local validation and
-required CI remain necessary before promotion; software-GPU parity does not
-qualify physical-device performance.
+The shared recovery matrix covers completed shader and HDR/Bloom worker replay.
+Broader composed/input/capability, native Python, physical/performance and required
+CI gates remain necessary before promotion.
