@@ -1,4 +1,4 @@
-// Actual loss/recreation and viewport churn around the normal authored glass card.
+// Actual loss/recreation and viewport churn around ordinary authored effects.
 // Test hooks observe browser GPU owners; scene meaning stays in the Rust program.
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -15,7 +15,7 @@ import { disableAuthoringJspi, waitForBrowserObservation } from "./playground-br
 import { installCaptureState, installWebGpuDeviceCapture } from "./webgpu-device-capture.mjs";
 
 const root = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
-const output = path.resolve(root, process.env.NOON_GLASS_RECOVERY_ARTIFACTS ?? "browser-smoke-artifacts/glass-lens-recovery");
+const output = path.resolve(root, process.env.NOON_EFFECT_RECOVERY_ARTIFACTS ?? "browser-smoke-artifacts/effect-resource-recovery");
 const runtimeBuild = JSON.parse(await readFile(path.join(root, "web/runtime-build-identity.json"), "utf8"));
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 for (const entry of Object.values(runtimeBuild.files)) {
@@ -25,13 +25,22 @@ const report = {
   sourceRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   testSourceSha256: hash(await readFile(fileURLToPath(import.meta.url))),
-  pythonSourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_glass_lens.py"))),
   runtimeBuild, graphicsProfile: "software correctness; no physical performance claim", browsers: [], profiles: [], status: "running",
 };
 const server = await serveRepository(root, 0);
 await mkdir(output, { recursive: true });
 const resourceCache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
 const boundaries = [0.5, 2, 2.5, 4, 4.5, 5, 5.5, 6.5, 7, 8];
+const workerLessons = [
+  { id: "glass", file: "showcase_glass_lens.py", duration: 8.5, time: 6, boundaries,
+    factory: "createDirectGlassLensSmokeRenderer" },
+  { id: "shader", file: "showcase_shader_material.py", duration: 6, time: 1.5,
+    boundaries: [0.5, 2.5, 3, 5, 5.5], factory: "createDirectShaderSweepSmokeRenderer" },
+  { id: "bloom", file: "camera_bloom.py", duration: 5, time: 1.5,
+    boundaries: [0.5, 2.5, 3], factory: "createDirectCameraBloomRenderer" },
+];
+report.pythonSources = Object.fromEntries(await Promise.all(workerLessons.map(async lesson =>
+  [lesson.file, hash(await readFile(path.join(root, "web/python/examples", lesson.file)))])));
 
 async function picture(page, name) {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -52,20 +61,20 @@ function literalPrefixWitness(image) {
   }
 }
 
-async function direct(context, backend, size = [320, 180], time = 6) {
+async function direct(context, backend, size = [320, 180], time = 6, factory = "createDirectGlassLensSmokeRenderer") {
   const page = await context.newPage();
   page.setDefaultTimeout(60_000);
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   if (backend === "WebGPU") await installWebGpuDeviceCapture(page);
   await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
-  const state = await page.evaluate(async ({ size, time, boundaries }) => {
+  const state = await page.evaluate(async ({ size, time, boundaries, factory }) => {
     const wasm = await import("./pkg/noon_web.js"); await wasm.default();
     const canvas = document.querySelector("#scene");
     [canvas.width, canvas.height] = size;
     [canvas.style.width, canvas.style.height] = size.map(v => `${v}px`);
     const surface = canvas.transferControlToOffscreen();
-    const renderer = await wasm.createDirectGlassLensSmokeRenderer(surface);
+    const renderer = await wasm[factory](surface);
     const { sampleDirectProgram, sampleDirectProgramThrough } = await import("../scripts/direct-program-sample.mjs");
     renderer.advanceDirectRealtime(0);
     await sampleDirectProgram(renderer, 0);
@@ -89,11 +98,11 @@ async function direct(context, backend, size = [320, 180], time = 6) {
         if (renderer.render()) return snapshot();
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      throw new Error("direct glass frame did not present");
+      throw new Error("direct effect frame did not present");
     }
     window.glass = { renderer, surface, snapshot, present };
     return snapshot();
-  }, { size, time, boundaries });
+  }, { size, time, boundaries, factory });
   assert.equal(state.backend, backend);
   assert.equal(state.time, time);
   return { page, state, errors, async close() {
@@ -216,12 +225,12 @@ async function waitWorker(worker, predicate, label) {
   }
   throw new Error(label);
 }
-async function pythonProfile(context, backend) {
+async function pythonProfile(context, backend, lesson) {
   const page = await context.newPage(); page.setDefaultTimeout(60_000);
   const errors = []; page.on("pageerror", error => errors.push(String(error)));
-  const source = await readFile(path.join(root, "web/python/examples/showcase_glass_lens.py"), "utf8");
+  const source = await readFile(path.join(root, "web/python/examples", lesson.file), "utf8");
   await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
-  const state = await page.evaluate(async ({ source, boundaries }) => {
+  const state = await page.evaluate(async ({ source, boundaries, duration, time }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
     const canvas = document.querySelector("#scene");
@@ -235,45 +244,47 @@ async function pythonProfile(context, backend) {
         if (registration !== null) throw new Error("glass source registered twice");
         registration = next.semanticExecution;
         await execution.startSemanticExecution(registration, {
-          authoringClient: authoring, loopDurationSeconds: 8.5, transportMode: "transferable", pacing: "external_samples",
+          authoringClient: authoring, loopDurationSeconds: duration, transportMode: "transferable", pacing: "external_samples",
         }); resolveAttached();
       } catch (error) { rejectAttached(error); throw error; }
     } });
     void completed.then(() => { if (registration === null) rejectAttached(new Error("glass source did not suspend")); }, rejectAttached);
     await attached;
-    for (const time of [0, ...boundaries, 8.5]) await execution.sampleToAuthoredTime(time);
+    for (const sample of [0, ...boundaries, duration]) await execution.sampleToAuthoredTime(sample);
     const result = await completed;
-    if (result.duration !== 8.5 || result.semanticExecution.contextId !== registration.contextId) throw new Error("glass source completion changed its context");
+    if (result.duration !== duration || result.semanticExecution.contextId !== registration.contextId) throw new Error("effect source completion changed its context");
     await execution.reconcileSemanticExecution({
       contextId: result.semanticExecution.contextId, callbackSessionId: result.semanticExecution.callbackSessionId,
       continuationGeneration: null,
-    }, { authoringClient: authoring, loopDurationSeconds: 8.5 });
+    }, { authoringClient: authoring, loopDurationSeconds: duration });
     await execution.pause();
-    await execution.seek(6);
+    await execution.seek(time);
     const snapshot = async () => ({ frame: await execution.debugFrame(), metrics: (await execution.metrics()).metrics });
     window.glass = { authoring, execution, snapshot, failures, registration, sourceCompleted: true };
     return snapshot();
-  }, { source, boundaries });
-  const result = { host: "pyodide-worker", backend, initial: state, resizes: [] };
+  }, { source, ...lesson });
+  const result = { host: "pyodide-worker", lesson: lesson.id, backend, initial: state, resizes: [] };
   try {
-    assert.equal(state.metrics.backend, backend); assert.equal(state.metrics.time, 6);
-    assert.equal(state.frame.time, 6);
-    const initial = await picture(page, `${backend}-python-initial`); literalPrefixWitness(initial);
-    const coldInitial = await direct(context, backend);
-    try { exact(initial, await picture(coldInitial.page, `${backend}-python-direct-oracle`), "completed Python seek equals direct Rust forward execution"); }
+    assert.equal(state.metrics.backend, backend); assert.equal(state.metrics.time, lesson.time);
+    assert.equal(state.frame.time, lesson.time);
+    const initial = await picture(page, `${backend}-${lesson.id}-python-initial`);
+    if (lesson.id === "glass") literalPrefixWitness(initial);
+    if (lesson.id === "shader") assert.equal(state.frame.objects.flatMap(object => object.effects).length, 2);
+    const coldInitial = await direct(context, backend, [320, 180], lesson.time, lesson.factory);
+    try { exact(initial, await picture(coldInitial.page, `${backend}-${lesson.id}-python-direct-oracle`), "completed Python seek equals direct Rust forward execution"); }
     finally { await coldInitial.close(); }
     for (const [index, size] of [[640, 360], [240, 160], [320, 180]].entries()) {
-      const after = await page.evaluate(async size => {
+      const after = await page.evaluate(async ({size, time}) => {
         const canvas = document.querySelector("#scene");
         [canvas.style.width, canvas.style.height] = size.map(v => `${v}px`);
         window.glass.execution.resize(...size, 1);
-        await window.glass.execution.advanceToWithRendererObservation(6);
+        await window.glass.execution.advanceToWithRendererObservation(time);
         return window.glass.snapshot();
-      }, size);
-      assert.equal(after.metrics.time, 6); assert.deepEqual(after.frame, state.frame);
-      const warm = await picture(page, `${backend}-python-resize-${index}`);
-      const cold = await direct(context, backend, size);
-      try { exact(warm, await picture(cold.page, `${backend}-python-cold-${index}`), "resized Python replay equals cold direct Rust exactly"); }
+      }, {size, time: lesson.time});
+      assert.equal(after.metrics.time, lesson.time); assert.deepEqual(after.frame, state.frame);
+      const warm = await picture(page, `${backend}-${lesson.id}-python-resize-${index}`);
+      const cold = await direct(context, backend, size, lesson.time, lesson.factory);
+      try { exact(warm, await picture(cold.page, `${backend}-${lesson.id}-python-cold-${index}`), "resized Python replay equals cold direct Rust exactly"); }
       finally { await cold.close(); }
       if (size[0] === 320) exact(warm, initial, "Python return viewport is exact");
       result.resizes.push({ size, coldDirectExact: true, authoredStateUnchanged: true });
@@ -315,8 +326,8 @@ async function pythonProfile(context, backend) {
     }
     const recovered = await page.evaluate(() => window.glass.snapshot());
     assert.deepEqual(recovered.frame, state.frame, "recovery preserves the authored replay time without a repair seek");
-    assert.equal(recovered.metrics.time, 6);
-    exact(await picture(page, `${backend}-python-recovered`), initial, "Python glass recovery is exact");
+    assert.equal(recovered.metrics.time, lesson.time);
+    exact(await picture(page, `${backend}-${lesson.id}-python-recovered`), initial, "Python effect recovery is exact");
     if (backend === "WebGL2") {
       assert.equal(recovered.metrics.gpuGeneration, state.metrics.gpuGeneration + 1);
       assert.deepEqual(await page.evaluate(() => window.glass.failures), []);
@@ -325,14 +336,14 @@ async function pythonProfile(context, backend) {
     await page.evaluate(() => window.glass.execution.restart());
     const recreated = await page.evaluate(() => window.glass.snapshot());
     assert.deepEqual(recreated.frame, beforeRecreation.frame, "explicit worker recreation retains current shared scene state");
-    exact(await picture(page, `${backend}-python-recreated`), initial, "recreated worker glass frame is exact");
+    exact(await picture(page, `${backend}-${lesson.id}-python-recreated`), initial, "recreated worker effect frame is exact");
     assert.ok(!page.workers().includes(worker), "recreation must retire the old render worker");
     assert.equal(page.workers().filter(value => value.url().includes("execution-render-worker.js") && !value.url().includes("capability-probe")).length, 1, "only the replacement render worker remains alive");
     const idleBefore = await page.evaluate(() => window.glass.snapshot());
     await page.waitForTimeout(150);
     const idleAfter = await page.evaluate(() => window.glass.snapshot());
     assert.deepEqual(idleAfter.frame, idleBefore.frame);
-    assert.equal(idleAfter.metrics.presentedFrames, idleBefore.metrics.presentedFrames, "paused nonneutral backdrop must sleep");
+    assert.equal(idleAfter.metrics.presentedFrames, idleBefore.metrics.presentedFrames, "paused effect must sleep");
     assert.equal(idleAfter.metrics.needsPresent, false);
     assert.equal(idleAfter.metrics.bufferedDeltas, 0);
     result.idle = { observationMs: 150, presentationsUnchanged: true, authoredStateUnchanged: true, pendingWork: false };
@@ -356,11 +367,13 @@ try {
       await resourceCache.install(context); await disableAuthoringJspi(context); await instrumentRenderWorker(context);
       const result = await directProfile(context, backend); report.profiles.push(result);
       console.log(`[PASS] ${backend}: direct glass resize, zero surface and real GPU loss recovery`);
-      report.profiles.push(await pythonProfile(context, backend));
-      console.log(`[PASS] ${backend}: Python seek, resize, real loss and worker recreation`);
+      for (const lesson of workerLessons) {
+        report.profiles.push(await pythonProfile(context, backend, lesson));
+        console.log(`[PASS] ${backend}/${lesson.id}: Python seek, resize, real loss and worker recreation`);
+      }
     } finally { await browser.close(); }
   }
-  assert.equal(report.profiles.length, 4);
+  assert.equal(report.profiles.length, 8);
   report.status = "passed";
 } catch (error) { report.status = "failed"; report.error = String(error.stack ?? error); throw error; }
 finally {

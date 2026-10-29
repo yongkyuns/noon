@@ -1658,23 +1658,24 @@ The native coordinator corpus separately checks padded direct 2D Gaussian
 references, opacity/masks, offscreen inputs, camera/physical resize, resource
 plateaus and real wrong-input/bounds/sampling controls at a two-byte bound.
 
-`scripts/glass-lens-recovery-qualification.mjs` uses actual browser device
+`scripts/effect-resource-recovery-qualification.mjs` uses actual browser device
 or context destruction. Direct Rust/WASM survives repeated viewport churn,
 a zero-sized surface and GPU replacement at the same authored state. Completed
-Python source replay agrees with forward Rust output, including resized views.
+Python glass, shader-material and HDR/Bloom source replay agrees with forward
+Rust output, including resized views. Shader rows remain present across recovery.
 WebGL workers recover in place; WebGPU workers use an explicit host `restart()`
 after confirmed device loss. Idle WebGPU worker loss does not currently emit a
 callback diagnostic in this profile: automatic idle-loss notification/recovery
 is not qualified. Recreation must retain the current shared scene/time without
 a repair seek, retire old workers and reproduce the previous pixels exactly.
-A paused nonneutral backdrop is observed for 150 ms with no extra presentations
+A paused effect is observed for 150 ms with no extra presentations
 or pending updates; that bounded observation is not a physical latency or
 performance claim. Direct live-program hosts retain their existing monotonic
 source progression contract; this test does not add backward live-source seek.
 
 These finite correctness/recovery profiles do not close #1897. Remaining host,
-physical-device performance and failure/capability qualification, scene HDR/bloom,
-public typed WGSL extensions and creator support documentation remain required.
+physical-device performance and failure/capability qualification, native Python
+and creator support documentation remain required.
 
 ### Linear HDR bloom renderer prerequisite (#1897 M4, not scene completion)
 
