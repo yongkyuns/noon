@@ -104,32 +104,63 @@ impl PreparedRetainedResourceAdditions {
     }
 }
 
-/// Only immutable source/schema cross this preparation boundary. There are no
-/// speculative attachment identities, execution rows or resource registrations.
+/// Preparation reuses published program handles. Only first-use definitions
+/// need source/schema; no speculative semantic or execution identity is created.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn encode_shader_preparation(programs: &[WgslEffectProgram]) -> Result<Vec<u8>, String> {
-    let sources: Vec<_> = programs.iter().map(|p| (p.schema(), p.source())).collect();
+#[derive(Serialize, Deserialize)]
+enum ShaderPreparationSource {
+    Existing(TransportShaderProgramHandle),
+    Source(ShaderSchema, Arc<str>),
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn encode_shader_preparation(
+    programs: &[WgslEffectProgram],
+    mut known: impl FnMut(&WgslEffectProgram) -> Option<TransportShaderProgramHandle>,
+) -> Result<Vec<u8>, String> {
+    let sources: Vec<_> = programs
+        .iter()
+        .map(|program| {
+            known(program)
+                .map(ShaderPreparationSource::Existing)
+                .unwrap_or_else(|| {
+                    ShaderPreparationSource::Source(
+                        program.schema().clone(),
+                        Arc::from(program.source()),
+                    )
+                })
+        })
+        .collect();
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(&sources, &mut bytes).map_err(|e| e.to_string())?;
     Ok(bytes)
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "renderer"))]
-pub(crate) fn decode_shader_preparation(bytes: &[u8]) -> Result<Vec<WgslEffectProgram>, String> {
+pub(crate) fn decode_shader_preparation(
+    bytes: &[u8],
+    resources: &InstalledRetainedResources,
+) -> Result<Vec<WgslEffectProgram>, String> {
     #[cfg(feature = "wgsl-effects")]
     {
-        let sources: Vec<(ShaderSchema, String)> =
+        let sources: Vec<ShaderPreparationSource> =
             ciborium::de::from_reader(bytes).map_err(|e| e.to_string())?;
         sources
             .into_iter()
-            .map(|(schema, source)| {
-                WgslEffectProgram::prepare(schema, source).map_err(|e| e.to_string())
+            .map(|source| match source {
+                ShaderPreparationSource::Existing(handle) => resources
+                    .shader_program(handle)
+                    .cloned()
+                    .ok_or_else(|| "shader preparation references a retired program".to_owned()),
+                ShaderPreparationSource::Source(schema, source) => {
+                    WgslEffectProgram::prepare(schema, &*source).map_err(|e| e.to_string())
+                }
             })
             .collect()
     }
     #[cfg(not(feature = "wgsl-effects"))]
     {
-        let _ = bytes;
+        let _ = (bytes, resources);
         Err("WGSL effects are disabled in this build".into())
     }
 }

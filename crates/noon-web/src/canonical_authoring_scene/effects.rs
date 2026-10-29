@@ -19,22 +19,23 @@ pub struct WasmStagedEffectPublication {
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-impl WasmStagedEffectPublication {
-    #[wasm_bindgen(js_name = resourceBytes)]
-    pub fn resource_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        crate::retained_resource_transport::shader_programs::encode_shader_preparation(
-            self.pending
-                .as_ref()
-                .ok_or_else(|| JsValue::from_str("effect publication is consumed"))?
-                .programs(),
-        )
-        .map_err(js_error)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = effectPreparationResources)]
+    pub fn effect_preparation_resources(
+        &mut self,
+        staged: &WasmStagedEffectPublication,
+    ) -> Result<Vec<u8>, JsValue> {
+        let pending = staged
+            .pending
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("effect publication is consumed"))?;
+        self.inner
+            .active_live_player()
+            .map_err(js_error)?
+            .effect_preparation_bytes(pending)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = prepareEffectAddition)]
     pub fn prepare_effect_addition(
         &mut self,

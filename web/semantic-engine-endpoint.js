@@ -1518,7 +1518,7 @@ export async function attachSemanticEngine(
         pendingEffectPreparation = { id, resolve, reject };
       });
       try {
-        const bytes = Uint8Array.from(staged.resourceBytes());
+        const bytes = Uint8Array.from(context.effectPreparationResources(staged));
         renderPort.postMessage({ type: "prepare_effect_programs", session, requestId: id, bytes }, [bytes.buffer]);
         await ready;
         if (stopped || generation !== continuation.generation || continuationActive || player !== null) {

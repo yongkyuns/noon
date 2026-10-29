@@ -34,6 +34,17 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.prepare_effect_attachments([(object, definition, name)]))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn effect_preparation_bytes(
+        &self,
+        pending: &noon::StagedEffectPublication,
+    ) -> Result<Vec<u8>, String> {
+        crate::retained_resource_transport::shader_programs::encode_shader_preparation(
+            pending.programs(),
+            |program| self.encoder.shader_program_handle(program),
+        )
+    }
+
     pub(crate) fn publish_effect_addition(
         &mut self,
         staged: noon::StagedEffectPublication,

@@ -59,7 +59,7 @@ const expectedJavascriptSurface = [
   "prepareEffectAddition(",
   "prepareFamilyEffectAddition(",
   "publishPreparedEffects(",
-  "resourceBytes(",
+  "effectPreparationResources(",
   "export class WasmPreparedEffectPrograms {",
   "prepareEffectPrograms(",
   "cacheEffectPrograms(",

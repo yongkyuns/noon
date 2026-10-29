@@ -3131,7 +3131,8 @@ test("source effect preparation publishes only after GPU readiness and waits for
   let endpoint, published = 0;
   f.context.publishPreparedEffects = () => { published++; };
   f.context.drainReturnedPublicationJson = () => f.player.seekDeltaJson(f.player.time());
-  const staged = { resourceBytes: () => new Uint8Array([1]) };
+  f.context.effectPreparationResources = () => new Uint8Array([1]);
+  const staged = {};
   try {
     const ready = next(f.control.port2);
     const initial = nextMatching(f.render.port2, m => m.type === "execution_delta");

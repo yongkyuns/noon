@@ -97,7 +97,8 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const original = `        for panel, program in zip(panels, programs):
             panel.add_effect(ShaderEffect(program), name="stripes")`;
     assert.ok(lesson.includes(original));
-    const source = lesson.replace(original, `        try:
+    const source = lesson.replace('programs = [material("local"), material("scene")]',
+      'programs = [material("scene")] * 2').replace(original, `        try:
             panels[0].add_effect(ShaderEffect(programs[0]), name="stripes")
         except Exception:
             try:
@@ -112,6 +113,16 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const initial = await page.evaluate(source => noonHostRaster.load(source, 6.25), source);
     assert.equal(initial.rendererBackend, backend);
     const previous = PNG.sync.read(await page.locator("#scene").screenshot()).data;
+    const author = page.workers().find(worker => worker.url().includes("python-worker.js"));
+    assert.ok(author);
+    await author.evaluate(() => {
+      globalThis.shaderPreparationBytes = [];
+      const original = MessagePort.prototype.postMessage;
+      MessagePort.prototype.postMessage = function (message, ...args) {
+        if (message?.type === "prepare_effect_programs") shaderPreparationBytes.push(message.bytes.byteLength);
+        return original.call(this, message, ...args);
+      };
+    });
     const worker = page.workers().find(worker => worker.url().includes("execution-render-worker.js") && !worker.url().includes("capability-probe"));
     assert.ok(worker, "actual Python render worker required");
     await worker.evaluate(() => {
@@ -138,7 +149,10 @@ async function qualifyPythonPreparation(context, baseUrl, backend) {
     const recovered = await page.evaluate(() => noonHostRaster.debugFrame());
     assert.equal(recovered.time, 0.75);
     assert.equal(recovered.objects.flatMap(object => object.effects).length, 2);
-    return { backend, rejected, recovered, rejectedModules: 1 };
+    const preparationBytes = await author.evaluate(() => shaderPreparationBytes);
+    assert.equal(preparationBytes.length, 3, "failed source, retry and shared-program attachment");
+    assert.ok(preparationBytes[2] < preparationBytes[1] / 2, "shared program uses its installed resource handle");
+    return { backend, rejected, recovered, rejectedModules: 1, preparationBytes };
   } finally { await page.close(); }
 }
 

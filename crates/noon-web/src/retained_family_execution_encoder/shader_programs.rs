@@ -26,6 +26,18 @@ fn identity(program: &WgslEffectProgram) -> usize {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn shader_program_handle(
+        &self,
+        program: &WgslEffectProgram,
+    ) -> Option<TransportShaderProgramHandle> {
+        self.shader_programs
+            .as_ref()?
+            .programs
+            .get(&identity(program))
+            .map(|p| p.handle)
+    }
+
     pub(super) fn stage_shader_programs(
         &self,
         envelope: &mut RetainedFamilyExecutionDeltaEnvelope,

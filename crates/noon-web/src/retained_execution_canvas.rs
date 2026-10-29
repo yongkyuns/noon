@@ -779,6 +779,7 @@ mod wasm {
             let programs =
                 crate::retained_resource_transport::shader_programs::decode_shader_preparation(
                     bytes,
+                    self.mirror.resources(),
                 )
                 .map_err(js_error)?;
             let request = self
