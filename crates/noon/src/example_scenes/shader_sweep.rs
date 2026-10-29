@@ -158,7 +158,7 @@ impl LiveContinuation for ShaderSweep {
                                 .method_target(),
                         ),
                     ],
-                    options,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
                     AnimationOptions::new(),
                 )
             }
