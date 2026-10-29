@@ -43,31 +43,31 @@ fn path_cache_retains_recent_meshes_and_evicts_stale_entries() {
     preparer.set_path_mesh_cache_limit(2);
 
     let scene_a = path_scene(std::slice::from_ref(&a));
-    let prepared = preparer.prepare(scene_a.frame());
+    let prepared = preparer.prepare(scene_a.frame()).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 1);
     assert_eq!(preparer.cached_path_mesh_count(), 1);
 
     let scene_b = path_scene(std::slice::from_ref(&b));
-    let prepared = preparer.prepare(scene_b.frame());
+    let prepared = preparer.prepare(scene_b.frame()).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 1);
     assert_eq!(preparer.cached_path_mesh_count(), 2);
 
     let scene_a = path_scene(std::slice::from_ref(&a));
-    let prepared = preparer.prepare(scene_a.frame());
+    let prepared = preparer.prepare(scene_a.frame()).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 0);
 
     let scene_c = path_scene(std::slice::from_ref(&c));
-    let prepared = preparer.prepare(scene_c.frame());
+    let prepared = preparer.prepare(scene_c.frame()).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 1);
     assert_eq!(preparer.cached_path_mesh_count(), 3);
 
     let scene_a = path_scene(std::slice::from_ref(&a));
-    let prepared = preparer.prepare(scene_a.frame());
+    let prepared = preparer.prepare(scene_a.frame()).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 0);
     assert_eq!(preparer.cached_path_mesh_count(), 2);
 
     let scene_b = path_scene(std::slice::from_ref(&b));
-    let prepared = preparer.prepare(scene_b.frame());
+    let prepared = preparer.prepare(scene_b.frame()).unwrap();
     assert_eq!(
         prepared.stats.geometry_cache_misses, 1,
         "least-recently-used stale mesh should have been evicted"
@@ -82,13 +82,13 @@ fn active_frame_geometry_can_exceed_retention_budget_without_retessellation() {
     preparer.set_path_mesh_cache_limit(1);
 
     let scene = path_scene(&[a.clone(), b.clone()]);
-    let prepared = preparer.prepare(scene.frame());
+    let prepared = preparer.prepare(scene.frame()).unwrap();
     assert_eq!(prepared.path_ids.len(), 2);
     assert_eq!(prepared.stats.geometry_cache_misses, 2);
     assert_eq!(preparer.cached_path_mesh_count(), 2);
 
     let scene = path_scene(&[a, b]);
-    let prepared = preparer.prepare(scene.frame());
+    let prepared = preparer.prepare(scene.frame()).unwrap();
     assert_eq!(prepared.path_ids.len(), 2);
     assert_eq!(
         prepared.stats.geometry_cache_misses, 0,
@@ -109,7 +109,7 @@ fn transient_path_churn_reaches_a_bounded_cache_plateau() {
     for edit in 0..EDIT_COUNT {
         let current = path(edit as f32 * 10.0);
         let scene = path_scene(std::slice::from_ref(&current));
-        let prepared = preparer.prepare(scene.frame());
+        let prepared = preparer.prepare(scene.frame()).unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
         assert!(
@@ -121,7 +121,7 @@ fn transient_path_churn_reaches_a_bounded_cache_plateau() {
 
     let most_recent = most_recent.expect("churn creates at least one path");
     let scene = path_scene(std::slice::from_ref(&most_recent));
-    let prepared = preparer.prepare(scene.frame());
+    let prepared = preparer.prepare(scene.frame()).unwrap();
     assert_eq!(
         prepared.stats.geometry_cache_misses, 0,
         "the most recent working set should remain reusable after long-running churn"
@@ -141,14 +141,14 @@ fn large_temporary_path_scene_does_not_remain_pinned_after_contraction() {
         .collect::<Vec<_>>();
 
     let large_scene = path_scene(&temporary_paths);
-    let prepared = preparer.prepare(large_scene.frame());
+    let prepared = preparer.prepare(large_scene.frame()).unwrap();
     assert_eq!(prepared.path_ids.len(), TEMPORARY_PATH_COUNT);
     assert_eq!(prepared.stats.geometry_cache_misses, TEMPORARY_PATH_COUNT);
     assert_eq!(preparer.cached_path_mesh_count(), TEMPORARY_PATH_COUNT);
 
     let small_path = path(10_000.0);
     let small_scene = path_scene(std::slice::from_ref(&small_path));
-    let prepared = preparer.prepare(small_scene.frame());
+    let prepared = preparer.prepare(small_scene.frame()).unwrap();
     assert_eq!(prepared.path_ids.len(), 1);
     assert_eq!(prepared.stats.geometry_cache_misses, 1);
     assert!(
@@ -157,7 +157,7 @@ fn large_temporary_path_scene_does_not_remain_pinned_after_contraction() {
     );
 
     let small_scene = path_scene(std::slice::from_ref(&small_path));
-    let prepared = preparer.prepare(small_scene.frame());
+    let prepared = preparer.prepare(small_scene.frame()).unwrap();
     assert_eq!(prepared.stats.geometry_cache_misses, 0);
     assert!(preparer.cached_path_mesh_count() <= CACHE_LIMIT);
 }

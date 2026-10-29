@@ -373,19 +373,18 @@ pub struct Style {
 }
 
 impl Style {
-    /// Unit authored paint bounds make colored radiance at most 64 times alpha.
-    /// Ordinary non-emissive/raw rendering retains its existing numeric profile.
+    /// Unit base paint and opacity bound the finite authored HDR/emission profile.
+    /// Raw already-linear raster input has a separate packing contract.
     pub fn supports_emission(self) -> bool {
-        self.emission.is_neutral()
-            || ((0.0..=1.0).contains(&self.opacity)
-                && [self.fill, self.stroke, self.background_stroke]
-                    .into_iter()
-                    .flatten()
-                    .all(|c| {
-                        [c.red, c.green, c.blue, c.alpha]
-                            .into_iter()
-                            .all(|v| (0.0..=1.0).contains(&v))
-                    }))
+        (0.0..=1.0).contains(&self.opacity)
+            && [self.fill, self.stroke, self.background_stroke]
+                .into_iter()
+                .flatten()
+                .all(|c| {
+                    [c.red, c.green, c.blue, c.alpha]
+                        .into_iter()
+                        .all(|v| (0.0..=1.0).contains(&v))
+                })
     }
 }
 

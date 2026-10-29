@@ -125,7 +125,7 @@ fn before_and_after_transients_preserve_pixels_across_stable_batch_boundaries() 
         assert_eq!(derived.stats.occurrences_packed, 9);
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
-        let stable = preparer.prepare(publication.frame());
+        let stable = preparer.prepare(publication.frame()).unwrap();
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         renderer.set_camera(

@@ -608,7 +608,7 @@ fn sorted_ranges_overlap(ranges: &[std::ops::Range<u32>], target: &std::ops::Ran
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedPrepareError {
-    UnsupportedEmission(ObjectId),
+    ColorProfile(crate::ColorProfileError),
     Image(RasterImagePrepareError),
     StalePublication {
         received: PublicationContext,
@@ -630,7 +630,7 @@ pub enum RetainedPrepareError {
 impl std::fmt::Display for RetainedPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedEmission(object) => write!(formatter, "object {} emission requires a qualified linear-HDR planar material with unit paint and opacity", object.get()),
+            Self::ColorProfile(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
             Self::StalePublication { received, applied } => write!(
                 formatter,
@@ -676,6 +676,12 @@ impl std::error::Error for RetainedPrepareError {}
 impl From<TextPrepareError> for RetainedPrepareError {
     fn from(value: TextPrepareError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<crate::ColorProfileError> for RetainedPrepareError {
+    fn from(error: crate::ColorProfileError) -> Self {
+        Self::ColorProfile(error)
     }
 }
 
@@ -1408,6 +1414,28 @@ impl RetainedFramePreparer {
         self.prepare_with_changes(device, frame, &changes, texts, fonts, geometries, metrics)
     }
 
+    fn admit_color_profile(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        profile: noon_core::ViewColorProfile,
+    ) -> Result<(), crate::ColorProfileError> {
+        let changed = self.color_profile != profile;
+        crate::validate_color_profile(
+            frame,
+            changes,
+            profile,
+            changed || !self.emission_profile_prepared,
+        )?;
+        if changed {
+            self.prepared_generation_ready = false;
+            self.scratch_ready = false;
+        }
+        self.emission_profile_prepared = true;
+        self.color_profile = profile;
+        Ok(())
+    }
+
     /// Prepare one coherent runtime publication and retain its applied revision
     /// metadata for later stale-publication rejection.
     pub fn prepare_publication<'a>(
@@ -1424,14 +1452,11 @@ impl RetainedFramePreparer {
             }
         }
 
-        validate_emission_profile(
+        self.admit_color_profile(
             publication.frame(),
             publication.changes(),
             publication.color_profile(),
-            !self.emission_profile_prepared || self.color_profile != publication.color_profile(),
         )?;
-        self.emission_profile_prepared = true;
-        self.color_profile = publication.color_profile();
         if previous.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1470,14 +1495,11 @@ impl RetainedFramePreparer {
             }
         }
         validate_visible_object_indices(publication.frame(), visible_object_indices)?;
-        validate_emission_profile(
+        self.admit_color_profile(
             publication.frame(),
             publication.changes(),
             publication.color_profile(),
-            !self.emission_profile_prepared || self.color_profile != publication.color_profile(),
         )?;
-        self.emission_profile_prepared = true;
-        self.color_profile = publication.color_profile();
         if self.last_applied_publication.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1524,15 +1546,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        validate_emission_profile(
-            frame,
-            changes,
-            noon_core::ViewColorProfile::Compatibility,
-            self.color_profile != noon_core::ViewColorProfile::Compatibility
-                || !self.emission_profile_prepared,
-        )?;
-        self.emission_profile_prepared = true;
-        self.color_profile = noon_core::ViewColorProfile::Compatibility;
+        self.admit_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)?;
         self.prepare_with_changes_inner(
             device, frame, changes, texts, fonts, geometries, metrics, None, None,
         )
@@ -1552,15 +1566,7 @@ impl RetainedFramePreparer {
         images: &dyn RasterImageResourceLookup,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        validate_emission_profile(
-            frame,
-            changes,
-            noon_core::ViewColorProfile::Compatibility,
-            self.color_profile != noon_core::ViewColorProfile::Compatibility
-                || !self.emission_profile_prepared,
-        )?;
-        self.emission_profile_prepared = true;
-        self.color_profile = noon_core::ViewColorProfile::Compatibility;
+        self.admit_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)?;
         self.prepare_with_changes_inner(
             device,
             frame,
@@ -6212,7 +6218,7 @@ mod tests {
         // for painter interleaving. Construct the compacted geometry state that
         // this defensive boundary protects without changing that policy.
         let mut geometry_preparer = FramePreparer::new();
-        let geometry = geometry_preparer.prepare(&frame);
+        let geometry = geometry_preparer.prepare(&frame).unwrap();
         let text_preparer = RetainedTextQuadPreparer::default();
         let mut applied_publication = None;
         let mut images = RasterImageFramePreparer::default();
@@ -6956,40 +6962,3 @@ impl std::fmt::Display for InteractiveDrawError {
     }
 }
 impl std::error::Error for InteractiveDrawError {}
-
-/// Admit the finite planar emission material profile before changing derived
-/// view resources. Local edits inspect their dirty closure; a view/profile change
-/// requires global admission once. Clean paused frames inspect no objects.
-pub fn validate_emission_profile(
-    frame: &FrameState,
-    changes: &FrameChanges,
-    profile: noon_core::ViewColorProfile,
-    all: bool,
-) -> Result<(), RetainedPrepareError> {
-    let validate = |index: usize| {
-        let Some(object) = frame.objects.get(index) else {
-            return Ok(());
-        };
-        if !frame.is_present(index) {
-            return Ok(());
-        }
-        if !object.style.emission.is_neutral()
-            && (profile != noon_core::ViewColorProfile::LinearHdr
-                || object.spatial.is_some()
-                || !object.style.supports_emission())
-        {
-            return Err(RetainedPrepareError::UnsupportedEmission(object.id));
-        }
-        Ok(())
-    };
-    if all || changes.is_all() {
-        for index in 0..frame.objects.len() {
-            validate(index)?;
-        }
-    } else {
-        for &index in changes.object_indices() {
-            validate(index)?;
-        }
-    }
-    Ok(())
-}

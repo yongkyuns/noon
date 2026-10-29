@@ -126,7 +126,7 @@ impl AuthoredViewOutput {
         size: [u32; 2],
     ) -> Result<ViewColorProfile, ViewOutputError> {
         let profile = publication.color_profile();
-        crate::validate_emission_profile(
+        crate::validate_color_profile(
             publication.frame(),
             publication.changes(),
             profile,

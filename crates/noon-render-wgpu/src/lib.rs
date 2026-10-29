@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod color_profile;
-pub use color_profile::authored_clear_color;
+pub use color_profile::{authored_clear_color, validate_color_profile, ColorProfileError};
 mod gpu;
 mod mega_mesh;
 mod paint;
@@ -764,9 +764,18 @@ impl FramePreparer {
 
     /// Prepare raw raster inputs with the ordinary packing contract. Float
     /// targets may use this entry point for explicitly already-linear values.
-    pub fn prepare<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
+    pub fn prepare<'a>(
+        &'a mut self,
+        frame: &FrameState,
+    ) -> Result<PreparedFrame<'a>, ColorProfileError> {
+        validate_color_profile(
+            frame,
+            &FrameChanges::all(),
+            noon_core::ViewColorProfile::Compatibility,
+            true,
+        )?;
         self.color_profile = noon_core::ViewColorProfile::Compatibility;
-        self.rebuild(frame)
+        Ok(self.rebuild(frame))
     }
 
     /// Decode authored colors according to the view in this same coherent
@@ -775,12 +784,18 @@ impl FramePreparer {
     pub fn prepare_publication<'a>(
         &'a mut self,
         publication: &noon_runtime::RendererPublication<'_>,
-    ) -> PreparedFrame<'a> {
-        self.prepare_with_color_profile(
+    ) -> Result<PreparedFrame<'a>, ColorProfileError> {
+        validate_color_profile(
             publication.frame(),
             publication.changes(),
             publication.color_profile(),
-        )
+            !self.initialized || self.color_profile != publication.color_profile(),
+        )?;
+        Ok(self.prepare_with_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        ))
     }
 
     /// Updates cached instance records using the runtime's consumed change set.
@@ -794,8 +809,18 @@ impl FramePreparer {
         &'a mut self,
         frame: &FrameState,
         changes: &FrameChanges,
-    ) -> PreparedFrame<'a> {
-        self.prepare_with_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)
+    ) -> Result<PreparedFrame<'a>, ColorProfileError> {
+        validate_color_profile(
+            frame,
+            changes,
+            noon_core::ViewColorProfile::Compatibility,
+            !self.initialized || self.color_profile != noon_core::ViewColorProfile::Compatibility,
+        )?;
+        Ok(self.prepare_with_color_profile(
+            frame,
+            changes,
+            noon_core::ViewColorProfile::Compatibility,
+        ))
     }
 
     fn prepare_with_color_profile<'a>(
@@ -3244,6 +3269,36 @@ mod tests {
     }
 
     #[test]
+    fn raw_preparation_rejects_authored_emission_before_mutating_cached_geometry() {
+        let mut state = frame(vec![object(1, GeometryRef::circle(0.5))]);
+        let mut preparer = FramePreparer::new();
+        let original = preparer.prepare(&state).unwrap().circles[0];
+        state.objects[0].style.emission = noon_core::Emission::new(7.0).unwrap();
+        let changes = FrameChanges::objects(vec![0]);
+        assert!(matches!(
+            preparer.prepare(&state),
+            Err(ColorProfileError::UnsupportedEmission(_))
+        ));
+        assert!(matches!(
+            preparer.prepare_incremental(&state, &changes),
+            Err(ColorProfileError::UnsupportedEmission(_))
+        ));
+        assert!(matches!(
+            preparer.prepare_incremental_visible(&state, &changes, &[0]),
+            Err(VisibleRenderError::ColorProfile(
+                ColorProfileError::UnsupportedEmission(_)
+            ))
+        ));
+        state.objects[0].style.emission = noon_core::Emission::NONE;
+        let clean = preparer
+            .prepare_incremental(&state, &FrameChanges::default())
+            .unwrap();
+        assert_eq!(clean.circles[0], original);
+        assert_eq!(clean.stats.instances_repacked, 0);
+        assert_eq!(clean.stats.full_rebuilds, 0);
+    }
+
+    #[test]
     fn background_path_surface_uses_a_separate_flag_without_changing_reveal_bits() {
         let foreground = pack_path_surface(PathSurface::Stroke, 0.375);
         let background = pack_path_surface(PathSurface::BackgroundStroke, 0.375);
@@ -3280,7 +3335,7 @@ mod tests {
         initial.render_geometries[0] = Some(geometry.clone().into());
         let mut preparer = FramePreparer::new();
 
-        let cold = preparer.prepare(&initial);
+        let cold = preparer.prepare(&initial).unwrap();
         assert_eq!(cold.stats.geometry_cache_misses, 1);
         assert!(cold
             .path_vertices
@@ -3292,7 +3347,7 @@ mod tests {
         let mut advanced = initial.clone();
         advanced.morphs[0] = 0.5;
         let changes = FrameChanges::objects(vec![0]);
-        let steady = preparer.prepare_incremental(&advanced, &changes);
+        let steady = preparer.prepare_incremental(&advanced, &changes).unwrap();
         assert_eq!(steady.stats.geometry_cache_misses, 0);
         assert!(!steady.path_geometry_dirty);
         assert_eq!(steady.path_vertices, vertices);
@@ -3328,7 +3383,7 @@ mod tests {
         initial.render_transforms[0] = Some(Transform2D::IDENTITY);
 
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&initial);
+        let prepared = preparer.prepare(&initial).unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
         assert!(prepared
@@ -3361,7 +3416,7 @@ mod tests {
         let mut preparer = FramePreparer::new();
 
         let vertices = {
-            let cold = preparer.prepare(&initial);
+            let cold = preparer.prepare(&initial).unwrap();
             assert_eq!(cold.stats.unsupported_count, 0);
             assert_eq!(cold.stats.geometry_cache_misses, 1);
             assert!(!cold.path_vertices.is_empty());
@@ -3374,7 +3429,9 @@ mod tests {
 
         let mut advanced = initial.clone();
         advanced.morphs[0] = 0.5;
-        let steady = preparer.prepare_incremental(&advanced, &FrameChanges::objects(vec![0]));
+        let steady = preparer
+            .prepare_incremental(&advanced, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(steady.stats.unsupported_count, 0);
         assert_eq!(steady.stats.geometry_cache_misses, 0);
         assert!(!steady.path_geometry_dirty);
@@ -3383,15 +3440,16 @@ mod tests {
         let mut visible = initial;
         visible.objects[0].style.fill = Some(Color::WHITE);
         let mut visible_preparer = FramePreparer::new();
-        let filled = visible_preparer.prepare(&visible);
+        let filled = visible_preparer.prepare(&visible).unwrap();
         assert_eq!(filled.stats.unsupported_count, 0);
         assert!(filled
             .path_vertices
             .iter()
             .any(|vertex| vertex.surface & 1 == 0));
         visible.morphs[0] = 0.5;
-        let middle =
-            visible_preparer.prepare_incremental(&visible, &FrameChanges::objects(vec![0]));
+        let middle = visible_preparer
+            .prepare_incremental(&visible, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(middle.stats.unsupported_count, 0);
         assert!(middle.stats.path_vertices_repacked > 0);
     }
@@ -3406,14 +3464,14 @@ mod tests {
         let initial = frame(vec![path]);
         let mut preparer = FramePreparer::new();
 
-        let cold = preparer.prepare(&initial);
+        let cold = preparer.prepare(&initial).unwrap();
         assert_eq!(cold.stats.geometry_cache_misses, 1);
         assert_eq!(preparer.cached_path_mesh_count(), 1);
 
         let mut filled = initial.clone();
         filled.objects[0].style.fill = Some(Color::WHITE);
         let changes = FrameChanges::objects(vec![0]);
-        let rebuilt = preparer.prepare_incremental(&filled, &changes);
+        let rebuilt = preparer.prepare_incremental(&filled, &changes).unwrap();
         assert_eq!(rebuilt.stats.geometry_cache_misses, 1);
         assert!(rebuilt.path_geometry_dirty);
         assert!(rebuilt
@@ -3434,12 +3492,12 @@ mod tests {
         let mut preparer = FramePreparer::new();
 
         let (vertices, indices) = {
-            let cold = preparer.prepare(&initial);
+            let cold = preparer.prepare(&initial).unwrap();
             assert!(cold.stats.path_vertices_repacked > 0);
             assert!(cold.stats.path_indices_repacked > 0);
             (cold.path_vertices.to_vec(), cold.path_indices.to_vec())
         };
-        let rebuilt = preparer.prepare(&initial);
+        let rebuilt = preparer.prepare(&initial).unwrap();
         assert_eq!(rebuilt.stats.geometry_cache_misses, 0);
         assert_eq!(rebuilt.stats.path_vertices_repacked, 0);
         assert_eq!(rebuilt.stats.path_indices_repacked, 0);
@@ -3896,7 +3954,7 @@ mod tests {
         let frame = frame(vec![first, second]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
         assert_eq!(prepared.stats.batch_count, 1);
@@ -3923,7 +3981,7 @@ mod tests {
         state.style.stroke_width = 0.2;
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         let stroke_progresses: Vec<f32> = prepared
             .path_vertices
@@ -3947,12 +4005,14 @@ mod tests {
         state.style.stroke_width = 0.2;
         let mut frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         assert_eq!(preparer.cached_path_mesh_count(), 1);
 
         frame.objects[0].transform.translation = Vec2::new(2.0, -3.0);
         frame.objects[0].style.fill = Some(Color::rgb(0.2, 0.5, 0.8));
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.instances_repacked, 1);
@@ -3963,7 +4023,9 @@ mod tests {
         assert_eq!(preparer.cached_path_mesh_count(), 1);
 
         frame.objects[0].style.stroke_width = 0.4;
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
         assert!(prepared.path_geometry_dirty);
         assert_eq!(preparer.cached_path_mesh_count(), 2);
@@ -3978,7 +4040,7 @@ mod tests {
         let mut frame = frame(vec![state]);
         frame.reveals[0] = 0.2;
         let mut preparer = FramePreparer::new();
-        let cold = preparer.prepare(&frame);
+        let cold = preparer.prepare(&frame).unwrap();
         assert_eq!(cold.paths.len(), 1);
         assert_eq!(cold.lines.len(), 1);
         assert_eq!(cold.lines[0].start, cold.lines[0].end);
@@ -3986,7 +4048,9 @@ mod tests {
         assert_eq!(preparer.cached_path_mesh_count(), 1);
 
         frame.reveals[0] = 0.35;
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.instances_repacked, 2);
@@ -4012,7 +4076,7 @@ mod tests {
         frame.reveals[0] = 0.25;
         let mut preparer = FramePreparer::new();
 
-        let cold = preparer.prepare(&frame);
+        let cold = preparer.prepare(&frame).unwrap();
         assert_eq!(cold.circles.len(), 1);
         assert!(cold.paths.is_empty());
         assert!(cold.lines.is_empty());
@@ -4021,7 +4085,9 @@ mod tests {
         assert!(!cold.path_geometry_dirty);
 
         frame.reveals[0] = 0.6;
-        let steady = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let steady = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(steady.circles.len(), 1);
         assert!(steady.paths.is_empty());
         assert_eq!(steady.circles[0].padding[0], 0.6);
@@ -4030,7 +4096,9 @@ mod tests {
         assert!(!steady.path_geometry_dirty);
 
         frame.reveals[0] = 1.0;
-        let complete = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let complete = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(complete.circles.len(), 1);
         assert!(complete.paths.is_empty());
         assert_eq!(complete.circles[0].padding[0], 1.0);
@@ -4056,7 +4124,7 @@ mod tests {
         frame.reveals.fill(0.5);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.circles.len(), 1);
         assert_eq!(prepared.circles[0].padding[0], 0.5);
         assert!(prepared.rectangles.is_empty());
@@ -4072,7 +4140,9 @@ mod tests {
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
 
         frame.reveals[2] = 0.8;
-        let advanced = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2]));
+        let advanced = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![2]))
+            .unwrap();
         assert_eq!(advanced.lines.len(), 1);
         assert_eq!(advanced.lines[0].transform.padding, 0.8);
         assert_eq!(advanced.stats.geometry_cache_misses, 0);
@@ -4100,10 +4170,12 @@ mod tests {
         state.style.stroke_width = 0.2;
         let mut frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
 
         frame.morphs[0] = 0.6;
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.dirty_instance_count, 1);
@@ -4141,7 +4213,7 @@ mod tests {
         let mut frame = frame(objects);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.stats.instance_count, OBJECT_COUNT);
         assert_eq!(prepared.stats.geometry_cache_misses, VARIANT_COUNT);
         // Mesh/cache batching remains at 12 variants, while exact transparent painter order
@@ -4153,7 +4225,7 @@ mod tests {
 
         frame.morphs.fill(0.5);
         let changes = FrameChanges::objects((0..OBJECT_COUNT).collect());
-        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let prepared = preparer.prepare_incremental(&frame, &changes).unwrap();
 
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert_eq!(prepared.stats.instances_repacked, OBJECT_COUNT);
@@ -4186,7 +4258,7 @@ mod tests {
         frame.reveals.fill(0.25);
         let mut preparer = FramePreparer::new();
 
-        let cold = preparer.prepare(&frame);
+        let cold = preparer.prepare(&frame).unwrap();
         assert_eq!(cold.stats.geometry_cache_misses, 1);
         assert_eq!(cold.paths.len(), OBJECT_COUNT);
         assert_eq!(cold.lines.len(), OBJECT_COUNT);
@@ -4195,7 +4267,7 @@ mod tests {
 
         frame.reveals.fill(0.65);
         let changes = FrameChanges::objects((0..OBJECT_COUNT).collect());
-        let steady = preparer.prepare_incremental(&frame, &changes);
+        let steady = preparer.prepare_incremental(&frame, &changes).unwrap();
         assert_eq!(steady.stats.geometry_cache_misses, 0);
         assert_eq!(steady.stats.instances_repacked, OBJECT_COUNT * 2);
         assert!(!steady.path_geometry_dirty);
@@ -4210,7 +4282,7 @@ mod tests {
         let frame = frame(objects);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.stats.batch_count, 1);
         assert_eq!(prepared.stats.instance_count, 100_000);
@@ -4228,7 +4300,7 @@ mod tests {
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.circles[0].style.stroke_enabled, 3);
         assert_eq!(prepared.circles[0].style.stroke_width, 0.04);
         assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
@@ -4244,10 +4316,12 @@ mod tests {
             ),
         ]);
         let mut preparer = FramePreparer::new();
-        let _ = preparer.prepare(&frame);
+        let _ = preparer.prepare(&frame).unwrap();
 
         frame.objects[1].transform.translation = Vec2::new(2.0, -3.0);
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         let unchanged = prepared.observe_object(0).unwrap();
         let changed = prepared.observe_object(1).unwrap();
 
@@ -4271,7 +4345,7 @@ mod tests {
             object(52, GeometryRef::rectangle(1.0, 1.0)),
         ]);
         let mut preparer = FramePreparer::new();
-        let _ = preparer.prepare(&frame);
+        let _ = preparer.prepare(&frame).unwrap();
 
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::default(), &[1])
@@ -4303,7 +4377,7 @@ mod tests {
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.paths[0].transform.translation, [5.0, -2.0]);
         assert_eq!(prepared.paths[0].transform.scale, [1.0, 1.0]);
         assert_eq!(prepared.paths[0].transform.rotation, 0.0);
@@ -4333,7 +4407,7 @@ mod tests {
         let frame = frame(objects);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.stats.instance_count, 30_000);
         assert_eq!(prepared.stats.batch_count, 3);
@@ -4363,7 +4437,7 @@ mod tests {
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         let instance = prepared.circles[0];
 
         assert_eq!(instance.transform.translation, [4.0, -3.0]);
@@ -4387,8 +4461,8 @@ mod tests {
         );
         let mut preparer = FramePreparer::new();
 
-        assert!(preparer.prepare(&frame).stats.capacity_growths > 0);
-        assert_eq!(preparer.prepare(&frame).stats.capacity_growths, 0);
+        assert!(preparer.prepare(&frame).unwrap().stats.capacity_growths > 0);
+        assert_eq!(preparer.prepare(&frame).unwrap().stats.capacity_growths, 0);
     }
 
     #[test]
@@ -4410,7 +4484,7 @@ mod tests {
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         let instance = prepared.lines[0];
 
         assert_eq!(prepared.line_ids, &[ObjectId::new(8)]);
@@ -4428,7 +4502,7 @@ mod tests {
         let frame = frame(vec![object(42, GeometryRef::External(GeometryId::new(3)))]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.stats.instance_count, 0);
         assert_eq!(prepared.stats.unsupported_count, 1);
@@ -4442,10 +4516,12 @@ mod tests {
             object(2, GeometryRef::circle(2.0)),
         ]);
         let mut preparer = FramePreparer::new();
-        assert_eq!(preparer.prepare(&frame).stats.instance_count, 2);
+        assert_eq!(preparer.prepare(&frame).unwrap().stats.instance_count, 2);
 
         frame.presences[0] = false;
-        let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let hidden = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(hidden.stats.instance_count, 1);
         assert_eq!(
             hidden.circle_ids,
@@ -4459,7 +4535,9 @@ mod tests {
         assert_eq!(hidden.stats.unsupported_count, 0);
 
         frame.presences[0] = true;
-        let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let restored = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(restored.stats.instance_count, 2);
         assert_eq!(
             restored.circle_ids,
@@ -4479,11 +4557,13 @@ mod tests {
         frame.presences[1] = false;
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(&frame, &[2, 1, 0]);
-        let initial = preparer.prepare(&frame);
+        let initial = preparer.prepare(&frame).unwrap();
         assert_eq!(initial.stats.instance_count, 2);
 
         frame.presences[1] = true;
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         let ordered = prepared
             .ordered_render_batches()
             .map(|prepared| prepared.batch.clone())
@@ -4528,14 +4608,16 @@ mod tests {
         let mut preparer = FramePreparer::new();
         let initial_order = (0..INITIAL_OBJECTS as u32).collect::<Vec<_>>();
         preparer.set_painter_order(&frame, &initial_order);
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
 
         // Activate chunked submissions with a local painter change before the
         // later structural publication adds the plotted path.
         let mut active_order = initial_order;
         active_order.swap(0, 1);
         preparer.set_painter_order_range(&frame, &active_order, 0..2);
-        preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..2));
+        preparer
+            .prepare_incremental(&frame, &FrameChanges::painter_order(0..2))
+            .unwrap();
 
         let mut curve = object(
             INITIAL_OBJECTS as u64,
@@ -4557,10 +4639,12 @@ mod tests {
 
         active_order.push(INITIAL_OBJECTS as u32);
         preparer.set_painter_order_range(&frame, &active_order, 0..active_order.len());
-        let prepared = preparer.prepare_incremental(
-            &frame,
-            &FrameChanges::structural(vec![INITIAL_OBJECTS], Vec::new()),
-        );
+        let prepared = preparer
+            .prepare_incremental(
+                &frame,
+                &FrameChanges::structural(vec![INITIAL_OBJECTS], Vec::new()),
+            )
+            .unwrap();
 
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.structural_slots_added, 1);
@@ -4585,12 +4669,14 @@ mod tests {
             object(3, GeometryRef::circle(0.5)),
         ]);
         let mut preparer = FramePreparer::new();
-        let initial = preparer.prepare(&frame);
+        let initial = preparer.prepare(&frame).unwrap();
         assert_eq!(initial.stats.geometry_cache_misses, 1);
         assert!(initial.path_geometry_dirty);
 
         frame.presences[1] = false;
-        let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let hidden = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         assert_eq!(hidden.stats.full_rebuilds, 0);
         assert_eq!(hidden.stats.structural_slots_retired, 1);
         assert_eq!(hidden.stats.geometry_cache_misses, 0);
@@ -4601,7 +4687,9 @@ mod tests {
         assert_eq!(hidden.paths[0].style.opacity, 0.0);
 
         frame.presences[1] = true;
-        let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let restored = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         assert_eq!(restored.stats.full_rebuilds, 0);
         assert_eq!(restored.stats.geometry_cache_misses, 0);
         assert_eq!(restored.stats.path_vertices_repacked, 0);
@@ -4619,9 +4707,14 @@ mod tests {
                 .collect(),
         );
         let mut preparer = FramePreparer::new();
-        assert_eq!(preparer.prepare(&frame).stats.instances_repacked, 100_000);
+        assert_eq!(
+            preparer.prepare(&frame).unwrap().stats.instances_repacked,
+            100_000
+        );
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
 
         assert_eq!(prepared.stats.instances_repacked, 0);
         assert_eq!(prepared.stats.dirty_instance_count, 0);
@@ -4636,11 +4729,11 @@ mod tests {
             object(3, GeometryRef::circle(4.0)),
         ]);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         frame.objects[2].transform.translation = Vec2::new(3.0, 4.0);
 
         let changes = FrameChanges::objects(vec![2]);
-        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let prepared = preparer.prepare_incremental(&frame, &changes).unwrap();
 
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.dirty_instance_count, 1);
@@ -4654,11 +4747,13 @@ mod tests {
     fn incompatible_incremental_layout_falls_back_to_full_rebuild() {
         let mut frame = frame(vec![object(1, GeometryRef::circle(1.0))]);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         frame.objects[0].content =
             noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 3.0));
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
 
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.dirty_instance_count, 1);
@@ -4690,7 +4785,7 @@ mod tests {
         let mut order = (0..OBJECT_COUNT as u32).collect::<Vec<_>>();
         preparer.set_painter_order(&frame, &order);
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.path_batches.len(), OBJECT_COUNT);
         assert_eq!(prepared.mega_path_batches.len(), 1);
@@ -4707,8 +4802,9 @@ mod tests {
         let mega_indices = prepared.mega_path_indices.to_vec();
         order.swap(5_000, 5_001);
         preparer.set_painter_order_range(&frame, &order, 5_000..5_002);
-        let reordered =
-            preparer.prepare_incremental(&frame, &FrameChanges::painter_order(5_000..5_002));
+        let reordered = preparer
+            .prepare_incremental(&frame, &FrameChanges::painter_order(5_000..5_002))
+            .unwrap();
 
         assert_eq!(reordered.stats.full_rebuilds, 0);
         assert_eq!(reordered.stats.instances_repacked, 0);
@@ -4748,7 +4844,7 @@ mod tests {
             .collect();
         let mut frame = frame(objects);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         let first_vertex_range = preparer.path_batch_vertex_ranges[0].clone();
         let middle_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT / 2].clone();
         let last_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1].clone();
@@ -4776,10 +4872,12 @@ mod tests {
         frame.render_geometries.push(None);
         frame.render_transforms.push(None);
 
-        let prepared = preparer.prepare_incremental(
-            &frame,
-            &FrameChanges::structural(vec![OBJECT_COUNT], Vec::new()),
-        );
+        let prepared = preparer
+            .prepare_incremental(
+                &frame,
+                &FrameChanges::structural(vec![OBJECT_COUNT], Vec::new()),
+            )
+            .unwrap();
 
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.structural_slots_added, 1);
@@ -4836,7 +4934,7 @@ mod tests {
         original.style.stroke_width = 0.02;
         let mut frame = frame(vec![original.clone()]);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         let old_vertex_count = preparer.path_vertices.len();
         let old_index_count = preparer.path_indices.len();
 
@@ -4848,8 +4946,9 @@ mod tests {
         frame.morphs.push(0.0);
         frame.render_geometries.push(None);
         frame.render_transforms.push(None);
-        let prepared =
-            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![1], Vec::new()));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::structural(vec![1], Vec::new()))
+            .unwrap();
 
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.structural_slots_added, 1);
@@ -4892,7 +4991,7 @@ mod tests {
         let frame = frame(objects);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.path_batches.len(), 1);
         assert!(prepared.mega_path_batches.is_empty());
@@ -4921,11 +5020,17 @@ mod tests {
         };
         let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.2)]);
         let mut preparer = FramePreparer::new();
-        let total_vertex_instances = preparer.prepare(&frame).mega_path_vertex_instances.len();
+        let total_vertex_instances = preparer
+            .prepare(&frame)
+            .unwrap()
+            .mega_path_vertex_instances
+            .len();
 
         frame.objects[0].transform.translation = Vec2::new(1.25, -0.75);
         frame.objects[0].style.stroke = Some(Color::rgb(0.2, 0.8, 0.4));
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
 
         assert_eq!(prepared.stats.path_vertices_repacked, 0);
         assert_eq!(prepared.stats.path_indices_repacked, 0);
@@ -4959,7 +5064,7 @@ mod tests {
             .collect();
         let mut frame = frame(objects);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         let first_vertex_range = preparer.path_batch_vertex_ranges[0].clone();
         let last_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1].clone();
         let first_index_range = preparer.path_batches[0].index_range.clone();
@@ -4981,7 +5086,9 @@ mod tests {
                     Vec2::new(-0.5, 1.0),
                 ),
         ));
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![REPLACED]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![REPLACED]))
+            .unwrap();
 
         assert_eq!(prepared.path_vertex_dirty_ranges.len(), 1);
         assert_eq!(prepared.path_index_dirty_ranges.len(), 1);
@@ -5032,7 +5139,7 @@ mod tests {
             last_index_range
         );
 
-        let compacted = preparer.prepare(&frame);
+        let compacted = preparer.prepare(&frame).unwrap();
         assert_eq!(compacted.stats.path_vertex_free_range_count, 0);
         assert_eq!(compacted.stats.path_vertex_free_element_count, 0);
         assert_eq!(compacted.stats.path_index_free_range_count, 0);
@@ -5060,7 +5167,7 @@ mod tests {
         };
         let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.5)]);
         let mut preparer = FramePreparer::for_individual_path_draws();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
 
         // This larger replacement cannot fit in the old second path range, so
         // the incremental path arena releases that range and appends a new one.
@@ -5078,19 +5185,21 @@ mod tests {
                     Vec2::new(-0.5, 0.5),
                 ),
         ));
-        let incremental = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let incremental = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         assert!(incremental.stats.path_vertices_repacked > 0);
         assert!(incremental.stats.path_indices_repacked > 0);
 
         let mut fresh = FramePreparer::for_individual_path_draws();
         let (expected_vertices, expected_indices) = {
-            let expected = fresh.prepare(&frame);
+            let expected = fresh.prepare(&frame).unwrap();
             (
                 expected.path_vertices.to_vec(),
                 expected.path_indices.to_vec(),
             )
         };
-        let rebuilt = preparer.prepare(&frame);
+        let rebuilt = preparer.prepare(&frame).unwrap();
 
         assert_eq!(rebuilt.path_vertices, expected_vertices);
         assert_eq!(rebuilt.path_indices, expected_indices);
@@ -5120,7 +5229,7 @@ mod tests {
             make_path(3, 1.0),
         ]);
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
 
         frame.objects[1].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
             VectorPath::new().move_to(Vec2::new(-1.0, 0.5)).cubic_to(
@@ -5129,7 +5238,9 @@ mod tests {
                 Vec2::new(1.0, 0.5),
             ),
         ));
-        preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+            .unwrap();
         assert!(!preparer.path_vertex_free_ranges.is_empty());
         assert!(!preparer.path_index_free_ranges.is_empty());
         let arena_vertices_after_growth = preparer.path_vertices.len();
@@ -5140,7 +5251,9 @@ mod tests {
                 .move_to(Vec2::new(-0.25, 0.0))
                 .line_to(Vec2::new(0.25, 0.0)),
         ));
-        preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
 
         assert_eq!(preparer.path_vertices.len(), arena_vertices_after_growth);
         assert_eq!(preparer.path_indices.len(), arena_indices_after_growth);
@@ -5176,15 +5289,15 @@ mod tests {
         let mut preparer = FramePreparer::for_individual_path_draws();
         preparer.set_path_mesh_cache_limit(CACHE_LIMIT);
         let stale = make_frame(0, CACHE_LIMIT);
-        renderer.upload(&device, &queue, &preparer.prepare(&stale));
+        renderer.upload(&device, &queue, &preparer.prepare(&stale).unwrap());
         let mut active = make_frame(1000, PINNED);
-        let cold = preparer.prepare(&active);
+        let cold = preparer.prepare(&active).unwrap();
         assert_eq!(cold.stats.geometry_cache_misses, PINNED);
         renderer.upload(&device, &queue, &cold);
         assert_eq!(preparer.cached_path_mesh_count(), CACHE_LIMIT + PINNED);
 
         active.morphs.fill(0.3);
-        let warm = preparer.prepare(&active);
+        let warm = preparer.prepare(&active).unwrap();
         assert_eq!(warm.stats.geometry_cache_misses, 0);
         assert_eq!(warm.stats.path_vertices_repacked, 0);
         assert_eq!(warm.stats.path_indices_repacked, 0);
@@ -5198,14 +5311,14 @@ mod tests {
         // If a packed mesh actually disappears, cache compaction must invalidate
         // packed reuse even when all remaining geometry is already cached.
         active.objects[0].content = active.objects[1].content.clone();
-        let changed = preparer.prepare(&active);
+        let changed = preparer.prepare(&active).unwrap();
         assert_eq!(changed.stats.geometry_cache_misses, 0);
         assert!(changed.stats.path_vertices_repacked > 0);
         assert!(changed.stats.path_indices_repacked > 0);
         let actual_vertices = changed.path_vertices.to_vec();
         let actual_indices = changed.path_indices.to_vec();
         let mut fresh = FramePreparer::for_individual_path_draws();
-        let expected = fresh.prepare(&active);
+        let expected = fresh.prepare(&active).unwrap();
         assert_eq!(actual_vertices, expected.path_vertices);
         assert_eq!(actual_indices, expected.path_indices);
         assert_eq!(preparer.cached_path_mesh_count(), PINNED - 1);
@@ -5227,13 +5340,15 @@ mod tests {
         let frame = frame(vec![path]);
         let mut preparer = FramePreparer::for_individual_path_draws();
         preparer.set_painter_order(&frame, &[0]);
-        let visible = preparer.prepare(&frame);
+        let visible = preparer.prepare(&frame).unwrap();
         assert_eq!(visible.ordered_render_batches().count(), 1);
         let vertices = visible.path_vertices.to_vec();
         let indices = visible.path_indices.to_vec();
 
         preparer.set_painter_order_range(&frame, &[], 0..1);
-        let empty = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..1));
+        let empty = preparer
+            .prepare_incremental(&frame, &FrameChanges::painter_order(0..1))
+            .unwrap();
 
         assert_eq!(empty.ordered_render_batches().count(), 0);
         assert_eq!(empty.stats.batch_count, 0);
@@ -5272,7 +5387,7 @@ mod tests {
         let frame = frame(vec![first, middle, last]);
         let mut preparer = FramePreparer::new();
 
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         assert_eq!(prepared.render_batches.len(), 3);
         assert!(matches!(
@@ -5326,11 +5441,11 @@ mod structural_execution_delta_tests {
             render_transforms: vec![None; count],
         };
         let mut preparer = FramePreparer::new();
-        let initial = preparer.prepare(&frame);
+        let initial = preparer.prepare(&frame).unwrap();
         assert_eq!(initial.stats.full_rebuilds, 1);
         frame.presences[10] = false;
         let changes = FrameChanges::structural(Vec::new(), vec![10]);
-        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let prepared = preparer.prepare_incremental(&frame, &changes).unwrap();
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.structural_slots_retired, 1);
         assert_eq!(prepared.stats.instances_repacked, 1);
@@ -5355,14 +5470,17 @@ mod structural_execution_delta_tests {
             render_transforms: vec![None; 3],
         };
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
 
         frame.presences[0] = false;
-        preparer.prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![0]));
+        preparer
+            .prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![0]))
+            .unwrap();
         frame.presences[0] = true;
         frame.objects[0].transform.translation.x = 2.0;
-        let prepared =
-            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![0], Vec::new()));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::structural(vec![0], Vec::new()))
+            .unwrap();
 
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.structural_slots_added, 1);
@@ -5392,10 +5510,12 @@ mod structural_execution_delta_tests {
         };
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(&frame, &[0, 1, 2, 3]);
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         preparer.set_painter_order_range(&frame, &[0, 2, 1, 3], 1..3);
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(1..3));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::painter_order(1..3))
+            .unwrap();
 
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.instances_repacked, 0);
@@ -5428,12 +5548,14 @@ mod structural_execution_delta_tests {
         let mut preparer = FramePreparer::new();
         let last = u32::try_from(OBJECT_COUNT - 1).expect("test object count fits u32");
         preparer.set_painter_order(&frame, &[last]);
-        let only_last = preparer.prepare(&frame);
+        let only_last = preparer.prepare(&frame).unwrap();
         assert_eq!(only_last.ordered_render_batches().count(), 1);
         let circles = only_last.circles.to_vec();
 
         preparer.set_painter_order_range(&frame, &[], 0..1);
-        let empty = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..1));
+        let empty = preparer
+            .prepare_incremental(&frame, &FrameChanges::painter_order(0..1))
+            .unwrap();
 
         assert_eq!(empty.ordered_render_batches().count(), 0);
         assert_eq!(empty.stats.batch_count, 0);
@@ -5462,7 +5584,7 @@ mod structural_execution_delta_tests {
             render_transforms: vec![None; count],
         };
         let mut preparer = FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         frame.objects.push(circle(count as u64));
         frame.presences.push(true);
         frame.reveals.push(1.0);
@@ -5470,7 +5592,7 @@ mod structural_execution_delta_tests {
         frame.render_geometries.push(None);
         frame.render_transforms.push(None);
         let changes = FrameChanges::structural(vec![count], Vec::new());
-        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let prepared = preparer.prepare_incremental(&frame, &changes).unwrap();
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.structural_slots_added, 1);
         assert_eq!(prepared.stats.instances_repacked, 1);

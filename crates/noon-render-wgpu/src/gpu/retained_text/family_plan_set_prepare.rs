@@ -103,6 +103,13 @@ impl RetainedFramePreparer {
                 .map_err(RetainedPrepareError::from)?;
         }
 
+        self.admit_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        )
+        .map_err(RetainedPrepareError::from)?;
+
         let frame = publication.planned_family_frame();
         if publication.active_family_animation_indices().is_empty() {
             self.release_planned_family_realization();
@@ -177,6 +184,8 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.admit_color_profile(frame.retained, changes, self.color_profile)
+            .map_err(RetainedPrepareError::from)?;
         let images =
             self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         let mut prepared = self.prepare_family_plan_set_with_changes_inner(
@@ -320,7 +329,11 @@ impl RetainedFramePreparer {
             self.scratch_ready = true;
         }
 
-        let geometry = self.geometry.prepare(&self.scratch);
+        let geometry = self.geometry.prepare_with_color_profile(
+            &self.scratch,
+            &FrameChanges::all(),
+            self.color_profile,
+        );
         self.render_items.clear();
         rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
         reorder_mixed_items(
@@ -901,9 +914,11 @@ impl RetainedFramePreparer {
             self.incremental_stats.scratch_reuses.saturating_add(1);
         let scratch_changes = FrameChanges::objects(scratch_changes);
         self.project_mixed_visibility(frame.retained, visible_object_indices);
-        let geometry = self
-            .geometry
-            .prepare_incremental(&self.scratch, &scratch_changes);
+        let geometry = self.geometry.prepare_with_color_profile(
+            &self.scratch,
+            &scratch_changes,
+            self.color_profile,
+        );
         if let Some(range) = changes.painter_order_range() {
             reorder_mixed_items_range(
                 &mut self.render_items,

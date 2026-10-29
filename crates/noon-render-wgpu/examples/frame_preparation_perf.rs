@@ -146,7 +146,9 @@ fn benchmark_gpu_geometry(
     let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.set_viewport(device, queue, 256, 256);
     let initial_upload_bytes = {
-        let initial = preparer.prepare(&frame);
+        let initial = preparer
+            .prepare(&frame)
+            .expect("fixed benchmark material is supported");
         renderer.upload(device, queue, &initial).bytes_uploaded
     };
     let (_target_texture, view) = benchmark_target(device);
@@ -174,7 +176,9 @@ fn benchmark_gpu_geometry(
                 frame.objects[target].transform.translation.x = base_x + iteration as f32 * 0.001;
             }
         }
-        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let prepared = preparer
+            .prepare_incremental(&frame, &changes)
+            .expect("fixed benchmark material is supported");
         let upload = renderer.upload(device, queue, &prepared);
         let update = update_started.elapsed();
         let started = Instant::now();
@@ -445,9 +449,13 @@ fn benchmark_size(object_count: usize, config: Config) {
     let mut frame = build_frame(object_count);
 
     let mut full_preparer = FramePreparer::new();
-    full_preparer.prepare(&frame);
+    full_preparer
+        .prepare(&frame)
+        .expect("fixed benchmark material is supported");
     let full = measure(config, |_| {
-        let prepared = full_preparer.prepare(black_box(&frame));
+        let prepared = full_preparer
+            .prepare(black_box(&frame))
+            .expect("fixed benchmark material is supported");
         black_box(prepared.stats.instances_repacked);
     });
 
@@ -456,27 +464,39 @@ fn benchmark_size(object_count: usize, config: Config) {
     let mut painter_order = (0..object_count as u32).collect::<Vec<_>>();
     painter_order.sort_by_key(|index| index % 7);
     ordered_preparer.set_painter_order(&frame, &painter_order);
-    ordered_preparer.prepare(&frame);
+    ordered_preparer
+        .prepare(&frame)
+        .expect("fixed benchmark material is supported");
     let explicit_order = measure(config, |_| {
-        let prepared = ordered_preparer.prepare(black_box(&frame));
+        let prepared = ordered_preparer
+            .prepare(black_box(&frame))
+            .expect("fixed benchmark material is supported");
         black_box(prepared.stats.instances_repacked);
     });
 
     let mut static_preparer = FramePreparer::new();
-    static_preparer.prepare(&frame);
+    static_preparer
+        .prepare(&frame)
+        .expect("fixed benchmark material is supported");
     let static_changes = FrameChanges::default();
     let unchanged = measure(config, |_| {
-        let prepared = static_preparer.prepare_incremental(black_box(&frame), &static_changes);
+        let prepared = static_preparer
+            .prepare_incremental(black_box(&frame), &static_changes)
+            .expect("fixed benchmark material is supported");
         black_box(prepared.stats.instances_repacked);
     });
 
     let mut dirty_preparer = FramePreparer::new();
-    dirty_preparer.prepare(&frame);
+    dirty_preparer
+        .prepare(&frame)
+        .expect("fixed benchmark material is supported");
     let target = object_count / 2;
     let dirty_changes = FrameChanges::objects(vec![target]);
     let one_changed = measure(config, |iteration| {
         frame.objects[target].transform.translation.x = iteration as f32;
-        let prepared = dirty_preparer.prepare_incremental(black_box(&frame), &dirty_changes);
+        let prepared = dirty_preparer
+            .prepare_incremental(black_box(&frame), &dirty_changes)
+            .expect("fixed benchmark material is supported");
         black_box(prepared.stats.instances_repacked);
     });
 

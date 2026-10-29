@@ -118,7 +118,7 @@ fn removed_emissive_rows_do_not_block_a_compatibility_view() {
     source.set_emission(7.0).unwrap();
     scene.add(&source).unwrap();
     let mut session = scene.execution_session().unwrap();
-    assert!(noon_render_wgpu::validate_emission_profile(
+    assert!(noon_render_wgpu::validate_color_profile(
         session.frame(),
         &noon_runtime::FrameChanges::all(),
         noon_core::ViewColorProfile::Compatibility,
@@ -126,7 +126,7 @@ fn removed_emissive_rows_do_not_block_a_compatibility_view() {
     )
     .is_err());
     scene.live(&mut session).remove(&source).unwrap();
-    assert!(noon_render_wgpu::validate_emission_profile(
+    assert!(noon_render_wgpu::validate_color_profile(
         session.frame(),
         &noon_runtime::FrameChanges::all(),
         noon_core::ViewColorProfile::Compatibility,
@@ -433,5 +433,38 @@ fn completed_material_tracks_hold_their_endpoint_between_future_animations() {
             (bloom.intensity() - intensity).abs() < 1e-12,
             "camera intensity at {time}"
         );
+    }
+}
+
+#[test]
+fn neutral_hdr_styles_reject_nonunit_paint_and_opacity() {
+    use noon_core::{Color, ViewColorProfile};
+    let mut scene = Scene::new();
+    let source = scene.circle(0.5).unwrap();
+    scene.add(&source).unwrap();
+    let session = scene.execution_session().unwrap();
+    let original = session.frame();
+    for value in [f32::NAN, f32::INFINITY, -0.01, 1.0000001] {
+        for field in 0..5 {
+            let mut frame = original.clone();
+            let style = &mut frame.objects[0].style;
+            match field {
+                0 => style.fill = Some(Color::rgba(value, 0.5, 0.5, 1.0)),
+                1 => style.stroke = Some(Color::rgba(0.5, value, 0.5, 1.0)),
+                2 => style.background_stroke = Some(Color::rgba(0.5, 0.5, value, 1.0)),
+                3 => style.fill = Some(Color::rgba(0.5, 0.5, 0.5, value)),
+                _ => style.opacity = value,
+            }
+            assert!(
+                noon_render_wgpu::validate_color_profile(
+                    &frame,
+                    &noon_runtime::FrameChanges::all(),
+                    ViewColorProfile::LinearHdr,
+                    true,
+                )
+                .is_err(),
+                "neutral HDR input {value}, field {field}"
+            );
+        }
     }
 }

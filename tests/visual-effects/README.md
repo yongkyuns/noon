@@ -2004,6 +2004,14 @@ output and supported capture/view capabilities. Compatibility/spatial emission
 rejects before retained view changes. Copy, target and effective style capture
 retain the material value; GPU state remains a disposable projection.
 
+All present authored HDR styles require finite unit paint/opacity, including at
+zero emission. Geometry, retained/family preparation and view targets share this
+admission check before changing caches; local publications inspect only dirty
+rows. Low-level `FramePreparer` raw inputs retain their explicitly already-linear
+packing contract, reject authored emission through `Result`, and preserve prior
+geometry on rejection. Active family scratch preparation keeps the publication's
+color profile, including first use and cached seek.
+
 Native shape/image proofs use the existing HDR RGB bound
 `.006 + .004 * abs(reference)` and two-byte display bound. Glyph inputs use
 `.002 + .001 * abs(reference)` for amplified RGB; ordinary float inputs and all

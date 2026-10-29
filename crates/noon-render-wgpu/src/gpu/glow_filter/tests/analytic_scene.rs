@@ -48,7 +48,7 @@ pub(super) fn render_plain(
         .unwrap(),
     );
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(frame);
+    let prepared = preparer.prepare(frame).unwrap();
     renderer.upload(device, queue, &prepared);
     let texture = target(device, size);
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -250,7 +250,7 @@ fn retained_painter_glow_pixels() {
             Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
         );
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         renderer.upload(&device, &queue, &prepared);
         let texture = target(&device, VIEW);
         let view = texture.create_view(&Default::default());
@@ -433,7 +433,9 @@ fn semantic_static_glow_publication_pixels() {
                     .definition,
                 (effect).into()
             );
-            let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+            let prepared = preparer
+                .prepare_incremental(publication.frame(), publication.changes())
+                .unwrap();
             renderer.upload(&device, &queue, &prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer
@@ -482,7 +484,9 @@ fn semantic_static_glow_publication_pixels() {
             .apply_execution_patch(&noon_compile::ExecutionPatch::RemoveObject(owner))
             .unwrap();
         let publication = runtime.take_renderer_publication();
-        let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+        let prepared = preparer
+            .prepare_incremental(publication.frame(), publication.changes())
+            .unwrap();
         renderer.upload(&device, &queue, &prepared);
         let mut encoder = device.create_command_encoder(&Default::default());
         renderer
