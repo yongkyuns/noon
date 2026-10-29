@@ -3,8 +3,7 @@
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use noon_core::{
-    GeometryRef, GeometryResource, ObjectId, PublicationContext, Rect, ShaderCoordinates,
-    VectorPath, ViewColorProfile,
+    GeometryRef, GeometryResource, ObjectId, PublicationContext, Rect, VectorPath, ViewColorProfile,
 };
 use noon_runtime::RendererPublication;
 
@@ -315,16 +314,10 @@ impl GpuRenderer {
         // Only local programs need intrinsic bounds. Cache immutable path bounds
         // by Arc identity so parameter/pose edits never revisit path commands.
         // External resources resolve their current version to that same identity.
-        let needs_local = row.effects.as_deref().is_some_and(|stack| {
-            stack
-                .definitions()
-                .iter()
-                .filter_map(|d| d.as_shader())
-                .any(|s| {
-                    s.program().schema().dependencies.coordinates
-                        == ShaderCoordinates::LocalNormalized
-                })
-        });
+        let needs_local = row
+            .effects
+            .as_deref()
+            .is_some_and(noon_compile::CompiledEffectStack::uses_local_shader_coordinates);
         let geometry = frame.render_geometry(index);
         let path = match geometry {
             Some(GeometryRef::VectorPath(path)) => Some(path),

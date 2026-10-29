@@ -302,3 +302,36 @@ fn shader_resource_and_value_failures_preserve_frame_resources_and_retry_sequenc
         assert_eq!(mirror.resources().shader_program_count(), 2);
     }
 }
+
+#[test]
+fn composed_local_shader_worker_rejection_preserves_resources_frame_and_sequence() {
+    let original = program(SOURCE.into());
+    let mut schema = original.schema().clone();
+    schema.dependencies.coordinates = ShaderCoordinates::Scene;
+    let material = WgslEffectProgram::prepare(schema, original.source()).unwrap();
+    let mut scene = Scene::new();
+    let leaf = scene.circle(0.4).unwrap();
+    let family = scene.family(&[(&leaf).into()]).unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    scene
+        .add_effect(&family, ShaderEffect::new(material), "material")
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(17);
+    let valid = encode(&mut encoder, &mut session, true);
+    // The real receiver must check a valid program's unsupported source role,
+    // not merely trust the producer's checked attachment.
+    let mut wire = serde_json::to_value(&valid).unwrap();
+    wire["resource_additions"]["shader_programs"][0]["schema"]["dependencies"]["coordinates"] =
+        "LocalNormalized".into();
+    let mut mirror = mirror();
+    let result = mirror.apply_json(&serde_json::to_string(&wire).unwrap());
+    assert!(
+        format!("{result:?}").contains("UnsupportedLocalShaderCoordinates"),
+        "{result:?}"
+    );
+    assert!(mirror.frame().is_none());
+    assert_eq!(mirror.resources().shader_program_count(), 0);
+    apply(&mut mirror, &valid); // The rejected sequence remains retryable.
+    assert_eq!(mirror.resources().shader_program_count(), 1);
+}

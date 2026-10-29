@@ -20,7 +20,7 @@ mod validation;
 #[doc(hidden)]
 pub trait ComposedSourceGraphView {
     fn source(&self, owner: ObjectId) -> Option<&ComposedSource>;
-    fn owner_valid(&self, owner: ObjectId) -> bool;
+    fn owner_error(&self, owner: ObjectId) -> Option<CompiledComposedSourceErrorKind>;
     fn input_valid(&self, input: ObjectId) -> Option<bool>;
     fn rank(&self, input: ObjectId) -> Option<usize>;
     fn input_role(&self, owner: ObjectId) -> Option<EffectInputRole>;
@@ -43,6 +43,7 @@ pub fn validate_composed_sources(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledComposedSourceErrorKind {
     InvalidOwner,
+    UnsupportedLocalShaderCoordinates,
     UnknownInput(ObjectId),
     NonDrawableInput(ObjectId),
     NonContiguousInput,

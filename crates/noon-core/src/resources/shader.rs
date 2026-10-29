@@ -20,6 +20,8 @@ pub enum ShaderProfile {
 pub enum ShaderCoordinates {
     /// Original object-local bounds mapped to [0, 1], +Y up. This is not
     /// normalized padded capture space or a screen-aligned bounding box.
+    /// Composed groups have no intrinsic local bounds in this profile; use
+    /// Scene or OutputPixels coordinates for those sources.
     LocalNormalized,
     Scene,
     /// Final backing pixels, origin at the top left, +Y down.

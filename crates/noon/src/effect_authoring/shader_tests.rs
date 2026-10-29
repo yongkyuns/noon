@@ -804,3 +804,110 @@ fn raw_shader_source_morph_admission_is_atomic_in_both_orders() {
     assert!(runtime.apply_execution_patch(&enroll).is_err());
     assert_eq!(runtime.frame(), &before);
 }
+
+#[test]
+fn composed_local_shader_rejects_before_publication_and_scene_coordinates_remain_valid() {
+    for coordinates in [
+        ShaderCoordinates::LocalNormalized,
+        ShaderCoordinates::Scene,
+        ShaderCoordinates::OutputPixels,
+    ] {
+        let original = program();
+        let mut schema = original.schema().clone();
+        schema.dependencies.coordinates = coordinates;
+        let material =
+            ShaderEffect::new(WgslEffectProgram::prepare(schema, original.source()).unwrap());
+        let mut scene = Scene::new();
+        let leaf = scene.circle(0.4).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let frame = session.frame().clone();
+        let nodes = leaf.integration_store().borrow().len();
+        let result = scene
+            .live(&mut session)
+            .add_effect(&family, material, "material");
+        if coordinates == ShaderCoordinates::LocalNormalized {
+            assert!(
+                format!("{result:?}").contains("UnsupportedLocalShaderCoordinates"),
+                "{result:?}"
+            );
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(session.frame(), &frame);
+            assert_eq!(leaf.integration_store().borrow().len(), nodes);
+            assert!(family.get_effect("material").is_err());
+            assert!(session.take_frame_changes().is_empty());
+        } else {
+            result.unwrap();
+            assert!(family.get_effect("material").is_ok());
+            assert_ne!(session.publication_context(), before);
+        }
+    }
+}
+
+#[test]
+fn raw_composed_local_shader_rejects_initial_and_incremental_admission_atomically() {
+    use noon_core::{ComposedSource, ObjectContentRef};
+    let leaf = CompiledObject::new(
+        ObjectId::new(1),
+        GeometryRef::circle(0.4),
+        Transform2D::IDENTITY,
+        Style::default(),
+    );
+    let mut owner = CompiledObject::new(
+        ObjectId::new(2),
+        ObjectContentRef::Composed(Arc::new(ComposedSource::new([leaf.id], None).unwrap())),
+        Transform2D::IDENTITY,
+        Style {
+            fill: None,
+            stroke: None,
+            ..Style::default()
+        },
+    );
+    owner.draw_enabled = false;
+    let effects = Arc::new(
+        CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(30, 1),
+            definition: ShaderEffect::new(program()).into(),
+        }])
+        .unwrap(),
+    );
+    let mut invalid = owner.clone();
+    invalid.effects = Some(effects.clone());
+    assert!(format!(
+        "{:?}",
+        CompiledScene::compile_objects(vec![leaf.clone(), invalid], &[])
+    )
+    .contains("UnsupportedLocalShaderCoordinates"));
+    let mut runtime = noon_runtime::SceneInstance::new(
+        CompiledScene::compile_objects(vec![leaf, owner.clone()], &[]).unwrap(),
+    );
+    runtime.take_frame_changes();
+    let context = runtime.publication_context();
+    let frame = runtime.frame().clone();
+    // A valid prefix may not leak when the later attachment is rejected.
+    let transaction = noon_compile::ExecutionMutationTransaction::from_mutations(vec![
+        ExecutionPatch::SetTransform {
+            object: ObjectId::new(1),
+            transform: Transform2D {
+                rotation: 0.5,
+                ..Transform2D::IDENTITY
+            },
+        },
+        ExecutionPatch::SetEffectStack {
+            object: owner.id,
+            expected: Box::new([]),
+            effects: Some(effects),
+        },
+    ]);
+    let result = runtime.apply_execution_transaction(&transaction);
+    assert!(
+        format!("{result:?}").contains("UnsupportedLocalShaderCoordinates"),
+        "{result:?}"
+    );
+    assert_eq!(runtime.publication_context(), context);
+    assert_eq!(runtime.frame(), &frame);
+    assert!(runtime.take_frame_changes().is_empty());
+}

@@ -92,6 +92,16 @@ impl CompiledEffectStack {
             definitions: definitions.into_boxed_slice(),
         })
     }
+    /// Intrinsic object bounds are required by local-normalized shader inputs.
+    pub fn uses_local_shader_coordinates(&self) -> bool {
+        self.definitions
+            .iter()
+            .filter_map(|d| d.as_shader())
+            .any(|s| {
+                s.program().schema().dependencies.coordinates
+                    == noon_core::ShaderCoordinates::LocalNormalized
+            })
+    }
     /// Input role follows the checked immutable attachment topology.
     pub fn input_role(&self) -> noon_core::EffectInputRole {
         self.definitions[0].input_role()

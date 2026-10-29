@@ -94,6 +94,8 @@ class WgslEffectProgram(_Immutable):
     scene (+Y up), or pixels (top-left origin). Optional time is authored seconds.
     Module globals NoonGpuUniform, noon_uniform, noon_source, noon_unit,
     vs_fullscreen and fs_sample are reserved by this ABI.
+    Composed groups require scene or pixels coordinates; local coordinates
+    require intrinsic object bounds.
     Source point morphs are unsupported; use Rotate for rigid rotation rather
     than animate.rotate, which requests point correspondence.
     """
