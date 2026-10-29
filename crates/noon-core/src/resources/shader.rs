@@ -9,12 +9,12 @@ use crate::Color;
 /// that result with source alpha before applying final scope opacity once.
 /// At covered samples, input.color supplies straight encoded RGB and unit
 /// alpha. Returning it therefore preserves intrinsic source coverage exactly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShaderProfile {
     PaintedPointwiseV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShaderCoordinates {
     /// Original object-local bounds mapped to [0, 1], +Y up. This is not
     /// normalized padded capture space or a screen-aligned bounding box.
@@ -24,7 +24,8 @@ pub enum ShaderCoordinates {
     OutputPixels,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShaderDependencies {
     pub coordinates: ShaderCoordinates,
     /// Canonical authored seconds, supplied by Runtime, never wall time.
@@ -33,7 +34,7 @@ pub struct ShaderDependencies {
     pub seed: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShaderUnit {
     Unitless,
     Normalized,
@@ -74,7 +75,7 @@ impl PartialEq for ShaderValue {
 
 /// Floating values interpolate; booleans and unsigned integers are discrete.
 /// Author values stay f64. Admission additionally requires finite f32 lowering.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ShaderParameterType {
     Scalar {
         range: RangeInclusive<f64>,
@@ -139,14 +140,16 @@ fn finite(v: f64) -> bool {
     v.is_finite() && (v as f32).is_finite()
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShaderParameterDefinition {
     pub name: Arc<str>,
     pub kind: ShaderParameterType,
     pub default: ShaderValue,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShaderSchema {
     pub profile: ShaderProfile,
     pub dependencies: ShaderDependencies,
@@ -380,6 +383,39 @@ impl ShaderEffect {
             values,
             seed: 0,
         }
+    }
+    /// Reconstruct checked typed samples at an external resource boundary.
+    /// Ordinary edits continue to use program-bound keys.
+    pub fn from_values(
+        program: WgslEffectProgram,
+        values: Arc<[ShaderValue]>,
+        seed: u32,
+    ) -> Result<Self, ShaderProgramError> {
+        if values.len() != program.schema().parameters.len() {
+            return Err(ShaderProgramError::Schema(
+                "parameter count does not match program",
+            ));
+        }
+        for (definition, value) in program.schema().parameters.iter().zip(values.iter()) {
+            if !definition.kind.accepts(*value) {
+                return Err(ShaderProgramError::InvalidParameter(
+                    definition.name.clone(),
+                ));
+            }
+        }
+        if seed != 0 && !program.schema().dependencies.seed {
+            return Err(ShaderProgramError::Schema(
+                "seed dependency is not declared",
+            ));
+        }
+        Ok(Self {
+            program,
+            values,
+            seed,
+        })
+    }
+    pub fn shared_values(&self) -> &Arc<[ShaderValue]> {
+        &self.values
     }
     pub fn program(&self) -> &WgslEffectProgram {
         &self.program

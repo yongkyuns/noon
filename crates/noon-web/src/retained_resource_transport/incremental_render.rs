@@ -160,6 +160,9 @@ impl InstalledRetainedResources {
 }
 
 impl PreparedRetainedResourceAdditionsWithRender {
+    pub(crate) fn shader_program_remap(&self) -> super::shader_programs::ShaderPrograms {
+        self.ordinary.shader_program_remap()
+    }
     pub(crate) fn composed_source_remap(
         &self,
     ) -> std::collections::HashMap<

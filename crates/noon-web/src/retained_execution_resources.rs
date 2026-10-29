@@ -52,6 +52,7 @@ impl InstalledRetainedExecutionMirror {
             },
         ));
         wire.extend_installed_composed_sources(&resources.composed_source_remap());
+        wire.extend_installed_shader_programs(&resources.shader_program_remap());
         Ok(Self {
             wire,
             resources,
@@ -267,6 +268,8 @@ impl InstalledRetainedExecutionMirror {
         self.wire
             .remove_installed_composed_sources(retirements.composed_sources.iter());
         self.wire
+            .remove_installed_shader_programs(retirements.shader_programs.iter());
+        self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
@@ -285,6 +288,29 @@ impl InstalledRetainedExecutionMirror {
         let snapshot = delta.retained.snapshot;
         let additions = self.resources.prepare_additions_with_render(bundle)?;
         let composed_sources = additions.composed_source_remap();
+        let shader_programs = additions.shader_program_remap();
+        let referenced_programs = delta
+            .retained
+            .objects
+            .iter()
+            .flat_map(|row| &row.effects)
+            .filter_map(|effect| match effect.definition {
+                crate::TransportEffectDefinition::Shader { program, .. } => Some(program),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        for key in shader_programs.keys() {
+            if key.session != delta.retained.session
+                || key.version != delta.retained.sequence
+                || !referenced_programs.contains(key)
+            {
+                return Err(RetainedResourceTransportError::InvalidShaderProgram {
+                    handle: *key,
+                    reason: "new program must bind an effect in its originating publication".into(),
+                }
+                .into());
+            }
+        }
         let referenced_sources = delta
             .retained
             .objects
@@ -341,6 +367,7 @@ impl InstalledRetainedExecutionMirror {
                     ),
                 )
             }));
+        self.wire.extend_installed_shader_programs(&shader_programs);
         self.wire
             .extend_installed_composed_sources(&composed_sources);
 
@@ -357,6 +384,8 @@ impl InstalledRetainedExecutionMirror {
                     Err(error) => {
                         self.wire
                             .remove_installed_composed_sources(composed_sources.keys());
+                        self.wire
+                            .remove_installed_shader_programs(shader_programs.keys());
                         self.wire
                             .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
@@ -376,6 +405,8 @@ impl InstalledRetainedExecutionMirror {
                 self.wire
                     .remove_installed_composed_sources(composed_sources.keys());
                 self.wire
+                    .remove_installed_shader_programs(shader_programs.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
@@ -391,6 +422,8 @@ impl InstalledRetainedExecutionMirror {
             Err(error) => {
                 self.wire
                     .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
+                    .remove_installed_shader_programs(shader_programs.keys());
                 self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
@@ -410,6 +443,8 @@ impl InstalledRetainedExecutionMirror {
                 self.wire
                     .remove_installed_composed_sources(composed_sources.keys());
                 self.wire
+                    .remove_installed_shader_programs(shader_programs.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
@@ -423,6 +458,8 @@ impl InstalledRetainedExecutionMirror {
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             self.wire
                 .remove_installed_composed_sources(composed_sources.keys());
+            self.wire
+                .remove_installed_shader_programs(shader_programs.keys());
             self.wire
                 .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
@@ -438,6 +475,8 @@ impl InstalledRetainedExecutionMirror {
         self.resources.retire(&retirements);
         self.wire
             .remove_installed_composed_sources(retirements.composed_sources.iter());
+        self.wire
+            .remove_installed_shader_programs(retirements.shader_programs.iter());
         self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
@@ -464,6 +503,32 @@ impl InstalledRetainedExecutionMirror {
             .iter()
             .copied()
             .collect::<std::collections::HashSet<_>>();
+        for program in released.shader_programs {
+            if !delta
+                .resource_retirements
+                .shader_programs
+                .contains(&program)
+            {
+                return Err(RetainedResourceTransportError::InvalidShaderProgram {
+                    handle: program,
+                    reason: "missing final program retirement".into(),
+                }
+                .into());
+            }
+        }
+        for program in &delta.resource_retirements.shader_programs {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Shader(*program))
+                > 0
+            {
+                return Err(RetainedResourceTransportError::InvalidShaderProgram {
+                    handle: *program,
+                    reason: "cannot retire a referenced program".into(),
+                }
+                .into());
+            }
+        }
         for source in released.composed_sources {
             if !retired.contains(&source) {
                 return Err(
@@ -2127,3 +2192,6 @@ mod morph_tests;
 mod composed_tests;
 #[cfg(test)]
 mod image_tests;
+
+#[cfg(all(test, feature = "wgsl-effects"))]
+mod shader_tests;

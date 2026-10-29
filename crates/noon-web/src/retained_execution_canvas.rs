@@ -125,6 +125,7 @@ mod render_substage_tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::gpu_effect_programs::EffectProgramTask;
     use noon_core::Vec2;
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
@@ -233,6 +234,7 @@ mod wasm {
         glow_transport_seen: bool,
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
+        effect_program_task: EffectProgramTask,
         text_gpu: RetainedTextGpuState,
         selection_overlay: Option<AnalyticOverlay>,
         pointer_view: Option<crate::PointerPresentationView>,
@@ -323,6 +325,7 @@ mod wasm {
             self.config = config;
             self.preparer = preparer;
             self.renderer = renderer;
+            self.effect_program_task.cancel();
             self.text_gpu = text_gpu;
             self.selection_overlay_gpu = OverlayGpuState::default();
             self.gpu_validation_scope = None;
@@ -401,6 +404,7 @@ mod wasm {
                 glow_transport_seen: false,
                 preparer,
                 renderer,
+                effect_program_task: EffectProgramTask::default(),
                 text_gpu,
                 selection_overlay: None,
                 pointer_view: None,
@@ -595,6 +599,7 @@ mod wasm {
                     // preparation path for subsequent removal/cleanup frames.
                     self.glow_transport_seen |= received_glow;
                     if replaces_session {
+                        self.effect_program_task.cancel();
                         self.renderer.reset_spatial_publication_context();
                         // A previous glow session can already have returned to
                         // the no-effect fast path. Its retained preparer's last
@@ -755,6 +760,18 @@ mod wasm {
             self.gpu_completion_samples.take_json().map_err(js_error)
         }
 
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = debugEffectProgramsJson)]
+        pub fn debug_effect_programs_json(&self) -> String {
+            let [rows, programs] = self.renderer.resident_effect_program_counts();
+            serde_json::json!({
+                "rows": rows, "programs": programs,
+                "pipelineCompiles": self.effect_program_task.pipeline_compiles,
+                "pending": self.effect_program_task.is_pending(),
+            })
+            .to_string()
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()
@@ -763,6 +780,20 @@ mod wasm {
             }
             if !self.drawable || !self.pending_frame {
                 return Ok(false);
+            }
+
+            if self.glow_transport_seen || self.effect_program_task.is_pending() {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                if !self
+                    .effect_program_task
+                    .poll(&mut self.renderer, &self.device, &publication)
+                    .map_err(js_error)?
+                {
+                    return Ok(false);
+                }
             }
 
             let profiling = self.render_substage_profiling;

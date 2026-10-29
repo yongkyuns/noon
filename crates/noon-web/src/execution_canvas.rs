@@ -31,9 +31,8 @@ mod wasm {
     };
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
-        AnalyticOverlay, Camera2D, EffectProgramPrepareError, GpuRenderer,
-        InteractiveRetainedFrame, OverlayGpuState, PreparedEffectPrograms, RetainedFramePreparer,
-        RetainedTextGpuState,
+        AnalyticOverlay, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
+        RetainedFramePreparer, RetainedTextGpuState,
     };
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
@@ -47,10 +46,7 @@ mod wasm {
         BrowserHostWake,
     };
 
-    use std::{cell::RefCell, rc::Rc};
-
-    type PendingEffectPrograms =
-        Rc<RefCell<Option<Result<PreparedEffectPrograms, EffectProgramPrepareError>>>>;
+    use crate::gpu_effect_programs::EffectProgramTask;
 
     use super::MANIM_DEFAULT_CLEAR_COLOR;
 
@@ -1006,8 +1002,7 @@ mod wasm {
         sampled_scene_target: Option<f64>,
         direct_preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
-        pending_effect_programs: Option<PendingEffectPrograms>,
-        effect_program_pipeline_compiles: u64,
+        effect_program_task: EffectProgramTask,
         direct_text_gpu: RetainedTextGpuState,
         timestamp_query_supported: bool,
         timestamp_profiler: Option<GpuTimestampProfiler>,
@@ -1035,7 +1030,7 @@ mod wasm {
         #[wasm_bindgen(js_name = retireExecutionSource)]
         pub fn retire_execution_source(&mut self) -> Result<(), JsValue> {
             self.source.retire_execution_source()?;
-            self.pending_effect_programs = None;
+            self.effect_program_task.cancel();
             Ok(())
         }
 
@@ -1081,9 +1076,7 @@ mod wasm {
                     .prepare_effect_programs(&device, &publication)
                     .await
                     .map_err(js_error)?;
-                self.effect_program_pipeline_compiles = self
-                    .effect_program_pipeline_compiles
-                    .saturating_add(work.pipeline_compiles as u64);
+                self.effect_program_task.record(work);
             }
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
@@ -1095,7 +1088,7 @@ mod wasm {
             self.config = config;
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
-            self.pending_effect_programs = None;
+            self.effect_program_task.cancel();
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
             self.selection_overlay = OverlayGpuState::default();
@@ -1162,9 +1155,7 @@ mod wasm {
                     .prepare_effect_programs(&device, &publication)
                     .await
                     .map_err(js_error)?;
-                self.effect_program_pipeline_compiles = self
-                    .effect_program_pipeline_compiles
-                    .saturating_add(work.pipeline_compiles as u64);
+                self.effect_program_task.record(work);
             }
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
@@ -1181,7 +1172,7 @@ mod wasm {
             self.config = config;
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
-            self.pending_effect_programs = None;
+            self.effect_program_task.cancel();
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
             self.selection_overlay = OverlayGpuState::default();
@@ -1206,8 +1197,8 @@ mod wasm {
             let [rows, programs] = self.renderer.resident_effect_program_counts();
             serde_json::json!({
                 "rows": rows, "programs": programs,
-                "pipelineCompiles": self.effect_program_pipeline_compiles,
-                "pending": self.pending_effect_programs.is_some(),
+                "pipelineCompiles": self.effect_program_task.pipeline_compiles,
+                "pending": self.effect_program_task.is_pending(),
             })
             .to_string()
         }
@@ -2700,8 +2691,7 @@ mod wasm {
                 sampled_scene_target: None,
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,
-                pending_effect_programs: None,
-                effect_program_pipeline_compiles: 0,
+                effect_program_task: EffectProgramTask::default(),
                 direct_text_gpu,
                 timestamp_query_supported,
                 timestamp_profiler: None,
@@ -2729,7 +2719,7 @@ mod wasm {
                     .prepare_effect_programs(&result.device, &publication)
                     .await
                     .map_err(js_error)?;
-                result.effect_program_pipeline_compiles = work.pipeline_compiles as u64;
+                result.effect_program_task.record(work);
             }
             Ok(result)
         }
@@ -2739,53 +2729,17 @@ mod wasm {
         // If that publication advances, reuse successful immutable modules while
         // replanning its current delta instead of installing stale row bindings.
         fn prepare_direct_effect_programs(&mut self) -> Result<bool, JsValue> {
-            let completed = if let Some(pending) = &self.pending_effect_programs {
-                let Some(completed) = pending.borrow_mut().take() else {
-                    return Ok(false);
-                };
-                Some(completed)
-            } else {
-                None
-            };
-            self.pending_effect_programs = None;
-            let completed = completed.transpose().map_err(js_error)?;
-            if let Some(completed) = &completed {
-                self.effect_program_pipeline_compiles = self
-                    .effect_program_pipeline_compiles
-                    .saturating_add(completed.stats().pipeline_compiles as u64);
-                self.renderer
-                    .cache_effect_programs(&self.device, completed)
-                    .map_err(js_error)?;
-            }
-            if self
-                .renderer
-                .effect_programs_current(&self.device, self.source.publication_context())
+            if !self.effect_program_task.is_pending()
+                && self
+                    .renderer
+                    .effect_programs_current(&self.device, self.source.publication_context())
             {
                 return Ok(true);
             }
             let publication = self.source.resource_publication();
-            let preparation = self
-                .renderer
-                .effect_program_preparation(&self.device, &publication)
-                .map_err(js_error)?;
-            match preparation.try_ready() {
-                Ok(prepared) => {
-                    self.renderer
-                        .commit_effect_programs(&self.device, &publication, prepared)
-                        .map_err(js_error)?;
-                    Ok(true)
-                }
-                Err(preparation) => {
-                    let pending = Rc::new(RefCell::new(None));
-                    let result = Rc::clone(&pending);
-                    wasm_bindgen_futures::spawn_local(async move {
-                        let prepared = preparation.prepare().await;
-                        *result.borrow_mut() = Some(prepared);
-                    });
-                    self.pending_effect_programs = Some(pending);
-                    Ok(false)
-                }
-            }
+            self.effect_program_task
+                .poll(&mut self.renderer, &self.device, &publication)
+                .map_err(js_error)
         }
 
         /// Keep one exact endpoint in the production retained GPU renderer

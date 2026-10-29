@@ -143,6 +143,15 @@ impl RetainedExecutionFrameMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), RetainedExecutionTransportError> {
         for row in &delta.objects {
+            for effect in &row.effects {
+                if let TransportEffectDefinition::Shader { program, .. } = effect.definition {
+                    if program.session != delta.session || program.version > delta.sequence {
+                        return Err(RetainedExecutionTransportError::InvalidEffectState(
+                            row.slot,
+                        ));
+                    }
+                }
+            }
             if let TransportObjectContent::Composed { source } = row.content {
                 if source.session != delta.session
                     || source.owner != row.object

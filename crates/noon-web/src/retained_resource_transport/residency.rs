@@ -11,6 +11,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResourceRoot {
     Composed(crate::TransportComposedSourceHandle),
+    Shader(crate::TransportShaderProgramHandle),
     Image(TransportImageResourceHandle),
     Text(TransportTextResourceHandle),
     Geometry(TransportGeometryResourceHandle),
@@ -30,26 +31,78 @@ impl ResourceRoot {
     }
 }
 
-fn object_roots(object: &RetainedTransportObjectState) -> [Option<ResourceRoot>; 2] {
-    [
-        ResourceRoot::from_object(object),
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ObjectRoots {
+    content: [Option<ResourceRoot>; 2],
+    // Added only for shader rows; changing parameter values reuses this Arc.
+    shaders: Option<std::sync::Arc<Vec<crate::TransportShaderProgramHandle>>>,
+}
+impl From<[Option<ResourceRoot>; 2]> for ObjectRoots {
+    fn from(content: [Option<ResourceRoot>; 2]) -> Self {
+        Self {
+            content,
+            shaders: None,
+        }
+    }
+}
+impl ObjectRoots {
+    fn iter(&self) -> impl Iterator<Item = ResourceRoot> + '_ {
+        self.content.iter().copied().flatten().chain(
+            self.shaders
+                .iter()
+                .flat_map(|v| v.iter().copied())
+                .map(ResourceRoot::Shader),
+        )
+    }
+    fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+}
+fn object_roots(
+    object: &RetainedTransportObjectState,
+    previous: Option<&ObjectRoots>,
+) -> ObjectRoots {
+    let programs = || {
         object
-            .fill_paint
-            .as_deref()
-            .and_then(noon_core::SemanticPaint::as_image)
-            .map(|image| ResourceRoot::Image(image.resource().into())),
-    ]
+            .effects
+            .iter()
+            .filter_map(|effect| match effect.definition {
+                crate::TransportEffectDefinition::Shader { program, .. } => Some(program),
+                _ => None,
+            })
+    };
+    let shaders = if programs().next().is_none() {
+        None
+    } else if let Some(old) = previous
+        .and_then(|old| old.shaders.as_ref())
+        .filter(|old| old.iter().copied().eq(programs()))
+    {
+        Some(std::sync::Arc::clone(old))
+    } else {
+        Some(std::sync::Arc::new(programs().collect()))
+    };
+    ObjectRoots {
+        content: [
+            ResourceRoot::from_object(object),
+            object
+                .fill_paint
+                .as_deref()
+                .and_then(noon_core::SemanticPaint::as_image)
+                .map(|image| ResourceRoot::Image(image.resource().into())),
+        ],
+        shaders,
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ResourceResidency {
-    slots: HashMap<TransportSlotId, [Option<ResourceRoot>; 2]>,
+    slots: HashMap<TransportSlotId, ObjectRoots>,
     references: HashMap<ResourceRoot, usize>,
 }
 
 pub(crate) struct StagedResourceResidency {
     snapshot: Option<ResourceResidency>,
-    updates: HashMap<TransportSlotId, [Option<ResourceRoot>; 2]>,
+    updates: HashMap<TransportSlotId, ObjectRoots>,
     deltas: HashMap<ResourceRoot, isize>,
 }
 
@@ -58,11 +111,11 @@ impl ResourceResidency {
         if delta.snapshot {
             let mut snapshot = Self::default();
             for object in &delta.objects {
-                let roots = object_roots(object);
-                if roots.iter().any(Option::is_some) {
-                    snapshot.slots.insert(object.slot, roots);
+                let roots = object_roots(object, None);
+                if !roots.is_empty() {
+                    snapshot.slots.insert(object.slot, roots.clone());
                 }
-                for root in roots.into_iter().flatten() {
+                for root in roots.iter() {
                     *snapshot.references.entry(root).or_default() += 1;
                 }
             }
@@ -74,11 +127,11 @@ impl ResourceResidency {
         }
         let mut updates = HashMap::new();
         for slot in &delta.removed_slots {
-            updates.insert(*slot, [None; 2]);
+            updates.insert(*slot, ObjectRoots::default());
         }
         for object in &delta.objects {
-            let mut next = object_roots(object);
-            next[0] = next[0].or_else(|| {
+            let mut next = object_roots(object, self.slots.get(&object.slot));
+            next.content[0] = next.content[0].or_else(|| {
                 // The retained wire can omit unchanged inline geometry. Preserve
                 // its installed root until a new geometry or transform clears it.
                 (matches!(
@@ -86,22 +139,26 @@ impl ResourceResidency {
                     TransportObjectContent::Geometry { resource: None, .. }
                 ) && object.render_transform.is_some()
                     && object.render_geometry.is_none())
-                .then(|| self.slots.get(&object.slot).and_then(|roots| roots[0]))
+                .then(|| {
+                    self.slots
+                        .get(&object.slot)
+                        .and_then(|roots| roots.content[0])
+                })
                 .flatten()
                 .filter(|root| matches!(root, ResourceRoot::RenderGeometry(_)))
             });
             updates.insert(object.slot, next);
         }
         let mut deltas = HashMap::new();
-        for (&slot, &next) in &updates {
-            let old = self.slots.get(&slot).copied().unwrap_or([None; 2]);
-            if old == next {
+        for (&slot, next) in &updates {
+            let old = self.slots.get(&slot).cloned().unwrap_or_default();
+            if &old == next {
                 continue;
             }
-            for root in old.into_iter().flatten() {
+            for root in old.iter() {
                 *deltas.entry(root).or_default() -= 1;
             }
-            for root in next.into_iter().flatten() {
+            for root in next.iter() {
                 *deltas.entry(root).or_default() += 1;
             }
         }
@@ -139,6 +196,7 @@ impl ResourceResidency {
             }
             match root {
                 ResourceRoot::Composed(source) => retired.composed_sources.push(source),
+                ResourceRoot::Shader(program) => retired.shader_programs.push(program),
                 ResourceRoot::Image(image) => retired.images.push(image),
                 ResourceRoot::Text(text) => retired.texts.push(text),
                 ResourceRoot::Geometry(geometry) => retired.geometries.push(geometry),
@@ -163,7 +221,7 @@ impl ResourceResidency {
             return;
         }
         for (slot, next) in staged.updates {
-            if next.iter().any(Option::is_some) {
+            if !next.is_empty() {
                 self.slots.insert(slot, next);
             } else {
                 self.slots.remove(&slot);
@@ -204,7 +262,7 @@ mod tests {
                 id: u64::from(slot),
                 version: 1,
             });
-            residency.slots.insert(id, [Some(root), None]);
+            residency.slots.insert(id, [Some(root), None].into());
             residency.references.insert(root, 1);
         }
         let slot = TransportSlotId {
