@@ -637,18 +637,16 @@ fn bloom_program() -> noon::LiveProgram<BloomAnimation> {
 #[ignore = "requires an X11 display and a working native float adapter"]
 fn native_surface_smoke_presents_authored_camera_bloom() {
     use winit::platform::x11::EventLoopBuilderExtX11;
-    let source = super::super::LiveProgramExecutionSource::new(
-        bloom_program(),
-        noon::RustHostCallbackTable::new(),
-    )
-    .unwrap();
+    let source =
+        crate::LiveProgramExecutionSource::new(bloom_program(), noon::RustHostCallbackTable::new())
+            .unwrap();
     let mut builder = winit::event_loop::EventLoop::builder();
     builder.with_any_thread(true);
     let event_loop = builder.build().unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-    let mut app = super::super::NativeApp::from_source(
+    let mut app = crate::NativeApp::from_source(
         Box::new(source),
-        super::super::NativeViewportConfig {
+        crate::NativeViewportConfig {
             width: 320,
             height: 180,
             title: "Noon authored HDR Bloom".to_owned(),
