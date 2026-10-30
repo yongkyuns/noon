@@ -45,6 +45,13 @@ jobs:
   rust:
     name: Rust coverage
     runs-on: ubuntu-latest
+    # LLVM source-based coverage maps are independent of DWARF debug symbols.
+    # Reuse CI's non-incremental, stripped test profile to fit hosted runner disk.
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
