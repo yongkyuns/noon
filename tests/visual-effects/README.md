@@ -1287,6 +1287,16 @@ truncation/clear retires them. Every later-pass profile/capability/budget reject
 precedes prefix mutation or queue writes. Clean calls upload/encode/allocate
 nothing. No physical-device performance guarantee follows from these counters.
 
+The ordinary renderer can compose a single encoded-LDR Glow in its existing
+painter-placement draw, preserving RGBA8 quantization before final opacity. It
+keeps the two Gaussian-mask images (8 bytes/pixel); intensity edits upload 32
+bytes and encode no separate filter pass. Parents, backdrop prefixes, isolation
+and private Visibility use materialized outputs. A newly active consumer prepares
+that output before reading it; its target stays warm for later reuse. Aggregate
+capture admission retains the conservative 12-byte Glow reservation, while
+`GlowScope::scratch_bytes` reports allocated filter images. Neither counter
+measures driver or in-flight memory.
+
 `gpu::effect_stack::tests` includes literal CPU witnesses, sparse invalidation,
 aggregate budget, neutral, retirement and late-failure tests. Its ignored native
 pixel test uses a separate direct 2-D convolution/compositor and checks every

@@ -189,7 +189,10 @@ fn animated_glow_publication_pixels() {
                 assert_eq!(stats.filter.kernel_builds, 0);
                 assert_eq!(stats.filter.bytes_uploaded, 32);
                 assert_eq!(stats.filter.blur_passes, 0);
-                assert_eq!(stats.filter.composite_passes, 1);
+                assert_eq!(
+                    stats.filter.composite_passes, 0,
+                    "composition belongs to placement"
+                );
             }
             eprintln!("animated rectangle={rectangle} offscreen={offscreen} silhouette={transparent} intensity_only={intensity_only} t={time} max_byte_error={error} halo_signal={signal} source_passes={} blur_passes={}", stats.source_passes, stats.filter.blur_passes);
             if time == 0.0 {
@@ -386,7 +389,10 @@ fn live_glow_value_publication_pixels() {
                 assert_eq!(stats.filter.pipeline_compiles, 0);
                 assert_eq!(stats.filter.bytes_uploaded, 32);
                 assert_eq!(stats.filter.blur_passes, 0);
-                assert_eq!(stats.filter.composite_passes, 1);
+                assert_eq!(
+                    stats.filter.composite_passes, 0,
+                    "composition belongs to placement"
+                );
             }
             if step == 0 {
                 first = Some(pixels.clone());

@@ -591,7 +591,7 @@ impl GpuRenderer {
                 let original = self
                     .retained_effects
                     .original_by_parent(frame, index, view)?;
-                if (!self.retained_input_is_ready(index, object)
+                if (!self.retained_input_is_materialized(index, object)
                     || (original && !self.retained_original_is_ready(index, object)))
                     && (original || RetainedEffectPublication::active_source(frame, index, view)?)
                 {

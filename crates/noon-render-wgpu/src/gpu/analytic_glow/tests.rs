@@ -123,14 +123,14 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
             first.filter.blur_passes,
             first.filter.composite_passes
         ),
-        (1, 2, 1)
+        (1, 2, 0)
     );
     assert_eq!(
         (
             first.source_texture_allocations,
             first.filter.texture_allocations
         ),
-        (1, 3)
+        (1, 2)
     );
     let draws = renderer.encode(
         &mut encoder,
@@ -193,7 +193,7 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
             edit.filter.blur_passes,
             edit.filter.composite_passes
         ),
-        (32, 0, 1)
+        (32, 0, 0)
     );
     assert_eq!(
         renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
@@ -288,7 +288,8 @@ fn truncating_a_warm_stack_rebinds_the_final_output_and_retires_neutral_suffix()
         0
     );
     assert_ne!(scope.placement_output.as_ref(), Some(&last_output));
-    assert_eq!(scope.placement_output.as_ref(), scope.filter.output());
+    assert!(scope.filter.placement_glow().is_some());
+    assert_eq!(scope.placement_output.as_ref(), Some(&scope.source.texture));
     assert!(truncated.retained_texture_bytes < first.retained_texture_bytes);
     let mut encoder = device.create_command_encoder(&Default::default());
     renderer
@@ -483,8 +484,8 @@ fn budget_rejection_is_atomic_and_accounts_for_other_scopes() {
     queue.submit([encoder.finish()]);
     let bytes = renderer.effect_capture_texture_bytes();
     let before = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
-        .filter
-        .output()
+        .placement_output
+        .as_ref()
         .unwrap()
         .clone();
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -506,8 +507,8 @@ fn budget_rejection_is_atomic_and_accounts_for_other_scopes() {
     assert_eq!(renderer.effect_captures.as_ref().unwrap().scopes.len(), 1);
     assert_eq!(
         renderer.effect_captures.as_ref().unwrap().scopes[&(0, 1)]
-            .filter
-            .output(),
+            .placement_output
+            .as_ref(),
         Some(&before)
     );
     queue.submit([encoder.finish()]);
@@ -556,7 +557,7 @@ fn transparent_paint_does_not_suppress_silhouette_and_abort_is_recoverable() {
             recovery.filter.blur_passes,
             recovery.filter.composite_passes
         ),
-        (2, 2, 1)
+        (2, 2, 0)
     );
     assert_eq!(
         recovery.source_texture_allocations + recovery.filter.texture_allocations,
@@ -785,8 +786,8 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
     queue.submit([encoder.finish()]);
     let bytes = renderer.effect_capture_texture_bytes();
     let output = renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)]
-        .filter
-        .output()
+        .placement_output
+        .as_ref()
         .unwrap()
         .clone();
     for change in 0..4 {
@@ -814,8 +815,8 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
         assert_eq!(renderer.effect_capture_texture_bytes(), bytes);
         assert_eq!(
             renderer.effect_captures.as_ref().unwrap().scopes[&(0, 0)]
-                .filter
-                .output(),
+                .placement_output
+                .as_ref(),
             Some(&output)
         );
     }

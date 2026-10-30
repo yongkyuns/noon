@@ -332,7 +332,7 @@ fn automatic_retained_host_glow_pixels() {
                     edit.composite_passes,
                     edit.bytes_uploaded
                 ),
-                (0, 0, 1, 32)
+                (0, 0, 0, 32)
             );
             edit_intensity(&mut runtime, 0.0);
             let (neutral, _) = host.render(&device, &queue, &mut runtime, offscreen);
@@ -461,7 +461,7 @@ fn g4_locality_and_retirement(device: &wgpu::Device, queue: &wgpu::Queue) {
                     work.texture_allocations,
                     work.pipeline_compiles
                 ),
-                (active, active, 0, 0, active, 32 * active, 0, 0)
+                (active, active, 0, 0, 0, 32 * active, 0, 0)
             );
             assert_eq!(work.retained_texture_bytes, warm.retained_texture_bytes);
             eprintln!("G4 view={view:?} active={active}/600 resident={} intensity_bytes={} geometry_bytes=0 allocations=0 compiles=0", work.retained_texture_bytes, work.bytes_uploaded);

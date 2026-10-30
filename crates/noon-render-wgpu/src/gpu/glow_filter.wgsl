@@ -71,9 +71,7 @@ fn fs_vertical(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32>
     return pack_mask(value);
 }
 
-@fragment
-fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let point = vec2<i32>(position.xy);
+fn compose_glow(point: vec2<i32>) -> vec4<f32> {
     let mask = unpack_mask(textureLoad(blurred_mask, point, 0));
     var source = textureLoad(input_image, point, 0);
     // Source preparation owns premultiplication. Zero-alpha RGB cannot leak.
@@ -83,4 +81,33 @@ fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32
     let halo_alpha = clamp(glow.control.x * glow.tint.a * mask, 0.0, 1.0);
     let halo = vec4<f32>(glow.tint.rgb * halo_alpha, halo_alpha);
     return glow.control.y * (source + (1.0 - source.a) * halo);
+}
+
+@fragment
+fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return compose_glow(vec2<i32>(position.xy));
+}
+
+struct Placement {
+    origin: vec2<i32>, size: vec2<u32>, viewport: vec2<u32>, opacity: f32, padding: u32,
+}
+@group(1) @binding(0) var<uniform> placement: Placement;
+
+@vertex
+fn vs_placement(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let pixel = vec2<f32>(placement.origin) + corners[index] * vec2<f32>(placement.size);
+    let normalized = pixel / vec2<f32>(placement.viewport);
+    return vec4<f32>(2.0 * normalized.x - 1.0, 1.0 - 2.0 * normalized.y, 0.0, 1.0);
+}
+
+@fragment
+fn fs_placement(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
+    let color = compose_glow(vec2<i32>(pixel.xy) - placement.origin);
+    // Preserve the materialized RGBA8 stage's precision before placement opacity.
+    let encoded = round(clamp(color, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0) / 255.0;
+    return encoded * placement.opacity;
 }

@@ -535,7 +535,7 @@ impl GpuRenderer {
             });
             let leaf = [(object, opacity.max(f32::MIN_POSITIVE))];
             let members = members.as_deref().unwrap_or(&leaf);
-            let replacements = if let Some(composed) = &composed {
+            let replacements = if let Some(composed) = composed.as_ref().filter(|_| own_capture) {
                 self.prepare_composed_replacements(
                     prepared,
                     request.object_index,
@@ -1152,29 +1152,53 @@ impl GpuRenderer {
             // and operator; final scope opacity still belongs to placement.
             scope.original_masked = demand.original_by_parent
                 && visibility.is_some_and(|definition| !definition.is_neutral());
-            let upload = glows.filter.prepare_encode(
-                device,
-                queue,
-                encoder,
-                &mut scope.filter,
-                GlowCapture {
-                    source: &scope.source.texture,
-                    silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
-                    revision: scope.revision,
-                },
-                request.definitions,
-                EffectStackParameters {
-                    shader: shader_context.as_ref(),
-                    working_format: self.target_format,
-                    output_height: parameters.output_height,
-                    world_view_height: parameters.world_view_height,
-                    // Keep the captured/filter image independent of final
-                    // placement opacity, including when a parent consumes it.
-                    scope_opacity: 1.0,
-                    scratch_budget_bytes: request.texture_budget_bytes,
-                    source_bounds: Some(source_bounds),
-                },
-            )?;
+            let capture = GlowCapture {
+                source: &scope.source.texture,
+                silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
+                revision: scope.revision,
+            };
+            let filter_parameters = EffectStackParameters {
+                shader: shader_context.as_ref(),
+                working_format: self.target_format,
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                // Keep the captured/filter image independent of final
+                // placement opacity, including when a parent consumes it.
+                scope_opacity: 1.0,
+                scratch_budget_bytes: request.texture_budget_bytes,
+                source_bounds: Some(source_bounds),
+            };
+            // A parent/prefix needs a real image. Otherwise the final pointwise
+            // Glow composition can run in the existing painter-placement draw.
+            // Keep the planner's materialized reservation for later consumers.
+            let placement_only = !demand.required_by_parent
+                && !demand.original_by_parent
+                && !demand.isolate
+                && visibility.is_none()
+                && matches!(request.definitions, [EffectDefinition::Glow(_)])
+                && EffectStackFilter::supports_glow_placement(device, self.target_format);
+            let upload = if placement_only {
+                glows.filter.prepare_glow_placement(
+                    device,
+                    queue,
+                    encoder,
+                    &mut scope.filter,
+                    capture,
+                    request.definitions,
+                    filter_parameters,
+                    &programs.layout,
+                )?
+            } else {
+                glows.filter.prepare_encode(
+                    device,
+                    queue,
+                    encoder,
+                    &mut scope.filter,
+                    capture,
+                    request.definitions,
+                    filter_parameters,
+                )?
+            };
             // The authored stack checks every later pass, including the same
             // Visibility domain/profile, before this additional mask draw.
             let original_work = if scope.original_masked {
@@ -1223,6 +1247,7 @@ impl GpuRenderer {
                 .clone();
             if source_changed
                 || stats.filter.composite_passes > 0
+                || (scope.filter.placement_glow().is_some() && stats.filter.bytes_uploaded != 0)
                 || scope.placement.opacity != placement.opacity
                 || scope.placement_output.as_ref() != Some(&output)
             {
@@ -1366,15 +1391,21 @@ impl GpuRenderer {
             "source capture must follow resize"
         );
         let programs = glows.placement.as_ref().expect("prepared placement");
-        programs.draw(
-            pass,
-            scope
-                .placement_binding
-                .as_ref()
-                .expect("prepared source output"),
-            scope.placement_erase_binding.as_ref(),
-            single_sample,
-        );
+        let placement = scope
+            .placement_binding
+            .as_ref()
+            .expect("prepared source output");
+        if !glows
+            .filter
+            .draw_glow_placement(pass, &scope.filter, placement, single_sample)
+        {
+            programs.draw(
+                pass,
+                placement,
+                scope.placement_erase_binding.as_ref(),
+                single_sample,
+            );
+        }
 
         true
     }
@@ -1436,20 +1467,21 @@ impl GpuRenderer {
                     self.draw_plain_ordered_batch(pass, prepared, &segment, single_sample, binding);
             }
             let programs = glows.placement.as_ref().expect("prepared glow programs");
-            pass.set_pipeline(if single_sample {
-                &programs.single
-            } else {
-                &programs.multisampled
-            });
-            pass.set_bind_group(
-                0,
-                scope
-                    .placement_binding
-                    .as_ref()
-                    .expect("prepared glow image"),
-                &[],
-            );
-            pass.draw(0..6, 0..1);
+            let placement = scope
+                .placement_binding
+                .as_ref()
+                .expect("prepared glow image");
+            if !glows
+                .filter
+                .draw_glow_placement(pass, &scope.filter, placement, single_sample)
+            {
+                programs.draw(
+                    pass,
+                    placement,
+                    scope.placement_erase_binding.as_ref(),
+                    single_sample,
+                );
+            }
             stats.draw_calls += 1;
             stats.instances_drawn += 1;
             // The tile's layout differs from the ordinary geometry layout.
