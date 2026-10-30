@@ -6,6 +6,7 @@ For a code-reading view of the current implementation, use [`type-map.md`](type-
 
 Additional focused documentation:
 
+- [Paints, effects and shader materials](../README.md#paints-effects-and-shader-materials) — creator entry points, finite profiles and paired examples; [operator/extension contracts and qualification](../tests/visual-effects/README.md).
 - [`mobile-web-rendering.md`](mobile-web-rendering.md) — mobile/browser rendering constraints and decisions.
 
 Current implementation and qualification work is tracked in [3D capability #1879](https://github.com/yongkyuns/noon/issues/1879), [camera dispositions #254](https://github.com/yongkyuns/noon/issues/254), and [performance #1653](https://github.com/yongkyuns/noon/issues/1653). Completed [Phase A #953](https://github.com/yongkyuns/noon/issues/953), [Phase B #954](https://github.com/yongkyuns/noon/issues/954), and [Phase C #955](https://github.com/yongkyuns/noon/issues/955) retain their integration records.
