@@ -1731,18 +1731,20 @@ The finite operator is deliberately specified independently of its WGSL:
 
 A fresh disabled-Bloom scope prepares only combination and display resolution:
 one float image and one unorm image, **12 retained image bytes per pixel**.
-First enabling Bloom adds extraction and horizontal/vertical blur images and
-programs, bringing the image total to **36 bytes per pixel**. These remain warm
+First enabling Bloom adds one float image and the extraction/blur programs,
+bringing the image total to **20 bytes per pixel**. Extraction/vertical output
+share one float image; horizontal/combined output share the other. These remain warm
 until resize or clear, avoiding allocation churn during animated intensity edits.
 Source images, the 1056-byte uniform, program/binding objects and in-flight host
 frames are excluded. Adapter/device support and parameters/extent/budget are
 validated before changing coherent state; rejection preserves the last output.
 Each scope belongs to its creating filter/device until cleared.
 A clean scope uploads/allocates/encodes nothing. Intensity edits upload 16 bytes
-and encode only combination/resolution; radius edits reuse extraction; source
+and encode only combination/resolution. Radius edits re-extract because vertical
+output overwrites extraction; source
 or threshold changes invalidate their real dependency closure. Disabled Bloom
 defers extraction/blur work. Source replacement rebinds only its consumers;
-resize prepares two images when disabled or five when enabled, reusing programs.
+resize prepares two images when disabled or three when enabled, reusing programs.
 Clearing retires all scope images/bindings; an abandoned encoder requires explicit
 invalidation before retry. Submission and device recovery remain host responsibilities.
 
@@ -2022,7 +2024,7 @@ four-sample support, attachment-byte limits, one of the four qualified SDR
 surface formats, primary 2D view ownership, absence of insets/spatial rows,
 device extents and an explicit **256 MiB primary-view target budget**. At current
 fixed quality, source (8), four-sample scene attachment (32), and Bloom/output
-scratch (36) total **76 bytes/pixel**. 1920x1080 fits; 3840x2160 rejects. Assets,
+scratch (20) total **60 bytes/pixel**. 1920x1080 fits; 3840x2160 rejects. Assets,
 object-effect scopes, the surface and in-flight resource leases have separate
 owners. Object-effect capture budgets remain unchanged. There is no silent
 resolution/quality reduction. Initial/global view admission inspects spatial rows
