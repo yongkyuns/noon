@@ -5,9 +5,11 @@ use noon::{
 };
 use noon_core::{Color, GeometryRef, Transform2D, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
-    text::TextDeviceMetrics, AnalyticOverlay, Camera2D, HdrBloomStats, InteractiveRetainedFrame,
+    text::TextDeviceMetrics, AnalyticOverlay, HdrBloomStats, InteractiveRetainedFrame,
     RetainedFramePreparer, RetainedTextGpuState, DEFAULT_EFFECT_TEXTURE_BUDGET,
 };
+#[cfg(feature = "wgsl-effects")]
+mod native_hdr_corpus;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 fn scene() -> (Scene, noon::Mobject, noon::Mobject) {
     let mut scene = Scene::new();
@@ -155,6 +157,8 @@ struct Draw {
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
     profile: ViewColorProfile,
+    camera: Camera2DState,
+    visible: Option<Vec<usize>>,
 }
 impl Draw {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -165,6 +169,11 @@ impl Draw {
             text,
             preparer: RetainedFramePreparer::new(),
             profile: ViewColorProfile::Compatibility,
+            camera: Camera2DState {
+                center: Vec2::ZERO,
+                height: 8.0,
+            },
+            visible: None,
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -185,7 +194,9 @@ impl Draw {
             } else {
                 FORMAT
             };
-            self.renderer = GpuRenderer::new(device, queue, format);
+            let mut renderer = GpuRenderer::new(device, queue, format);
+            renderer.copy_effect_program_cache_from(device, &self.renderer);
+            self.renderer = renderer;
             self.text = self.renderer.create_retained_text_state(device, queue);
             self.preparer = RetainedFramePreparer::new();
             self.profile = profile;
@@ -193,17 +204,21 @@ impl Draw {
         self.renderer.set_viewport(device, queue, size[0], size[1]);
         self.renderer.set_camera(
             queue,
-            Camera2D::new(
-                Vec2::ZERO,
-                Vec2::new(8.0 * size[0] as f32 / size[1] as f32, 8.0),
-            )
-            .unwrap(),
+            camera_for_viewport(self.camera, size[0], size[1]).unwrap(),
         );
-        let metrics = TextDeviceMetrics::uniform(size[1] as f32 / 8.0)
+        pollster::block_on(self.renderer.prepare_effect_programs(device, publication)).unwrap();
+        let scale = size[1] as f32 / self.camera.height;
+        let metrics = TextDeviceMetrics::uniform(scale)
             .unwrap()
-            .with_world_origin_pixels(Vec2::new(size[0] as f32 * 0.5, size[1] as f32 * 0.5))
+            .with_world_origin_pixels(Vec2::new(
+                size[0] as f32 * 0.5 - self.camera.center.x * scale,
+                size[1] as f32 * 0.5 + self.camera.center.y * scale,
+            ))
             .unwrap();
-        let visible: Vec<_> = (0..publication.frame().objects.len()).collect();
+        let visible = self
+            .visible
+            .take()
+            .unwrap_or_else(|| (0..publication.frame().objects.len()).collect());
         let visible = self
             .renderer
             .effect_source_visibility(publication, &visible)
@@ -258,7 +273,7 @@ impl Draw {
                 &mut encoder,
                 &mut self.renderer,
                 publication,
-                8.0,
+                f64::from(self.camera.height),
                 if wrong_input { &empty } else { overlay },
                 &target,
             )

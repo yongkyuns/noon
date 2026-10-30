@@ -2129,7 +2129,13 @@ before replacing those targets.
 `node scripts/direct-view-output-qualification.mjs` checks actual WebGPU/WebGL2
 pixels against an independent f64 uniform-interior reference, live/finite source
 modes, exact seek/restoration and resize admission. The native full-field oracle
-remains `cargo test -p noon-native --lib view_output::native_hdr -- --include-ignored`.
+remains `cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored`.
+The same CI step also compares 17 ordinary Rust appearance programs through the
+native source adapter and offscreen exporter at four authored samples per second,
+including source completion, two view sizes and the authored camera. It requires
+changing pixels and a maximum two-byte channel difference. This forward corpus
+complements the operator references; it does not qualify native Python, arbitrary
+seek, physical scanout, input latency or total driver memory.
 Held frames may sleep rather than republish time; active animation and explicit
 seek still sample canonical authored time. These software-GPU checks do not
 qualify physical-device performance.
