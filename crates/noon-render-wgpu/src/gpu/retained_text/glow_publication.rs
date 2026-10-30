@@ -36,6 +36,8 @@ pub struct RetainedEffectStats {
     pub source_passes: usize,
     pub blur_passes: usize,
     pub composite_passes: usize,
+    /// Filter-program compilations reported by the existing operator counters.
+    pub pipeline_compiles: usize,
     pub bytes_uploaded: usize,
     pub texture_allocations: usize,
     pub retained_texture_bytes: u64,
@@ -49,6 +51,7 @@ impl RetainedEffectStats {
         self.source_passes += value.source_passes;
         self.blur_passes += value.filter.blur_passes;
         self.composite_passes += value.filter.composite_passes;
+        self.pipeline_compiles += value.filter.pipeline_compiles;
         self.bytes_uploaded += value.source_bytes_uploaded
             + value.placement_bytes_uploaded
             + value.filter.bytes_uploaded;

@@ -1172,6 +1172,13 @@ passes, upload ranges/bytes, CPU time and resident/peak/in-flight memory. Radius
 view or topology changes may resize affected local targets. Absent effects add no
 passes, targets, global scan or unconditional time updates.
 
+The existing `automatic_retained_host_glow_pixels` native GPU test checks G4's
+1/100 active glows among 600 static objects at all three frozen output sizes,
+including exact dirty/upload/pass/allocation counters. Its 1,000 attach/remove
+cycles use the small 80×60 fixture and drain submissions through real readback.
+These are renderer locality and capture-image residency checks; they do not
+measure total driver/in-flight memory, input latency or physical frame pacing.
+
 | Existing owner | Responsibility |
 | --- | --- |
 | Core effect values | Typed definitions, checked parameters and partial interpolation |
