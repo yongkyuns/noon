@@ -40,6 +40,7 @@ pub mod foreground_matching;
 pub mod foreground_membership;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod glass_lens;
+pub mod glow_churn;
 pub mod glow_profile;
 pub mod glow_pulse;
 pub mod graph_queries;

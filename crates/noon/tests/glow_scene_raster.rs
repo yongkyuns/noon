@@ -63,6 +63,7 @@ struct Surface {
     effect_stats: noon_render_wgpu::RetainedEffectStats,
     program_stats: noon_render_wgpu::EffectProgramStats,
     upload_stats: noon_render_wgpu::RetainedUploadStats,
+    capture_budget: u64,
 }
 impl Surface {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -108,6 +109,7 @@ impl Surface {
             effect_stats: Default::default(),
             program_stats: Default::default(),
             upload_stats: Default::default(),
+            capture_budget: 1_000_000,
         }
     }
     fn render(
@@ -126,6 +128,15 @@ impl Surface {
         background: wgpu::Color,
     ) -> Vec<u8> {
         let publication = session.take_renderer_publication();
+        self.render_publication(device, queue, publication, background)
+    }
+    fn render_publication(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: noon_runtime::RendererPublication<'_>,
+        background: wgpu::Color,
+    ) -> Vec<u8> {
         self.program_stats =
             pollster::block_on(self.renderer.prepare_effect_programs(device, &publication))
                 .unwrap();
@@ -168,7 +179,7 @@ impl Surface {
                 &self.text,
                 &publication,
                 background,
-                1_000_000,
+                self.capture_budget,
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -374,6 +385,78 @@ fn authored_glow_churn(device: &wgpu::Device, queue: &wgpu::Queue) {
     eprintln!("AUTHORED_GLOW_CHURN_PASS objects=600 cycles=1000 resident_plateau={} retired_bytes=0 texture_allocations={allocations} geometry_bytes=0", resident_bytes.unwrap());
 }
 
+fn live_source_glow_churn(device: &wgpu::Device, queue: &wgpu::Queue) {
+    use noon::{LiveProgramStatus, RustHostCallbackTable};
+    let mut source = noon::example_scenes::glow_churn::program().unwrap();
+    let mut callbacks = RustHostCallbackTable::new();
+    let mut surface =
+        Surface::with_target_size(device, queue, Vec2::new(1152.0, 648.0), [1152, 648]);
+    surface.capture_budget = 32 * 1024 * 1024;
+    source.resume().unwrap();
+    let ordinary = surface.render_publication(
+        device,
+        queue,
+        source.take_renderer_publication(),
+        wgpu::Color::BLACK,
+    );
+    let mut attached_pixels = None;
+    let mut residency = None;
+    let mut cycles = 0;
+    for phase in 0..=21 {
+        let time = if phase == 21 {
+            10.0
+        } else {
+            (1.0 + phase as f64 * 26.0) / 60.0
+        };
+        match source.drive_to(&mut callbacks, time + 1e-8).unwrap() {
+            LiveProgramStatus::PublicationPending(expected) => {
+                let publication = source.take_renderer_publication();
+                assert_eq!(publication.context(), expected);
+                surface.render_publication(device, queue, publication, wgpu::Color::BLACK);
+                source.admit_publication(expected).unwrap();
+            }
+            LiveProgramStatus::ReadyToResume => {}
+            other => panic!("unexpected churn phase {phase}: {other:?}"),
+        }
+        let status = source.resume().unwrap();
+        let image = surface.render_publication(
+            device,
+            queue,
+            source.take_renderer_publication(),
+            wgpu::Color::BLACK,
+        );
+        if phase < 20 {
+            assert_eq!(surface.upload_stats.geometry.bytes_uploaded, 0);
+        }
+        if phase < 20 && phase % 2 == 0 {
+            cycles += 100;
+            assert!(
+                image != ordinary,
+                "the source must actually attach visible Glows"
+            );
+            assert!(&image == attached_pixels.get_or_insert_with(|| image.clone()));
+            let bytes = surface.effect_stats.retained_texture_bytes;
+            assert!(bytes > 0 && bytes <= surface.capture_budget);
+            assert_eq!(bytes, *residency.get_or_insert(bytes));
+            if phase > 0 {
+                assert_eq!(surface.effect_stats.pipeline_compiles, 0);
+            }
+        } else {
+            assert!(
+                image == ordinary,
+                "each source removal must restore exact ordinary pixels"
+            );
+            assert_eq!(surface.effect_stats.retained_texture_bytes, 0);
+        }
+        if phase < 20 {
+            assert_eq!(surface.effect_stats.rows_examined, 100);
+        }
+        assert_eq!(status == LiveProgramStatus::Finished, phase == 21);
+    }
+    assert_eq!(cycles, 1000);
+    eprintln!("G4 live source cycles={cycles} viewport=1152x648 peak_capture_bytes={} retired_bytes=0; forward correctness, not physical timing", residency.unwrap());
+}
+
 #[test]
 #[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
 fn public_scene_glow_pixels_and_lifecycle() {
@@ -397,6 +480,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
     eprintln!("public Scene glow raster adapter: {info:?}");
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     authored_glow_churn(&device, &queue);
+    live_source_glow_churn(&device, &queue);
     let (scene, source, animation) = scene(true);
     let (plain_scene, _, plain_animation) = self::scene(false);
     let mut session = scene.execution_session().unwrap();

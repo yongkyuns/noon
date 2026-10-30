@@ -111,6 +111,15 @@ pub async fn create_direct_glow_profile_renderer(
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
+/// Ordinary forward source for the paired 1,000-cycle Glow lifecycle fixture.
+#[wasm_bindgen(js_name = createDirectGlowChurnRenderer)]
+pub async fn create_direct_glow_churn_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::glow_churn::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct-WASM real-GPU qualification for a local change in a sparse 100k scene.
 #[wasm_bindgen(js_name = createDirectRetainedLocalityRenderer)]
 pub async fn create_direct_retained_locality_renderer(

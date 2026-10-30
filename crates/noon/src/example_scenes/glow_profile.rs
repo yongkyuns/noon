@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/glow_profile.py`; no per-frame host callback.
 use crate::{
     effects::{EffectUpdate, Pixels},
-    AnimationOptions, MobjectTarget, RateFunction, Scene, SceneExecution,
+    AnimationOptions, Mobject, MobjectTarget, RateFunction, Scene, SceneExecution,
     SemanticAnimationCompositionKind, TransformToRequest,
 };
 
@@ -34,29 +34,7 @@ pub fn session(active: usize, property: Property, duration: f64) -> Result<Scene
     if !duration.is_finite() || duration < 10.0 {
         return Err("G4 duration must be finite and at least 10 seconds".into());
     }
-    let mut scene = Scene::new();
-    let mut camera = scene.camera_frame().map_err(message)?;
-    let scale = 6.0 / f64::from(noon_core::DEFAULT_FRAME_HEIGHT);
-    camera.set_scale(scale, scale).map_err(message)?;
-    let mut objects = Vec::with_capacity(OBJECT_COUNT);
-    for index in 0..OBJECT_COUNT {
-        let mut dot = scene.circle(0.05).map_err(message)?;
-        dot.set_translation(
-            -3.75 + (index % 30) as f64 * 0.25,
-            -2.375 + (index / 30) as f64 * 0.25,
-        )
-        .map_err(message)?;
-        dot.set_fill(1.0, 1.0, 1.0, 1.0).map_err(message)?;
-        dot.disable_stroke().map_err(message)?;
-        if index < active {
-            dot.set_glow(EffectUpdate::default().radius(Pixels(3.0)).intensity(0.4))
-                .map_err(message)?;
-        }
-        objects.push(dot);
-    }
-    scene
-        .add_many(&objects.iter().map(MobjectTarget::from).collect::<Vec<_>>())
-        .map_err(message)?;
+    let (scene, objects) = grid(active)?;
     let options = AnimationOptions::new()
         .run_time(duration)
         .rate_func(RateFunction::Linear);
@@ -97,6 +75,33 @@ pub fn session(active: usize, property: Property, duration: f64) -> Result<Scene
     }
     execution.seek(0.0).map_err(message)?;
     Ok(execution)
+}
+
+pub(super) fn grid(active: usize) -> Result<(Scene, Vec<Mobject>), String> {
+    let mut scene = Scene::new();
+    let mut camera = scene.camera_frame().map_err(message)?;
+    let scale = 6.0 / f64::from(noon_core::DEFAULT_FRAME_HEIGHT);
+    camera.set_scale(scale, scale).map_err(message)?;
+    let mut objects = Vec::with_capacity(OBJECT_COUNT);
+    for index in 0..OBJECT_COUNT {
+        let mut dot = scene.circle(0.05).map_err(message)?;
+        dot.set_translation(
+            -3.75 + (index % 30) as f64 * 0.25,
+            -2.375 + (index / 30) as f64 * 0.25,
+        )
+        .map_err(message)?;
+        dot.set_fill(1.0, 1.0, 1.0, 1.0).map_err(message)?;
+        dot.disable_stroke().map_err(message)?;
+        if index < active {
+            dot.set_glow(EffectUpdate::default().radius(Pixels(3.0)).intensity(0.4))
+                .map_err(message)?;
+        }
+        objects.push(dot);
+    }
+    scene
+        .add_many(&objects.iter().map(MobjectTarget::from).collect::<Vec<_>>())
+        .map_err(message)?;
+    Ok((scene, objects))
 }
 
 fn message(error: impl std::fmt::Display) -> String {
