@@ -12,24 +12,30 @@ import { validateProductPerformanceAnchor, readProductPerformanceAnchor } from "
 test("repository pins a post-fix cumulative product source and existing workloads", async () => {
   const anchor = await readProductPerformanceAnchor();
   assert.equal(anchor.source, "58135c4069a6f8d700dcaaee677d7c8c7a48d6c5");
+  const lock = await readFile(new URL(anchor.dependencyLock.file, import.meta.url));
+  assert.equal(createHash("sha256").update(lock).digest("hex"), anchor.dependencyLock.sha256);
+  assert.match(lock.toString(), /name = "wasm-bindgen"\nversion = "0\.2\.129"/);
   assert.deepEqual(anchor.workloads,
     ["parity-square-and-circle", "showcase-camera-follows-path",
       "showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths"]);
 });
 
 for (const [name, mutate, expected] of [
-  ["schema", value => { value.schemaVersion = 2; }, /schema/],
+  ["schema", value => { value.schemaVersion = 3; }, /schema/],
   ["source", value => { value.source = "main"; }, /commit SHA/],
   ["label", value => { value.label = ""; }, /label/],
   ["policy", value => { value.policy = "best-of-three"; }, /alternating-pair policy/],
+  ["lock path", value => { value.dependencyLock.file = "../Cargo.lock"; }, /dependency lock/],
+  ["lock hash", value => { value.dependencyLock.sha256 = "unverified"; }, /dependency lock/],
   ["workloads", value => { value.workloads = ["parity-square-and-circle"]; }, /workloads changed/],
 ]) {
   test(`invalid anchor ${name} fails closed`, () => {
     const value = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       source: "a".repeat(40),
       label: "fixture",
       policy: "same-run-alternating-pairs",
+      dependencyLock: { file: "product-performance-anchor.Cargo.lock", sha256: "b".repeat(64) },
       workloads: ["parity-square-and-circle", "showcase-camera-follows-path",
       "showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths"],
     };
