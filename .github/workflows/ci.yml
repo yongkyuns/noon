@@ -685,6 +685,8 @@ jobs:
         run: node scripts/noise-paint-qualification.mjs
       - name: Qualify paired hatch paint authoring
         run: node scripts/hatch-paint-qualification.mjs
+      - name: Qualify G4 authoring and rendered cold-pass admission
+        run: node scripts/glow-profile-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage
@@ -723,6 +725,7 @@ jobs:
         with:
           name: finite-effect-authoring-pixels
           path: |
+            browser-smoke-artifacts/glow-profile
             browser-smoke-artifacts/ordered-effects
             browser-smoke-artifacts/composed-effects
             browser-smoke-artifacts/scope-opacity

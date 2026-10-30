@@ -1,5 +1,6 @@
 // G4 authoring parity, using the existing real Rust/Pyodide pixel harness.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createRuntimeBuildIdentity } from "./build-runtime-identity.mjs";
@@ -25,4 +26,38 @@ await qualifyPairedAuthoring({
       sampleTime,
       objectCount: 601,
     })))),
+  async qualifyLifecycle(context, baseUrl, backend) {
+    const page = await context.newPage();
+    try {
+      if (backend === "WebGL2") await page.addInitScript(() =>
+        Object.defineProperty(navigator, "gpu", { value: undefined }));
+      const glue = await readFile(root + "/web/pkg/noon_web.js", "utf8");
+      const mutated = glue + `
+const originalColdRender = ExecutionCanvasRenderer.prototype.render;
+ExecutionCanvasRenderer.prototype.render = function() {
+  if (this.time() >= 10) { globalThis.refusedColdEndpoint = this.time(); return false; }
+  return originalColdRender.call(this);
+};`;
+      await page.route("**/web/pkg/noon_web.js", route =>
+        route.fulfill({ contentType: "application/javascript", body: mutated }));
+      await page.goto(baseUrl + "/web/perf-profile.html?glows=1&objects=600&layout=fixed&glowProperty=intensity&warmup=30&frames=540&targetHz=60&width=1152&height=648");
+      await page.waitForFunction(() => document.querySelector("#status")?.dataset.state === "error"
+        || window.__NOON_PERF_REPORT__, null, { timeout: 90000 });
+      const result = await page.evaluate(() => ({
+        status: document.querySelector("#status").dataset.state,
+        failure: window.__NOON_PERF_FAILURE__,
+        endpoint: globalThis.refusedColdEndpoint,
+        accepted: !!window.__NOON_PERF_REPORT__,
+      }));
+      assert.equal(result.status, "error");
+      assert.equal(result.accepted, false);
+      assert.equal(result.endpoint, 10, "actual runtime reached the endpoint");
+      assert.equal(result.failure.coldPass, null, "missing presentation cannot complete the cold pass");
+      assert.equal(result.failure.rawSamples.coldFrames.length, 599);
+      assert.equal(result.failure.rawSamples.frames.length, 0);
+      assert.match(result.failure.error, /performance frame was not presented at t=10/);
+      return { mutationSha256: createHash("sha256").update(mutated).digest("hex"), ...result };
+    } finally { await page.close(); }
+  },
 });
+assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "on-disk source/package unchanged");
