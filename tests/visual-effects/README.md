@@ -1185,6 +1185,17 @@ retires all capture textures. It requires one examined row, no geometry upload,
 stable attached residency and no filter recompilation after the first cycle.
 These paused live edits do not qualify a timed source or the physical cohorts.
 
+`noon::example_scenes::glow_churn` and `web/python/examples/glow_churn.py`
+add ordinary forward source execution: 100 dots attach/remove Glow ten times
+among the same 600-dot grid, using normal wait segments and no frame callback.
+The native `glow_churn` example runs that source; the existing public Scene
+raster test renders every mutation boundary at 1152×648, checking restoration,
+locality and bounded capture residency. The existing G4 browser qualifier checks
+initial/attached/removed/completed pixels through Rust/WASM and Pyodide.
+This qualifies forward source and lifecycle behavior. Live continuations retain
+their existing arbitrary-seek rejection; the static profiler's rewind protocol,
+physical timing and total driver/in-flight memory remain separate gates.
+
 The paired [Rust G4 builder](../../crates/noon/src/example_scenes/glow_profile.rs)
 and [Python source](../../web/python/examples/glow_profile.py) author the same
 600-dot grid, with 1 or 100 named glows. Ordinary linear target animation changes
