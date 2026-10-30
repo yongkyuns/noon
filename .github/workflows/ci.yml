@@ -594,7 +594,10 @@ jobs:
           name: web-pkg
           path: web
       - name: Verify source and browser artifact provenance
-        run: node .github/ci/wasm-build.mjs verify
+        run: |
+          node .github/ci/wasm-build.mjs verify
+          # Only this verified consumer ignores its generated pixel evidence.
+          printf '\n/browser-smoke-artifacts\n' >> "$(git rev-parse --git-path info/exclude)"
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -685,6 +688,8 @@ jobs:
         run: node scripts/noise-paint-qualification.mjs
       - name: Qualify paired hatch paint authoring
         run: node scripts/hatch-paint-qualification.mjs
+      - name: Qualify G4 authoring and rendered cold-pass admission
+        run: node scripts/glow-profile-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage
@@ -723,6 +728,7 @@ jobs:
         with:
           name: finite-effect-authoring-pixels
           path: |
+            browser-smoke-artifacts/glow-profile
             browser-smoke-artifacts/ordered-effects
             browser-smoke-artifacts/composed-effects
             browser-smoke-artifacts/scope-opacity

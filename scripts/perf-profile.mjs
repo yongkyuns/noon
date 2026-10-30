@@ -132,6 +132,10 @@ try {
       const state = await page.locator("#status").getAttribute("data-state");
       if (state === "error") {
         const message = await page.locator("#status").textContent();
+        const partial = await page.evaluate(() => window.__NOON_PERF_FAILURE__ ?? null);
+        await mkdir(path.dirname(artifactPath), { recursive: true });
+        await writeFile(`${artifactPath}.invalid.json`,
+          JSON.stringify({ commit: commitSha, runtimeBuildIdentity, requestedBackend: backend, partial }));
         throw new Error(`${layout}/${objects} failed: ${message}\n${errors.join("\n")}`);
       }
       const report = await page.evaluate(() => window.__NOON_PERF_REPORT__);
@@ -151,6 +155,12 @@ try {
         assert.equal(report.workload.glowProperty, glowProperty);
         assert.equal(report.rawSamples.frames.length, frames);
         assert.ok(report.workload.driverDurationSeconds >= 10);
+        const cold = report.setup.coldPass;
+        assert.equal(cold?.completed, true, "G4 requires one complete rendered cold pass");
+        assert.equal(cold.initialPublicationRendered, true);
+        assert.equal(cold.renderedFrames, Math.ceil(report.workload.driverDurationSeconds * targetHz) + 1);
+        assert.equal(report.rawSamples.coldFrames.length, cold.renderedFrames - 1);
+        assert.ok(Math.abs(cold.authoredEndTime - report.workload.driverDurationSeconds) < 1e-6);
       }
       assert.equal(report.environment.devicePixelRatio, dpr);
       assert.equal(report.environment.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2",

@@ -5,6 +5,7 @@ import { appendFile, copyFile, lstat, mkdir, readFile, writeFile } from "node:fs
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config, configuration, fileDigest, prepareArtifact, sourceSha, stamp, verify } from "./wasm-build.mjs";
+import { readProductPerformanceAnchor } from "./product-performance-anchor.mjs";
 
 const lockPath = "Cargo.lock";
 const dependencyInputs = name => name === "Cargo.toml" || name === "rust-toolchain.toml"
@@ -48,9 +49,9 @@ async function dependencyConfiguration(root) {
   return inputs;
 }
 
-// Resolve the baseline once, then reuse its ignored Cargo.lock only where the
-// tracked dependency inputs match. A differing input set gets an explicit,
-// independent resolution; every resulting lock is checked with --locked.
+// Qualified frozen sources keep their authenticated lock. Otherwise resolve
+// the baseline once and reuse it only for matching tracked dependency inputs;
+// differing inputs resolve independently. Every path is checked with --locked.
 export async function prepareProductDependencies(baselineRoot, targetRoots, options = {}) {
   assert.ok(Array.isArray(targetRoots) && targetRoots.length > 0, "missing product dependency targets");
   const runCargo = options.runCargo ?? ((root, args) => commandOutput(root, "cargo", args));
@@ -74,9 +75,18 @@ export async function prepareProductDependencies(baselineRoot, targetRoots, opti
     await assertSafeLockfile(targetRoot, { required: targetTracked });
     const targetInputs = await dependencyConfiguration(targetRoot);
     const inputsMatch = JSON.stringify(targetInputs) === JSON.stringify(baselineInputs);
+    const pinned = options.pinnedLockfiles?.get(targetRoot);
     let mode;
 
-    if (targetTracked) {
+    if (pinned) {
+      assert.ok(!targetTracked, "refusing to replace a tracked dependency lock");
+      assert.equal(commandOutput(targetRoot, "git", ["rev-parse", "HEAD"]), pinned.source,
+        "pinned dependency lock source mismatch");
+      assert.equal(await fileDigest(path.dirname(pinned.file), path.basename(pinned.file)), pinned.sha256,
+        "pinned dependency lock hash mismatch");
+      await copyFile(pinned.file, path.join(targetRoot, lockPath));
+      mode = "pinned-qualified";
+    } else if (targetTracked) {
       mode = "tracked-preserved";
       if (!inputsMatch) {
         console.log(`Dependency inputs differ; preserving tracked ${lockPath} and validating it without rewriting: ${targetRoot}`);
@@ -93,6 +103,8 @@ export async function prepareProductDependencies(baselineRoot, targetRoots, opti
 
     await assertSafeLockfile(targetRoot, { required: true });
     await validateCargoLockfile(targetRoot, runCargo);
+    if (pinned) assert.equal(await fileDigest(targetRoot, lockPath), pinned.sha256,
+      "pinned dependency lock changed during validation");
     results.push({ root: targetRoot, mode, inputsMatchBaseline: inputsMatch,
       lockDigest: await fileDigest(targetRoot, lockPath) });
   }
@@ -196,7 +208,13 @@ async function main() {
     const [baseline, ...targets] = process.argv.slice(3);
     assert.ok(baseline && targets.length > 0, "expected dependencies <baseline> <target> [target ...]");
     const roots = [baseline, ...targets].map(root => path.resolve(root));
-    const prepared = await prepareProductDependencies(roots[0], roots.slice(1));
+    const anchor = await readProductPerformanceAnchor();
+    const pinnedLockfiles = new Map(roots.slice(1)
+      .filter(root => commandOutput(root, "git", ["rev-parse", "HEAD"]) === anchor.source)
+      .map(root => [root, { source: anchor.source,
+        file: fileURLToPath(new URL(anchor.dependencyLock.file, import.meta.url)),
+        sha256: anchor.dependencyLock.sha256 }]));
+    const prepared = await prepareProductDependencies(roots[0], roots.slice(1), { pinnedLockfiles });
     console.log(`Product dependency locks: ${JSON.stringify(prepared.results)}`);
     return;
   }

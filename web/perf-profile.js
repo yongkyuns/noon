@@ -44,6 +44,9 @@ let renderer = null;
 // rAF and host calls, not physical scanout, input latency or total driver memory.
 const rawFrames = activeGlows === null ? null : [];
 const rawGpuRenderPassMs = activeGlows === null ? null : [];
+const rawColdFrames = activeGlows === null ? null : [];
+const rawColdGpuRenderPassMs = activeGlows === null ? null : [];
+let coldPass = null;
 
 try {
   await init();
@@ -69,6 +72,32 @@ try {
     throw new Error("initial performance frame was not presented");
   }
   const playerCreateMs = performance.now() - createStarted;
+
+  if (activeGlows !== null) {
+    status.value = "Rendering the complete cold G4 trajectory…";
+    const started = performance.now();
+    const steps = Math.ceil(driverDurationSeconds * targetHz);
+    const coldGpuWindow = new SampleWindow(steps + 8);
+    for (let frame = 1; frame <= steps; frame += 1) {
+      const timestampMs = await nextAnimationFrame();
+      const authoredTime = Math.min(frame / targetHz, driverDurationSeconds);
+      const timings = presentSceneTime(authoredTime);
+      takeGpuTimestampMetrics(coldGpuWindow, rawColdGpuRenderPassMs);
+      rawColdFrames.push({ authoredTime, timestampMs, ...timings });
+    }
+    const gpu = await settleGpuTimestampMetrics(coldGpuWindow, rawColdGpuRenderPassMs);
+    coldPass = {
+      completed: true,
+      initialPublicationRendered: true,
+      renderedFrames: steps + 1,
+      authoredEndTime: renderer.time(),
+      elapsedMs: performance.now() - started,
+      gpu: { ...gpu, renderPassMs: coldGpuWindow.summary() },
+    };
+    renderer.seekDirect(0);
+    renderer.advanceDirectRealtime(0);
+    if (!presentPending()) throw new Error("G4 cold-pass rewind did not present");
+  }
 
   status.value = `Warming ${layout} / ${objectCount.toLocaleString()} objects…`;
   for (let frame = 0; frame < warmupFrames; frame += 1) {
@@ -168,6 +197,7 @@ try {
       warmupFrames,
       measuredFrames: frame.frames,
       incompleteMetricFrames: 0,
+      ...(coldPass === null ? {} : { coldPass }),
     },
     cadence: {
       frameIntervalMs: frame.interval,
@@ -206,7 +236,8 @@ try {
       renderPassMs: windows.gpuRenderPassMs.summary(),
     },
     ...(rawFrames === null ? {} : {
-      rawSamples: { frames: rawFrames, gpuRenderPassMs: rawGpuRenderPassMs },
+      rawSamples: { frames: rawFrames, gpuRenderPassMs: rawGpuRenderPassMs,
+        coldFrames: rawColdFrames, coldGpuRenderPassMs: rawColdGpuRenderPassMs },
     }),
   };
 
@@ -219,6 +250,11 @@ try {
   status.dataset.state = "complete";
   console.log("NOON_PERF_REPORT", report);
 } catch (error) {
+  window.__NOON_PERF_FAILURE__ = {
+    error: String(error), coldPass,
+    rawSamples: { frames: rawFrames, gpuRenderPassMs: rawGpuRenderPassMs,
+      coldFrames: rawColdFrames, coldGpuRenderPassMs: rawColdGpuRenderPassMs },
+  };
   console.error(error);
   status.value = `Profile failed: ${error}`;
   status.dataset.state = "error";
