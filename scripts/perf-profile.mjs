@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +84,7 @@ server.stderr.on("data", (chunk) => {
 });
 
 let browser = null;
+const rawFiles = [];
 try {
   await waitForServer();
   browser = await chromium.launch({
@@ -100,6 +101,9 @@ try {
         deviceScaleFactor: dpr,
       });
       const page = await context.newPage();
+      if (backend === "webgl") {
+        await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+      }
       const errors = [];
       page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
       page.on("console", (message) => {
@@ -131,6 +135,12 @@ try {
         throw new Error(`${layout}/${objects} failed: ${message}\n${errors.join("\n")}`);
       }
       const report = await page.evaluate(() => window.__NOON_PERF_REPORT__);
+      // Preserve completed measurements even when a profile assertion rejects.
+      // Successful aggregate publication removes these temporary duplicates.
+      const rawPath = `${artifactPath}.${layout}-${objects}.raw.json`;
+      await mkdir(path.dirname(rawPath), { recursive: true });
+      await writeFile(rawPath, JSON.stringify({ commit: commitSha, runtimeBuildIdentity, requestedBackend: backend, report }));
+      rawFiles.push(rawPath);
       assert.equal(report.schemaVersion, 2);
       assert.equal(report.workload.execution, "typed-direct-rust");
       assert.equal(report.workload.objects, objects);
@@ -214,6 +224,7 @@ try {
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
   await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+  await Promise.all(rawFiles.map(file => unlink(file)));
   console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
 } finally {
   await browser?.close();
