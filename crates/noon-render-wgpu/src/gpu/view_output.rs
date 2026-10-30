@@ -67,7 +67,7 @@ impl AuthoredViewOutput {
             source_revision: 0,
         }
     }
-    /// Source 8 + four-sample scene attachment 32 + Bloom/output scratch 36
+    /// Source 8 + four-sample scene attachment 32 + Bloom/output scratch 20
     /// bytes/pixel. Surface, scene assets/effect scopes and in-flight leases are
     /// separate owners; this is the retained primary-view target budget.
     pub fn validate_extent(device: &wgpu::Device, size: [u32; 2]) -> Result<(), ViewOutputError> {

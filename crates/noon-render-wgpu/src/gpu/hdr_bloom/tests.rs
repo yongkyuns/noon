@@ -49,6 +49,12 @@ fn finite_kernel_normalization_and_layout() {
     assert_eq!(size_of::<BloomUniform>(), 1056);
     assert_eq!(std::mem::offset_of!(BloomUniform, control), 16);
     assert_eq!(std::mem::offset_of!(BloomUniform, weights), 32);
+    // Operator targets fit the frozen desktop views and primary mobile view;
+    // source/MSAA, driver metadata and in-flight resources are separate owners.
+    for size in [[1152, 648], [2304, 1296], [1920, 1080]] {
+        assert!(HdrBloomFilter::required_scratch_bytes(size).unwrap() <= 64 * 1024 * 1024);
+    }
+    assert!(HdrBloomFilter::required_scratch_bytes([1152, 648]).unwrap() <= 32 * 1024 * 1024);
     for sigma in [
         0.0,
         f64::from_bits(1),
@@ -140,10 +146,10 @@ fn neutral_scope_defers_bloom_resources_and_preserves_output_on_budget_rejection
             active.texture_allocations,
             active.bind_group_creations
         ),
-        (3, 3, 4)
+        (3, 1, 4)
     );
     assert_eq!(scope.display_output(), Some(&output));
-    assert_eq!(scope.scratch_bytes(), 17 * 13 * 36);
+    assert_eq!(scope.scratch_bytes(), 17 * 13 * 20);
     assert_eq!(encode(&device, &queue, &filter, &mut scope).passes, [1; 5]);
     // Resizing a disabled scope releases warm Bloom images without discarding programs.
     let smaller = source(&device, [7, 5], HDR);
@@ -203,10 +209,10 @@ fn retained_dirty_closure_atomic_rejection_and_retirement() {
         .prepare(&device, &queue, &mut scope, capture, p)
         .unwrap();
     assert_eq!(stats.pipeline_compiles, 5);
-    assert_eq!(stats.texture_allocations, 5);
+    assert_eq!(stats.texture_allocations, 3);
     assert_eq!(stats.bind_group_creations, 5);
     assert_eq!(stats.bytes_uploaded, 1056);
-    assert_eq!(stats.scratch_bytes, 17 * 13 * 36);
+    assert_eq!(stats.scratch_bytes, 17 * 13 * 20);
     assert_eq!(encode(&device, &queue, &filter, &mut scope).passes, [1; 5]);
     let linear = scope.linear_output().unwrap().clone();
     let display = scope.display_output().unwrap().clone();
@@ -216,7 +222,7 @@ fn retained_dirty_closure_atomic_rejection_and_retirement() {
     assert_eq!(
         stats,
         HdrBloomStats {
-            scratch_bytes: 17 * 13 * 36,
+            scratch_bytes: 17 * 13 * 20,
             ..Default::default()
         }
     );
@@ -273,7 +279,7 @@ fn retained_dirty_closure_atomic_rejection_and_retirement() {
             &mut scope,
             capture,
             HdrBloomParameters {
-                scratch_budget_bytes: 17 * 13 * 36 - 1,
+                scratch_budget_bytes: 17 * 13 * 20 - 1,
                 ..p
             }
         ),
@@ -347,10 +353,7 @@ fn retained_dirty_closure_atomic_rejection_and_retirement() {
             },
         )
         .unwrap();
-    assert_eq!(
-        encode(&device, &queue, &filter, &mut scope).passes,
-        [0, 1, 1, 1, 1]
-    );
+    assert_eq!(encode(&device, &queue, &filter, &mut scope).passes, [1; 5]);
     let stats = filter
         .prepare(
             &device,
@@ -412,9 +415,9 @@ fn retained_dirty_closure_atomic_rejection_and_retirement() {
             p,
         )
         .unwrap();
-    assert_eq!(stats.texture_allocations, 5);
+    assert_eq!(stats.texture_allocations, 3);
     assert_eq!(stats.pipeline_compiles, 0);
-    assert_eq!(stats.scratch_bytes, 7 * 5 * 36);
+    assert_eq!(stats.scratch_bytes, 7 * 5 * 20);
     scope.clear();
     assert!(scope.linear_output().is_none());
     assert!(scope.display_output().is_none());
@@ -803,9 +806,9 @@ fn hdr_bloom_matches_independent_linear_reference_and_rejects_shader_negative_co
                 p,
             )
             .unwrap();
-        assert_eq!(stats.texture_allocations, 5);
+        assert_eq!(stats.texture_allocations, 3);
         assert_eq!(stats.pipeline_compiles, 0);
-        assert_eq!(stats.scratch_bytes, 7 * 5 * 36);
+        assert_eq!(stats.scratch_bytes, 7 * 5 * 20);
         encode(&device, &queue, &filter, &mut scope);
         let actual = read(&device, &queue, scope.display_output().unwrap());
         assert!(byte_error(&actual, &expected) <= 2);
