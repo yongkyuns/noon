@@ -151,6 +151,15 @@ pub struct EffectStackScope {
     warm_sample: Option<Box<SampleScope>>,
 }
 impl EffectStackScope {
+    pub(super) fn placement_glow(&self) -> Option<&GlowScope> {
+        if self.output != Some(0) || self.passes.len() != 1 {
+            return None;
+        }
+        match &self.passes[0].filter {
+            PassFilter::Glow(scope) if scope.output().is_none() => Some(scope),
+            _ => None,
+        }
+    }
     /// None means ordinary source submission, including an entirely neutral stack.
     pub fn output(&self) -> Option<&wgpu::Texture> {
         self.output
@@ -291,6 +300,81 @@ pub struct EffectStackFilter {
 }
 
 impl EffectStackFilter {
+    pub(super) fn supports_glow_placement(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        let limits = device.limits();
+        matches!(
+            format,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+        ) && limits.max_bind_groups >= 2
+            && limits.max_uniform_buffers_per_shader_stage >= 2
+            && limits.max_sampled_textures_per_shader_stage >= 3
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_glow_placement(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scope: &mut EffectStackScope,
+        capture: GlowCapture<'_>,
+        effects: &[EffectDefinition],
+        parameters: EffectStackParameters,
+        layout: &wgpu::BindGroupLayout,
+    ) -> Result<EffectRasterStats, EffectPrepareError> {
+        let prepared = preflight(device, &self.sample, scope, capture, effects, parameters)?;
+        let [EffectDefinition::Glow(definition)] = effects else {
+            unreachable!("only a standalone Glow can use placement composition");
+        };
+        assert_eq!(prepared.last, Some(0));
+        scope.sync_profile(effects);
+        let pass = &mut scope.passes[0];
+        let PassFilter::Glow(glow) = &mut pass.filter else {
+            unreachable!()
+        };
+        let stats = self.glow.prepare_placement(
+            device,
+            queue,
+            encoder,
+            glow,
+            capture,
+            GlowParameters {
+                definition: *definition,
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                scope_opacity: parameters.scope_opacity,
+                scratch_budget_bytes: prepared.budgets[0],
+            },
+            layout,
+            parameters.working_format,
+        )?;
+        if stats.bytes_uploaded != 0 || stats.blur_passes != 0 {
+            pass.revision += 1;
+        }
+        scope.output = Some(0);
+        Ok(EffectRasterStats {
+            scratch_bytes: scope.scratch_bytes(),
+            ..stats
+        })
+    }
+
+    pub(super) fn draw_glow_placement<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        scope: &'a EffectStackScope,
+        placement: &'a wgpu::BindGroup,
+        single_sample: bool,
+    ) -> bool {
+        let Some(glow) = scope.placement_glow() else {
+            return false;
+        };
+        self.glow
+            .draw_placement(pass, glow, placement, single_sample);
+        true
+    }
     pub(super) fn shader_program(
         &self,
         device: &wgpu::Device,

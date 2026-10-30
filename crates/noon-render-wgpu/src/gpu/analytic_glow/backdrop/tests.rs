@@ -191,6 +191,147 @@ fn runtime(rows: Vec<CompiledObject>) -> SceneInstance {
 }
 
 #[test]
+#[ignore = "requires a real raster adapter; deferred Glow promotion and warm consumer transitions"]
+fn glow_placement_materializes_for_new_parent_and_backdrop_consumers() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let glow = |intensity| {
+        Arc::new(
+            CompiledEffectStack::new([CompiledEffect {
+                attachment: SemanticNodeId::new(92, 2),
+                definition: noon_core::Glow::new(
+                    EffectUpdate::default()
+                        .radius(Pixels(2.0))
+                        .intensity(intensity),
+                )
+                .unwrap()
+                .into(),
+            }])
+            .unwrap(),
+        )
+    };
+    for grouped in [false, true] {
+        let mut objects = rows(None, 0.6);
+        objects[0].effects = Some(glow(1.5));
+        let consumer = if grouped {
+            let mut group = CompiledObject::new(
+                ObjectId::new(90),
+                noon_core::ObjectContentRef::Composed(Arc::new(
+                    noon_core::ComposedSource::new([ObjectId::new(10), ObjectId::new(20)], None)
+                        .unwrap(),
+                )),
+                Transform2D::IDENTITY,
+                Style {
+                    fill: None,
+                    stroke: None,
+                    ..Style::default()
+                },
+            );
+            group.draw_enabled = false;
+            group.effects = Some(glow(0.0));
+            objects.push(group);
+            ObjectId::new(90)
+        } else {
+            objects[1].effects = Some(panel_effect(0.0));
+            ObjectId::new(20)
+        };
+        let mut scene = runtime(objects);
+        let mut fixture = Fixture::new(&device, &queue);
+        let mut target = None;
+        let mut flat = Vec::new();
+        for (step, value) in [0.0, 2.0, 1.99, 0.0, 2.0].into_iter().enumerate() {
+            if step > 0 {
+                scene
+                    .apply_execution_patch(&ExecutionPatch::SetEffects {
+                        object: consumer,
+                        effects: if grouped {
+                            glow(value)
+                        } else {
+                            panel_effect(value)
+                        },
+                    })
+                    .unwrap();
+            }
+            let work = fixture
+                .render_budget(
+                    &device,
+                    &queue,
+                    &mut scene,
+                    wgpu::Color::TRANSPARENT,
+                    BUDGET,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("transition grouped={grouped} step={step}: {error:?}")
+                });
+            let cache = fixture.renderer.effect_captures.as_ref().unwrap();
+            let packed = fixture
+                .renderer
+                .retained_effects
+                .packed_capture_owner(0, ObjectId::new(10))
+                .unwrap();
+            let child = &cache.scopes[&cache.owners[&packed]];
+            if step == 0 {
+                assert!(
+                    child.filter.placement_glow().is_some(),
+                    "initial child must be deferred; grouped={grouped}"
+                );
+            } else if value > 0.0 {
+                assert!(
+                    child.filter.placement_glow().is_none(),
+                    "active consumer needs an image; grouped={grouped} step={step}"
+                );
+            }
+            if value > 0.0 {
+                let image = child.filter.output().unwrap();
+                if let Some(previous) = &target {
+                    assert_eq!(
+                        image, previous,
+                        "consumer reactivation reuses the materialized child target"
+                    );
+                } else {
+                    target = Some(image.clone());
+                }
+            }
+            if step == 2 || (grouped && step == 4) {
+                assert_eq!(work.texture_allocations, 0, "grouped={grouped} step={step}");
+            }
+            if grouped && step == 2 {
+                assert_eq!(
+                    work.sources_prepared, 1,
+                    "a parent parameter edit must not revisit its children"
+                );
+                assert_eq!(work.source_passes, 0);
+            }
+            let actual = read(&device, &queue, &fixture.target);
+            let mut fresh = Fixture::new(&device, &queue);
+            let mut replay = scene.clone();
+            fresh
+                .render_budget(
+                    &device,
+                    &queue,
+                    &mut replay,
+                    wgpu::Color::TRANSPARENT,
+                    BUDGET,
+                )
+                .unwrap_or_else(|error| panic!("fresh grouped={grouped} step={step}: {error:?}"));
+            assert_eq!(
+                actual,
+                read(&device, &queue, &fresh.target),
+                "consumer transition must equal fresh preparation; grouped={grouped} step={step}"
+            );
+            if step == 0 {
+                flat = actual;
+            } else if value == 0.0 {
+                assert_eq!(actual, flat);
+            } else {
+                assert_ne!(actual, flat, "the consumer must affect pixels");
+            }
+        }
+    }
+}
+
+#[test]
 fn backdrop_retained_coordinator_reuses_clean_inputs_refilters_radius_and_retires() {
     let (device, queue) = wgpu::Device::noop(&Default::default());
     let mut fixture = Fixture::new(&device, &queue);

@@ -11,6 +11,17 @@ impl GpuRenderer {
         })
     }
 
+    pub(in crate::gpu) fn retained_input_is_materialized(
+        &self,
+        index: usize,
+        object: ObjectId,
+    ) -> bool {
+        self.retained_input_is_ready(index, object)
+            && self
+                .retained_input(index, object)
+                .is_some_and(|scope| scope.filter.placement_glow().is_none())
+    }
+
     pub(in crate::gpu) fn retained_original_is_ready(
         &self,
         index: usize,
@@ -40,7 +51,10 @@ impl GpuRenderer {
         let Some(scope) = self.retained_input(index, object) else {
             return Ok(None);
         };
-        if scope.invalidated || scope.camera != self.camera || scope.viewport != self.viewport_size
+        if scope.invalidated
+            || scope.camera != self.camera
+            || scope.viewport != self.viewport_size
+            || (!original && scope.filter.placement_glow().is_some())
         {
             return Err(EffectPrepareError::PublicationMismatch);
         }
