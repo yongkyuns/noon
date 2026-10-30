@@ -1179,6 +1179,34 @@ cycles use the small 80×60 fixture and drain submissions through real readback.
 These are renderer locality and capture-image residency checks; they do not
 measure total driver/in-flight memory, input latency or physical frame pacing.
 
+The paired [Rust G4 builder](../../crates/noon/src/example_scenes/glow_profile.rs)
+and [Python source](../../web/python/examples/glow_profile.py) author the same
+600-dot grid, with 1 or 100 named glows. Ordinary linear target animation changes
+only intensity (0.4→1) or radius (3→6 backing pixels), for at least ten seconds.
+The native entry point is `cargo run -p noon-native --example glow_profile -- 100 intensity`.
+The existing direct frame profiler selects this workload without changing its
+ordinary analytic defaults:
+
+```sh
+NOON_RENDERER_SMOKE=1 NOON_WASM_PROFILE=release bash scripts/build-web-demo.sh
+NOON_PERF_GLOWS=100 NOON_PERF_GLOW_PROPERTY=intensity \
+NOON_PERF_WARMUP=30 NOON_PERF_FRAMES=540 NOON_PERF_TARGET_HZ=60 \
+NOON_PERF_WIDTH=1152 NOON_PERF_HEIGHT=648 node scripts/perf-profile.mjs
+```
+
+Use `NOON_PERF_GLOWS=1`, property `radius`, the other frozen views and the
+selected backend for the other trials. Reports retain every measured rAF/CPU
+sample, available GPU-pass samples and actual renderer-device identity.
+`node scripts/glow-profile-qualification.mjs` compares twelve exact-time
+Rust/Pyodide cases on both raster backends using the existing paired harness.
+The Rust builder completes CPU authoring before rewinding the same runtime;
+this setup is not a rendered cold source pass. This workload enables authored-path
+measurements; a single run is not the frozen repeated-pair/cold-pass protocol.
+Like the existing analytic profiler, its entry points require the declared
+`renderer-smoke` build; record and freeze that profile for comparisons.
+It does not measure input-to-present, total driver/in-flight memory or authored
+attach/remove cycles. Those remain qualification gates.
+
 | Existing owner | Responsibility |
 | --- | --- |
 | Core effect values | Typed definitions, checked parameters and partial interpolation |
