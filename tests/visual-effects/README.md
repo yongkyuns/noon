@@ -2133,9 +2133,14 @@ remains `cargo test -p noon-native --features wgsl-effects --lib view_output::na
 The same CI step also compares 17 ordinary Rust appearance programs through the
 native source adapter and offscreen exporter at four authored samples per second,
 including source completion, two view sizes and the authored camera. It requires
-changing pixels and a maximum two-byte channel difference. This forward corpus
-complements the operator references; it does not qualify native Python, arbitrary
-seek, physical scanout, input latency or total driver memory.
+changing pixels and a maximum two-byte channel difference. The same step compares
+native viewer seeks, including rewind and repeated times, against forward
+`SessionCapture` output: 1/100 glows with predeclared intensity/radius animation, through both view sizes. Initial affine/effect targets reuse the ordinary
+scheduler and animation lowerer before runtime construction, preserving immutable
+viewer admission. Parallel duplicate channels reject before publication; existing
+content-morph and live-edited playback restrictions remain explicit.
+These checks complement the operator references; they do not qualify native Python,
+arbitrary live-source seek, physical scanout, input latency or total driver memory.
 Held frames may sleep rather than republish time; active animation and explicit
 seek still sample canonical authored time. These software-GPU checks do not
 qualify physical-device performance.
