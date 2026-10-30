@@ -1199,9 +1199,13 @@ selected backend for the other trials. Reports retain every measured rAF/CPU
 sample, available GPU-pass samples and actual renderer-device identity.
 `node scripts/glow-profile-qualification.mjs` compares twelve exact-time
 Rust/Pyodide cases on both raster backends using the existing paired harness.
-The Rust builder completes CPU authoring before rewinding the same runtime;
-this setup is not a rendered cold source pass. This workload enables authored-path
-measurements; a single run is not the frozen repeated-pair/cold-pass protocol.
+The Rust builder completes CPU authoring before rewinding the same runtime.
+For G4, the profiler then renders every target-Hz sample through the full authored
+horizon, including its endpoint, before rewind, warmup and measurement. Reports
+keep cold-frame samples/timing separate from measured samples; the CLI requires
+the completed pass and preserves partial data on failure. This is a rendered
+static-Rust trajectory, not Pyodide/native-Python source-completion evidence.
+A single run still does not satisfy the frozen repeated-pair protocol.
 Like the existing analytic profiler, its entry points require the declared
 `renderer-smoke` build; record and freeze that profile for comparisons.
 It does not measure input-to-present, total driver/in-flight memory or authored
