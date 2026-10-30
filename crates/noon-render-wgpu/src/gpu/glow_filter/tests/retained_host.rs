@@ -373,6 +373,126 @@ fn automatic_retained_host_glow_pixels() {
     }
     eprintln!("automatic-host frames={frames}; full-image comparisons=50; neutral comparisons=10");
     g4_locality_and_retirement(&device, &queue);
+    batched_host_matches_scalar(&device, &queue);
+}
+
+fn batched_host_matches_scalar(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let effects = |index: usize, phase: usize, scalar: bool| {
+        let mut effects = vec![CompiledEffect {
+            attachment: SemanticNodeId::new(100 + index as u32, 1),
+            definition: Glow::new(
+                EffectUpdate::default()
+                    .radius(Pixels(2.1 + index as f64 * 0.1 + phase as f64 * 0.15))
+                    .intensity(2.4)
+                    .color(Color::rgba(0.2 + index as f32 * 0.15, 0.4, 0.8, 0.8)),
+            )
+            .unwrap()
+            .into(),
+        }];
+        if scalar {
+            // An identity suffix uses the established materialized path.
+            effects.push(CompiledEffect {
+                attachment: SemanticNodeId::new(200 + index as u32, 1),
+                definition: noon_core::Blur::new(EffectUpdate::default().radius(Pixels(0.0)))
+                    .unwrap()
+                    .into(),
+            });
+        }
+        Arc::new(noon_compile::CompiledEffectStack::new(effects).unwrap())
+    };
+    let scene = |scalar| {
+        SceneInstance::new(
+            CompiledScene::compile_objects(
+                (0..5)
+                    .map(|i| {
+                        let mut object = CompiledObject::new(
+                            ObjectId::new(i as u64 + 1),
+                            noon_core::GeometryRef::circle(0.2),
+                            Transform2D {
+                                translation: Vec2::new(-2.8 + i as f32 * 1.4, 0.0),
+                                ..Transform2D::IDENTITY
+                            },
+                            Style {
+                                fill: Some(Color::rgba(0.9, 0.2, 0.4, 0.3 + i as f32 * 0.1)),
+                                stroke: None,
+                                opacity: 0.75,
+                                ..Style::default()
+                            },
+                        );
+                        object.effects = Some(effects(i, 0, scalar));
+                        object
+                    })
+                    .collect(),
+                &[],
+            )
+            .unwrap(),
+        )
+    };
+    let mut batched = scene(false);
+    let mut scalar = scene(true);
+    let mut host = Host::new(device, queue);
+    let mut reference = Host::new(device, queue);
+    let mut previous = Vec::new();
+    for step in 0..4 {
+        if step == 1 || step == 2 {
+            for (runtime, scalar) in [(&mut batched, false), (&mut scalar, true)] {
+                for i in if step == 1 { 0..5 } else { 2..3 } {
+                    runtime
+                        .apply_execution_patch(&ExecutionPatch::SetEffects {
+                            object: ObjectId::new(i as u64 + 1),
+                            effects: effects(i, step, scalar),
+                        })
+                        .unwrap();
+                }
+            }
+        }
+        let (actual, work) = host.render(device, queue, &mut batched, false);
+        let (expected, scalar_work) = reference.render(device, queue, &mut scalar, false);
+        assert_eq!(
+            work.blur_passes,
+            match step {
+                0 | 1 => 4,
+                2 => 2,
+                _ => 0,
+            }
+        );
+        assert_eq!(
+            scalar_work.blur_passes,
+            match step {
+                0 | 1 => 10,
+                2 => 2,
+                _ => 0,
+            }
+        );
+        let error = actual
+            .iter()
+            .zip(&expected)
+            .map(|(&a, &b)| a.abs_diff(b))
+            .max()
+            .unwrap();
+        assert!(
+            error <= 2,
+            "retained batched/scalar image mismatch at step {step}: {error}"
+        );
+        if step == 1 || step == 2 {
+            assert_ne!(actual, previous, "radius changes must reach pixels");
+        }
+        if step == 2 {
+            assert_eq!(
+                (
+                    work.rows_examined,
+                    work.sources_prepared,
+                    work.texture_allocations,
+                    work.pipeline_compiles
+                ),
+                (1, 1, 0, 0)
+            );
+        }
+        if step == 3 {
+            assert_eq!(actual, previous);
+        }
+        previous = actual;
+    }
 }
 
 // Renderer/resource qualification, not Scene lowering or physical pacing evidence.
@@ -426,6 +546,11 @@ fn g4_locality_and_retirement(device: &wgpu::Device, queue: &wgpu::Queue) {
             let mut host = Host::with_view(device, queue, view, budget);
             let (initial, warm) = host.render(device, queue, &mut runtime, false);
             assert_eq!(warm.rows_examined, 600);
+            assert_eq!(
+                warm.blur_passes,
+                if active == 1 { 2 } else { 50 },
+                "all active G4 masks must be encoded"
+            );
             assert!(warm.retained_texture_bytes > 0 && warm.retained_texture_bytes <= budget);
             let (_, clean) = host.render(device, queue, &mut runtime, false);
             assert_eq!(

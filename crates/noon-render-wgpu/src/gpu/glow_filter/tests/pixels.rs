@@ -269,16 +269,13 @@ fn compare_pixels(
     );
 }
 
-#[test]
-#[ignore = "requires a native raster adapter; run explicitly, never qualifies via noop"]
-fn batched_blurs_preserve_independent_kernels_sources_and_clean_reuse() {
-    let (device, queue) = device();
+fn qualify_batched_blurs(device: &wgpu::Device, queue: &wgpu::Queue) {
     let size = [19, 15];
     let sources = (0..5)
         .map(|i| {
             primitive_capture(
-                &device,
-                &queue,
+                device,
+                queue,
                 size,
                 i % 2 == 0,
                 Color::rgba(0.31, 0.57, 0.83, 0.2 + i as f32 * 0.15),
@@ -288,7 +285,7 @@ fn batched_blurs_preserve_independent_kernels_sources_and_clean_reuse() {
         .collect::<Vec<_>>();
     let pixels = sources
         .iter()
-        .map(|s| readback(&device, &queue, &s.texture))
+        .map(|s| readback(device, queue, &s.texture))
         .collect::<Vec<_>>();
     let mut scopes = (0..5).map(|_| GlowScope::default()).collect::<Vec<_>>();
     let mut filter = GlowFilter::default();
@@ -299,8 +296,8 @@ fn batched_blurs_preserve_independent_kernels_sources_and_clean_reuse() {
         for (i, scope) in scopes.iter_mut().enumerate() {
             let work = filter
                 .prepare(
-                    &device,
-                    &queue,
+                    device,
+                    queue,
                     scope,
                     GlowCapture {
                         source: &sources[i].texture,
@@ -321,7 +318,7 @@ fn batched_blurs_preserve_independent_kernels_sources_and_clean_reuse() {
             }
         }
         let mut encoder = device.create_command_encoder(&Default::default());
-        let work = filter.encode_blur_jobs(&device, &mut encoder, jobs);
+        let work = filter.encode_blur_jobs(device, &mut encoder, jobs);
         assert_eq!(
             work.blur_passes,
             if step < 2 { 4 } else { 0 },
@@ -335,8 +332,8 @@ fn batched_blurs_preserve_independent_kernels_sources_and_clean_reuse() {
         queue.submit([encoder.finish()]);
         for i in 0..5 {
             compare_pixels(
-                &device,
-                &queue,
+                device,
+                queue,
                 &scopes[i],
                 &pixels[i],
                 &pixels[i],
@@ -351,6 +348,7 @@ fn batched_blurs_preserve_independent_kernels_sources_and_clean_reuse() {
 #[ignore = "requires a native raster adapter; run explicitly, never qualifies via noop"]
 fn native_gaussian_pixels_and_retained_updates() {
     let (device, queue) = device();
+    qualify_batched_blurs(&device, &queue);
     let mut filter = GlowFilter::default();
     // Includes fractional transforms, nonuniform object scale, capture edges,
     // low alpha amplified by intensity, transparent silhouette and sigma limit.
