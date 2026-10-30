@@ -25,20 +25,31 @@ assert.ok(
   "NOON_PERF_REQUIRE_GPU_TIMESTAMPS requires the WebGPU backend",
 );
 
-const counts = integerList(process.env.NOON_PERF_COUNTS ?? "1000,10000,100000");
-const layouts = stringList(process.env.NOON_PERF_LAYOUTS ?? "fit,fixed,overdraw");
+const activeGlows = process.env.NOON_PERF_GLOWS === undefined ? null
+  : positiveInteger(process.env.NOON_PERF_GLOWS, "NOON_PERF_GLOWS");
+const glowProperty = process.env.NOON_PERF_GLOW_PROPERTY ?? "intensity";
+const counts = integerList(process.env.NOON_PERF_COUNTS ?? (activeGlows === null ? "1000,10000,100000" : "600"));
+const layouts = stringList(process.env.NOON_PERF_LAYOUTS ?? (activeGlows === null ? "fit,fixed,overdraw" : "fixed"));
+if (activeGlows !== null) {
+  assert.ok([1, 100].includes(activeGlows), "NOON_PERF_GLOWS must be 1 or 100");
+  assert.ok(["intensity", "radius"].includes(glowProperty), "NOON_PERF_GLOW_PROPERTY must be intensity or radius");
+  assert.deepEqual(counts, [600], "G4 uses exactly 600 objects");
+  assert.deepEqual(layouts, ["fixed"], "G4 uses the frozen fixed layout");
+}
 for (const layout of layouts) {
   assert.ok(["fit", "fixed", "overdraw"].includes(layout), `unknown layout: ${layout}`);
 }
 const warmup = positiveInteger(process.env.NOON_PERF_WARMUP ?? "30", "NOON_PERF_WARMUP");
 const frames = positiveInteger(process.env.NOON_PERF_FRAMES ?? "300", "NOON_PERF_FRAMES");
 const targetHz = positiveNumber(process.env.NOON_PERF_TARGET_HZ ?? "60", "NOON_PERF_TARGET_HZ");
-const width = positiveInteger(process.env.NOON_PERF_WIDTH ?? "960", "NOON_PERF_WIDTH");
-const height = positiveInteger(process.env.NOON_PERF_HEIGHT ?? "540", "NOON_PERF_HEIGHT");
+const width = positiveInteger(process.env.NOON_PERF_WIDTH ?? (activeGlows === null ? "960" : "1152"), "NOON_PERF_WIDTH");
+const height = positiveInteger(process.env.NOON_PERF_HEIGHT ?? (activeGlows === null ? "540" : "648"), "NOON_PERF_HEIGHT");
 const dpr = positiveNumber(process.env.NOON_PERF_DPR ?? "1", "NOON_PERF_DPR");
 const artifactPath = path.resolve(
   repoRoot,
-  process.env.NOON_PERF_ARTIFACT ?? `perf-artifacts/perf-profile-${backend}.json`,
+  process.env.NOON_PERF_ARTIFACT ?? (activeGlows === null
+    ? `perf-artifacts/perf-profile-${backend}.json`
+    : `perf-artifacts/perf-profile-glow-${activeGlows}-${glowProperty}-${backend}.json`),
 );
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], {
@@ -93,6 +104,7 @@ try {
         targetHz: String(targetHz),
         width: String(width),
         height: String(height),
+        ...(activeGlows === null ? {} : { glows: String(activeGlows), glowProperty }),
       });
       process.stdout.write(`Profiling ${backend} ${layout} ${objects.toLocaleString()} objects… `);
       await page.goto(`${baseUrl}/web/perf-profile.html?${query}`, { waitUntil: "load" });
@@ -111,7 +123,16 @@ try {
       assert.equal(report.workload.execution, "typed-direct-rust");
       assert.equal(report.workload.objects, objects);
       assert.equal(report.workload.layout, layout);
+      if (activeGlows !== null) {
+        assert.equal(report.workload.family, "glow-direct");
+        assert.equal(report.workload.activeGlows, activeGlows);
+        assert.equal(report.workload.glowProperty, glowProperty);
+        assert.equal(report.rawSamples.frames.length, frames);
+        assert.ok(report.workload.driverDurationSeconds >= 10);
+      }
       assert.equal(report.environment.devicePixelRatio, dpr);
+      assert.equal(report.environment.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2",
+        "observed renderer backend must match the requested profile");
       if (requireGpuTimestamps) {
         assert.equal(
           report.gpu?.timestampSupported,
@@ -174,6 +195,7 @@ try {
       dpr,
       forceSoftwareWebGpu,
       requireGpuTimestamps,
+      ...(activeGlows === null ? {} : { activeGlows, glowProperty }),
     },
     cases: results,
   };

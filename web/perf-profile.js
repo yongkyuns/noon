@@ -1,4 +1,4 @@
-import init, { createDirectAnalyticProfileRenderer } from "./pkg/noon_web.js";
+import init, { createDirectAnalyticProfileRenderer, createDirectGlowProfileRenderer } from "./pkg/noon_web.js";
 import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
 import {
@@ -7,17 +7,25 @@ import {
 } from "./render-gpu-diagnostics.js";
 
 const parameters = new URLSearchParams(location.search);
-const objectCount = positiveInteger("objects", 10_000);
+const activeGlows = parameters.has("glows") ? positiveInteger("glows") : null;
+const glowProperty = parameters.get("glowProperty") ?? "intensity";
+const objectCount = positiveInteger("objects", activeGlows === null ? 10_000 : 600);
 const warmupFrames = positiveInteger("warmup", 30);
 const measuredFrames = positiveInteger("frames", 300);
 const targetHz = positiveNumber("targetHz", 60);
-const width = positiveInteger("width", 960);
-const height = positiveInteger("height", 540);
-const layout = parameters.get("layout") ?? "fit";
+const width = positiveInteger("width", activeGlows === null ? 960 : 1152);
+const height = positiveInteger("height", activeGlows === null ? 540 : 648);
+const layout = parameters.get("layout") ?? (activeGlows === null ? "fit" : "fixed");
 const ANALYTIC_LAYOUTS = ["fit", "fixed", "overdraw"];
 if (objectCount > 100_000) throw new Error("objects must not exceed 100000");
 if (!ANALYTIC_LAYOUTS.includes(layout)) {
   throw new Error(`layout must be one of ${ANALYTIC_LAYOUTS.join(", ")}`);
+}
+if (activeGlows !== null && (
+  ![1, 100].includes(activeGlows) || objectCount !== 600 || layout !== "fixed" ||
+  !["intensity", "radius"].includes(glowProperty)
+)) {
+  throw new Error("G4 requires glows=1|100, objects=600, layout=fixed and glowProperty=intensity|radius");
 }
 
 const canvas = document.querySelector("#scene");
@@ -33,15 +41,24 @@ const driverDurationSeconds = Math.max(
 );
 const browserJank = new BrowserJankMonitor();
 let renderer = null;
+// Retain every measured sample for the opt-in effects workload. These observe
+// rAF and host calls, not physical scanout, input latency or total driver memory.
+const rawFrames = activeGlows === null ? null : [];
+const rawGpuRenderPassMs = activeGlows === null ? null : [];
 
 try {
   await init();
   const createStarted = performance.now();
   const offscreen = canvas.transferControlToOffscreen();
-  renderer = await createDirectAnalyticProfileRenderer(
-    offscreen, objectCount, layout, width / height, driverDurationSeconds,
-  );
+  renderer = activeGlows === null
+    ? await createDirectAnalyticProfileRenderer(
+      offscreen, objectCount, layout, width / height, driverDurationSeconds,
+    )
+    : await createDirectGlowProfileRenderer(
+      offscreen, activeGlows, glowProperty, driverDurationSeconds,
+    );
   renderer.resize(width, height);
+  const rendererGpuIdentity = activeGlows === null ? null : JSON.parse(renderer.rendererAdapterInfo());
   renderer.advanceDirectRealtime(0);
   renderer.enableGpuTimestampProfiling(true);
   if (!presentPending()) {
@@ -85,7 +102,7 @@ try {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${layout} / ${objectCount.toLocaleString()} objects…`;
     const timestamp = await nextAnimationFrame();
     const timings = presentSceneTime((measured + 1) / targetHz);
-    takeGpuTimestampMetrics(windows.gpuRenderPassMs);
+    takeGpuTimestampMetrics(windows.gpuRenderPassMs, rawGpuRenderPassMs);
 
     cadence.record(timestamp, timings.cpuFrameMs);
     windows.cpuFrameMs.record(timings.cpuFrameMs);
@@ -96,31 +113,43 @@ try {
         estimateUnattributedFrameMs(timestamp - previousTimestamp, timings.cpuFrameMs),
       );
     }
+    rawFrames?.push({
+      authoredTime: (measured + 1) / targetHz,
+      timestampMs: timestamp,
+      frameGapMs: previousTimestamp === null ? null : timestamp - previousTimestamp,
+      ...timings,
+      uploadBytes: renderer.lastBytesUploaded(),
+      geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+    });
     previousTimestamp = timestamp;
     measured += 1;
   }
-  const gpuTimestamps = await settleGpuTimestampMetrics(windows.gpuRenderPassMs);
+  const gpuTimestamps = await settleGpuTimestampMetrics(windows.gpuRenderPassMs, rawGpuRenderPassMs);
   const measurementEndMs = performance.now();
   browserJank.stop();
 
   const frame = cadence.summary();
   const report = {
     schemaVersion: 2,
-    benchmark: "Noon direct Rust analytic frame profile",
+    benchmark: activeGlows === null ? "Noon direct Rust analytic frame profile" : "Noon authored G4 glow frame profile",
     generatedAt: new Date().toISOString(),
     workload: {
-      family: "analytic-direct",
+      family: activeGlows === null ? "analytic-direct" : "glow-direct",
       layout,
-      description: "shared Rust analytic workload; one object advances on a linear position track",
+      description: activeGlows === null
+        ? "shared Rust analytic workload; one object advances on a linear position track"
+        : "shared Rust G4 scene; only named glow parameters animate, all geometry is static",
       execution: "typed-direct-rust",
       camera: "authored",
       objects: objectCount,
-      incrementalDriverObjects: 1,
+      incrementalDriverObjects: activeGlows ?? 1,
+      ...(activeGlows === null ? {} : { activeGlows, glowProperty }),
       driverDurationSeconds,
     },
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: renderer.rendererBackend(),
+      ...(rendererGpuIdentity === null ? {} : { rendererGpuIdentity }),
       hardwareConcurrency: navigator.hardwareConcurrency ?? null,
       deviceMemoryGiB: navigator.deviceMemory ?? null,
       devicePixelRatio: window.devicePixelRatio || 1,
@@ -172,6 +201,9 @@ try {
       inFlight: gpuTimestamps.inFlight,
       renderPassMs: windows.gpuRenderPassMs.summary(),
     },
+    ...(rawFrames === null ? {} : {
+      rawSamples: { frames: rawFrames, gpuRenderPassMs: rawGpuRenderPassMs },
+    }),
   };
 
   window.__NOON_PERF_REPORT__ = report;
@@ -230,7 +262,7 @@ function presentPending() {
   return false;
 }
 
-function takeGpuTimestampMetrics(sampleWindow) {
+function takeGpuTimestampMetrics(sampleWindow, rawSamples = null) {
   const raw = renderer.takeGpuTimestampJson();
   const metrics = JSON.parse(raw);
   if (!metrics || typeof metrics !== "object") {
@@ -239,6 +271,7 @@ function takeGpuTimestampMetrics(sampleWindow) {
   const renderPassMs = Array.isArray(metrics.renderPassMs) ? metrics.renderPassMs : [];
   for (const milliseconds of renderPassMs) {
     sampleWindow.record(milliseconds);
+    rawSamples?.push(milliseconds);
   }
   return {
     timestampSupported: metrics.timestampSupported === true,
@@ -249,13 +282,13 @@ function takeGpuTimestampMetrics(sampleWindow) {
   };
 }
 
-async function settleGpuTimestampMetrics(sampleWindow) {
-  let metrics = takeGpuTimestampMetrics(sampleWindow);
+async function settleGpuTimestampMetrics(sampleWindow, rawSamples = null) {
+  let metrics = takeGpuTimestampMetrics(sampleWindow, rawSamples);
   // Mapping resolves after queue submission. Yield browser frames to process
   // those callbacks, bounded so profiling never turns into a synchronous wait.
   for (let attempt = 0; metrics.timestampSupported && metrics.inFlight > 0 && attempt < 32; attempt += 1) {
     await nextAnimationFrame();
-    metrics = takeGpuTimestampMetrics(sampleWindow);
+    metrics = takeGpuTimestampMetrics(sampleWindow, rawSamples);
   }
   return metrics;
 }

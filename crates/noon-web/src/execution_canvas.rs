@@ -1385,6 +1385,12 @@ mod wasm {
             self.gpu_generation
         }
 
+        /// Actual device identity, queried once outside a measurement loop.
+        #[wasm_bindgen(js_name = rendererAdapterInfo)]
+        pub fn renderer_adapter_info(&self) -> Result<String, JsValue> {
+            crate::gpu_diagnostics::renderer_adapter_info(&self.device).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
         pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {
             self.gpu_diagnostics
