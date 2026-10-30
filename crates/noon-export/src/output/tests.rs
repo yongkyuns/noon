@@ -331,7 +331,7 @@ fn png_sink_roundtrips_odd_size_bytes_and_records_fractional_timing() {
 #[ignore = "requires FFmpeg; selected by native output gate"]
 fn rejected_frames_poison_output_and_never_publish() {
     let root = Temp::new();
-    for bad in 0..12 {
+    for bad in 0..13 {
         let path = root.0.join(format!("bad-{bad}.mp4"));
         let mut sink = FileSink::new(
             OutputOptions::mp4(&path),
@@ -342,7 +342,7 @@ fn rejected_frames_poison_output_and_never_publish() {
         )
         .unwrap();
         let mut pixels = vec![255; 4 * 4 * 4];
-        if bad == 1 {
+        if bad == 1 || bad == 12 {
             pixels[3] = 128;
         }
         if bad == 2 {
@@ -350,6 +350,9 @@ fn rejected_frames_poison_output_and_never_publish() {
         }
         let index = if bad == 0 { 1 } else { 0 };
         let mut invalid = frame(&pixels, 4, 4, index);
+        if bad == 12 {
+            invalid.format = CapturePixelFormat::LinearHdrSdrRgba8Opaque;
+        }
         match bad {
             3 => invalid.observation.requested_time = 0.01,
             4 => invalid.observation.published_time = f64::NAN,
