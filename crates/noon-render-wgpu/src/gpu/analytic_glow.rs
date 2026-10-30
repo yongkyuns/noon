@@ -1484,6 +1484,9 @@ impl GpuRenderer {
             let instance_index =
                 u32::try_from(*index).expect("prepared analytic index exceeds GPU limits");
             if next < instance_index {
+                if next > range.start {
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                }
                 let mut segment = resolved.clone();
                 segment.batch.instance_range = next..instance_index;
                 stats +=
@@ -1507,11 +1510,12 @@ impl GpuRenderer {
             }
             stats.draw_calls += 1;
             stats.instances_drawn += 1;
-            // The tile's layout differs from the ordinary geometry layout.
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
             *binding = None;
             next = instance_index + 1;
         }
+        // Adjacent tiles keep their own layout. Restore the ordinary camera
+        // only for a following geometry span or the next ordered batch.
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
         if next < range.end {
             let mut segment = resolved.clone();
             segment.batch.instance_range = next..range.end;

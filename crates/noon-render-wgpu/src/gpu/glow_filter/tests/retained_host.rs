@@ -403,8 +403,30 @@ fn batched_host_matches_scalar(device: &wgpu::Device, queue: &wgpu::Queue) {
     let scene = |scalar| {
         SceneInstance::new(
             CompiledScene::compile_objects(
-                (0..5)
-                    .map(|i| {
+                (0..7)
+                    .map(|row| {
+                        // Plain geometry inside the circle span and a following
+                        // rectangle batch require the ordinary camera layout.
+                        if row == 2 || row == 6 {
+                            return CompiledObject::new(
+                                ObjectId::new(100 + row as u64),
+                                if row == 2 {
+                                    noon_core::GeometryRef::circle(0.15)
+                                } else {
+                                    noon_core::GeometryRef::rectangle(0.6, 0.2)
+                                },
+                                Transform2D {
+                                    translation: Vec2::new(if row == 2 { -0.7 } else { 1.5 }, 0.7),
+                                    ..Transform2D::IDENTITY
+                                },
+                                Style {
+                                    fill: Some(Color::rgba(0.1, 0.9, 0.3, 0.8)),
+                                    stroke: None,
+                                    ..Style::default()
+                                },
+                            );
+                        }
+                        let i = if row > 2 { row - 1 } else { row };
                         let mut object = CompiledObject::new(
                             ObjectId::new(i as u64 + 1),
                             noon_core::GeometryRef::circle(0.2),
