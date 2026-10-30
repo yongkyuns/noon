@@ -8,6 +8,7 @@ struct GlowUniform {
     reserved: u32,
     tint: vec4<f32>,
     control: vec4<f32>, // intensity, final scope opacity, reserved, reserved
+    source_bounds: vec4<u32>, // conservative source min.xy / exclusive max.xy
     weights: array<vec4<f32>, 64>, // nonnegative offsets 0..192, vec4 UBO stride
 }
 
@@ -46,8 +47,16 @@ fn unpack_mask(value: vec4<f32>) -> f32 {
 
 
 fn blur0(point: vec2<i32>, vertical: bool) -> vec4<f32> {
+    if !vertical && (point.y < i32(glow0.source_bounds.y) || point.y >= i32(glow0.source_bounds.w)) {
+        return pack_mask(0.0);
+    }
+    let coordinate = select(point.x, point.y, vertical);
+    let source_min = i32(select(glow0.source_bounds.x, glow0.source_bounds.y, vertical));
+    let source_max = i32(select(glow0.source_bounds.z, glow0.source_bounds.w, vertical));
+    let first = max(-i32(glow0.radius), source_min - coordinate);
+    let last = min(i32(glow0.radius), source_max - 1 - coordinate);
     var value = 0.0;
-    for (var offset = -i32(glow0.radius); offset <= i32(glow0.radius); offset += 1) {
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + select(vec2<i32>(offset, 0), vec2<i32>(0, offset), vertical);
         if all(sample_point >= vec2<i32>(0)) && all(sample_point < vec2<i32>(glow0.size)) {
             let index = u32(abs(offset));
@@ -62,8 +71,16 @@ fn blur0(point: vec2<i32>, vertical: bool) -> vec4<f32> {
 }
 
 fn blur1(point: vec2<i32>, vertical: bool) -> vec4<f32> {
+    if !vertical && (point.y < i32(glow1.source_bounds.y) || point.y >= i32(glow1.source_bounds.w)) {
+        return pack_mask(0.0);
+    }
+    let coordinate = select(point.x, point.y, vertical);
+    let source_min = i32(select(glow1.source_bounds.x, glow1.source_bounds.y, vertical));
+    let source_max = i32(select(glow1.source_bounds.z, glow1.source_bounds.w, vertical));
+    let first = max(-i32(glow1.radius), source_min - coordinate);
+    let last = min(i32(glow1.radius), source_max - 1 - coordinate);
     var value = 0.0;
-    for (var offset = -i32(glow1.radius); offset <= i32(glow1.radius); offset += 1) {
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + select(vec2<i32>(offset, 0), vec2<i32>(0, offset), vertical);
         if all(sample_point >= vec2<i32>(0)) && all(sample_point < vec2<i32>(glow1.size)) {
             let index = u32(abs(offset));
@@ -78,8 +95,16 @@ fn blur1(point: vec2<i32>, vertical: bool) -> vec4<f32> {
 }
 
 fn blur2(point: vec2<i32>, vertical: bool) -> vec4<f32> {
+    if !vertical && (point.y < i32(glow2.source_bounds.y) || point.y >= i32(glow2.source_bounds.w)) {
+        return pack_mask(0.0);
+    }
+    let coordinate = select(point.x, point.y, vertical);
+    let source_min = i32(select(glow2.source_bounds.x, glow2.source_bounds.y, vertical));
+    let source_max = i32(select(glow2.source_bounds.z, glow2.source_bounds.w, vertical));
+    let first = max(-i32(glow2.radius), source_min - coordinate);
+    let last = min(i32(glow2.radius), source_max - 1 - coordinate);
     var value = 0.0;
-    for (var offset = -i32(glow2.radius); offset <= i32(glow2.radius); offset += 1) {
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + select(vec2<i32>(offset, 0), vec2<i32>(0, offset), vertical);
         if all(sample_point >= vec2<i32>(0)) && all(sample_point < vec2<i32>(glow2.size)) {
             let index = u32(abs(offset));
@@ -94,8 +119,16 @@ fn blur2(point: vec2<i32>, vertical: bool) -> vec4<f32> {
 }
 
 fn blur3(point: vec2<i32>, vertical: bool) -> vec4<f32> {
+    if !vertical && (point.y < i32(glow3.source_bounds.y) || point.y >= i32(glow3.source_bounds.w)) {
+        return pack_mask(0.0);
+    }
+    let coordinate = select(point.x, point.y, vertical);
+    let source_min = i32(select(glow3.source_bounds.x, glow3.source_bounds.y, vertical));
+    let source_max = i32(select(glow3.source_bounds.z, glow3.source_bounds.w, vertical));
+    let first = max(-i32(glow3.radius), source_min - coordinate);
+    let last = min(i32(glow3.radius), source_max - 1 - coordinate);
     var value = 0.0;
-    for (var offset = -i32(glow3.radius); offset <= i32(glow3.radius); offset += 1) {
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + select(vec2<i32>(offset, 0), vec2<i32>(0, offset), vertical);
         if all(sample_point >= vec2<i32>(0)) && all(sample_point < vec2<i32>(glow3.size)) {
             let index = u32(abs(offset));
