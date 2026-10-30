@@ -1178,6 +1178,12 @@ including exact dirty/upload/pass/allocation counters. Its 1,000 attach/remove
 cycles use the small 80×60 fixture and drain submissions through real readback.
 These are renderer locality and capture-image residency checks; they do not
 measure total driver/in-flight memory, input latency or physical frame pacing.
+The existing `public_scene_glow_pixels_and_lifecycle` test also runs 1,000 public
+`set_glow`/`remove_glow` cycles among 600 authored dots at 80×60. Each attachment
+reproduces the first attached image; every removal restores ordinary pixels and
+retires all capture textures. It requires one examined row, no geometry upload,
+stable attached residency and no filter recompilation after the first cycle.
+These paused live edits do not qualify a timed source or the physical cohorts.
 
 The paired [Rust G4 builder](../../crates/noon/src/example_scenes/glow_profile.rs)
 and [Python source](../../web/python/examples/glow_profile.py) author the same
