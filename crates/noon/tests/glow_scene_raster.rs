@@ -312,6 +312,68 @@ fn error(a: &[u8], b: &[u8]) -> u8 {
     a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap()
 }
 
+fn authored_glow_churn(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let mut scene = Scene::new();
+    let mut objects = Vec::new();
+    for index in 0..600 {
+        let mut dot = scene.circle(0.05).unwrap();
+        dot.set_translation(
+            -3.75 + (index % 30) as f64 * 0.25,
+            -2.375 + (index / 30) as f64 * 0.25,
+        )
+        .unwrap();
+        dot.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+        dot.disable_stroke().unwrap();
+        scene.add(&dot).unwrap();
+        objects.push(dot);
+    }
+    let mut session = scene.execution_session().unwrap();
+    let mut surface = Surface::new(device, queue);
+    let ordinary = surface.render(device, queue, &mut session);
+    let mut attached_pixels = None;
+    let mut resident_bytes = None;
+    let mut allocations = 0;
+    for cycle in 0..1000 {
+        scene
+            .live(&mut session)
+            .set_glow(
+                &objects[0],
+                EffectUpdate::default()
+                    .color(Color::BLUE)
+                    .radius(Pixels(3.0))
+                    .intensity(1.4),
+            )
+            .unwrap();
+        let attached = surface.render(device, queue, &mut session);
+        assert_eq!(
+            &attached,
+            attached_pixels.get_or_insert_with(|| attached.clone())
+        );
+        assert!(error(&attached, &ordinary) > 2, "missing glow must fail");
+        let stats = surface.effect_stats;
+        assert_eq!(stats.rows_examined, 1);
+        assert_eq!(
+            stats.retained_texture_bytes,
+            *resident_bytes.get_or_insert(stats.retained_texture_bytes)
+        );
+        assert!(stats.retained_texture_bytes > 0);
+        if cycle > 0 {
+            assert_eq!(stats.pipeline_compiles, 0);
+        }
+        allocations += stats.texture_allocations;
+        assert_eq!(surface.upload_stats.geometry.bytes_uploaded, 0);
+        scene.live(&mut session).remove_glow(&objects[0]).unwrap();
+        assert_eq!(surface.render(device, queue, &mut session), ordinary);
+        assert_eq!(surface.effect_stats.rows_examined, 1);
+        assert_eq!(surface.effect_stats.retained_texture_bytes, 0);
+        assert_eq!(surface.upload_stats.geometry.bytes_uploaded, 0);
+        assert!(!surface.renderer.has_retained_effect_sources());
+    }
+    assert_eq!(surface.render(device, queue, &mut session), ordinary);
+    assert_eq!(surface.effect_stats, Default::default());
+    eprintln!("AUTHORED_GLOW_CHURN_PASS objects=600 cycles=1000 resident_plateau={} retired_bytes=0 texture_allocations={allocations} geometry_bytes=0", resident_bytes.unwrap());
+}
+
 #[test]
 #[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
 fn public_scene_glow_pixels_and_lifecycle() {
@@ -334,6 +396,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
     assert_ne!(info.backend, wgpu::Backend::Noop);
     eprintln!("public Scene glow raster adapter: {info:?}");
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    authored_glow_churn(&device, &queue);
     let (scene, source, animation) = scene(true);
     let (plain_scene, _, plain_animation) = self::scene(false);
     let mut session = scene.execution_session().unwrap();
