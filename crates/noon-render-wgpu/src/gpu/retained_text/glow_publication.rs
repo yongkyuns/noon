@@ -785,9 +785,11 @@ impl GpuRenderer {
                     }),
             )
         });
+        let mut pending_glows = Vec::new();
         for (index, mapped) in sources {
             if let Some((object, scratch, definitions, observation)) = mapped {
                 let demand = super::super::glow_filter::CaptureDemand {
+                    defer_glow_blur: true,
                     required_by_parent: self
                         .retained_effects
                         .required_by_parent(frame, index, view)?,
@@ -913,8 +915,10 @@ impl GpuRenderer {
                     stats.accumulate_work(value);
                 }
                 self.retained_effects.packed.insert(index, (object, packed));
+                pending_glows.push(packed);
             }
         }
+        stats.accumulate_work(self.encode_deferred_glow_blurs(device, encoder, pending_glows));
         // Even a clean publication must admit a newly reduced host budget.
         // Removal is processed first so retiring a scope can satisfy that budget.
         if self.effect_capture_texture_bytes() > texture_budget_bytes {

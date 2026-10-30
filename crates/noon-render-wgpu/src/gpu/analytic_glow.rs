@@ -1187,6 +1187,7 @@ impl GpuRenderer {
                     request.definitions,
                     filter_parameters,
                     &programs.layout,
+                    demand.defer_glow_blur,
                 )?
             } else {
                 glows.filter.prepare_encode(
@@ -1292,6 +1293,28 @@ impl GpuRenderer {
         })();
         self.effect_captures = result.is_ok().then_some(glows);
         result
+    }
+
+    pub(in crate::gpu) fn encode_deferred_glow_blurs(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        owners: Vec<ObjectId>,
+    ) -> EffectCaptureStats {
+        let Some(cache) = self.effect_captures.as_mut() else {
+            return EffectCaptureStats::default();
+        };
+        let jobs = owners
+            .into_iter()
+            .filter_map(|owner| {
+                let key = *cache.owners.get(&owner)?;
+                cache.scopes.get_mut(&key)?.filter.take_placement_blur()
+            })
+            .collect();
+        EffectCaptureStats {
+            filter: cache.filter.encode_glow_blurs(device, encoder, jobs),
+            ..EffectCaptureStats::default()
+        }
     }
 
     /// Retire an exact derived object binding and release its local textures.

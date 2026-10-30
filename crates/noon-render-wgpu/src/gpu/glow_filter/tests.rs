@@ -45,6 +45,7 @@ fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
     };
     assert_eq!(prepare(CaptureDemand::default(), 800), Ok(None));
     let demand = CaptureDemand {
+        defer_glow_blur: false,
         required_by_parent: true,
         original_by_parent: true,
         isolate: false,
