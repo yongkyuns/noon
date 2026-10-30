@@ -11,6 +11,9 @@ use std::mem::size_of;
 use bytemuck::{Pod, Zeroable};
 use noon_core::{EffectParameterError, Glow, GlowSource};
 
+mod batch;
+pub(super) use batch::BlurJob;
+
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const MAX_SIGMA: f64 = 64.0;
 const WEIGHT_VECTORS: usize = 64; // 193 used coefficients; portable fixed uniform array
@@ -205,6 +208,7 @@ pub struct EffectCaptureTile {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CaptureDemand {
+    pub defer_glow_blur: bool,
     pub required_by_parent: bool,
     pub isolate: bool,
     /// Extra input support; does not apply a paint filter to the target.
@@ -281,6 +285,7 @@ impl EffectCaptureTile {
             isolate,
             original_by_parent,
             padding_pixels,
+            ..
         } = demand;
         if definitions.len() > noon_core::MAX_EFFECT_STACK_LEN {
             return Err(EffectPrepareError::StackExceedsProfile);
@@ -755,6 +760,7 @@ struct Programs {
     vertical: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     placement: Option<GlowPlacement>,
+    batch: Option<batch::GlowBlurBatch>,
 }
 
 #[derive(Debug)]
@@ -971,6 +977,7 @@ impl GlowFilter {
         parameters: GlowParameters,
         layout: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
+        defer_blur: bool,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         let mut stats = self.prepare_inner(device, queue, scope, capture, parameters, false)?;
         if scope.active {
@@ -984,8 +991,10 @@ impl GlowFilter {
                 stats.pipeline_compiles += 2;
             }
         }
-        let encoded = self.encode_inner(encoder, scope, false);
-        stats.blur_passes = encoded.blur_passes;
+        if !defer_blur {
+            let encoded = self.encode_inner(encoder, scope, false);
+            stats.blur_passes = encoded.blur_passes;
+        }
         Ok(stats)
     }
 
@@ -1150,6 +1159,7 @@ impl Programs {
             vertical,
             composite,
             placement: None,
+            batch: None,
         }
     }
 

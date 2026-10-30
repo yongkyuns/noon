@@ -1297,6 +1297,16 @@ capture admission retains the conservative 12-byte Glow reservation, while
 `GlowScope::scratch_bytes` reports allocated filter images. Neither counter
 measures driver or in-flight memory.
 
+Independent placement-only Glow masks of equal size can share four-target
+horizontal/vertical passes. Each mask keeps its own images and kernel; no
+resolution or precision changes. Only prepared dirty owners enter the batch.
+Remainders and devices below the four-target/binding limits use scalar passes;
+materialized consumers retain their existing ordering. Two shared pipelines are
+created lazily, with no added textures. `blur_passes` counts physical passes
+(50 for 100 masks), not individual masks. Existing native Gaussian and retained
+host tests compare independent kernels and scalar output, including radius edits,
+one-owner invalidation, clean reuse and the scalar remainder.
+
 `gpu::effect_stack::tests` includes literal CPU witnesses, sparse invalidation,
 aggregate budget, neutral, retirement and late-failure tests. Its ignored native
 pixel test uses a separate direct 2-D convolution/compositor and checks every
