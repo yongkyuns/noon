@@ -68,6 +68,9 @@ def verify(root: Path) -> list[dict]:
         require(int(stream['duration_ts']) == duration_ticks,
                 'video proof failed: encoded duration does not match authored terminal time')
         require([int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)], "video proof failed: [int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)]")
+        require([int(f.get('duration', f.get('pkt_duration', -1))) for f in probe['frames']] ==
+                [min(q, duration_ticks - i * q) for i in range(count)],
+                'video proof failed: per-frame durations do not match the exact source boundary')
         require(stream['color_range'] == 'tv', "video proof failed: stream['color_range'] == 'tv'")
         require(stream['color_space'] == 'bt709', "video proof failed: stream['color_space'] == 'bt709'")
         require(stream['color_primaries'] == 'bt709', "video proof failed: stream['color_primaries'] == 'bt709'")

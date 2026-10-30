@@ -327,6 +327,10 @@ wide-gamut profile is claimed. Broader color-management/player qualification
 remains part of #1896; lossy video is compared with explicit pixel tolerances,
 not bit-identical expectations.
 
+Both compatibility capture and the named HDR-to-SDR capture format are accepted:
+the latter has already applied Reinhard and sRGB transfer once. This remains SDR
+video output; the file adapter does not apply another tone/transfer conversion.
+
 ## Capture-only use
 
 `capture_frames` gives a fallible consumer borrowed tightly packed RGBA pixels
