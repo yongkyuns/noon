@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { createRuntimeBuildIdentity } from "./build-runtime-identity.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,13 @@ const commit = spawnSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 });
 const commitSha = commit.status === 0 ? commit.stdout.trim() : null;
+let runtimeBuildIdentity = null;
+if (activeGlows !== null) {
+  runtimeBuildIdentity = JSON.parse(await readFile(path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));
+  assert.deepEqual(await createRuntimeBuildIdentity(repoRoot), runtimeBuildIdentity,
+    "G4 profiling requires the exact clean source/package");
+  assert.equal(runtimeBuildIdentity.sourceRevision, commitSha, "G4 source revision must be committed");
+}
 
 let serverOutput = "";
 const server = spawn(
@@ -174,6 +182,7 @@ try {
     benchmark: "Noon direct Rust browser performance matrix",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
+    ...(runtimeBuildIdentity === null ? {} : { runtimeBuildIdentity }),
     host: {
       platform: os.platform(),
       release: os.release(),

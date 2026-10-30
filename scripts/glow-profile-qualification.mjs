@@ -9,6 +9,7 @@ import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const identity = JSON.parse(await readFile(root + "/web/runtime-build-identity.json", "utf8"));
 assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "exact clean source/package required");
+assert.ok(identity.sourceRevision, "committed source revision required");
 const source = await readFile(root + "/web/python/examples/glow_profile.py", "utf8");
 await qualifyPairedAuthoring({
   artifactDirectory: "browser-smoke-artifacts/glow-profile",
