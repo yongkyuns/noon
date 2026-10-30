@@ -15,3 +15,4 @@ __pycache__/
 /web/ci-artifact.json
 /web/ci-Cargo.lock
 /node_modules
+/browser-smoke-artifacts
