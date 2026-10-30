@@ -90,13 +90,19 @@ function held(time) {
 const times=[...new Set([0.25,0.75,1.25,1.75,2.25,2.75,3.25,3.75,4.25,4.75,5,
   5.125,5.25,5.5,5.75,6,6.25,6.5,6.75,7,7.25,7.5,7.75,8,8.125,8.25,8.5,8.75,8.875,9,9.25,9.5,9.75,
   10,10.25,10.5,10.75,11,11.25,11.5,11.75,12,12.25,12.5,12.75,13,13.25,13.5,13.75,14])];
-await qualifyPairedAuthoring({
-  cases:times.map(sampleTime=>({
+const boundaries=[0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,6.5,7.5,8,9,9.5,10,10.5,11.5,12,13,13.5];
+const frameTimes=[...new Set([0,...boundaries,...times])].sort((a,b)=>a-b);
+// Every Rust sample stays cold. Python follows one fixed frame map, with
+// separate cold mid-animation and source-complete controls.
+const cases=times.map(sampleTime=>({
     id:`scope-opacity-${sampleTime}`,file:"scope_opacity.py",factory:"createDirectScopeOpacitySmokeRenderer",
     duration:14,sampleTime,playback:"live",canvasSize:[640,360],directHeldSampleTime:held(sampleTime),
-    boundaries:[0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,6.5,7.5,8,9,9.5,10,10.5,11.5,12,13,13.5],
+    boundaries, pythonFrameTimes:sampleTime===5.25?undefined:frameTimes,
     stopAtSourceCompletion:sampleTime===14,
-  })),
+  }));
+cases.push({...cases.at(-1),id:"scope-opacity-14-cold",pythonFrameTimes:undefined});
+await qualifyPairedAuthoring({
+  cases,
   artifactDirectory:"browser-smoke-artifacts/scope-opacity",prepareContext:disableAuthoringJspi,
   qualifyPixels({fixture,backend,rust,python}) {return {
     rust:reference(rust,fixture.sampleTime,`${backend}/rust-wasm`),
