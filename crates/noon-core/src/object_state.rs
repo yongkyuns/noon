@@ -25,7 +25,7 @@ pub use blur::Blur;
 pub(crate) use effect_parameters::sealed as effect_value_sealed;
 pub use effect_parameters::{
     EffectOffset, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue,
-    Pixels, PreparedEffectUpdate,
+    Pixels, PreparedEffectUpdate, ShaderParameterWrite,
 };
 pub use glow::{Glow, GlowSource};
 pub use gradient::{GradientError, GradientStop};

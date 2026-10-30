@@ -202,6 +202,12 @@ impl SemanticExecutionReachability {
         self.nodes.get(&id).is_some_and(|node| node.scene_root)
     }
 
+    pub(super) fn execution_roots(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.nodes
+            .iter()
+            .filter_map(|(&id, node)| node.scene_root.then_some(id))
+    }
+
     pub fn is_object_reachable(&self, id: SemanticNodeId) -> bool {
         self.nodes
             .get(&id)

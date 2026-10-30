@@ -117,7 +117,7 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_edit_membership(noon::SceneMembershipRequest::Add(&[family_target]))
+            .live_edit_membership(noon::SceneMembershipRequest::Add(&[family_target]), false)
             .unwrap();
         let rectangle = space.rectangle().clone();
         context

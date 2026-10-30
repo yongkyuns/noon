@@ -15,7 +15,7 @@ fn append_channels(runtime: &mut SceneInstance, update: EffectUpdate) {
     let row = &runtime.frame().objects[1];
     let captured = only_effect(row.effects.as_ref().unwrap());
     let tracks = captured
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .unwrap()
         .into_iter()
         .enumerate()

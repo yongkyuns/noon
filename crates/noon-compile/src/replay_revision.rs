@@ -140,7 +140,11 @@ impl CompiledScene {
                     {
                         continue;
                     }
-                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                    let retired = self.objects[slot as usize]
+                        .effects
+                        .as_ref()
+                        .and_then(|stack| stack.get(attachment))?;
+                    for property in retired.parameter_properties() {
                         let channel = CompiledChannelKey::effect(slot, property, attachment);
                         if !self.channel_tracks(channel).is_empty() {
                             channels.insert(channel);

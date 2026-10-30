@@ -5,6 +5,8 @@ import initNoonWeb, {
   WasmAuthoringFamilyHandle,
   WasmEffectDefinition,
   WasmEffectUpdate,
+  WasmShaderParameter,
+  WasmShaderSchema,
   WasmLinearGradient,
   WasmRadialGradient,
   WasmNoisePaint,
@@ -145,6 +147,23 @@ async function initializePyodide() {
     return token;
   };
   self.noonAwaitSemanticContinuation = (context) => awaitSemanticContinuation(context);
+  self.noonPrepareSemanticEffects = async (context, staged) => {
+    try {
+      const continuation = activeAuthoringRun?.continuation;
+      if (!continuation || continuation.context !== context || continuation.terminal ||
+          continuation.preparedPlayback || continuation.endpoint === null) {
+        throw new Error("shader resource preparation requires the active render endpoint");
+      }
+      if (staged.startsSegment === true) {
+        return await awaitSemanticContinuation(context, () =>
+          continuation.endpoint.prepareSourceEffects(continuation.generation, staged));
+      }
+      await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+      throw error;
+    } finally { if (!fatalAuthoringFailure) staged.free(); }
+  };
   self.noonSetSemanticContinuationCallbackSession = (context, sessionId) => {
     if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
       throw new TypeError("semantic continuation callback session must be a non-negative safe integer");
@@ -222,6 +241,9 @@ async function initializePyodide() {
   self.noonShadow = (update) => WasmEffectDefinition.shadow(update);
   self.noonNoiseDissolve = (update) => WasmEffectDefinition.noiseDissolve(update);
   self.noonPixelate = (update) => WasmEffectDefinition.pixelate(update);
+  self.noonShaderParameter = WasmShaderParameter;
+  self.noonShaderSchema = (...args) => new WasmShaderSchema(...args);
+  self.noonShaderEffect = (program, update) => WasmEffectDefinition.shader(program, update);
   self.noonLinearGradient = (...args) => new WasmLinearGradient(...args);
   self.noonRadialGradient = (...args) => new WasmRadialGradient(...args);
   self.noonNoisePaint = (...args) => new WasmNoisePaint(...args);
@@ -683,7 +705,7 @@ function registerContinuationContext(context) {
   return continuation;
 }
 
-function awaitSemanticContinuation(context) {
+function awaitSemanticContinuation(context, start = null) {
   let continuation;
   try {
     continuation = registerContinuationContext(context);
@@ -700,7 +722,17 @@ function awaitSemanticContinuation(context) {
   const result = new Promise((resolve, reject) => {
     continuation.pending = { resolve, reject };
   });
-  if (continuation.endpoint !== null) {
+  if (start !== null) {
+    const pending = continuation.pending;
+    Promise.resolve().then(start).catch(error => {
+      if (continuation.pending === pending) {
+        continuation.pending = null;
+        pending.reject(error);
+      } else if (!continuation.terminal) {
+        failContinuation(continuation, error);
+      }
+    });
+  } else if (continuation.endpoint !== null) {
     try {
       continuation.endpoint.startContinuation(continuation.generation);
     } catch (error) {
@@ -1455,7 +1487,7 @@ __noon_namespace = {
 }
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
+if __noon_portable_constructs or MODULE_BARRIER_GLOBAL in __noon_code.co_names:
     __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
 with authoring_source_scope():
     await execute_authoring_module(__noon_code, __noon_namespace)

@@ -230,6 +230,7 @@ impl EffectCaptureTile {
             viewport,
             &[parameters.definition],
             super::EffectStackParameters {
+                shader: None,
                 working_format: wgpu::TextureFormat::Rgba8Unorm,
                 output_height: parameters.output_height,
                 world_view_height: parameters.world_view_height,
@@ -314,9 +315,9 @@ impl EffectCaptureTile {
         let texel_bytes = capture_texel_bytes(parameters.working_format)?;
         let mut cost_per_pixel = texel_bytes;
         let mut silhouette = original_by_parent;
-        for &definition in definitions {
+        for definition in definitions {
             let value = EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: parameters.output_height,
                 world_view_height: parameters.world_view_height,
                 scope_opacity: parameters.scope_opacity,
@@ -426,7 +427,7 @@ impl EffectCaptureTile {
 }
 
 /// Common isolated capture footprint for the finite built-ins.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct EffectCaptureParameters {
     pub definition: noon_core::EffectDefinition,
     pub output_height: u32,
@@ -434,7 +435,7 @@ pub struct EffectCaptureParameters {
     pub scope_opacity: f32,
 }
 impl EffectCaptureParameters {
-    pub(super) fn is_neutral_at_sigma(self, sigma: f64) -> bool {
+    pub(super) fn is_neutral_at_sigma(&self, sigma: f64) -> bool {
         self.definition.is_neutral()
             || (matches!(self.definition, noon_core::EffectDefinition::Blur(_)) && sigma == 0.0)
             || self.definition.as_pixelate().is_some_and(|v| {
@@ -446,7 +447,7 @@ impl EffectCaptureParameters {
                 .is_ok_and(|size| size <= 1.0)
             })
     }
-    pub(super) fn sigma_pixels(self) -> Result<f64, EffectPrepareError> {
+    pub(super) fn sigma_pixels(&self) -> Result<f64, EffectPrepareError> {
         if let Some(pixelate) = self.definition.as_pixelate() {
             super::sample_filter::checked_cell_size(
                 pixelate,
@@ -468,7 +469,7 @@ impl EffectCaptureParameters {
         }
         Ok(sigma)
     }
-    pub(super) fn offset_pixels(self) -> Result<[f64; 2], EffectPrepareError> {
+    pub(super) fn offset_pixels(&self) -> Result<[f64; 2], EffectPrepareError> {
         let Some(shadow) = self.definition.as_shadow() else {
             return Ok([0.0; 2]);
         };
@@ -485,23 +486,24 @@ impl EffectCaptureParameters {
         Ok([x, -y])
     }
     pub(crate) fn filter_bytes_per_pixel(
-        self,
+        &self,
         format: wgpu::TextureFormat,
     ) -> Result<u64, EffectPrepareError> {
         capture_texel_bytes(format)?;
         if format == wgpu::TextureFormat::Rgba16Float {
-            return match self.definition {
+            return match &self.definition {
                 noon_core::EffectDefinition::Blur(_)
                 | noon_core::EffectDefinition::BackdropBlur(_) => Ok(24),
                 _ => Err(EffectPrepareError::UnsupportedCapture),
             };
         }
-        Ok(match self.definition {
+        Ok(match &self.definition {
             noon_core::EffectDefinition::Bloom(_) => {
                 return Err(EffectPrepareError::UnsupportedCapture)
             }
             noon_core::EffectDefinition::NoiseDissolve(_)
-            | noon_core::EffectDefinition::Pixelate(_) => 4,
+            | noon_core::EffectDefinition::Pixelate(_)
+            | noon_core::EffectDefinition::Shader(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
             noon_core::EffectDefinition::Blur(_) | noon_core::EffectDefinition::BackdropBlur(_) => {
                 28
@@ -538,6 +540,7 @@ pub struct GlowParameters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectPrepareError {
     CellSizeExceedsProfile,
+    ShaderProgramNotPrepared,
     Blur(super::gaussian_blur::GaussianBlurPrepareError),
     Parameter(EffectParameterError),
     InvalidScopeOpacity,

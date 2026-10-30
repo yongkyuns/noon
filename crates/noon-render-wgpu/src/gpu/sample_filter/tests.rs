@@ -1,8 +1,9 @@
 use super::*;
 
 const SIZE: [u32; 2] = [24, 20];
-fn parameters(progress: f64) -> SampleParameters {
+fn parameters(progress: f64) -> SampleParameters<'static> {
     SampleParameters {
+        shader: None,
         definition: noon_core::NoiseDissolve::new(7, 0.08)
             .unwrap()
             .with_progress(progress)
@@ -113,7 +114,7 @@ fn mask_preflight_is_atomic_and_clean_preparation_reuses_resources() {
     invalid.push((p, EffectPrepareError::CaptureCoordinatesOutOfRange));
     for (p, error) in invalid {
         assert_eq!(
-            prepare(&mut filter, &mut scope, &device, &queue, &source, p),
+            prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone()),
             Err(error)
         );
         assert_eq!(scope.output(), Some(&output));
@@ -375,9 +376,15 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
                             p.scope_opacity = opacity;
                             p.source_bounds = bounds;
                             let first_in_scope = scope.output().is_none();
-                            let work =
-                                prepare(&mut filter, &mut scope, &device, &queue, &texture, p)
-                                    .unwrap();
+                            let work = prepare(
+                                &mut filter,
+                                &mut scope,
+                                &device,
+                                &queue,
+                                &texture,
+                                p.clone(),
+                            )
+                            .unwrap();
                             assert_eq!(work.texture_allocations, usize::from(first_in_scope));
                             assert_eq!(work.buffer_allocations, usize::from(first_in_scope));
                             if count > 0 {
@@ -553,7 +560,7 @@ fn dissolve_pixels_endpoints_seed_coordinates_and_warm_resources_match_reference
     eprintln!("DISSOLVE_OPERATOR_PASS cases={count} channels={} max_error={maximum} source_endpoints_exact=true empty_endpoints_exact=true warmed_bytes=1920 source_revisions=true rebind=true abandoned_retry=true",count*input.len());
 }
 
-fn pixel_parameters(size: f64) -> SampleParameters {
+fn pixel_parameters(size: f64) -> SampleParameters<'static> {
     SampleParameters {
         definition: noon_core::Pixelate::new(
             noon_core::EffectUpdate::default().size(noon_core::Pixels(size)),
@@ -737,7 +744,8 @@ fn pixelate_pixels_formats_fractional_cells_and_warm_reuse_match_independent_cel
                     p.source_bounds.min = origin;
                     p.scope_opacity = opacity;
                     let work =
-                        prepare(&mut filter, &mut scope, &device, &queue, &source, p).unwrap();
+                        prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone())
+                            .unwrap();
                     if count > 0 {
                         assert_eq!(work.pipeline_compiles, 0);
                     }
@@ -762,7 +770,8 @@ fn pixelate_pixels_formats_fractional_cells_and_warm_reuse_match_independent_cel
                         assert_eq!(actual, input);
                     }
                     let again =
-                        prepare(&mut filter, &mut scope, &device, &queue, &source, p).unwrap();
+                        prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone())
+                            .unwrap();
                     assert_eq!(
                         (
                             again.bytes_uploaded,
@@ -810,3 +819,6 @@ fn cell_grid_has_literal_subpixel_vectors_and_bounded_integer_coordinates() {
         Err(EffectPrepareError::CaptureCoordinatesOutOfRange)
     );
 }
+
+#[cfg(feature = "wgsl-effects")]
+mod shader;

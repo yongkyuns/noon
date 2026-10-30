@@ -96,6 +96,7 @@ impl DynamicProperties {
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectShader(_)
             | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
@@ -168,7 +169,7 @@ pub struct CompiledObject {
 
 /// One static attachment lowered from the existing generational semantic node.
 /// This is execution data, not a second attachment allocator or mutable scene.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CompiledEffect {
     pub attachment: noon_core::SemanticNodeId,
     pub definition: noon_core::EffectDefinition,
@@ -176,7 +177,7 @@ pub struct CompiledEffect {
 
 impl CompiledEffect {
     /// Ordinary timeline channels owned by one lowered appearance attachment.
-    pub const PARAMETER_PROPERTIES: [Property; 9] = [
+    const BUILTIN_PARAMETER_PROPERTIES: [Property; 9] = [
         Property::EffectColor,
         Property::EffectRadius,
         Property::EffectIntensity,
@@ -188,15 +189,23 @@ impl CompiledEffect {
         Property::EffectSize,
     ];
 
+    /// Bounded attachment-local fields, borrowed from the immutable schema.
+    pub fn parameter_properties(&self) -> impl Iterator<Item = Property> + '_ {
+        Self::BUILTIN_PARAMETER_PROPERTIES.into_iter().chain(
+            (0..self.definition.as_shader().map_or(0, |v| v.values().len()))
+                .map(|index| Property::EffectShader(index as u8)),
+        )
+    }
+
     /// Lower a captured parameter request to ordinary independent timeline values.
     /// The caller assigns existing TrackIds, timing and composition maps. Capture
     /// this value from the runtime row at activation, not an earlier authored copy.
     pub fn parameter_channels(
         &self,
-        update: noon_core::EffectUpdate,
+        update: &noon_core::EffectUpdate,
     ) -> Result<Vec<(Property, TrackValues)>, noon_core::EffectParameterError> {
-        update.prepare(self.definition)?;
-        let target = update.apply_to(self.definition)?;
+        let target = update.apply_to(self.definition.clone())?;
+        noon_core::EffectValue::validate_effect_transition(&self.definition, &target)?;
         let count = usize::from(update.color.is_some())
             + usize::from(update.radius.is_some())
             + usize::from(update.intensity.is_some())
@@ -204,7 +213,8 @@ impl CompiledEffect {
             + usize::from(update.offset.is_some())
             + usize::from(update.progress.is_some())
             + usize::from(update.softness.is_some())
-            + usize::from(update.size.is_some());
+            + usize::from(update.size.is_some())
+            + update.shader_parameters().len();
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
             (update.color.is_some(), Property::EffectColor),
@@ -215,7 +225,15 @@ impl CompiledEffect {
             (update.progress.is_some(), Property::EffectProgress),
             (update.softness.is_some(), Property::EffectSoftness),
             (update.size.is_some(), Property::EffectSize),
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            update
+                .shader_parameters()
+                .iter()
+                .filter(|w| w.key.definition().kind.is_continuous())
+                .map(|w| (true, Property::EffectShader(w.key.index() as u8))),
+        ) {
             if requested {
                 channels.push((
                     property,
@@ -223,10 +241,10 @@ impl CompiledEffect {
                         attachment: self.attachment,
                         from: noon_core::EffectTrackValue::from_definition(
                             property,
-                            self.definition,
+                            &self.definition,
                         )
                         .expect("checked appearance parameter"),
-                        to: noon_core::EffectTrackValue::from_definition(property, target)
+                        to: noon_core::EffectTrackValue::from_definition(property, &target)
                             .expect("checked appearance parameter"),
                         end_behavior: noon_core::EffectTrackEndBehavior::Sample,
                     },
@@ -1539,6 +1557,7 @@ impl CompiledScene {
                         | Property::EffectProgress
                         | Property::EffectSoftness
                         | Property::EffectSize
+                        | Property::EffectShader(_)
                         | Property::EffectSeed
                 )
             {
@@ -2052,7 +2071,7 @@ impl CompiledScene {
         self.tracks.contains_key(&channel)
     }
 
-    fn channels_for_object_index(
+    pub fn channels_for_object_index(
         &self,
         object_index: u32,
     ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
@@ -2902,6 +2921,7 @@ impl CompiledScene {
                             | Property::EffectProgress
                             | Property::EffectSoftness
                             | Property::EffectSize
+                            | Property::EffectShader(_)
                             | Property::EffectSeed
                     )
                 {
@@ -3107,10 +3127,27 @@ pub(crate) fn validate_paint_track_profile(
     Ok(())
 }
 
+/// Geometry deformation is outside the finite painted-pointwise source profile.
+/// Check the compiled channel/stack together, including raw native execution.
+pub(crate) fn validate_shader_source_track(
+    property: Property,
+    effects: Option<&CompiledEffectStack>,
+) -> Result<(), noon_core::TimelineError> {
+    if matches!(property, Property::Transform | Property::Morph)
+        && effects.is_some_and(|stack| stack.definitions().iter().any(|d| d.as_shader().is_some()))
+    {
+        return Err(noon_core::TimelineError::UnsupportedShaderSourceTrack(
+            property,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_effect_track(
     track: &TrackDefinition,
     object: &CompiledObject,
 ) -> Result<(), noon_core::TimelineError> {
+    validate_shader_source_track(track.property, object.effects.as_deref())?;
     let effect = if let TrackValues::Effect { attachment, .. } = track.values {
         object
             .effects
@@ -3142,7 +3179,13 @@ pub(crate) fn validate_effect_track_attachment(
         if let (noon_core::EffectTrackValue::Seed(a), noon_core::EffectTrackValue::Seed(b)) =
             (from, to)
         {
-            return if a == b && effect.definition.as_noise_dissolve().is_some() {
+            return if a == b
+                && noon_core::EffectTrackValue::from_definition(
+                    Property::EffectSeed,
+                    &effect.definition,
+                )
+                .is_some()
+            {
                 Ok(())
             } else {
                 Err(noon_core::TimelineError::InvalidEffectValues(
@@ -3150,8 +3193,14 @@ pub(crate) fn validate_effect_track_attachment(
                 ))
             };
         }
-        if from.update().prepare(effect.definition).is_err()
-            || to.update().prepare(effect.definition).is_err()
+        if from
+            .update(&effect.definition)
+            .and_then(|v| v.prepare(effect.definition.clone()))
+            .is_err()
+            || to
+                .update(&effect.definition)
+                .and_then(|v| v.prepare(effect.definition.clone()))
+                .is_err()
         {
             return Err(noon_core::TimelineError::InvalidEffectValues(
                 track.property,
@@ -3698,7 +3747,7 @@ fn validate_presence_chains(tracks: &[CompiledTrack]) -> Result<(), (TrackId, Tr
     Ok(())
 }
 
-const fn property_rank(property: Property) -> u8 {
+const fn property_rank(property: Property) -> u16 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
@@ -3725,6 +3774,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::EffectSize => 22,
         Property::EffectThreshold => 23,
         Property::Emission => 24,
+        Property::EffectShader(index) => 25 + index as u16,
     }
 }
 
@@ -4655,7 +4705,9 @@ mod tests {
             Transform2D::IDENTITY,
             Style::default(),
         );
-        compiled.effects = Some(Arc::new(CompiledEffectStack::new([effect]).unwrap()));
+        compiled.effects = Some(Arc::new(
+            CompiledEffectStack::new([effect.clone()]).unwrap(),
+        ));
         let mut channels = vec![
             (
                 Property::Position,
@@ -4669,7 +4721,7 @@ mod tests {
         channels.extend(
             effect
                 .parameter_channels(
-                    noon_core::EffectUpdate::default()
+                    &noon_core::EffectUpdate::default()
                         .color(noon_core::Color::BLUE)
                         .radius(0.3)
                         .intensity(0.8),

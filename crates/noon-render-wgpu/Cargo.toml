@@ -7,6 +7,8 @@ description = "Reusable retained WGPU renderer for Noon runtime state"
 readme = "README.md"
 
 [features]
+# Optional authored-source validation; no default parser dependency.
+wgsl-effects = ["noon-core/wgsl-effects"]
 default = ["native", "ci-noop"]
 native = [
     "wgpu/dx12",

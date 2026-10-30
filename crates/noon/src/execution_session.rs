@@ -48,7 +48,8 @@ pub use completion::ExecutionSegmentCompletionError;
 pub use effective_content::ExecutionSessionContentError;
 pub use noon_runtime::SignalTimelineAppendError;
 pub use publication::{
-    EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
+    EffectiveSemanticObject, ExecutionSessionPublicationError, StagedEffectPublication,
+    StructuralPublicationStats,
 };
 #[cfg(feature = "prepared-prefix")]
 pub use replay::PrefixReader;
@@ -149,6 +150,11 @@ fn stage_animation_admissions(
         .map_err(|error| ExecutionSessionAnimationError::InvalidComposition(error.to_string()))
 }
 
+enum ShaderPublicationPreparation<'a> {
+    Collect(&'a mut Vec<noon_core::WgslEffectProgram>),
+    Publish(&'a [noon_core::WgslEffectProgram]),
+}
+
 #[derive(Clone)]
 enum PreparedAnimationLifecycle {
     Introduce(SemanticNodeId),
@@ -177,7 +183,7 @@ enum PreparedAnimationLifecycle {
 /// The tree borrows no execution state and owns only its child topology. All semantic
 /// identity, schedule lowering, admission, and runtime publication remain transaction-local
 /// until `declare_and_activate_composition` succeeds.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SemanticCompositionRequest {
     FocusOn {
         focus: crate::FocusOnOptions,
@@ -844,6 +850,7 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 #[derive(Debug)]
 pub struct ExecutionSession {
     store_identity: noon_core::SemanticStoreIdentity,
+    require_effect_preparation: bool,
     execution_index: SemanticExecutionIndex,
     reachability: SemanticExecutionReachability,
     slots: noon_runtime::ExecutionSlotTable,
@@ -899,6 +906,7 @@ impl Clone for ExecutionSession {
         });
         Self {
             store_identity: self.store_identity.clone(),
+            require_effect_preparation: self.require_effect_preparation,
             execution_index: self.execution_index.clone(),
             reachability: self.reachability.clone(),
             slots: self.slots.clone(),
@@ -1111,6 +1119,7 @@ impl ExecutionSession {
         let _ = runtime.take_spatial_changes();
         Self {
             store_identity,
+            require_effect_preparation: false,
             execution_index,
             reachability,
             slots,
@@ -1634,6 +1643,14 @@ impl ExecutionSession {
         self.runtime.painter_order()
     }
 
+    /// Borrow the stable frame/resources for fallible device preparation.
+    /// Presentation changes and continuation receipts remain pending.
+    pub fn resource_publication(&self) -> RendererPublication<'_> {
+        self.runtime
+            .resource_publication()
+            .with_primary_view(self.camera_object)
+    }
+
     /// Consume one coherent renderer publication from this typed session.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         let prefix_queries = self.runtime.has_painter_prefix_sources();
@@ -1907,17 +1924,21 @@ impl ExecutionSession {
             projection.execution_signal(),
             runtime_value,
         )])?;
-        self.apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+        self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             Vec::new(),
-            Some(root),
+            None.into(),
             publication::SemanticPublicationPurpose::AuthoredMutation,
-            Some(publication::PreparedReactiveEnrollmentBatch {
-                projection_enrollments: vec![projection],
-                runtime_enrollment,
+            Some(publication::PreparedScalarPublicationContract {
+                handled_signals: [semantic_signal].into_iter().collect(),
+                reactive_enrollment: Some(publication::PreparedReactiveEnrollmentBatch {
+                    projection_enrollments: vec![projection],
+                    runtime_enrollment,
+                }),
             }),
-            [semantic_signal].into_iter().collect(),
+            Some(root),
         )
+        .map(|(result, _)| result)
         .map_err(ExecutionSessionAnimationError::AuthoredPublication)
     }
 
@@ -2173,6 +2194,24 @@ impl ExecutionSession {
         request: &SemanticCompositionRequest,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.prepare_composition_publication(
+            store,
+            root,
+            request,
+            play_options,
+            ShaderPublicationPreparation::Publish(&[]),
+        )
+        .map(|segment| segment.expect("publishing an animation returns its segment"))
+    }
+
+    fn prepare_composition_publication(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        request: &SemanticCompositionRequest,
+        play_options: AnimationOptions,
+        preparation: ShaderPublicationPreparation<'_>,
+    ) -> Result<Option<ExecutionSegment>, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
         if !self.reachability.is_execution_root(root) {
             return Err(ExecutionSessionAnimationError::CreateTarget {
@@ -2212,7 +2251,7 @@ impl ExecutionSession {
             false,
         )?;
         stage_animation_admissions(store, root, &admitted.ordered, &mut declaration)?;
-        self.declare_and_activate_prepared_animation(
+        self.prepare_animation_publication(
             store,
             declaration,
             animation,
@@ -2225,6 +2264,7 @@ impl ExecutionSession {
                 removals,
                 callback_intervals,
             }),
+            preparation,
         )
     }
 
@@ -4128,7 +4168,7 @@ impl ExecutionSession {
                         if effect.name.authored() == Some("glow")
                             && effect.definition.as_glow().is_some() =>
                     {
-                        let destination = effect.definition;
+                        let destination = effect.definition.clone();
                         Some(
                             noon_core::EffectUpdate::default()
                                 .intensity(0.0)
@@ -4231,11 +4271,31 @@ impl ExecutionSession {
     fn declare_and_activate_prepared_animation(
         &mut self,
         store: &mut SemanticStore,
-        mut declaration: SemanticMutationTransaction,
+        declaration: SemanticMutationTransaction,
         root: impl Into<SemanticTransactionNodeRef>,
         play_options: AnimationOptions,
         lifecycle: Option<PreparedAnimationLifecycle>,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.prepare_animation_publication(
+            store,
+            declaration,
+            root,
+            play_options,
+            lifecycle,
+            ShaderPublicationPreparation::Publish(&[]),
+        )
+        .map(|segment| segment.expect("publishing an animation returns its segment"))
+    }
+
+    fn prepare_animation_publication(
+        &mut self,
+        store: &mut SemanticStore,
+        mut declaration: SemanticMutationTransaction,
+        root: impl Into<SemanticTransactionNodeRef>,
+        play_options: AnimationOptions,
+        lifecycle: Option<PreparedAnimationLifecycle>,
+        preparation: ShaderPublicationPreparation<'_>,
+    ) -> Result<Option<ExecutionSegment>, ExecutionSessionAnimationError> {
         let root = root.into();
         let callback_markers = match lifecycle.as_ref() {
             Some(PreparedAnimationLifecycle::Composition {
@@ -4798,7 +4858,7 @@ impl ExecutionSession {
                         .or_insert_with(|| (Vec::new(), None));
                     entry.0.push(noon_compile::CompiledEffect {
                         attachment,
-                        definition: *definition,
+                        definition: definition.clone(),
                     });
                     if name.is_visibility() {
                         entry.1 = Some(attachment);
@@ -4927,21 +4987,52 @@ impl ExecutionSession {
                 runtime_enrollment,
             })
         };
+        let prepared_effect_programs = match preparation {
+            ShaderPublicationPreparation::Collect(programs) => {
+                let publication = noon_compile::prepare_semantic_publication_with_scalar_timeline(
+                    &prepared,
+                    &self.execution_index,
+                    &self.reachability,
+                    &handled_scalar_signals,
+                )
+                .map_err(|error| {
+                    ExecutionSessionAnimationError::AuthoredPublication(
+                        ExecutionSessionPublicationError::Lowering(error),
+                    )
+                })?;
+                self.validate_shader_view_profile(&prepared, &publication)
+                    .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
+                for program in publication.introduced_shader_programs() {
+                    if !programs.contains(program) {
+                        programs.push(program.clone());
+                    }
+                }
+                return Ok(None);
+            }
+            ShaderPublicationPreparation::Publish(programs) => programs.to_vec(),
+        };
         let result = self
-            .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+            .apply_prepared_semantic_transaction_with_execution_contract(
                 prepared,
                 execution_prefix,
+                publication::PreparedRuntimePublication {
+                    prepared_effect_programs,
+                    ..Default::default()
+                },
+                publication::SemanticPublicationPurpose::AuthoredMutation,
+                Some(publication::PreparedScalarPublicationContract {
+                    reactive_enrollment,
+                    handled_signals: handled_scalar_signals,
+                }),
                 // Admissions can reorder the root even without a matching
                 // family transform. Use the lifecycle's already validated scope;
                 // the unrooted lowering guard remains unchanged.
                 family_replacement
                     .map(|(root, _, _)| root)
                     .or_else(|| lifecycle.as_ref().map(PreparedAnimationLifecycle::root)),
-                publication::SemanticPublicationPurpose::AuthoredMutation,
-                reactive_enrollment,
-                handled_scalar_signals,
             )
-            .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
+            .map_err(ExecutionSessionAnimationError::AuthoredPublication)?
+            .0;
         self.commit_scalar_timeline_append(scalar_timeline);
         debug_assert!(match root {
             SemanticTransactionNodeRef::Existing(node) => store.node(node).is_some(),
@@ -5057,7 +5148,7 @@ impl ExecutionSession {
                 .with_glow_pulse_attachments(glow_pulse_attachments),
             );
         }
-        Ok(segment)
+        Ok(Some(segment))
     }
 
     /// Apply one native-reactive input using authoritative semantic signal identity.

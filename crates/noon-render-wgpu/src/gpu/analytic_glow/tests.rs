@@ -45,6 +45,7 @@ fn effect(intensity: f64) -> EffectDefinition {
 
 fn request(definitions: &[EffectDefinition]) -> EffectCaptureRequest<'_> {
     EffectCaptureRequest {
+        shader: None,
         object_index: 1,
         definitions,
         texture_budget_bytes: 1_000_000,
@@ -302,7 +303,7 @@ fn truncating_a_warm_stack_rebinds_the_final_output_and_retires_neutral_suffix()
     queue.submit([encoder.finish()]);
     let neutral = [EffectUpdate::default()
         .intensity(0.0)
-        .apply_to(definitions[0])
+        .apply_to(definitions[0].clone())
         .unwrap()];
     let mut encoder = device.create_command_encoder(&Default::default());
     let neutral = renderer
@@ -367,7 +368,7 @@ fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
             &prepared,
             EffectCaptureRequest {
                 object_index: 0,
-                ..request(&[mask])
+                ..request(std::slice::from_ref(&mask))
             },
         )
         .unwrap();
@@ -390,7 +391,7 @@ fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
                     &prepared,
                     EffectCaptureRequest {
                         object_index: 0,
-                        ..request(&[value])
+                        ..request(std::slice::from_ref(&value))
                     },
                 )
                 .unwrap();
@@ -430,7 +431,7 @@ fn tiny_mask_domain_rejects_without_discarding_a_coherent_warm_capture() {
             &prepared,
             EffectCaptureRequest {
                 object_index: 0,
-                ..request(&[mask])
+                ..request(std::slice::from_ref(&mask))
             }
         ),
         Err(EffectPrepareError::CaptureCoordinatesOutOfRange)

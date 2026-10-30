@@ -38,6 +38,11 @@ fn emit<C: LiveContinuation<Error = String>>(
                     }
                 }
                 LiveProgramStatus::Finished => break,
+                LiveProgramStatus::PreparingResources => {
+                    return Err(format!(
+                        "{name}: diagnostic host cannot prepare external shaders"
+                    ));
+                }
                 LiveProgramStatus::Terminal => return Err(format!("{name}: terminal program")),
             }
         }

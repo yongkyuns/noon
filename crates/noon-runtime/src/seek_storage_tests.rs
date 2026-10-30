@@ -417,11 +417,11 @@ fn merged_seek_preserves_paint_effect_and_reserved_storage() {
         CompiledEffectStack::new([
             CompiledEffect {
                 attachment: identities[0],
-                definition: definitions[0],
+                definition: definitions[0].clone(),
             },
             CompiledEffect {
                 attachment: identities[1],
-                definition: definitions[1],
+                definition: definitions[1].clone(),
             },
         ])
         .unwrap(),

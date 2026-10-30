@@ -724,14 +724,19 @@ test("external samples wake only active interactions and serialize presented del
   }
 });
 
-test("one external sample crosses continuation segments with the returned player", async () => {
+for (const prepareEffects of [false, true]) {
+test(`one external sample crosses continuation segments with the returned player (prepare effects=${prepareEffects})`, async () => {
   let endpoint;
   let stage = 0;
+  let preparation;
   const f = fixture("transferable", null, {
     generation: 32,
     onComplete: () => {
       stage += 1;
-      setImmediate(() => endpoint.startContinuation(32));
+      setImmediate(() => {
+        if (prepareEffects) preparation = endpoint.prepareSourceEffects(32, { startsSegment: true });
+        else endpoint.startContinuation(32);
+      });
     },
     onError: (_generation, error) => { throw error; },
   }, { pacing: "external_samples" });
@@ -744,6 +749,8 @@ test("one external sample crosses continuation segments with the returned player
     });
   };
   const delta = () => nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+  f.context.effectPreparationResources = () => new Uint8Array([1]);
+  f.context.publishPreparedEffects = () => {};
   try {
     f.player.driveLiveSegmentToAuthoredTime = (target) => {
       f.stats().authoredSampleTimes.push(target);
@@ -761,10 +768,19 @@ test("one external sample crosses continuation segments with the returned player
     await ready;
     acknowledge(await initial);
 
+    const resources = prepareEffects
+      ? nextMatching(f.render.port2, m => m.type === "prepare_effect_programs") : null;
+    const released = prepareEffects
+      ? nextMatching(f.render.port2, m => m.type === "release_effect_programs") : null;
     const sampled = request(f.control.port2, "sample_to_authored_time", 63, { time: 1.5 });
     acknowledge(await delta()); // first segment endpoint
     acknowledge(await delta()); // first segment completion
+    if (resources !== null) {
+      const resource = await resources;
+      f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
+    }
     acknowledge(await delta()); // next segment authored/resume publication
+    if (released !== null) { await released; await preparation; }
     acknowledge(await delta()); // requested frame in the next segment
     const sampleResult = await sampled;
     assert.equal(sampleResult.time, 1.5);
@@ -777,6 +793,7 @@ test("one external sample crosses continuation segments with the returned player
     assert.equal(f.stats().completedSegments, 1);
   } finally { endpoint?.stop(); f.close(); }
 });
+}
 
 for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]) {
   test(`external sampling completion: time=${time}, stop=${stopAtSourceCompletion}`, { timeout: 2_000 }, async () => {
@@ -3120,5 +3137,55 @@ test("finite export retains presentation barriers and rejects competing controls
     assert.equal(advances, 1, "a terminal held frame reuses the same publication epoch");
     await request(f.control.port2, "cancel_finite_export", 6);
     assert.equal(active, false);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("source effect preparation publishes only after GPU readiness and waits for retention", { timeout: 5000 }, async () => {
+  let complete;
+  const completed = new Promise(resolve => { complete = resolve; });
+  const f = fixture("transferable", null, { generation: 9, onComplete: complete, onError: assert.fail });
+  let endpoint, published = 0;
+  f.context.publishPreparedEffects = () => { published++; };
+  f.context.drainReturnedPublicationJson = () => f.player.seekDeltaJson(f.player.time());
+  f.context.effectPreparationResources = () => new Uint8Array([1]);
+  const staged = {};
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, m => m.type === "execution_delta");
+    endpoint = await f.attach(); await ready;
+    const first = await initial;
+    f.render.port2.postMessage({ type: "execution_presented", session: 7, sequence: first.sequence });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await completed;
+
+    let requestReady = nextMatching(f.render.port2, m => m.type === "prepare_effect_programs");
+    const failed = assert.rejects(endpoint.prepareSourceEffects(9, staged), /compiler failed/);
+    let resource = await requestReady;
+    assert.equal(published, 0);
+    f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId, error: "compiler failed" });
+    await failed;
+    assert.equal(published, 0, "failed device work cannot publish CPU state");
+
+    requestReady = nextMatching(f.render.port2, m => m.type === "prepare_effect_programs");
+    const deltaReady = nextMatching(f.render.port2, m => m.type === "execution_delta");
+    let settled = false;
+    const success = endpoint.prepareSourceEffects(9, staged).then(() => { settled = true; });
+    resource = await requestReady;
+    await assert.rejects(endpoint.prepareSourceEffects(9, staged), /current returned source lease/);
+    f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
+    const delta = await deltaReady;
+    assert.equal(published, 1);
+    assert.equal(settled, false, "the source cannot resume before its frame is retained");
+    f.render.port2.postMessage({ type: "execution_presented", session: 7, sequence: delta.sequence });
+    await success;
+
+    requestReady = nextMatching(f.render.port2, m => m.type === "prepare_effect_programs");
+    const cancelled = assert.rejects(endpoint.prepareSourceEffects(9, staged), /stopped before resource preparation/);
+    resource = await requestReady;
+    endpoint.stop();
+    f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
+    await cancelled;
+    assert.equal(published, 1, "late device completion cannot revive a retired source");
   } finally { endpoint?.stop(); f.close(); }
 });

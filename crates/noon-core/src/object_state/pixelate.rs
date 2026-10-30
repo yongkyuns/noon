@@ -32,17 +32,17 @@ impl Pixelate {
 }
 impl sealed::Sealed for Pixelate {}
 impl EffectValue for Pixelate {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.require_parameters(&[EffectParameter::Size])?;
         update.validate()?;
         Ok(Self {
             size: update.size.unwrap_or(self.size),
         })
     }
-    fn validate_effect_value_update(self, _target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_value_update(&self, _target: &Self) -> Result<(), EffectParameterError> {
         Ok(())
     }
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
         if !self.size.same_unit(target.size) {
             return Err(EffectParameterError::DiscreteTransition(
                 EffectParameter::Size,
@@ -51,9 +51,9 @@ impl EffectValue for Pixelate {
         Ok(())
     }
     fn sample_effect_parameters(
-        self,
-        target: Self,
-        request: EffectUpdate,
+        &self,
+        target: &Self,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let update = EffectUpdate {
@@ -62,7 +62,7 @@ impl EffectValue for Pixelate {
                 .map(|_| self.size.interpolate(target.size, alpha)),
             ..EffectUpdate::default()
         };
-        update.apply_to(self)?;
+        update.apply_to(*self)?;
         Ok(update)
     }
 }

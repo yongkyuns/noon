@@ -45,7 +45,7 @@ fn tracks(
         .unwrap()
         .get(SemanticNodeId::new(3, 7))
         .unwrap()
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .unwrap()
         .into_iter()
         .enumerate()
@@ -81,7 +81,7 @@ fn independent_glow_channels_share_motion_timing_and_rewind() {
         .color(Color::BLUE)
         .radius(Pixels(5.0))
         .intensity(1.2);
-    let mut channels = tracks(&object, update, 0.2, RateFunction::Linear);
+    let mut channels = tracks(&object, update.clone(), 0.2, RateFunction::Linear);
     channels.push(TrackDefinition {
         id: TrackId::new(10),
         object: object.id,
@@ -324,10 +324,10 @@ fn incompatible_parameter_values_and_discrete_updates_fail_admission() {
         .get(SemanticNodeId::new(3, 7))
         .unwrap();
     assert!(effect
-        .parameter_channels(EffectUpdate::default().radius(1.0))
+        .parameter_channels(&EffectUpdate::default().radius(1.0))
         .is_err());
     assert!(effect
-        .parameter_channels(EffectUpdate::default().source(noon_core::GlowSource::Silhouette))
+        .parameter_channels(&EffectUpdate::default().source(noon_core::GlowSource::Silhouette))
         .is_err());
     for values in [
         TrackValues::Effect {
@@ -366,12 +366,12 @@ fn incompatible_parameter_values_and_discrete_updates_fail_admission() {
         assert!(noon_core::validate_track_definition(&track).is_err());
     }
     assert!(effect
-        .parameter_channels(EffectUpdate::default())
+        .parameter_channels(&EffectUpdate::default())
         .unwrap()
         .is_empty());
     assert_eq!(
         effect
-            .parameter_channels(EffectUpdate::default().intensity(0.35))
+            .parameter_channels(&EffectUpdate::default().intensity(0.35))
             .unwrap()
             .len(),
         1,
@@ -806,13 +806,13 @@ fn bounded_polynomial_glow_normalizes_roundoff_at_the_peak() {
 #[test]
 fn public_endpoint_sampler_rejects_cross_parameter_pairs() {
     assert!(EffectTrackValue::Intensity(0.5)
-        .sample(EffectTrackValue::Color(Color::BLUE), 0.5)
+        .sample_value(EffectTrackValue::Color(Color::BLUE), 0.5)
         .is_err());
     assert!(EffectTrackValue::Intensity(0.5)
-        .sample(EffectTrackValue::Intensity(1.0), f64::NAN)
+        .sample_value(EffectTrackValue::Intensity(1.0), f64::NAN)
         .is_err());
     assert!(EffectTrackValue::Radius(EffectRadius::Pixels(2.0))
-        .sample(EffectTrackValue::Radius(EffectRadius::Scene(3.0)), 0.5)
+        .sample_value(EffectTrackValue::Radius(EffectRadius::Scene(3.0)), 0.5)
         .is_err());
 }
 
@@ -874,7 +874,7 @@ fn sequential_channel_capture_uses_current_value_and_replays_historical_gaps() {
         .get(SemanticNodeId::new(3, 7))
         .unwrap();
     let (property, values) = captured
-        .parameter_channels(EffectUpdate::default().intensity(3.0))
+        .parameter_channels(&EffectUpdate::default().intensity(3.0))
         .unwrap()
         .remove(0);
     let second = TrackDefinition {

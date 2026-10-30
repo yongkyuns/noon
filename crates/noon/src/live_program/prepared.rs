@@ -24,6 +24,8 @@ pub enum PreparedSourceError<E> {
     Program(LiveProgramError<E>),
     /// This slice needs a nonzero readable prefix; do not invent source time.
     NoPreparedInterval,
+    /// A headless prefix cannot admit externally prepared GPU resources.
+    ResourcePreparationUnavailable,
     /// Invalid demand is rejected before invoking source code or changing state.
     InvalidPreparationTarget(f64),
 }
@@ -35,6 +37,9 @@ impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
             Self::Prefix(e) => e.fmt(f),
             Self::Program(e) => e.fmt(f),
             Self::InvalidPreparationTarget(time) => write!(f, "invalid preparation target {time}"),
+            Self::ResourcePreparationUnavailable => {
+                f.write_str("external shader preparation requires a rendering host")
+            }
             Self::NoPreparedInterval => {
                 f.write_str("prepared source finished without a readable interval")
             }
@@ -226,6 +231,9 @@ impl<C: LiveContinuation> PreparedSource<C> {
             .session()
             .validate_prepared_source_domain()
             .map_err(PreparedSourceError::Prefix)?;
+        if status == LiveProgramStatus::PreparingResources {
+            return Err(PreparedSourceError::ResourcePreparationUnavailable);
+        }
         if status == LiveProgramStatus::Finished {
             let boundary = self
                 .boundary

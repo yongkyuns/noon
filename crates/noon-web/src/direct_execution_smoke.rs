@@ -1661,6 +1661,43 @@ pub async fn create_direct_lingering_renderer(
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
+/// The same checked custom-material lesson as the native Rust example.
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepSmokeRenderer)]
+pub async fn create_direct_shader_sweep_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepLateSmokeRenderer)]
+pub async fn create_direct_shader_sweep_late_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::late_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderFadeSmokeRenderer)]
+pub async fn create_direct_shader_fade_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::fade_in_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderTimeSmokeRenderer)]
+pub async fn create_direct_shader_time_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::shader_sweep::authored_time_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
 /// Same ordinary Rust material/view program as the native camera_bloom example.
 #[wasm_bindgen(js_name = createDirectCameraBloomRenderer)]
 pub async fn create_direct_camera_bloom_renderer(

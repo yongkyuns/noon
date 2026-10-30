@@ -9,9 +9,10 @@ description = "Browser-facing persistent runtime and live patch control for Noon
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["renderer"]
+wgsl-effects = ["noon/wgsl-effects"]
+default = ["renderer", "wgsl-effects"]
 # Explicit release-profile qualification only; production builds omit the fixtures.
-renderer-smoke = ["renderer"]
+renderer-smoke = ["renderer", "wgsl-effects"]
 # Opt-in typed replay fixtures for optimized qualification, not production exports.
 replay-smoke = []
 # Experimental historical input adapter; no default viewer switch.

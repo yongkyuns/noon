@@ -23,6 +23,8 @@ pub struct SampleObservation {
 pub enum ForwardSampleStatus {
     /// One source resume or shared segment drive completed; call `advance` again.
     Progress,
+    /// Prepare the program's owned immutable requests without holding a frame borrow.
+    ResourcePreparationPending,
     /// Consume this exact endpoint publication, then acknowledge its admission.
     /// It is not an additional output frame.
     PublicationPending(PublicationContext),
@@ -110,6 +112,16 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         self.program.status()
     }
 
+    pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.program.pending_effect_programs()
+    }
+    pub fn publish_prepared_effects(&mut self) -> Result<(), ForwardSampleError<C::Error>> {
+        self.program
+            .publish_prepared_effects()
+            .map(|_| ())
+            .map_err(ForwardSampleError::Program)
+    }
+
     /// Query the existing runtime-owned spatial cache without advancing time,
     /// invoking callbacks, consuming a publication or admitting a continuation.
     pub fn query_viewport(
@@ -162,6 +174,9 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         }
 
         match self.program.status() {
+            LiveProgramStatus::PreparingResources => {
+                Ok(ForwardSampleStatus::ResourcePreparationPending)
+            }
             LiveProgramStatus::PublicationPending(context) => {
                 self.phase = Phase::Endpoint {
                     context,

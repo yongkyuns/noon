@@ -125,6 +125,7 @@ mod render_substage_tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::gpu_effect_programs::EffectProgramTask;
     use noon_core::Vec2;
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
@@ -237,6 +238,7 @@ mod wasm {
         glow_transport_seen: bool,
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
+        effect_program_task: EffectProgramTask,
         text_gpu: RetainedTextGpuState,
         selection_overlay: Option<AnalyticOverlay>,
         pointer_view: Option<crate::PointerPresentationView>,
@@ -330,6 +332,7 @@ mod wasm {
             self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.preparer = preparer;
             self.renderer = renderer;
+            self.effect_program_task.cancel();
             self.text_gpu = text_gpu;
             self.selection_overlay_gpu = OverlayGpuState::default();
             self.gpu_validation_scope = None;
@@ -411,6 +414,7 @@ mod wasm {
                 glow_transport_seen: false,
                 preparer,
                 renderer,
+                effect_program_task: EffectProgramTask::default(),
                 text_gpu,
                 selection_overlay: None,
                 pointer_view: None,
@@ -623,6 +627,7 @@ mod wasm {
                     // preparation path for subsequent removal/cleanup frames.
                     self.glow_transport_seen |= received_glow;
                     if replaces_session {
+                        self.effect_program_task.cancel();
                         self.renderer.reset_spatial_publication_context();
                         // A previous glow session can already have returned to
                         // the no-effect fast path. Its retained preparer's last
@@ -783,6 +788,49 @@ mod wasm {
             self.gpu_completion_samples.take_json().map_err(js_error)
         }
 
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = debugEffectProgramsJson)]
+        pub fn debug_effect_programs_json(&self) -> String {
+            let [rows, programs] = self.renderer.resident_effect_program_counts();
+            serde_json::json!({
+                "rows": rows, "programs": programs,
+                "pipelineCompiles": self.effect_program_task.pipeline_compiles,
+                "pending": self.effect_program_task.is_pending(),
+            })
+            .to_string()
+        }
+
+        /// The future owns only immutable source and device work. This method
+        /// returns before awaiting, so rendering/recovery retain normal access.
+        #[wasm_bindgen(js_name = prepareEffectPrograms)]
+        pub fn prepare_effect_programs(&self, bytes: &[u8]) -> Result<js_sys::Promise, JsValue> {
+            let programs =
+                crate::retained_resource_transport::shader_programs::decode_shader_preparation(
+                    bytes,
+                    self.mirror.resources(),
+                )
+                .map_err(js_error)?;
+            let request = self
+                .renderer
+                .effect_module_preparation(&self.device, &programs);
+            Ok(wasm_bindgen_futures::future_to_promise(async move {
+                let prepared = request.prepare().await.map_err(js_error)?;
+                Ok(crate::gpu_effect_programs::WasmPreparedEffectPrograms { prepared }.into())
+            }))
+        }
+
+        #[wasm_bindgen(js_name = cacheEffectPrograms)]
+        pub fn cache_effect_programs(
+            &mut self,
+            prepared: &crate::gpu_effect_programs::WasmPreparedEffectPrograms,
+        ) -> Result<(), JsValue> {
+            self.renderer
+                .cache_effect_programs(&self.device, &prepared.prepared)
+                .map_err(js_error)?;
+            self.effect_program_task.record(prepared.prepared.stats());
+            Ok(())
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()
@@ -791,6 +839,22 @@ mod wasm {
             }
             if !self.drawable || !self.pending_frame {
                 return Ok(false);
+            }
+
+            self.prepare_working_profile()?;
+
+            if self.glow_transport_seen || self.effect_program_task.is_pending() {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                if !self
+                    .effect_program_task
+                    .poll(&mut self.renderer, &self.device, &publication)
+                    .map_err(js_error)?
+                {
+                    return Ok(false);
+                }
             }
 
             let profiling = self.render_substage_profiling;
@@ -834,37 +898,6 @@ mod wasm {
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());
-            let profile = {
-                let publication = self
-                    .mirror
-                    .renderer_publication(&self.pending_changes)
-                    .map_err(js_error)?;
-                self.view_output
-                    .prepare(
-                        &self.device,
-                        &publication,
-                        !self.mirror.inset_2d_views().is_empty(),
-                        [self.config.width, self.config.height],
-                    )
-                    .map_err(js_error)?
-            };
-            if profile != self.working_profile {
-                let format = if profile == noon_core::ViewColorProfile::LinearHdr {
-                    wgpu::TextureFormat::Rgba16Float
-                } else {
-                    self.config.format
-                };
-                let gpu =
-                    build_retained_gpu_state(&self.mirror, &self.device, &self.queue, format)?;
-                self.preparer = gpu.preparer;
-                self.renderer = gpu.renderer;
-                self.text_gpu = gpu.text_gpu;
-                self.preloaded_geometry_count = gpu.preloaded_geometry_count;
-                self.preload_bytes_uploaded = gpu.preload_bytes_uploaded;
-                self.working_profile = profile;
-                self.pending_changes = FrameChanges::all();
-                self.update_camera()?;
-            }
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
             // Worker transport has already resolved and validated this frame and
@@ -1375,6 +1408,44 @@ mod wasm {
     }
 
     impl WasmRetainedExecutionCanvasRenderer {
+        fn prepare_working_profile(&mut self) -> Result<(), JsValue> {
+            let profile = {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                self.view_output
+                    .prepare(
+                        &self.device,
+                        &publication,
+                        !self.mirror.inset_2d_views().is_empty(),
+                        [self.config.width, self.config.height],
+                    )
+                    .map_err(js_error)?
+            };
+            if profile == self.working_profile {
+                return Ok(());
+            }
+            let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                self.config.format
+            };
+            let mut gpu =
+                build_retained_gpu_state(&self.mirror, &self.device, &self.queue, format)?;
+            gpu.renderer
+                .copy_effect_program_cache_from(&self.device, &self.renderer);
+            self.effect_program_task.cancel();
+            self.preparer = gpu.preparer;
+            self.renderer = gpu.renderer;
+            self.text_gpu = gpu.text_gpu;
+            self.preloaded_geometry_count = gpu.preloaded_geometry_count;
+            self.preload_bytes_uploaded = gpu.preload_bytes_uploaded;
+            self.working_profile = profile;
+            self.pending_changes = FrameChanges::all();
+            self.update_camera()
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
             if !self.drawable
                 || self.webgl_context_lifecycle.is_lost()

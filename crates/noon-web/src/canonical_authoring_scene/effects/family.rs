@@ -4,6 +4,34 @@ use crate::WasmAuthoringFamilyHandle;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = prepareFamilyMembership)]
+    pub fn prepare_family_membership(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        batch: WasmSceneMembershipBatch,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        self.prepare_membership_target(family.semantic_family_ref().into(), batch)
+    }
+
+    #[wasm_bindgen(js_name = prepareFamilyEffectAddition)]
+    pub fn prepare_family_effect_addition(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        definition: &WasmEffectDefinition,
+        name: &str,
+    ) -> Result<WasmStagedEffectPublication, JsValue> {
+        let pending = self
+            .inner
+            .active_live_player()
+            .map_err(js_error)?
+            .prepare_effect_addition(family.semantic_family_ref(), definition.definition(), name)
+            .map_err(js_error)?;
+        Ok(WasmStagedEffectPublication {
+            pending: Some(pending),
+            reservations: Default::default(),
+        })
+    }
+
     #[wasm_bindgen(js_name = liveSetFamilyGlow)]
     pub fn live_set_family_glow(
         &mut self,
@@ -13,7 +41,7 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_set_glow(family.semantic_family_ref(), update.value)
+            .live_set_glow(family.semantic_family_ref(), update.value.clone())
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveAddFamilyEffect)]
@@ -39,7 +67,11 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_set_effect(family.semantic_family_ref(), name.into(), update.value)
+            .live_set_effect(
+                family.semantic_family_ref(),
+                name.into(),
+                update.value.clone(),
+            )
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveSetFamilyEffectHandle)]
@@ -55,7 +87,7 @@ impl CanonicalAuthoringSceneContext {
             .live_set_effect(
                 family.semantic_family_ref(),
                 (&effect.handle).into(),
-                update.value,
+                update.value.clone(),
             )
             .map_err(js_error)
     }

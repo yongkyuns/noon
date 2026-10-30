@@ -69,6 +69,14 @@ pub(crate) trait NativeExecutionSource {
     fn pending_endpoint(&self) -> Option<PublicationContext> {
         None
     }
+    fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        None
+    }
+    fn publish_prepared_effects(&mut self) -> Result<(), NativeHostError> {
+        Err(NativeHostError::Program(
+            "source has no staged publication".into(),
+        ))
+    }
     /// Advance through the existing shared runtime/source protocol. Work is
     /// bounded per call; the caller retains its absolute wall-time target when
     /// more source work or a renderer publication is required.
@@ -336,6 +344,7 @@ where
         mut program: LiveProgram<C>,
         callbacks: RustHostCallbackTable,
     ) -> Result<Self, NativeHostError> {
+        program.require_effect_resource_preparation();
         program
             .resume()
             .map_err(|error| NativeHostError::Program(error.to_string()))?;
@@ -436,7 +445,8 @@ where
                 .map_err(|error| NativeHostError::Program(error.to_string()))?
             {
                 ForwardSampleStatus::Progress => {}
-                ForwardSampleStatus::PublicationPending(_)
+                ForwardSampleStatus::ResourcePreparationPending
+                | ForwardSampleStatus::PublicationPending(_)
                 | ForwardSampleStatus::Ready(_)
                 | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
             }
@@ -447,6 +457,15 @@ where
         Ok(())
     }
 
+    fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.program.pending_effect_programs()
+    }
+    fn publish_prepared_effects(&mut self) -> Result<(), NativeHostError> {
+        self.program
+            .publish_prepared_effects()
+            .map(|_| ())
+            .map_err(|e| NativeHostError::Program(e.to_string()))
+    }
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
         if self.program.status() == LiveProgramStatus::ReadyToResume {
             self.program

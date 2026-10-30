@@ -462,6 +462,8 @@ pub enum Property {
     EffectSoftness,
     EffectSeed,
     EffectSize,
+    /// A schema field on one exact shader attachment generation.
+    EffectShader(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -493,7 +495,8 @@ impl Property {
             | Self::EffectProgress
             | Self::EffectSoftness
             | Self::EffectSeed
-            | Self::EffectSize => ValueKind::Effect,
+            | Self::EffectSize
+            | Self::EffectShader(_) => ValueKind::Effect,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -519,7 +522,7 @@ impl Property {
     }
 }
 
-/// A typed endpoint for a single glow channel. Radius and intensity retain f64
+/// A typed endpoint for one attachment parameter. Radius and intensity retain f64
 /// precision; no renderer units, timing or attachment identity are inferred here.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum EffectTrackValue {
@@ -534,14 +537,17 @@ pub enum EffectTrackValue {
     /// seeds cannot interpolate; successive intervals may choose another seed.
     Seed(u32),
     Size(crate::EffectRadius),
+    Shader {
+        parameter: u8,
+        value: crate::ShaderValue,
+    },
 }
 
 impl EffectTrackValue {
     pub fn from_definition(
         property: Property,
-        definition: impl Into<crate::EffectDefinition>,
+        definition: &crate::EffectDefinition,
     ) -> Option<Self> {
-        let definition = definition.into();
         match property {
             Property::EffectColor => definition.color().map(Self::Color),
             Property::EffectOffset => definition.as_shadow().map(|v| Self::Offset(v.offset())),
@@ -553,7 +559,20 @@ impl EffectTrackValue {
                 .as_noise_dissolve()
                 .map(|v| Self::Softness(v.softness())),
             Property::EffectSize => definition.as_pixelate().map(|v| Self::Size(v.size())),
-            Property::EffectSeed => definition.as_noise_dissolve().map(|v| Self::Seed(v.seed())),
+            Property::EffectShader(parameter) => definition
+                .as_shader()?
+                .values()
+                .get(usize::from(parameter))
+                .map(|&value| Self::Shader { parameter, value }),
+            Property::EffectSeed => definition
+                .as_noise_dissolve()
+                .map(|v| Self::Seed(v.seed()))
+                .or_else(|| {
+                    definition
+                        .as_shader()
+                        .filter(|v| v.program().schema().dependencies.seed)
+                        .map(|v| Self::Seed(v.seed()))
+                }),
             Property::EffectIntensity => definition.intensity().map(Self::Intensity),
             Property::EffectThreshold => definition.threshold().map(Self::Threshold),
             _ => None,
@@ -571,11 +590,54 @@ impl EffectTrackValue {
             Self::Softness(_) => Property::EffectSoftness,
             Self::Seed(_) => Property::EffectSeed,
             Self::Size(_) => Property::EffectSize,
+            Self::Shader { parameter, .. } => Property::EffectShader(parameter),
         }
     }
 
-    pub fn update(self) -> crate::EffectUpdate {
+    pub const fn parameter(self) -> crate::EffectParameter {
         match self {
+            Self::Color(_) => crate::EffectParameter::Color,
+            Self::Radius(_) => crate::EffectParameter::Radius,
+            Self::Intensity(_) => crate::EffectParameter::Intensity,
+            Self::Threshold(_) => crate::EffectParameter::Threshold,
+            Self::Offset(_) => crate::EffectParameter::Offset,
+            Self::Progress(_) => crate::EffectParameter::Progress,
+            Self::Softness(_) => crate::EffectParameter::Softness,
+            Self::Seed(_) => crate::EffectParameter::Seed,
+            Self::Size(_) => crate::EffectParameter::Size,
+            Self::Shader { parameter, .. } => crate::EffectParameter::Shader(parameter),
+        }
+    }
+
+    /// Resolve a compiled field against the attachment's pinned program. Raw
+    /// indices never become unchecked semantic parameter writes.
+    pub fn update(
+        self,
+        definition: &crate::EffectDefinition,
+    ) -> Result<crate::EffectUpdate, crate::EffectParameterError> {
+        let update = if let Self::Shader { parameter, value } = self {
+            let invalid = crate::EffectParameterError::InvalidShaderParameter(parameter);
+            let shader = definition.as_shader().ok_or(invalid)?;
+            let field = shader
+                .program()
+                .schema()
+                .parameters
+                .get(usize::from(parameter))
+                .ok_or(invalid)?;
+            let key = shader
+                .program()
+                .parameter(&field.name)
+                .expect("checked shader schema");
+            crate::EffectUpdate::default().shader_parameter(&key, value)
+        } else {
+            self.builtin_update().expect("builtin parameter")
+        };
+        update.validate()?;
+        Ok(update)
+    }
+
+    fn builtin_update(self) -> Option<crate::EffectUpdate> {
+        Some(match self {
             Self::Color(value) => crate::EffectUpdate::default().color(value),
             Self::Radius(value) => crate::EffectUpdate::default().radius(value),
             Self::Intensity(value) => crate::EffectUpdate::default().intensity(value),
@@ -585,21 +647,44 @@ impl EffectTrackValue {
             Self::Softness(value) => crate::EffectUpdate::default().softness(value),
             Self::Seed(value) => crate::EffectUpdate::default().seed(value),
             Self::Size(value) => crate::EffectUpdate::default().size(value),
-        }
+            Self::Shader { .. } => return None,
+        })
     }
 
-    /// Use the same checked interpolation contract as semantic glow targets.
+    /// Use the same checked interpolation contract as semantic effect targets.
     /// The returned patch owns only this channel, not the whole definition.
-    pub fn sample(self, to: Self, alpha: f64) -> Result<crate::EffectUpdate, TimelineError> {
-        Ok(self.sample_value(to, alpha)?.update())
+    pub fn sample(
+        self,
+        to: Self,
+        alpha: f64,
+        definition: &crate::EffectDefinition,
+    ) -> Result<crate::EffectUpdate, TimelineError> {
+        self.sample_value(to, alpha)?
+            .update(definition)
+            .map_err(|_| TimelineError::InvalidEffectValues(self.property()))
+    }
+
+    fn validate(self) -> Result<(), TimelineError> {
+        let invalid = || TimelineError::InvalidEffectValues(self.property());
+        if let Self::Shader { parameter, value } = self {
+            if parameter >= 16 || value.interpolate(value, 0.0).is_none() {
+                return Err(invalid());
+            }
+        } else {
+            self.builtin_update()
+                .expect("builtin parameter")
+                .validate()
+                .map_err(|_| invalid())?;
+        }
+        Ok(())
     }
     pub fn sample_value(self, to: Self, alpha: f64) -> Result<Self, TimelineError> {
         let invalid = || TimelineError::InvalidEffectValues(self.property());
         if self.property() != to.property() || !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
             return Err(invalid());
         }
-        self.update().validate().map_err(|_| invalid())?;
-        to.update().validate().map_err(|_| invalid())?;
+        self.validate()?;
+        to.validate()?;
         let mix = crate::object_state::effect_parameters::interpolate;
         let result = match (self, to) {
             (Self::Color(a), Self::Color(b)) => Self::Color(crate::Color::rgba(
@@ -617,12 +702,22 @@ impl EffectTrackValue {
             (Self::Progress(a), Self::Progress(b)) => Self::Progress(mix(a, b, alpha)),
             (Self::Softness(a), Self::Softness(b)) => Self::Softness(mix(a, b, alpha)),
             (Self::Seed(a), Self::Seed(b)) if a == b => Self::Seed(a),
+            (
+                Self::Shader {
+                    parameter,
+                    value: a,
+                },
+                Self::Shader { value: b, .. },
+            ) => Self::Shader {
+                parameter,
+                value: a.interpolate(b, alpha).ok_or_else(invalid)?,
+            },
             (Self::Offset(a), Self::Offset(b)) if a.same_unit(b) => {
                 Self::Offset(a.interpolate(b, alpha))
             }
             _ => return Err(invalid()),
         };
-        result.update().validate().map_err(|_| invalid())?;
+        result.validate()?;
         Ok(result)
     }
 }
@@ -850,7 +945,7 @@ impl TrackValues {
             Self::Effect { from, to, .. } => {
                 if from.property() != property
                     || to.property() != property
-                    || from.sample(*to, 0.0).is_err()
+                    || from.sample_value(*to, 0.0).is_err()
                 {
                     return Err(TimelineError::InvalidEffectValues(property));
                 }
@@ -1103,6 +1198,7 @@ pub enum TimelineError {
     InvalidPaintValues,
     UnsupportedPaintRateFunction(RateFunction),
     InvalidEffectValues(Property),
+    UnsupportedShaderSourceTrack(Property),
     UnsupportedGlowRateFunction(RateFunction),
     InvalidEffectAttachment {
         object: ObjectId,
@@ -1165,6 +1261,7 @@ impl std::fmt::Display for TimelineError {
             Self::InvalidPaintValues => formatter.write_str("continuous paint track is outside the finite planar fill profile"),
             Self::UnsupportedPaintRateFunction(rate) => write!(formatter, "continuous paint tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectValues(property) => write!(formatter, "invalid or incompatible effect endpoints for {property:?}"),
+            Self::UnsupportedShaderSourceTrack(property) => write!(formatter, "painted-pointwise shaders do not support source geometry tracks ({property:?}); use rigid motion channels instead"),
             Self::UnsupportedGlowRateFunction(rate) => write!(formatter, "glow tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),

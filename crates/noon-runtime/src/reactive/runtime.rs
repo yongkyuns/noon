@@ -33,7 +33,7 @@ struct ReactiveTarget {
 pub(crate) struct ReactiveRuntime {
     state: ComputeState,
     targets: Vec<ReactiveTarget>,
-    target_lookup: BTreeMap<(u64, u8), usize>,
+    target_lookup: BTreeMap<(u64, u16), usize>,
     targets_by_object: Vec<Vec<usize>>,
 }
 
@@ -583,11 +583,11 @@ impl SceneInstance {
     }
 }
 
-fn binding_key(object: ObjectId, property: Property) -> (u64, u8) {
+fn binding_key(object: ObjectId, property: Property) -> (u64, u16) {
     (object.get(), property_slot(property))
 }
 
-const fn property_slot(property: Property) -> u8 {
+const fn property_slot(property: Property) -> u16 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
@@ -614,6 +614,7 @@ const fn property_slot(property: Property) -> u8 {
         Property::EffectSize => 22,
         Property::EffectThreshold => 23,
         Property::Emission => 24,
+        Property::EffectShader(index) => 25 + index as u16,
     }
 }
 

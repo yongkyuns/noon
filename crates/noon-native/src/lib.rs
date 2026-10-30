@@ -570,6 +570,20 @@ impl NativeApp {
 
     fn resume_ready_preserving_clock(&mut self, now: Instant) -> Result<bool, NativeHostError> {
         let resumed = self.execution.resume_ready()?;
+        if let Some(programs) = self.execution.pending_effect_programs().map(<[_]>::to_vec) {
+            if let Some(gpu) = self.gpu.as_mut() {
+                let request = gpu
+                    .renderer
+                    .effect_module_preparation(&gpu.device, &programs);
+                let prepared = pollster::block_on(request.prepare())
+                    .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                gpu.renderer
+                    .cache_effect_programs(&gpu.device, &prepared)
+                    .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                self.execution.publish_prepared_effects()?;
+                gpu.prepared_effect_modules = Some(prepared);
+            }
+        }
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
         Ok(resumed)
     }
@@ -713,6 +727,12 @@ impl NativeApp {
                 .as_mut()
                 .expect("drawable native host must own GPU state");
             gpu.prepare_working_profile(&publication, !inset_views.is_empty(), camera)?;
+            pollster::block_on(
+                gpu.renderer
+                    .prepare_effect_programs(&gpu.device, &publication),
+            )
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+            gpu.prepared_effect_modules = None;
             gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
             gpu.renderer
                 .prepare_spatial(&gpu.device, &gpu.queue, &publication)
@@ -1216,6 +1236,7 @@ struct NativeGpu {
     preparer: RetainedFramePreparer,
     text_state: RetainedTextGpuState,
     renderer: GpuRenderer,
+    prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
     overlay: OverlayGpuState,
     view_output: AuthoredViewOutput,
     working_profile: noon_core::ViewColorProfile,
@@ -1276,6 +1297,7 @@ impl NativeGpu {
             preparer: RetainedFramePreparer::new(),
             text_state,
             renderer,
+            prepared_effect_modules: None,
             overlay: OverlayGpuState::default(),
             view_output,
             working_profile: noon_core::ViewColorProfile::Compatibility,
@@ -1329,6 +1351,7 @@ impl NativeGpu {
                 self.config.format
             };
             let mut renderer = GpuRenderer::new(&self.device, &self.queue, format);
+            renderer.copy_effect_program_cache_from(&self.device, &self.renderer);
             renderer.set_viewport(
                 &self.device,
                 &self.queue,

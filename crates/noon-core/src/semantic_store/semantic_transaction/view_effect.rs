@@ -66,7 +66,9 @@ pub(super) fn validate(
                     return None;
                 }
                 match preflight.pending_creations.get(token) {
-                    Some(SemanticNodeCreation::Effect { definition, .. }) => Some(*definition),
+                    Some(SemanticNodeCreation::Effect { definition, .. }) => {
+                        Some(definition.clone())
+                    }
                     _ => None,
                 }
             });

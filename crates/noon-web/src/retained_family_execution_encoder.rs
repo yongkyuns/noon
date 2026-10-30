@@ -1,4 +1,5 @@
 mod publication;
+mod shader_programs;
 
 use crate::retained_resource_transport::residency::{ResourceResidency, StagedResourceResidency};
 use noon_core::{
@@ -30,6 +31,7 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     observed_plan_count: usize,
     resources: RetainedResourceInventory,
     resource_roots: ResourceResidency,
+    shader_programs: Option<shader_programs::ShaderProgramInventory>,
     text_closures: HashMap<TransportTextResourceHandle, TextClosure>,
     geometry_references: HashMap<crate::TransportGeometryResourceHandle, usize>,
     font_references: HashMap<(String, u32), usize>,
@@ -301,6 +303,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
             resource_roots: ResourceResidency::default(),
+            shader_programs: None,
             text_closures: HashMap::new(),
             geometry_references: HashMap::new(),
             font_references: HashMap::new(),
@@ -361,6 +364,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 }
             }
         }
+        let staged_programs = self.stage_shader_programs(envelope)?;
         let new_images = envelope
             .retained
             .objects
@@ -462,13 +466,15 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let pending_render = staged.finish();
         let staged_roots = self.resource_roots.stage(&envelope.retained);
         let retirements = self.resource_roots.retirements(&staged_roots);
-        if new_texts.is_empty()
+        if !staged_programs.has_additions(&self.resources)
+            && new_texts.is_empty()
             && new_sources.is_empty()
             && new_images.is_empty()
             && mesh_geometry_handles.is_empty()
             && updates.is_empty()
         {
             envelope.resource_retirements = retirements;
+            self.commit_shader_programs(staged_programs);
             self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
             pending_render.commit(self);
             return Ok(());
@@ -483,6 +489,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             &self.resources,
         )?;
         additions = additions.with_composed_sources(new_sources)?;
+        additions = staged_programs.capture(additions, &self.resources)?;
         additions.capture_images(new_images, images)?;
         let closures = additions.text_closures().collect::<Vec<_>>();
         additions.retain_additions(&mut self.resources);
@@ -502,6 +509,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         debug_assert!(!additions.is_empty());
         envelope.resource_additions = Some(additions);
         envelope.resource_retirements = retirements;
+        self.commit_shader_programs(staged_programs);
         self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
         pending_render.commit(self);
         Ok(())
@@ -529,6 +537,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         retirements: &RetainedResourceRetirements,
     ) {
         self.resources.forget_root_retirements(retirements);
+        self.retire_shader_programs(&retirements.shader_programs);
         for geometry in &retirements.geometries {
             if !self.geometry_references.contains_key(geometry) {
                 self.resources.forget_geometry(*geometry);

@@ -94,7 +94,10 @@ pub mod effects {
     pub use noon_core::{
         BackdropBlur, Bloom, Blur, DissolveDirection, DissolveStyle, EffectDefinition,
         EffectOffset, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
-        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, Shadow,
+        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, ShaderCoordinates, ShaderDependencies,
+        ShaderEffect, ShaderParameterDefinition, ShaderParameterKey, ShaderParameterType,
+        ShaderProfile, ShaderProgramError, ShaderSchema, ShaderUnit, ShaderValue, Shadow,
+        WgslEffectProgram,
     };
 }
 mod drawing;
@@ -243,7 +246,8 @@ pub use execution_session::{
     ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
     ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
     ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
-    SignalTimelineAppendError, TranslationDragError, TranslationDragReceipt, TranslationDragUndo,
+    SignalTimelineAppendError, StagedEffectPublication, TranslationDragError,
+    TranslationDragReceipt, TranslationDragUndo,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};

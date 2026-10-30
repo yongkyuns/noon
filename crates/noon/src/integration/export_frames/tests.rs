@@ -107,6 +107,9 @@ fn drive(
     for _ in 0..20_000 {
         match export.advance()? {
             ExportFramesStatus::Progress => {}
+            ExportFramesStatus::ResourcePreparationPending => {
+                panic!("fixture contains no external effect resources")
+            }
             ExportFramesStatus::PublicationPending(context) => {
                 let publication = export.take_renderer_publication()?;
                 assert_eq!(publication.context(), context);

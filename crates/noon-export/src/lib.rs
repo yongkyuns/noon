@@ -172,6 +172,7 @@ where
     F: FnMut(CapturedFrame<'_>) -> Result<(), E>,
 {
     let layout = options.layout().map_err(CaptureRunError::Capture)?;
+    program.require_effect_resource_preparation();
     let mut export =
         ExportFrames::new(program, callbacks, frame_options).map_err(CaptureRunError::Sampling)?;
     let result = (|| {
@@ -186,6 +187,17 @@ where
             }
             match export.advance().map_err(CaptureRunError::Sampling)? {
                 ExportFramesStatus::Progress => {}
+                ExportFramesStatus::ResourcePreparationPending => {
+                    gpu.prepare_effect_modules(
+                        export
+                            .pending_effect_programs()
+                            .expect("pending resource request"),
+                    )
+                    .map_err(CaptureRunError::Capture)?;
+                    export
+                        .publish_prepared_effects()
+                        .map_err(CaptureRunError::Sampling)?;
+                }
                 ExportFramesStatus::PublicationPending(context) => {
                     capture_publication(&mut gpu, &mut export, &options, context, false)?;
                     export

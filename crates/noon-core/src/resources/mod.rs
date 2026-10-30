@@ -42,3 +42,6 @@ pub use text_parts::*;
 
 mod transaction;
 pub use transaction::*;
+
+mod shader;
+pub use shader::*;

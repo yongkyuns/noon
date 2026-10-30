@@ -239,6 +239,7 @@ fn retained_painter_glow_pixels() {
         )
         .unwrap();
         let request = EffectCaptureRequest {
+            shader: None,
             object_index: 1,
             definitions: &[effect.into()],
             texture_budget_bytes: 1_000_000,

@@ -209,9 +209,7 @@ pub(super) fn adopt_ordinary_parameter_tracks(
         {
             if let Some(ownership) = attachments.get_mut(attachment) {
                 ownership.remove_on_completion = false;
-                for parameter in from.update().parameters() {
-                    ownership.ordinary_parameters |= parameter_bit(parameter);
-                }
+                ownership.ordinary_parameters |= parameter_bit(from.parameter());
             }
         }
     }
@@ -229,6 +227,7 @@ const fn parameter_bit(parameter: EffectParameter) -> u16 {
         EffectParameter::Seed => 128,
         EffectParameter::Size => 256,
         EffectParameter::Threshold => 512,
+        EffectParameter::Shader(_) => 0,
     }
 }
 

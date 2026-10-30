@@ -6,7 +6,7 @@ uses its explicit staged property view; this module installs no public methods.
 
 from __future__ import annotations
 
-from _noon_errors import engine_call, raise_engine_error
+from _noon_errors import engine_call, is_effect_preparation_required, raise_engine_error
 
 import copy
 import json
@@ -3463,11 +3463,37 @@ def _replace_submobjects(root, members):
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
+    scene = None
+    if context is not None:
+        from _manim_reactive import _current_authoring_scene
+        scene = _current_authoring_scene()
+        for member in mobjects:
+            for leaf in _compat._leaf_mobjects(member):
+                if leaf._scene is not None and leaf._scene is not scene:
+                    raise ValueError("membership wrapper belongs to another Scene")
     batch = _family_membership_batch(context, "add", mobjects)
-    _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
-    _fork_group_wrapper_references(self)
-    for value in mobjects:
-        self._semantic_member_wrappers[_family_wrapper_key(value)] = value
+
+    def commit():
+        _fork_group_wrapper_references(self)
+        for value in mobjects:
+            self._semantic_member_wrappers[_family_wrapper_key(value)] = value
+        if scene is not None:
+            from _manim_scene import _reconcile_completed_family_bindings
+            _reconcile_completed_family_bindings(scene, mobjects)
+
+    try:
+        _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
+    except Exception as error:
+        if not is_effect_preparation_required(error):
+            raise
+        from _manim_scene import _complete_prepared_publication
+        if scene is None:
+            raise RuntimeError("shader-bearing membership requires its active authoring source") from error
+        batch = _family_membership_batch(context, "add", mobjects)
+        method = context.prepareFamilyMembership if _is_shared_family(self) else context.prepareObjectMembership
+        pending = engine_call(method, _family_query_handle(self), batch)
+        return _complete_prepared_publication(scene, context, pending, commit, self)
+    commit()
     return self
 
 

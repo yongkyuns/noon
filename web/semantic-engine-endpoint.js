@@ -123,12 +123,20 @@ export async function attachSemanticEngine(
   let continuationGeneration = continuation?.generation ?? null;
   let executionWakeCadence = null;
   let pendingRendererObservation = null;
+  let nextEffectPreparation = 1;
+  let pendingEffectPreparation = null;
   let lastExternalSampleTime = null;
   let externalInteractionWallTime = null;
   let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
   const post = (payload, transfer = []) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
+  function rejectEffectPreparation(error) {
+    if (pendingEffectPreparation === null) return;
+    pendingEffectPreparation.reject(error);
+    pendingEffectPreparation = null;
+  }
+
   function notePreparedTrap(error) {
     if (prepared === null || !(error instanceof WebAssembly.RuntimeError)) return false;
     if (!engineTrapped) {
@@ -246,11 +254,18 @@ export async function attachSemanticEngine(
       return Promise.resolve();
     }
     if (pendingPresentation !== null) {
+      // Resource preparation and continuation progression may retain the same
+      // first frame. Both consume its one acknowledgement, not another barrier.
+      if (samePublication(pendingPresentation.publication, requiredPublication)) {
+        return pendingPresentation.promise;
+      }
       throw new Error("semantic endpoint already awaits a renderer publication");
     }
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       pendingPresentation = { publication: requiredPublication, resolve, reject };
     });
+    pendingPresentation.promise = promise;
+    return promise;
   };
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||
@@ -1257,6 +1272,7 @@ export async function attachSemanticEngine(
     if (hasAudio) post({ type: "audio_stopped" });
     continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
+    rejectEffectPreparation(new Error("semantic execution stopped before resource preparation"));
     rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
     rejectPendingRendererObservation(
       new Error("semantic execution stopped before renderer observation"),
@@ -1432,10 +1448,17 @@ export async function attachSemanticEngine(
         pendingPointerPresentation = null;
         void drain();
       }
+      else if (message?.type === "effect_programs_prepared") {
+        const pending = pendingEffectPreparation;
+        if (!pending || message.session !== session || message.requestId !== pending.id) return;
+        if (message.error != null) pending.reject(new Error(String(message.error)));
+        else pending.resolve();
+      }
       else if (message?.type === "renderer_observation") noteRendererObservation(message);
       else if (message?.type === "render_error") {
         const error = new Error(message.message);
         rejectPendingRendererObservation(error);
+        rejectEffectPreparation(error);
         if (continuation !== null || prepared !== null) {
           terminateProgression(error);
         } else {
@@ -1491,6 +1514,36 @@ export async function attachSemanticEngine(
         throw error;
       }
     },
+    async prepareSourceEffects(generation, staged) {
+      if (stopped || continuation === null || continuationActive || player !== null ||
+          generation !== continuation.generation || pendingEffectPreparation !== null) {
+        throw new Error("resource preparation requires the current returned source lease");
+      }
+      const id = nextEffectPreparation++;
+      const startsSegment = staged.startsSegment === true;
+      if (!Number.isSafeInteger(id)) throw new Error("effect preparation request IDs exhausted");
+      const ready = new Promise((resolve, reject) => {
+        pendingEffectPreparation = { id, resolve, reject };
+      });
+      try {
+        const bytes = Uint8Array.from(context.effectPreparationResources(staged));
+        renderPort.postMessage({ type: "prepare_effect_programs", session, requestId: id, bytes }, [bytes.buffer]);
+        await ready;
+        if (stopped || generation !== continuation.generation || continuationActive || player !== null) {
+          throw new Error("source changed during effect preparation");
+        }
+        context.publishPreparedEffects(staged);
+        const publication = startsSegment
+          ? this.startContinuation(generation)
+          : send(context.drainReturnedPublicationJson());
+        await awaitPresentation(publication);
+      } finally {
+        // Until retention, the renderer's opaque preparation lease keeps every
+        // module resident. Failed/stale CPU publication releases it as well.
+        renderPort.postMessage({ type: "release_effect_programs", session, requestId: id });
+        if (pendingEffectPreparation?.id === id) pendingEffectPreparation = null;
+      }
+    },
     async publishContinuationResult(generation) {
       if (stopped || continuation === null || continuationActive || player !== null ||
           generation !== continuation.generation) {
@@ -1533,6 +1586,7 @@ export async function attachSemanticEngine(
       if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null, true);
       else observeContinuationWake(performance.now(), true);
       void drain();
+      return publication;
     },
   };
 }

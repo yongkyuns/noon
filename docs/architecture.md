@@ -1226,9 +1226,17 @@ A browser worker/process boundary may require a typed transport representation b
 
 The retained execution channel may send changed style, transform, and morph fields for an existing row in a dense incremental publication. The receiver validates the session sequence, slot generation, object identity, and the whole patch set before applying it to the same retained frame mirror used by full rows. Snapshots and changes to content, resources, structure, or family plans retain their complete transport form. This is a wire-size optimization at the worker boundary; it does not add semantic state or a second execution model.
 
-Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v25 carries an ordered `effects` list with each original semantic attachment generation and its checked Glow, Blur or Shadow definition. No-effect rows omit the list. Snapshot and incremental receivers validate the complete bounded stack, identities, numeric values and supported planar source profile before installing anything or consuming a sequence number. Older protocol versions and the former singular effect field fail closed, so a worker cannot silently discard bindings or change their order. This is derived wire data at the existing genuine Python/render worker boundary, **not** an in-process scene representation. The validated worker mirror reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Coherent capture and filtering execute on the existing encoder after ordinary retained GPU upload; they do not round-trip through a host effect store. Supported Python playback is qualified through the actual authoring/worker channel separately from transport fixtures.
+Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v30 carries an ordered `effects` list with each original semantic attachment generation and its checked effect definition. No-effect rows omit the list. Snapshot and incremental receivers validate the complete bounded stack, identities, numeric values and supported planar source profile before installing anything or consuming a sequence number. Older protocol versions and the former singular effect field fail closed, so a worker cannot silently discard bindings or change their order. This is derived wire data at the existing genuine Python/render worker boundary, **not** an in-process scene representation. The validated worker mirror reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Coherent capture and filtering execute on the existing encoder after ordinary retained GPU upload; they do not round-trip through a host effect store. Supported Python playback is qualified through the actual authoring/worker channel separately from transport fixtures.
 
-Composed worker rows reference immutable source plans in resource protocol v15.
+Custom pointwise effects use that same boundary: an immutable WGSL source and
+checked schema transfer once as a resource; changed rows carry only its derived
+handle, typed values and seed. Copied attachments share the installed program.
+The receiver validates source and values through the shared Rust API before
+committing resources, frame or sequence. Final references retire the program;
+a later attachment needs a fresh resource key. Native and direct Rust/WASM
+execution keep their opaque in-process program values and use no such codec.
+
+Composed worker rows reference immutable source plans in resource protocol v16.
 Their derived key is the existing session, full owner identity and originating
 envelope sequence. Parameter rows reuse that key without copying member lists.
 New plans must bind a row in that publication; retired keys cannot be rebound by

@@ -7,12 +7,7 @@
 
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
-// Prepared captures lease backend GPU resources. WASM resources stay within
-// their owning context; native leases retain their Send/Sync sharing contract.
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc as CaptureSourceLease;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc as CaptureSourceLease;
+use super::GpuLease as CaptureSourceLease;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{EffectDefinition, GeometryRef, GlowSource, ObjectId, Transform2D, Vec2};
@@ -33,6 +28,8 @@ mod inputs;
 pub struct EffectCaptureRequest<'a> {
     pub object_index: usize,
     pub definitions: &'a [EffectDefinition],
+    /// Maps from full output pixels; capture translates by the padded tile origin.
+    pub shader: Option<&'a super::ShaderSampleContext>,
     /// Total retained capture + filter texture budget for this renderer, not just
     /// the current object. Source buffers and shared pipeline metadata are separate.
     /// Resources retained by already-submitted frames require an additional host
@@ -234,7 +231,7 @@ pub(super) struct EffectCaptureGpu {
     // cache keys; owners retain their normal published object identities.
     scopes: BTreeMap<(u8, usize), ResidentEffect>,
     owners: BTreeMap<ObjectId, (u8, usize)>,
-    filter: EffectStackFilter,
+    pub(super) filter: EffectStackFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
     backdrops: backdrop::BackdropGpu,
@@ -307,6 +304,7 @@ impl GpuRenderer {
             encoder,
             prepared,
             EffectCaptureRequest {
+                shader: None,
                 object_index: request.object_index,
                 definitions: effect.definitions(),
                 texture_budget_bytes: request.texture_budget_bytes,
@@ -490,9 +488,9 @@ impl GpuRenderer {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
         let mut own_capture = demand.isolate || (composed.is_some() && opacity != 1.0);
-        for &definition in request.definitions {
+        for definition in request.definitions {
             let parameters = crate::EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: self.viewport_size[1],
                 world_view_height: f64::from(self.camera.world_size.y),
                 scope_opacity: opacity,
@@ -654,6 +652,7 @@ impl GpuRenderer {
         }
         let texel_bytes = super::glow_filter::capture_texel_bytes(self.target_format)?;
         let parameters = EffectStackParameters {
+            shader: None,
             working_format: self.target_format,
             output_height: self.viewport_size[1],
             world_view_height: f64::from(self.camera.world_size.y),
@@ -787,6 +786,27 @@ impl GpuRenderer {
         let source_bounds = EffectPixelBounds {
             min: std::array::from_fn(|axis| bounds.min[axis] - f64::from(tile.origin[axis])),
             max: std::array::from_fn(|axis| bounds.max[axis] - f64::from(tile.origin[axis])),
+        };
+        let shader_context = request
+            .shader
+            .map(|context| context.for_capture(tile.origin));
+        super::sample_filter::validate_effect_shader_context(
+            request.definitions,
+            shader_context.as_ref(),
+            tile.size,
+        )?;
+        let _shader_programs = if request.definitions.iter().any(|d| d.as_shader().is_some()) {
+            let cache = self
+                .effect_captures
+                .as_deref()
+                .ok_or(EffectPrepareError::ShaderProgramNotPrepared)?;
+            Some(cache.filter.pin_shader_programs(
+                device,
+                old.map(|old| &old.filter),
+                request.definitions,
+            )?)
+        } else {
+            None
         };
         if request
             .definitions
@@ -1144,6 +1164,7 @@ impl GpuRenderer {
                 },
                 request.definitions,
                 EffectStackParameters {
+                    shader: shader_context.as_ref(),
                     working_format: self.target_format,
                     output_height: parameters.output_height,
                     world_view_height: parameters.world_view_height,
@@ -1171,6 +1192,7 @@ impl GpuRenderer {
                         revision: scope.revision,
                     },
                     super::SampleParameters {
+                        shader: None,
                         definition: visibility.expect("active private visibility").into(),
                         output_height: parameters.output_height,
                         world_view_height: parameters.world_view_height,

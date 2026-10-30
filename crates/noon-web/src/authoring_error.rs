@@ -826,6 +826,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 message,
             ),
             E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
+            E::ExternalEffectPreparationRequired => Self::new(
+                "pending_work",
+                "publication.effect_preparation_required",
+                message,
+            ),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
             }
@@ -1035,6 +1040,10 @@ impl From<LiveSessionError> for AuthoringFailure {
 impl From<noon::ExecutionSessionAnimationError> for AuthoringFailure {
     fn from(error: noon::ExecutionSessionAnimationError) -> Self {
         use noon::ExecutionSessionAnimationError as E;
+        let message = error.to_string();
+        if let E::AuthoredPublication(cause) = error {
+            return Self::caused_by("animation.publication", message, cause.into());
+        }
         let code = match &error {
             E::TextGlyph(noon_compile::TextGlyphLoweringError::ConflictingObjectDrivers {
                 ..
@@ -1136,6 +1145,23 @@ impl From<noon::SpatialCompositionError> for AuthoringFailure {
 mod tests {
     use super::*;
     use noon_core::SemanticNodeId;
+
+    #[test]
+    fn shader_composition_preparation_keeps_its_typed_retry_cause() {
+        let failure = AuthoringFailure::from(LiveSessionError::Activation(
+            noon::ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
+            ),
+        ));
+        assert_eq!(failure.category, "pending_work");
+        assert_eq!(failure.code, "live.activation");
+        let publication = failure.cause.unwrap();
+        assert_eq!(publication.code, "animation.publication");
+        assert_eq!(
+            publication.cause.unwrap().code,
+            "publication.effect_preparation_required"
+        );
+    }
 
     #[test]
     fn conflicting_text_drivers_are_typed_input_errors_with_original_sources() {

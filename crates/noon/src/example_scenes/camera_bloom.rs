@@ -97,6 +97,11 @@ pub fn execution() -> Result<crate::SceneExecution, String> {
     loop {
         match continuation.resume(&mut scene.live(&mut session))? {
             ContinuationStep::Finished => break,
+            ContinuationStep::Publish(_) => {
+                return Err(
+                    "camera Bloom pre-authoring cannot prepare custom shader resources".into(),
+                );
+            }
             ContinuationStep::Await(segment) => {
                 session
                     .advance_segment_to(segment, segment.end_time())

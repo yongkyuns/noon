@@ -30,7 +30,7 @@ fn ordinary_camera_bloom_round_trips_through_worker_publication_and_seek() {
         assert_eq!(publication.color_profile(), view.color_profile);
         let bloom = publication.view_effects().unwrap().iter().next().unwrap();
         let TransportEffectDefinition::Bloom { intensity, .. } =
-            TransportEffectState::from(&bloom).definition
+            TransportEffectState::try_from(&bloom).unwrap().definition
         else {
             panic!("camera Bloom lost");
         };

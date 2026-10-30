@@ -146,6 +146,12 @@ impl PrefixReader {
     pub fn interactions_active(&self) -> bool {
         self.session.interactions_active()
     }
+    /// Borrow the selected historical frame for fallible device preparation.
+    /// Delivery, dirty changes and the displayed history cursor remain pending.
+    pub fn resource_publication(&self) -> RendererPublication<'_> {
+        self.session.resource_publication()
+    }
+
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         self.session.take_renderer_publication()
     }

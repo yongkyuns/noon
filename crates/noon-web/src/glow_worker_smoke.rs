@@ -160,7 +160,7 @@ fn runtime(
         .into(),
     };
     source.effects = Some(Arc::new(
-        noon_compile::CompiledEffectStack::new([effect]).unwrap(),
+        noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap(),
     ));
     let objects = vec![
         CompiledObject::new(
@@ -209,7 +209,7 @@ fn runtime(
             .color(Color::rgba(0.15, 0.85, 0.25, 0.5))
     };
     for (i, (property, values)) in effect
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .unwrap()
         .into_iter()
         .enumerate()
@@ -453,7 +453,9 @@ fn fixture() -> Fixture {
         runtime
             .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object: ObjectId::new(2),
-                effects: Arc::new(noon_compile::CompiledEffectStack::new([effect]).unwrap()),
+                effects: Arc::new(
+                    noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap(),
+                ),
             })
             .unwrap();
         let publication = runtime.take_renderer_publication();

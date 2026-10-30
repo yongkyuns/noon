@@ -37,6 +37,7 @@ on:
       - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/playground-prepared-lifecycle-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
+      - "scripts/shader-time-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
       - "!web/**/*.test.mjs"
@@ -77,6 +78,7 @@ on:
       - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/playground-prepared-lifecycle-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
+      - "scripts/shader-time-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
@@ -153,6 +155,9 @@ jobs:
           npx playwright install chromium
       - name: Qualify actual DOM samples and paused click-selection pixels
         run: |
+          node scripts/shader-time-qualification.mjs
+          NOON_SHADER_SOURCE_MODE=jspi NOON_PAIRED_ARTIFACTS=ci-artifacts/shader-jspi node scripts/shader-time-qualification.mjs
+          NOON_SHADER_SOURCE_MODE=async NOON_PAIRED_ARTIFACTS=ci-artifacts/shader-async node scripts/shader-time-qualification.mjs
           node scripts/direct-view-output-qualification.mjs
           node scripts/worker-view-output-qualification.mjs
           node --test scripts/pointer-selection-raster-contract.test.mjs
@@ -193,6 +198,8 @@ jobs:
         with:
           name: playground-playback-controls
           path: |
+            ci-artifacts/shader-time
+            ci-artifacts/shader-jspi
             ci-artifacts/direct-view-output
             ci-artifacts/worker-view-output
             browser-smoke-artifacts/pointer-dom

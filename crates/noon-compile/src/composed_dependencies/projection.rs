@@ -15,6 +15,7 @@ struct Row<'a> {
     text_bounds: bool,
     z: f64,
     input_role: EffectInputRole,
+    local_shader: bool,
     unresolved_geometry: bool,
 }
 impl<'a> Row<'a> {
@@ -37,6 +38,10 @@ impl<'a> Row<'a> {
                 || row.fill_paint.is_some(),
             text_bounds: row.text_bounds.is_some(),
             z: row.base_z_index,
+            local_shader: row
+                .effects
+                .as_deref()
+                .is_some_and(crate::CompiledEffectStack::uses_local_shader_coordinates),
             input_role: row
                 .effects
                 .as_ref()
@@ -87,15 +92,20 @@ impl<'a> Projection<'a> {
     pub(super) fn source(&self, id: ObjectId) -> Option<&'a ComposedSource> {
         self.row(id)?.source.map(|source| source.as_ref())
     }
-    pub(super) fn owner_valid(&self, id: ObjectId) -> bool {
-        self.row(id).is_some_and(|row| {
-            row.source.is_some()
-                && row.transform == Transform2D::IDENTITY
-                && row.spatial.is_none()
-                && !row.draw
-                && !row.painted
-                && !row.text_bounds
-        })
+    pub(super) fn owner_error(&self, id: ObjectId) -> Option<CompiledComposedSourceErrorKind> {
+        let Some(row) = self.row(id) else {
+            return Some(CompiledComposedSourceErrorKind::InvalidOwner);
+        };
+        if row.local_shader {
+            return Some(CompiledComposedSourceErrorKind::UnsupportedLocalShaderCoordinates);
+        }
+        (!(row.source.is_some()
+            && row.transform == Transform2D::IDENTITY
+            && row.spatial.is_none()
+            && !row.draw
+            && !row.painted
+            && !row.text_bounds))
+            .then_some(CompiledComposedSourceErrorKind::InvalidOwner)
     }
     pub(super) fn input_valid(&self, id: ObjectId) -> Option<bool> {
         self.row(id)
@@ -132,9 +142,18 @@ impl<'a> Projection<'a> {
                 .then_with(|| family.rank(a).cmp(&family.rank(b)))
         });
     }
-    fn stage_input_role(&mut self, id: ObjectId, input_role: EffectInputRole) {
-        if self.row(id).is_some_and(|row| row.input_role != input_role) {
-            self.edit(id, |row| row.input_role = input_role);
+    fn stage_effects(&mut self, id: ObjectId, effects: Option<&crate::CompiledEffectStack>) {
+        let input_role = effects.map_or(EffectInputRole::Painted, |stack| stack.input_role());
+        let local_shader =
+            effects.is_some_and(crate::CompiledEffectStack::uses_local_shader_coordinates);
+        if self
+            .row(id)
+            .is_some_and(|row| row.input_role != input_role || row.local_shader != local_shader)
+        {
+            self.edit(id, |row| {
+                row.input_role = input_role;
+                row.local_shader = local_shader;
+            });
             self.changed.insert(id);
         }
     }
@@ -210,17 +229,12 @@ impl<'a> Projection<'a> {
                     }
                 }
                 ExecutionPatch::SetEffects { object, effects } => {
-                    self.stage_input_role(*object, effects.input_role());
+                    self.stage_effects(*object, Some(effects));
                 }
                 ExecutionPatch::SetEffectStack {
                     object, effects, ..
                 } => {
-                    self.stage_input_role(
-                        *object,
-                        effects
-                            .as_ref()
-                            .map_or(EffectInputRole::Painted, |stack| stack.input_role()),
-                    );
+                    self.stage_effects(*object, effects.as_deref());
                 }
                 ExecutionPatch::SetZIndex { object, value } => {
                     self.edit(*object, |row| row.z = *value);
@@ -304,11 +318,10 @@ impl<'a> Projection<'a> {
             }
         }
         for &id in self.rows.keys() {
-            if self.source(id).is_some() && !self.owner_valid(id) {
-                return Err(CompiledComposedSourceError {
-                    owner: id,
-                    kind: CompiledComposedSourceErrorKind::InvalidOwner,
-                });
+            if self.source(id).is_some() {
+                if let Some(kind) = self.owner_error(id) {
+                    return Err(CompiledComposedSourceError { owner: id, kind });
+                }
             }
         }
         self.prefix = self.dependencies.prepare_prefix_admission(
@@ -337,8 +350,8 @@ impl ComposedSourceGraphView for Projection<'_> {
     fn source(&self, owner: ObjectId) -> Option<&ComposedSource> {
         self.source(owner)
     }
-    fn owner_valid(&self, owner: ObjectId) -> bool {
-        self.owner_valid(owner)
+    fn owner_error(&self, owner: ObjectId) -> Option<CompiledComposedSourceErrorKind> {
+        self.owner_error(owner)
     }
     fn input_valid(&self, input: ObjectId) -> Option<bool> {
         self.input_valid(input)

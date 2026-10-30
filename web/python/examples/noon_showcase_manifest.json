@@ -531,6 +531,32 @@
           "label": "Compare padded and unpadded read rounds"
         }
       ]
+    },
+    {
+      "id": "showcase-shader-material", "title": "A material that moves",
+      "lesson": "Animate a reusable shader's controls and compare a pattern that follows its object with one fixed in the scene.",
+      "primary_feature": "typed-shader-material", "category": "Appearance",
+      "path": "python/examples/showcase_shader_material.py",
+      "features": ["WgslEffectProgram", "typed parameters", "local and scene coordinates", "set_effect", "exact removal"],
+      "duration": 6, "thumbnail_time": 1.5,
+      "thumbnail": "thumbnails/showcase/showcase-shader-material.png",
+      "thumbnail_alt": "Two tilted teal striped panels compare object-local and scene-space material coordinates",
+      "still_intervals": [[0, 0.5], [2.5, 3], [5, 5.5], [5.5, 6]],
+      "beats": [{"time": 0.5, "label": "Attach the material"}, {"time": 1.5, "label": "Move the object and phase"}, {"time": 4, "label": "Return the controls"}, {"time": 5.6, "label": "Remove the treatment"}],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-glass-lens", "title": "Move the glass",
+      "lesson": "Move a glass card across a texture, animate its blur radius, then dissolve and reveal the same content.",
+      "primary_feature": "backdrop-glass", "category": "Visual effects",
+      "path": "python/examples/showcase_glass_lens.py",
+      "features": ["BackdropBlur", "Pixels", "ImageMobject", "VGroup", "Dissolve", "animate.set_effect"],
+      "duration": 8.5, "thumbnail_time": 2.25,
+      "thumbnail": "thumbnails/showcase/showcase-glass-lens.png",
+      "thumbnail_alt": "A translucent labeled glass card softens a blue and gold checkerboard behind its image and text",
+      "still_intervals": [[0, 0.5], [2, 2.5], [4, 4.5], [4.5, 5], [5, 5.5], [6.5, 7], [8, 8.5]],
+      "beats": [{"time": 0.5, "label": "Move the lens and soften the backdrop"}, {"time": 2.25, "label": "Glass over a texture"}, {"time": 4.25, "label": "Neutral radius"}, {"time": 4.75, "label": "Remove the lens"}, {"time": 5.25, "label": "Restore the lens"}, {"time": 6.5, "label": "Dissolve the card"}, {"time": 8.25, "label": "Reveal with the same seed"}],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }

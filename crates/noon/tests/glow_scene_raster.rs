@@ -61,6 +61,7 @@ struct Surface {
     text: RetainedTextGpuState,
     target: wgpu::Texture,
     effect_stats: noon_render_wgpu::RetainedEffectStats,
+    program_stats: noon_render_wgpu::EffectProgramStats,
     upload_stats: noon_render_wgpu::RetainedUploadStats,
 }
 impl Surface {
@@ -68,9 +69,17 @@ impl Surface {
         Self::with_logical_viewport(device, queue, Vec2::new(80.0, 60.0))
     }
     fn with_logical_viewport(device: &wgpu::Device, queue: &wgpu::Queue, logical: Vec2) -> Self {
+        Self::with_target_size(device, queue, logical, SIZE)
+    }
+    fn with_target_size(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        logical: Vec2,
+        size: [u32; 2],
+    ) -> Self {
         let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer
-            .set_viewport_with_logical_size(device, queue, SIZE[0], SIZE[1], logical)
+            .set_viewport_with_logical_size(device, queue, size[0], size[1], logical)
             .unwrap();
         renderer.set_camera(
             queue,
@@ -80,8 +89,8 @@ impl Surface {
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("public glow Scene qualification"),
             size: wgpu::Extent3d {
-                width: SIZE[0],
-                height: SIZE[1],
+                width: size[0],
+                height: size[1],
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -97,6 +106,7 @@ impl Surface {
             text,
             target,
             effect_stats: Default::default(),
+            program_stats: Default::default(),
             upload_stats: Default::default(),
         }
     }
@@ -116,18 +126,29 @@ impl Surface {
         background: wgpu::Color,
     ) -> Vec<u8> {
         let publication = session.take_renderer_publication();
+        self.program_stats =
+            pollster::block_on(self.renderer.prepare_effect_programs(device, &publication))
+                .unwrap();
         let visible = publication
             .painter_order()
             .iter()
             .map(|&i| i as usize)
             .collect::<Vec<_>>();
+        let camera = self.renderer.camera();
+        let density = Vec2::new(
+            self.target.width() as f32 / camera.world_size.x,
+            self.target.height() as f32 / camera.world_size.y,
+        );
+        let metrics = TextDeviceMetrics::new(density)
+            .unwrap()
+            .with_world_origin_pixels(Vec2::new(
+                self.target.width() as f32 * 0.5 - camera.center.x * density.x,
+                self.target.height() as f32 * 0.5 + camera.center.y * density.y,
+            ))
+            .unwrap();
         let visible = self
             .renderer
             .effect_source_visibility(&publication, &visible)
-            .unwrap();
-        let metrics = TextDeviceMetrics::uniform(10.0)
-            .unwrap()
-            .with_world_origin_pixels(Vec2::new(40.0, 30.0))
             .unwrap();
         let prepared = self
             .preparer
@@ -798,7 +819,7 @@ fn click_glow_pulse_pixels_restore_and_retire() {
             );
             assert_eq!(
                 original.authored_definition().unwrap(),
-                original_definition.unwrap()
+                original_definition.clone().unwrap()
             );
         } else {
             assert!(source.get_effect("glow").is_err());

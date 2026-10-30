@@ -559,9 +559,9 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
     let pending_effects = prepared.animation_effect_snapshot(copied).unwrap();
     assert_eq!(pending_effects.len(), 2);
     for (snapshot, source) in pending_effects.iter().zip([first, second]) {
-        let copy = snapshot.copy_provenance.unwrap();
+        let copy = snapshot.copy_provenance.as_ref().unwrap();
         assert_eq!(copy.source_attachment(), source);
-        assert_eq!(copy.copied_definition(), snapshot.definition);
+        assert_eq!(copy.copied_definition(), &snapshot.definition);
         assert!(!copy.writes_parameter(EffectParameter::Intensity));
     }
     let result = prepared.commit();
@@ -595,11 +595,11 @@ fn copy_uses_one_transaction_and_independent_attachment_identities() {
         .unwrap();
     let prepared = tx.prepare(&mut store).unwrap();
     let frozen_effects = prepared.animation_effect_snapshot(frozen).unwrap();
-    let frozen_intent = frozen_effects[0].copy_provenance.unwrap();
+    let frozen_intent = frozen_effects[0].copy_provenance.as_ref().unwrap();
     assert_eq!(frozen_intent.source_attachment(), first);
     assert!(frozen_intent.writes_parameter(EffectParameter::Intensity));
     let independent_effects = prepared.animation_effect_snapshot(independent).unwrap();
-    let independent_intent = independent_effects[0].copy_provenance.unwrap();
+    let independent_intent = independent_effects[0].copy_provenance.as_ref().unwrap();
     assert_eq!(independent_intent.source_attachment(), copy_ids[0]);
     assert!(!independent_intent.writes_parameter(EffectParameter::Intensity));
     assert_eq!(
@@ -620,7 +620,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     let update = EffectUpdate::default().intensity(Glow::default().intensity());
 
     let mut staged = SemanticMutationTransaction::new();
-    staged.update_effect(copied_effect, update);
+    staged.update_effect(copied_effect, update.clone());
     let prepared = staged.prepare(&mut store).unwrap();
     assert_eq!(
         prepared.proposed_scene_revision(),
@@ -638,6 +638,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     let staged_snapshot = prepared.animation_effect_snapshot(copied).unwrap();
     assert!(staged_snapshot[0]
         .copy_provenance
+        .as_ref()
         .unwrap()
         .writes_parameter(EffectParameter::Intensity));
     drop(prepared);
@@ -648,7 +649,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     );
 
     let mut invalid = SemanticMutationTransaction::new();
-    invalid.update_effect(copied_effect, update);
+    invalid.update_effect(copied_effect, update.clone());
     invalid.update_effect(copied_effect, EffectUpdate::default().radius(-1.0));
     assert!(invalid.apply(&mut store).is_err());
     assert_eq!(store.scene_revision(), revision);
@@ -658,7 +659,7 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
     );
 
     let mut accepted = SemanticMutationTransaction::new();
-    accepted.update_effect(copied_effect, update);
+    accepted.update_effect(copied_effect, update.clone());
     let result = accepted.prepare(&mut store).unwrap().commit();
     assert!(
         result.impacts().is_empty(),
@@ -678,8 +679,8 @@ fn copied_effect_parameter_intent_is_staged_atomic_and_idempotent() {
 
     let committed_revision = store.scene_revision();
     let mut repeated = SemanticMutationTransaction::new();
-    repeated.update_effect(copied_effect, update);
-    repeated.update_effect(original_effect, update);
+    repeated.update_effect(copied_effect, update.clone());
+    repeated.update_effect(original_effect, update.clone());
     assert!(repeated.apply(&mut store).unwrap().impacts().is_empty());
     assert_eq!(store.scene_revision(), committed_revision);
     assert_eq!(store.last_mutation_stats().slots_written, 0);
@@ -891,7 +892,7 @@ fn every_disjoint_parameter_order_preserves_earlier_updates() {
                     let halo = attach(&mut store, owner, "glow");
                     let mut tx = SemanticMutationTransaction::new();
                     for index in order {
-                        tx.update_effect(halo, updates[index]);
+                        tx.update_effect(halo, updates[index].clone());
                     }
                     let result = tx.apply(&mut store).unwrap();
                     let expected: Vec<_> = order

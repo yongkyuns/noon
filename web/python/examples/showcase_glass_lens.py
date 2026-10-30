@@ -3,10 +3,9 @@
 Paired with noon::example_scenes::glass_lens. The shared Rust timeline owns
 motion, radius interpolation and seeded visibility; pixels are prepared once.
 """
-from noon import (
-    BackdropBlur, Dissolve, ImageMobject, Pixels, Rectangle, MovingCameraScene, Text, VGroup,
-    linear, smooth,
-)
+from noon import *
+
+
 def diamond_pixels():
     pixels = []
     for y in range(9):
@@ -18,7 +17,6 @@ def diamond_pixels():
             row.append([100 + 17 * x, 160 + 10 * y, 255, alpha] if alpha else [255, 0, 255, 0])
         pixels.append(row)
     return pixels
-
 
 
 class GlassLens(MovingCameraScene):

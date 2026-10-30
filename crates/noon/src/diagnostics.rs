@@ -4,9 +4,12 @@ use noon_core::{Color, GeometryRef, GeometryResource, GeometryResourceLookup, Re
 use serde_json::{json, Value};
 
 fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
-    let definition = match effect.definition {
+    let definition = match &effect.definition {
         noon_core::EffectDefinition::Bloom(v) => {
             json!({"kind":"bloom","radius":v.radius(),"threshold":v.threshold(),"intensity":v.intensity()})
+        }
+        noon_core::EffectDefinition::Shader(value) => {
+            json!({"kind":"shader","profile":format!("{:?}",value.program().schema().profile),"values":value.values(),"seed":value.seed()})
         }
         noon_core::EffectDefinition::Pixelate(v) => json!({"kind":"pixelate","size":v.size()}),
         noon_core::EffectDefinition::Glow(glow) => {

@@ -1676,7 +1676,10 @@ fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
     assert_eq!(initial.retained.objects[1].slot.generation, 0);
     mirror.apply(initial.retained).unwrap();
     player
-        .live_edit_membership(noon::SceneMembershipRequest::Remove(&[(&toggled).into()]))
+        .live_edit_membership(
+            noon::SceneMembershipRequest::Remove(&[(&toggled).into()]),
+            false,
+        )
         .unwrap();
     let retired = player.delta(false).unwrap().unwrap();
     assert!(!retired.retained.snapshot);
@@ -1684,7 +1687,10 @@ fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
     assert_eq!(retired.retained.removed_slots.len(), 1);
     mirror.apply(retired.retained).unwrap();
     player
-        .live_edit_membership(noon::SceneMembershipRequest::Add(&[(&toggled).into()]))
+        .live_edit_membership(
+            noon::SceneMembershipRequest::Add(&[(&toggled).into()]),
+            false,
+        )
         .unwrap();
     assert!(player.session.execution_slot_for_frame_index(1).is_some());
     let snapshot = player.delta(false).unwrap().unwrap();

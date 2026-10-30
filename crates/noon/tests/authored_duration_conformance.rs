@@ -113,6 +113,9 @@ fn sample(p: u32, q: u32, prefix: usize, delayed: bool) -> (Vec<Observed>, Expor
                 let _ = export.take_renderer_publication().unwrap();
                 export.acknowledge_sample(sample).unwrap();
             }
+            ExportFramesStatus::ResourcePreparationPending => {
+                panic!("duration fixture has no external shaders")
+            }
             ExportFramesStatus::Complete(summary) => return (observations, summary),
         }
     }

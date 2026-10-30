@@ -94,6 +94,9 @@ fn native_images_match_manim_sampling_opacity_and_lifecycle() {
                     program.drive_to(&mut callbacks, time).unwrap();
                 }
                 LiveProgramStatus::Finished => break,
+                LiveProgramStatus::PreparingResources => {
+                    panic!("image fixture has no external shaders")
+                }
                 LiveProgramStatus::Terminal => panic!("terminal image program"),
             }
         }

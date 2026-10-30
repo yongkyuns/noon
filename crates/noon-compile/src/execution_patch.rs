@@ -282,7 +282,7 @@ pub(crate) fn validate_effect_values(
         return Err(crate::CompilePatchError::InvalidEffectUpdate { object });
     }
     for (old, new) in previous.iter().zip(next.iter()) {
-        noon_core::EffectValue::validate_effect_value_update(old.definition, new.definition)
+        noon_core::EffectValue::validate_effect_value_update(&old.definition, &new.definition)
             .map_err(|_| crate::CompilePatchError::InvalidEffectUpdate { object })?;
     }
     Ok(())

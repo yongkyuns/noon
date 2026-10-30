@@ -6,7 +6,7 @@ use crate::{SceneInstance, TimelineEventScheduler};
 /// realize it with RAF, `WaitUntil`, platform timers, or another wake primitive.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TimelineWakeState {
-    /// At least one authored timeline channel is active and can vary with scene time.
+    /// At least one active authored dependency can vary with scene time.
     Continuous,
     /// No channel is active; the next authored timeline boundary is at this scene time.
     Deadline(f64),
@@ -80,9 +80,13 @@ impl TimelineEventScheduler {
 impl SceneInstance {
     /// Last nonnegative event in a finite immutable timeline, including audio.
     /// Returns `None` for unbounded intervals, and `Some(0.0)` for a static plan.
+    /// A declared time effect is unbounded unless a sealed replay range owns its end.
     /// This O(events) capability query belongs at host admission/reconfiguration;
     /// ordinary wakeups keep using the indexed `wake_state()` observation.
     pub fn finite_timeline_end_time(&self) -> Option<f64> {
+        if !self.time_effect_rows.is_empty() {
+            return self.replay_end_time();
+        }
         self.timeline_scheduler.finite_end_time()
     }
 
@@ -103,6 +107,11 @@ impl SceneInstance {
             frame_pending: !self.changes.is_empty(),
             timeline: self.timeline_scheduler.wake_state(),
         }
+        .with_additional_timeline(if self.active_time_effect_rows.is_empty() {
+            TimelineWakeState::Quiescent
+        } else {
+            TimelineWakeState::Continuous
+        })
         .with_additional_timeline(
             self.next_replay_revision_time()
                 .map_or(TimelineWakeState::Quiescent, TimelineWakeState::Deadline),

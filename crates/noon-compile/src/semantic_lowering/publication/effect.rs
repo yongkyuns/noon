@@ -63,7 +63,7 @@ pub(super) fn lower_prepared_attachment(
     let stack = CompiledEffectStack::new_with_visibility(
         effects.iter().map(|effect| CompiledEffect {
             attachment: effect.attachment,
-            definition: effect.definition,
+            definition: effect.definition.clone(),
         }),
         effects
             .iter()
@@ -143,7 +143,7 @@ pub(super) fn lower_changes(
                 CompiledEffectStack::new_with_visibility(
                     original.iter().map(|effect| CompiledEffect {
                         attachment: effect.attachment,
-                        definition: effect.definition,
+                        definition: effect.definition.clone(),
                     }),
                     original
                         .iter()

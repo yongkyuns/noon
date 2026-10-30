@@ -19,7 +19,9 @@ use super::ExecutionSession;
 
 mod prepared_value;
 use prepared_value::PreparedPublication;
+mod staged_effects;
 mod transient_glow;
+pub use staged_effects::StagedEffectPublication;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticPublicationPurpose {
@@ -37,6 +39,7 @@ pub(crate) enum SemanticPublicationPurpose {
 pub(super) struct PreparedRuntimePublication {
     pub effective: Option<PreparedEffectivePropertyBatch>,
     pub frame: Option<noon_runtime::PreparedFrameEvaluation>,
+    pub prepared_effect_programs: Vec<noon_core::WgslEffectProgram>,
 }
 
 impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication {
@@ -44,6 +47,7 @@ impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication
         Self {
             effective,
             frame: None,
+            prepared_effect_programs: Vec::new(),
         }
     }
 }
@@ -54,8 +58,8 @@ pub(crate) struct PreparedReactiveEnrollmentBatch {
 }
 
 pub(super) struct PreparedScalarPublicationContract {
-    handled_signals: std::collections::HashSet<SemanticNodeId>,
-    reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+    pub(super) handled_signals: std::collections::HashSet<SemanticNodeId>,
+    pub(super) reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +73,7 @@ pub enum ExecutionSessionPublicationError {
     SegmentCompletionPending,
     TranslationDragActive,
     ForeignSemanticStore,
+    ExternalEffectPreparationRequired,
     ReplaySealed,
     StaleSceneRevision {
         expected: SceneRevision,
@@ -103,6 +108,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::TranslationDragActive => f.write_str(
                 "cancel or release the active translation drag before authored publication",
             ),
+            Self::ExternalEffectPreparationRequired => f.write_str("newly executable shader programs require the publication-preparation barrier"),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -144,6 +150,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             | Self::SegmentCompletionPending
             | Self::TranslationDragActive
             | Self::ForeignSemanticStore
+            | Self::ExternalEffectPreparationRequired
             | Self::StaleSceneRevision { .. }
             | Self::UnknownObject(_) => None,
         }
@@ -181,6 +188,27 @@ impl EffectiveSemanticObject<'_> {
 }
 
 impl ExecutionSession {
+    pub(super) fn validate_shader_view_profile(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+        publication: &noon_compile::PreparedSemanticPublication,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        let Some(camera) = self
+            .camera_object
+            .and_then(|object| self.execution_index.semantic_object_id(object))
+        else {
+            return Ok(());
+        };
+        publication
+            .validate_shader_view_profile(
+                prepared,
+                &self.execution_index,
+                &self.reachability,
+                camera,
+            )
+            .map_err(ExecutionSessionPublicationError::Lowering)
+    }
+
     pub(crate) fn require_published_store(
         &self,
         store: &SemanticStore,
@@ -413,29 +441,6 @@ impl ExecutionSession {
         .map(|(result, _)| result)
     }
 
-    pub(crate) fn apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
-        &mut self,
-        prepared: PreparedSemanticMutationTransaction<'_>,
-        execution_prefix: Vec<ExecutionPatch>,
-        order_root: Option<SemanticNodeId>,
-        purpose: SemanticPublicationPurpose,
-        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
-        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
-    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        self.apply_prepared_semantic_transaction_with_execution_contract(
-            prepared,
-            execution_prefix,
-            None.into(),
-            purpose,
-            Some(PreparedScalarPublicationContract {
-                handled_signals: handled_scalar_signals,
-                reactive_enrollment,
-            }),
-            order_root,
-        )
-        .map(|(result, _)| result)
-    }
-
     pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
@@ -568,7 +573,11 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
-        let PreparedRuntimePublication { effective, frame } = runtime;
+        let PreparedRuntimePublication {
+            effective,
+            frame,
+            prepared_effect_programs,
+        } = runtime;
         debug_assert!(
             frame.is_none() || !matches!(purpose, SemanticPublicationPurpose::Callback(_))
         );
@@ -649,6 +658,14 @@ impl ExecutionSession {
                     .map_err(ExecutionSessionPublicationError::Lowering)?;
                 (publication, revised)
             };
+        self.validate_shader_view_profile(&prepared, &publication)?;
+        if self.require_effect_preparation
+            && publication
+                .introduced_shader_programs()
+                .any(|program| !prepared_effect_programs.contains(program))
+        {
+            return Err(ExecutionSessionPublicationError::ExternalEffectPreparationRequired);
+        }
         let preparation_stats = publication.stats();
         let order_patches = order_root
             .map(|root| prepare_semantic_root_order(&prepared, root))

@@ -1,6 +1,7 @@
 use super::*;
 use noon_core::{Color, EffectUpdate, Pixels};
 
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 fn only_effect(stack: &noon_compile::CompiledEffectStack) -> noon_compile::CompiledEffect {
     assert_eq!(stack.len(), 1, "single-effect reference fixture");
     stack.iter().next().unwrap()
@@ -23,6 +24,7 @@ fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
         max: [25.0, 33.0],
     };
     let parameters = super::super::EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 64,
         world_view_height: 6.4,
@@ -402,6 +404,7 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
             .into(),
     ];
     let values = super::super::EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 100,
         world_view_height: 10.0,
@@ -444,7 +447,7 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
         Err(EffectPrepareError::ScratchBudgetExceeded)
     );
     let invalid_suffix = [
-        definitions[0],
+        definitions[0].clone(),
         noon_core::Blur::new(EffectUpdate::default().radius(Pixels(65.0)))
             .unwrap()
             .into(),
@@ -464,7 +467,9 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
         EffectCaptureTile::prepare_stack(
             bounds,
             [100, 100],
-            &[definitions[0]; noon_core::MAX_EFFECT_STACK_LEN + 1],
+            &std::array::from_fn::<_, { noon_core::MAX_EFFECT_STACK_LEN + 1 }, _>(|_| definitions
+                [0]
+            .clone()),
             values,
             4096,
             1_000_000
@@ -481,13 +486,14 @@ fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
     let b = EffectUpdate::default()
         .radius(Pixels(1.0))
         .source(GlowSource::Silhouette)
-        .apply_to(a)
+        .apply_to(a.clone())
         .unwrap();
     let bounds = EffectPixelBounds {
         min: [20.0, 20.0],
         max: [24.0, 24.0],
     };
     let values = super::super::EffectStackParameters {
+        shader: None,
         working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 100,
         world_view_height: 10.0,
@@ -495,10 +501,16 @@ fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
         scratch_budget_bytes: 1_000_000,
         source_bounds: None,
     };
-    let silhouette =
-        EffectCaptureTile::prepare_stack(bounds, [100, 100], &[a, b], values, 4096, 1_000_000)
-            .unwrap()
-            .unwrap();
+    let silhouette = EffectCaptureTile::prepare_stack(
+        bounds,
+        [100, 100],
+        &[a.clone(), b.clone()],
+        values,
+        4096,
+        1_000_000,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(silhouette.origin, [10, 10]);
     assert_eq!(silhouette.size, [24, 24]);
     assert_eq!(

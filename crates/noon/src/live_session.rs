@@ -657,6 +657,25 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    pub(crate) fn stage_effect_publication(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
+        self.session
+            .stage_effect_publication(&mut self.store.borrow_mut(), self.root, transaction)
+            .map_err(Into::into)
+    }
+    /// Host acknowledgement after preparing the staged immutable resources.
+    /// Fresh canonical validation runs before either live authority commits.
+    pub fn publish_staged_effects(
+        &mut self,
+        staged: crate::StagedEffectPublication,
+    ) -> Result<Option<ExecutionSegment>, LiveSessionError> {
+        self.session
+            .publish_staged_effects(&mut self.store.borrow_mut(), staged)
+            .map_err(Into::into)
+    }
+
     /// Prepare resources and publish one semantic transaction while borrowing
     /// the already-running execution session. Composite authoring uses this
     /// boundary so resource admission and the transaction share one rollback
@@ -709,6 +728,17 @@ impl<'a> LiveSession<'a> {
         let transaction =
             crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
         self.apply(transaction)
+    }
+
+    /// Stage an existing membership request until the host prepares any newly
+    /// executable shader programs. Membership and identities remain unpublished.
+    pub fn prepare_membership(
+        &mut self,
+        request: SceneMembershipRequest<'_>,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
+        let transaction =
+            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
+        self.stage_effect_publication(transaction)
     }
 
     pub fn add_many(
@@ -1212,6 +1242,21 @@ impl<'a> LiveSession<'a> {
                 .map_err(LiveSessionError::from)?;
         self.apply(transaction)?;
         Ok(changed)
+    }
+
+    /// Stage the ordinary family edit for the same resource-preparation barrier
+    /// as scene insertion. The returned change flags describe the pending edit.
+    pub fn prepare_family_membership<'root>(
+        &mut self,
+        family: impl Into<MobjectTarget<'root>>,
+        members: &[MobjectTarget<'_>],
+        adding: bool,
+    ) -> Result<(crate::StagedEffectPublication, Vec<bool>), LiveSessionError> {
+        let family = family.into();
+        self.require_membership_root(family)?;
+        let (transaction, changed) =
+            crate::family_authoring::family_membership_transaction(family, members, adding)?;
+        Ok((self.stage_effect_publication(transaction)?, changed))
     }
 
     /// Publish one fully validated detached Manim geometry object through this
@@ -2238,6 +2283,24 @@ impl<'a> LiveSession<'a> {
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_composition(&mut store, self.root, &request, play_options)
+            .map_err(Into::into)
+    }
+
+    /// Stage this ordinary composition until its newly executable resources are ready.
+    /// The original request is validated again at publication, including activation capture.
+    pub fn prepare_composition(
+        &mut self,
+        request: &AnimationCompositionRequest<'_>,
+        play_options: AnimationOptions,
+    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
+        let request = self.execution_composition_request(request)?;
+        self.session
+            .stage_composition_publication(
+                &mut self.store.borrow_mut(),
+                self.root,
+                request,
+                play_options,
+            )
             .map_err(Into::into)
     }
 

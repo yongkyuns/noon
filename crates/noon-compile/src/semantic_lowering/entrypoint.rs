@@ -338,6 +338,19 @@ fn validate_camera_object(
         .iter()
         .find(|object| object.live && object.id == object_id)
         .expect("semantic camera object must exist in its compiled projection");
+    if object.view_color_profile == Some(noon_core::ViewColorProfile::LinearHdr)
+        && compiled.objects().iter().any(|row| {
+            row.live
+                && row.effects.as_ref().is_some_and(|effects| {
+                    effects
+                        .definitions()
+                        .iter()
+                        .any(|effect| effect.as_shader().is_some())
+                })
+        })
+    {
+        return Err(SemanticLoweringError::UnsupportedEffectProfile { owner: node }.into());
+    }
     let role = object
         .spatial
         .as_deref()

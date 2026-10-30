@@ -16,6 +16,7 @@ use crate::{TransportImageResourceHandle, TransportImageSampling, TransportSlotI
 
 mod composed;
 pub(crate) mod incremental_render_resources;
+mod shaders;
 use composed::PublishedComposedSource;
 
 /// Resource-aware execution channel for the retained geometry/text runtime.
@@ -23,9 +24,9 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V30 transports the selected authored camera profile and checked Bloom.
-// Older envelopes reject; direct native/WASM boundaries remain typed in process.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 30;
+// V31 carries checked WGSL programs and authored HDR/Bloom view metadata.
+// Older envelopes reject; native and direct Rust/WASM remain typed in process.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 31;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,16 +55,21 @@ impl From<TransportGlowSource> for GlowSource {
 
 /// Wire-only effective treatment for a true cross-worker boundary. This is
 /// never a second in-process authored or mutable effect representation.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransportEffectState {
     pub attachment: SemanticNodeId,
     #[serde(flatten)]
     pub definition: TransportEffectDefinition,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TransportEffectDefinition {
+    Shader {
+        program: crate::TransportShaderProgramHandle,
+        values: Arc<[noon_core::ShaderValue]>,
+        seed: u32,
+    },
     Bloom {
         radius: EffectRadius,
         threshold: f64,
@@ -95,9 +101,13 @@ pub enum TransportEffectDefinition {
         progress: f64,
     },
 }
-impl From<&noon_compile::CompiledEffect> for TransportEffectState {
-    fn from(effect: &noon_compile::CompiledEffect) -> Self {
-        let definition = match effect.definition {
+impl TryFrom<&noon_compile::CompiledEffect> for TransportEffectState {
+    type Error = RetainedExecutionTransportError;
+    fn try_from(effect: &noon_compile::CompiledEffect) -> Result<Self, Self::Error> {
+        let definition = match &effect.definition {
+            noon_core::EffectDefinition::Shader(_) => {
+                return Err(RetainedExecutionTransportError::UnsupportedShaderProgram)
+            }
             noon_core::EffectDefinition::Bloom(v) => TransportEffectDefinition::Bloom {
                 radius: v.radius(),
                 threshold: v.threshold(),
@@ -133,15 +143,30 @@ impl From<&noon_compile::CompiledEffect> for TransportEffectState {
                 }
             }
         };
-        Self {
+        Ok(Self {
             attachment: effect.attachment,
             definition,
-        }
+        })
     }
 }
 impl TransportEffectState {
-    fn to_compiled(self) -> Option<noon_compile::CompiledEffect> {
-        let definition = match self.definition {
+    fn to_compiled(&self) -> Option<noon_compile::CompiledEffect> {
+        self.to_compiled_with_programs(&HashMap::new())
+    }
+    fn to_compiled_with_programs(
+        &self,
+        programs: &crate::retained_resource_transport::shader_programs::ShaderPrograms,
+    ) -> Option<noon_compile::CompiledEffect> {
+        let definition = match self.definition.clone() {
+            TransportEffectDefinition::Shader {
+                program,
+                values,
+                seed,
+            } => {
+                noon_core::ShaderEffect::from_values(programs.get(&program)?.clone(), values, seed)
+                    .ok()?
+                    .into()
+            }
             TransportEffectDefinition::Bloom {
                 radius,
                 threshold,
@@ -599,6 +624,7 @@ pub enum RetainedTransportApplyOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
     UnsupportedComposedSource,
+    UnsupportedShaderProgram,
     UnknownComposedSource(crate::TransportComposedSourceHandle),
     InvalidComposedSourceHandle(TransportSlotId),
     InvalidComposedSource(noon_compile::CompiledComposedSourceError),
@@ -653,6 +679,7 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::UnknownComposedSource(handle) => write!(formatter, "unknown immutable composed source {handle:?}"),
             Self::InvalidComposedSourceHandle(slot) => write!(formatter, "invalid composed source provenance or owner profile at {slot:?}"),
             Self::InvalidComposedSource(error) => error.fmt(formatter),
+            Self::UnsupportedShaderProgram => formatter.write_str("custom shader transport requires a program resource key"),
             Self::UnsupportedComposedSource => write!(formatter,"composed source conversion requires a publication resource key"),
             Self::InvalidEffectState(slot) => write!(
                 formatter,
@@ -805,6 +832,7 @@ pub struct RetainedExecutionDeltaEncoder {
     render_geometry_indices: Option<HashMap<usize, u64>>,
     published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
     published_composed_sources: Vec<Option<PublishedComposedSource>>,
+    published_shader_sources: Option<shaders::PublishedShaderSources>,
 }
 
 impl RetainedExecutionDeltaEncoder {
@@ -822,6 +850,7 @@ impl RetainedExecutionDeltaEncoder {
             render_geometry_indices: None,
             published_render_geometries: Vec::new(),
             published_composed_sources: Vec::new(),
+            published_shader_sources: None,
         }
     }
 
@@ -873,6 +902,7 @@ impl RetainedExecutionDeltaEncoder {
             index,
             resource,
             self.composed_source_handle(frame, index),
+            (self.session, self.next_sequence),
         )?;
         let render_geometry = render_geometry_identity(frame, index);
         if reuse_inline_geometry
@@ -947,6 +977,7 @@ impl RetainedExecutionDeltaEncoder {
         self.snapshot_orders = orders;
         self.published_render_geometries = render_geometries;
         self.published_composed_sources = composed_sources;
+        self.commit_shader_sources(frame, &objects, &HashSet::new(), true);
         Ok(RetainedExecutionDeltaEnvelope {
             primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
@@ -1120,6 +1151,7 @@ impl RetainedExecutionDeltaEncoder {
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
         self.commit_composed_sources(frame, &objects, &excluded_indices);
+        self.commit_shader_sources(frame, &objects, &excluded_indices, false);
         for (index, _) in &removed_rows {
             if let Some(order) = self.snapshot_orders.get_mut(*index) {
                 *order = None;
@@ -1189,6 +1221,7 @@ pub struct RetainedExecutionFrameMirror {
     // lowering does; a bare arena-local GeometryId cannot bind another layer.
     geometry_bindings: HashMap<crate::TransportGeometryResourceHandle, GeometryRef>,
     composed_sources: HashMap<crate::TransportComposedSourceHandle, Arc<noon_core::ComposedSource>>,
+    shader_programs: crate::retained_resource_transport::shader_programs::ShaderPrograms,
     composed_dependencies: noon_compile::ComposedDependencies,
     composed_handles: HashMap<ObjectId, crate::TransportComposedSourceHandle>,
     #[cfg(test)]
@@ -1415,6 +1448,7 @@ impl RetainedExecutionFrameMirror {
             object,
             content,
             self.resolve_fill_paint(object.fill_paint.as_ref())?,
+            &self.shader_programs,
         )
     }
 
@@ -1759,6 +1793,7 @@ impl RetainedExecutionFrameMirror {
                         object,
                         content,
                         self.resolve_fill_paint(object.fill_paint.as_ref())?,
+                        &self.shader_programs,
                     )
                 })
             })
@@ -1869,7 +1904,7 @@ impl RetainedExecutionFrameMirror {
                 added,
                 wire: object,
                 geometry,
-                state: frame_object(object, content, fill_paint)?,
+                state: frame_object(object, content, fill_paint, &self.shader_programs)?,
             });
         }
         let mut seen_removed = HashSet::with_capacity(delta.removed_slots.len());
@@ -2235,6 +2270,7 @@ fn transport_object(
     index: usize,
     render_geometry_resource: Option<u64>,
     composed_source: Option<crate::TransportComposedSourceHandle>,
+    shader_publication: (u32, u64),
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
     let object = frame
         .objects
@@ -2262,9 +2298,24 @@ fn transport_object(
             .map(|stack| {
                 stack
                     .iter()
-                    .map(|effect| TransportEffectState::from(&effect))
-                    .collect()
+                    .map(|effect| match &effect.definition {
+                        noon_core::EffectDefinition::Shader(shader) => Ok(TransportEffectState {
+                            attachment: effect.attachment,
+                            definition: TransportEffectDefinition::Shader {
+                                program: crate::TransportShaderProgramHandle {
+                                    session: shader_publication.0,
+                                    origin: effect.attachment,
+                                    version: shader_publication.1,
+                                },
+                                values: Arc::clone(shader.shared_values()),
+                                seed: shader.seed(),
+                            },
+                        }),
+                        _ => TransportEffectState::try_from(&effect),
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             })
+            .transpose()?
             .unwrap_or_default(),
         z_index: object.z_index,
         content: match composed_source {
@@ -2354,7 +2405,7 @@ fn validate_object_fields(
     }
     if object.effects.len() > noon_core::MAX_EFFECT_STACK_LEN
         || object.effects.iter().enumerate().any(|(index, effect)| {
-            effect.to_compiled().is_none()
+            !shaders::valid_wire_effect(effect)
                 || object.effects[..index]
                     .iter()
                     .any(|previous| previous.attachment == effect.attachment)
@@ -2514,6 +2565,7 @@ fn frame_object(
     object: &RetainedTransportObjectState,
     content: ObjectContentRef,
     fill_paint: Option<Arc<noon_core::SemanticPaint>>,
+    shader_programs: &crate::retained_resource_transport::shader_programs::ShaderPrograms,
 ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
     let spatial = match object.spatial.as_ref() {
         Some(spatial) => Some(spatial.to_compiled().ok_or(
@@ -2532,16 +2584,15 @@ fn frame_object(
             }
             None
         } else {
-            let bindings =
-                object
-                    .effects
-                    .iter()
-                    .map(|value| {
-                        value.to_compiled().ok_or(
-                            RetainedExecutionTransportError::InvalidEffectState(object.slot),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+            let bindings = object
+                .effects
+                .iter()
+                .map(|value| {
+                    value.to_compiled_with_programs(shader_programs).ok_or(
+                        RetainedExecutionTransportError::InvalidEffectState(object.slot),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Some(Arc::new(
                 noon_compile::CompiledEffectStack::new_with_visibility(bindings, object.visibility)
                     .map_err(|_| {
@@ -2706,7 +2757,7 @@ mod tests {
     fn effect_stack(
         effect: &noon_compile::CompiledEffect,
     ) -> Arc<noon_compile::CompiledEffectStack> {
-        Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
+        Arc::new(noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap())
     }
 
     #[test]
@@ -2780,7 +2831,7 @@ mod tests {
                 }),
                 2 => suffix.effects.push(TransportEffectState {
                     attachment: SemanticNodeId::new(97, 18),
-                    definition: suffix.effects[0].definition,
+                    definition: suffix.effects[0].definition.clone(),
                 }),
                 3 => bad.protocol_version = 28,
                 _ => {
@@ -2940,7 +2991,7 @@ mod tests {
         changed.swap(0, 7);
         changed[1].definition = EffectUpdate::default()
             .intensity(1.25)
-            .apply_to(changed[1].definition)
+            .apply_to(changed[1].definition.clone())
             .unwrap();
         frame.objects[0].effects = Some(Arc::new(CompiledEffectStack::new(changed).unwrap()));
         let delta = encoder
@@ -2966,7 +3017,7 @@ mod tests {
                     suffix.effects[7].attachment = suffix.effects[0].attachment;
                 }
                 1 => {
-                    suffix.effects.push(suffix.effects[0]);
+                    suffix.effects.push(suffix.effects[0].clone());
                 }
                 2 => {
                     suffix.effects[7].definition = TransportEffectDefinition::Blur {
@@ -3378,7 +3429,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(effect.attachment)),
-            Some(*effect)
+            Some(effect.as_ref().clone())
         );
     }
 
@@ -3420,7 +3471,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(effect.attachment)),
-            Some(*effect)
+            Some(effect.as_ref().clone())
         );
     }
 
@@ -3469,7 +3520,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(effect.attachment)),
-            Some(*effect)
+            Some(effect.as_ref().clone())
         );
         assert!(mirror.frame().unwrap().objects[1].effects.is_none());
 
@@ -3478,7 +3529,7 @@ mod tests {
             attachment: effect.attachment,
             definition: EffectUpdate::default()
                 .intensity(1.25)
-                .apply_to(effect.definition)
+                .apply_to(effect.definition.clone())
                 .unwrap(),
         });
         frame.objects[0].effects = Some(effect_stack(&changed));
@@ -3501,7 +3552,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(changed.attachment)),
-            Some(*changed)
+            Some(changed.as_ref().clone())
         );
 
         // Removing the exact effect clears its renderer-derived scope; the old
@@ -3625,7 +3676,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(valid.attachment)),
-            Some(*valid)
+            Some(valid.as_ref().clone())
         );
         let next_sequence = mirror.next_sequence;
         let mut delta = encoder
@@ -3659,7 +3710,7 @@ mod tests {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(valid.attachment)),
-            Some(*valid)
+            Some(valid.as_ref().clone())
         );
 
         frame.objects[1].effects = Some(effect_stack(&valid));
@@ -3786,7 +3837,7 @@ mod tests {
                         .effects
                         .as_ref()
                         .and_then(|stack| stack.get(effect.attachment)),
-                    Some(*effect)
+                    Some(effect.as_ref().clone())
                 );
                 assert_eq!(installed.style, frame.objects[0].style);
 
@@ -3794,7 +3845,7 @@ mod tests {
                     attachment: effect.attachment,
                     definition: EffectUpdate::default()
                         .intensity(1.5)
-                        .apply_to(effect.definition)
+                        .apply_to(effect.definition.clone())
                         .unwrap(),
                 });
                 frame.objects[0].effects = Some(effect_stack(&changed));
@@ -3839,7 +3890,7 @@ mod tests {
                         .effects
                         .as_ref()
                         .and_then(|stack| stack.get(changed.attachment)),
-                    Some(*changed)
+                    Some(changed.as_ref().clone())
                 );
                 assert_eq!(mirror.frame().unwrap().objects[1], before.objects[1]);
             }

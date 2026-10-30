@@ -21,6 +21,66 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.add_effect(object, definition, name))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn require_effect_resource_preparation(&mut self) {
+        self.session.require_effect_resource_preparation();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn prepare_effect_addition<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        definition: EffectDefinition,
+        name: &str,
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.with_live_session(|live| live.prepare_effect_attachments([(object, definition, name)]))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn prepare_family_membership(
+        &mut self,
+        family: MobjectTarget<'_>,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.require_completed_live_segment()?;
+        self.with_live_session(|live| {
+            live.prepare_family_membership(family, members, true)
+                .map(|(pending, _)| pending)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn effect_preparation_bytes(
+        &self,
+        pending: &noon::StagedEffectPublication,
+    ) -> Result<Vec<u8>, String> {
+        crate::retained_resource_transport::shader_programs::encode_shader_preparation(
+            pending.programs(),
+            |program| self.encoder.shader_program_handle(program),
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn publish_effect_addition(
+        &mut self,
+        staged: noon::StagedEffectPublication,
+    ) -> Result<(), AuthoringFailure> {
+        if let Some(segment) = self.with_live_session(|live| live.publish_staged_effects(staged))? {
+            self.admit_live_segment(segment);
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn prepare_composition(
+        &mut self,
+        request: &noon::AnimationCompositionRequest<'_>,
+        options: noon_core::AnimationOptions,
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.require_completed_live_segment()?;
+        self.with_live_session(|live| live.prepare_composition(request, options))
+    }
+
     pub(crate) fn live_set_effect<'owner>(
         &mut self,
         object: impl Into<MobjectTarget<'owner>>,

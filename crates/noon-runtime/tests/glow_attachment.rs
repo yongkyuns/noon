@@ -31,14 +31,14 @@ fn source(effect: Option<Arc<CompiledEffect>>) -> CompiledObject {
         Transform2D::IDENTITY,
         Style::default(),
     );
-    row.effects = effect.map(|effect| stack(*effect));
+    row.effects = effect.map(|effect| stack(effect.as_ref().clone()));
     row
 }
 fn change(expected: Option<SemanticNodeId>, effect: Option<Arc<CompiledEffect>>) -> ExecutionPatch {
     ExecutionPatch::SetEffectStack {
         object: ObjectId::new(1),
         expected: expected.into_iter().collect(),
-        effects: effect.map(|effect| stack(*effect)),
+        effects: effect.map(|effect| stack(effect.as_ref().clone())),
     }
 }
 fn stack(effect: CompiledEffect) -> Arc<noon_compile::CompiledEffectStack> {
@@ -51,7 +51,7 @@ fn only(stack: &noon_compile::CompiledEffectStack) -> CompiledEffect {
 fn channels(effect: &CompiledEffect, start: f64, offset: u64) -> Vec<TrackDefinition> {
     effect
         .parameter_channels(
-            EffectUpdate::default()
+            &EffectUpdate::default()
                 .radius(Pixels(6.5))
                 .color(Color::BLUE)
                 .intensity(2.0),
@@ -132,10 +132,10 @@ fn parameter_channels_require_exact_attachment_addresses_for_every_finite_kind()
     ] {
         let effect = Arc::new(CompiledEffect {
             attachment: SemanticNodeId::new(7, 3),
-            definition,
+            definition: definition.clone(),
         });
         let tracks: Vec<_> = effect
-            .parameter_channels(update)
+            .parameter_channels(&update)
             .unwrap()
             .into_iter()
             .enumerate()
@@ -314,7 +314,7 @@ fn attach_remove_and_new_generation_preserve_the_object_and_only_dirty_rendering
                 .effects
                 .as_ref()
                 .map(|stack| only(stack)),
-            next.as_deref().copied()
+            next.as_deref().cloned()
         );
         let mut row = rt.frame().objects[0].clone();
         row.effects = None;
@@ -387,10 +387,10 @@ fn stale_attachment_changes_and_same_identity_schema_edits_fail_without_a_prefix
     rt.take_spatial_changes();
     let frame = rt.frame().clone();
     let context = rt.publication_context();
-    let mut schema = *a;
+    let mut schema = a.as_ref().clone();
     schema.definition = EffectUpdate::default()
         .source(GlowSource::Silhouette)
-        .apply_to(a.definition)
+        .apply_to(a.definition.clone())
         .unwrap();
     for patch in [
         change(None, Some(b.clone())),
@@ -428,15 +428,15 @@ fn stale_attachment_changes_and_same_identity_schema_edits_fail_without_a_prefix
 fn topology_barrier_keeps_value_writes_bound_to_their_own_generation() {
     let a = attachment(3);
     let b = attachment(4);
-    let mut old_value = *a;
+    let mut old_value = a.as_ref().clone();
     old_value.definition = EffectUpdate::default()
         .intensity(1.0)
-        .apply_to(a.definition)
+        .apply_to(a.definition.clone())
         .unwrap();
-    let mut new_value = *b;
+    let mut new_value = b.as_ref().clone();
     new_value.definition = EffectUpdate::default()
         .intensity(1.7)
-        .apply_to(b.definition)
+        .apply_to(b.definition.clone())
         .unwrap();
     let mut rt = SceneInstance::new(scene(Some(a.clone()), &[]));
     rt.apply_execution_transaction(&tx([
@@ -447,7 +447,7 @@ fn topology_barrier_keeps_value_writes_bound_to_their_own_generation() {
         change(Some(a.attachment), Some(b.clone())),
         ExecutionPatch::SetEffects {
             object: ObjectId::new(1),
-            effects: stack(new_value),
+            effects: stack(new_value.clone()),
         },
     ]))
     .unwrap();
@@ -465,7 +465,7 @@ fn topology_barrier_keeps_value_writes_bound_to_their_own_generation() {
             change(None, Some(attachment(5))),
             ExecutionPatch::SetEffects {
                 object: ObjectId::new(1),
-                effects: stack(*a)
+                effects: stack(a.as_ref().clone())
             },
         ]))
         .is_err());

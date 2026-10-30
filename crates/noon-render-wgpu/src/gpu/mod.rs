@@ -1,5 +1,12 @@
 use std::mem::size_of;
 
+// Backend GPU leases stay in their browser context; native jobs may share them
+// across threads. CPU semantic/resource values continue to use ordinary Arc.
+#[cfg(target_arch = "wasm32")]
+pub(super) use std::rc::{Rc as GpuLease, Weak as WeakGpuLease};
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) use std::sync::{Arc as GpuLease, Weak as WeakGpuLease};
+
 use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
@@ -44,6 +51,10 @@ pub use hdr_bloom::{
 };
 mod glow_filter;
 mod sample_filter;
+mod shader_effects;
+pub use shader_effects::{
+    EffectProgramPreparation, EffectProgramPrepareError, EffectProgramStats, PreparedEffectPrograms,
+};
 mod shadow_filter;
 pub use effect_stack::{
     EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,
@@ -56,7 +67,9 @@ pub use glow_filter::{
     EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
     EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
-pub use sample_filter::{SampleFilter, SampleParameters, SampleScope};
+pub use sample_filter::{
+    PreparedShaderProgram, SampleFilter, SampleParameters, SampleScope, ShaderSampleContext,
+};
 mod encoded_display;
 mod overlay;
 mod path_batching;
@@ -575,6 +588,7 @@ impl std::error::Error for PathPreloadUploadError {}
 pub struct GpuRenderer {
     fill_paints: Option<Box<paint::PaintGpu>>,
     effect_captures: Option<Box<analytic_glow::EffectCaptureGpu>>,
+    effect_programs: shader_effects::EffectPrograms,
     retained_effects: retained_text::glow_publication::RetainedEffectPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
@@ -952,6 +966,7 @@ impl GpuRenderer {
             derived_display,
             images: None,
             effect_captures: None,
+            effect_programs: Default::default(),
             fill_paints: None,
             retained_effects: Default::default(),
             circle_capacity_bytes: 0,

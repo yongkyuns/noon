@@ -244,3 +244,6 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
     }
     eprintln!("public composed group: 13 mixed image/vector states, max byte error {maximum}");
 }
+
+#[cfg(feature = "wgsl-effects")]
+mod shader;
