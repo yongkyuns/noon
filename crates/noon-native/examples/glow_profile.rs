@@ -1,4 +1,4 @@
-//! Run with `-- 1 intensity` or `-- 100 radius`; the authored track lasts 60s.
+//! Run with `-- 1 intensity` or `-- 100 radius`; the authored track lasts 10s.
 use noon::example_scenes::glow_profile::{session, Property};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,6 +12,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("usage: glow_profile [1|100] [intensity|radius]".into());
     }
-    noon_native::run(session(active, property, 60.0)?)?;
+    noon_native::run(session(active, property, 10.0)?)?;
     Ok(())
 }

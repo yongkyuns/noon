@@ -35,10 +35,9 @@ canvas.width = width;
 canvas.height = height;
 canvas.style.aspectRatio = `${width} / ${height}`;
 
-const driverDurationSeconds = Math.max(
-  60,
-  ((warmupFrames + measuredFrames + 16) / targetHz) * 2,
-);
+const driverDurationSeconds = activeGlows === null
+  ? Math.max(60, ((warmupFrames + measuredFrames + 16) / targetHz) * 2)
+  : Math.max(10, (warmupFrames + measuredFrames + 16) / targetHz);
 const browserJank = new BrowserJankMonitor();
 let renderer = null;
 // Retain every measured sample for the opt-in effects workload. These observe

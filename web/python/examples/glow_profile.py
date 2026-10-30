@@ -5,7 +5,7 @@ from noon import *
 options = globals().get("context", {})
 active = options.get("active_glows", 1)
 property_name = options.get("property", "intensity")
-duration = float(options.get("duration", 60))
+duration = float(options.get("duration", 10))
 if isinstance(active, bool) or not isinstance(active, int) or active not in (1, 100):
     raise ValueError("G4 active glow count must be 1 or 100")
 if property_name not in ("intensity", "radius"):
