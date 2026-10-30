@@ -4,27 +4,30 @@ use super::encoded_display::EncodedDisplayPresenter;
 pub enum OutputTransfer {
     #[default]
     Direct,
-    /// The browser WebGL drawing buffer applies an sRGB store transfer even
-    /// though wgpu exposes the surface as `Rgba8Unorm`. Keep scene rendering in
-    /// encoded UNORM space, then decode exactly once before presentation.
-    BrowserWebGlSrgb,
+    /// Keep scene rendering in encoded UNORM space, then decode exactly once
+    /// before an sRGB store. Browser WebGL also needs this for its implicit
+    /// drawing-buffer transfer, even with an exposed `Rgba8Unorm` surface.
+    SrgbStore,
 }
 
 impl OutputTransfer {
-    #[cfg(any(target_arch = "wasm32", test))]
     fn for_target(backend: wgpu::Backend, format: wgpu::TextureFormat) -> Self {
         // A float radiance image is an offscreen scene input, never the browser
         // drawing buffer. Its output transfer belongs after HDR resolution.
         if matches!(format, wgpu::TextureFormat::Rgba16Float) {
             Self::Direct
-        } else {
+        } else if format.is_srgb() {
+            Self::SrgbStore
+        } else if cfg!(target_arch = "wasm32") {
             Self::for_browser_backend(backend)
+        } else {
+            Self::Direct
         }
     }
 
     pub const fn for_browser_backend(backend: wgpu::Backend) -> Self {
         match backend {
-            wgpu::Backend::Gl => Self::BrowserWebGlSrgb,
+            wgpu::Backend::Gl => Self::SrgbStore,
             _ => Self::Direct,
         }
     }
@@ -47,11 +50,8 @@ impl PresentationBridge {
         transfer: OutputTransfer,
         viewport_size: [u32; 2],
     ) -> Self {
-        // Browser WebGL exposes an ordinary `Rgba8Unorm` wgpu surface, but its
-        // drawing buffer still applies the browser's sRGB presentation transfer.
-        // Resolve that backend fact here so every canvas host gets the same color
-        // contract without duplicating adapter plumbing in noon-web.
-        #[cfg(target_arch = "wasm32")]
+        // Native sRGB attachments and the browser GL drawing buffer both apply
+        // a store transfer. Resolve it once for every retained rendering host.
         let transfer = if transfer == OutputTransfer::Direct {
             OutputTransfer::for_target(device.adapter_info().backend, surface_format)
         } else {
@@ -60,7 +60,7 @@ impl PresentationBridge {
 
         let scene_format = match transfer {
             OutputTransfer::Direct => surface_format,
-            OutputTransfer::BrowserWebGlSrgb => surface_format.remove_srgb_suffix(),
+            OutputTransfer::SrgbStore => surface_format.remove_srgb_suffix(),
         };
         let mut result = Self {
             transfer,
@@ -70,10 +70,10 @@ impl PresentationBridge {
             view: None,
             presenter: None,
         };
-        if transfer == OutputTransfer::BrowserWebGlSrgb {
+        if transfer == OutputTransfer::SrgbStore {
             result.presenter = Some(
                 EncodedDisplayPresenter::new(device, surface_format, transfer)
-                    .expect("browser presentation uses RGBA8/BGRA8 output"),
+                    .expect("encoded presentation uses RGBA8/BGRA8 output"),
             );
             result.recreate_scene_target(device);
         }
@@ -90,7 +90,7 @@ impl PresentationBridge {
             return;
         }
         self.viewport_size = viewport_size;
-        if self.transfer == OutputTransfer::BrowserWebGlSrgb {
+        if self.transfer == OutputTransfer::SrgbStore {
             self.recreate_scene_target(device);
         }
     }
@@ -137,7 +137,7 @@ impl PresentationBridge {
             .as_mut()
             .expect("presentation requires a presenter")
             .prepare(&texture)
-            .expect("browser scene target is encoded RGBA8");
+            .expect("presentation scene target is encoded RGBA8");
         self.texture = Some(texture);
         self.view = Some(view);
     }
@@ -148,10 +148,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_browser_gl_needs_the_presentation_decode() {
+    fn browser_backend_defaults_select_only_the_implicit_gl_store() {
         assert_eq!(
             OutputTransfer::for_browser_backend(wgpu::Backend::Gl),
-            OutputTransfer::BrowserWebGlSrgb
+            OutputTransfer::SrgbStore
         );
         assert_eq!(
             OutputTransfer::for_browser_backend(wgpu::Backend::BrowserWebGpu),
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn float_radiance_targets_never_take_the_browser_drawing_buffer_transfer() {
+    fn target_formats_preserve_encoded_bytes_without_touching_float_radiance() {
         for backend in [
             wgpu::Backend::Gl,
             wgpu::Backend::BrowserWebGpu,
@@ -177,8 +177,31 @@ mod tests {
         }
         assert_eq!(
             OutputTransfer::for_target(wgpu::Backend::Gl, wgpu::TextureFormat::Rgba8Unorm),
-            OutputTransfer::BrowserWebGlSrgb
+            if cfg!(target_arch = "wasm32") {
+                OutputTransfer::SrgbStore
+            } else {
+                OutputTransfer::Direct
+            }
         );
+        for backend in [
+            wgpu::Backend::Metal,
+            wgpu::Backend::Vulkan,
+            wgpu::Backend::BrowserWebGpu,
+        ] {
+            for format in [
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ] {
+                assert_eq!(
+                    OutputTransfer::for_target(backend, format),
+                    OutputTransfer::SrgbStore
+                );
+                assert_eq!(
+                    OutputTransfer::for_target(backend, format.remove_srgb_suffix()),
+                    OutputTransfer::Direct
+                );
+            }
+        }
     }
 
     #[test]

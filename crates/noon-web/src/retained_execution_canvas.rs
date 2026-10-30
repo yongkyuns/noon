@@ -1538,7 +1538,7 @@ mod wasm {
             &device,
             config.format,
             if backend == wgpu::Backend::Gl {
-                OutputTransfer::BrowserWebGlSrgb
+                OutputTransfer::SrgbStore
             } else {
                 OutputTransfer::Direct
             },

@@ -3345,7 +3345,7 @@ mod wasm {
             &device,
             config.format,
             if backend == wgpu::Backend::Gl {
-                noon_render_wgpu::OutputTransfer::BrowserWebGlSrgb
+                noon_render_wgpu::OutputTransfer::SrgbStore
             } else {
                 noon_render_wgpu::OutputTransfer::Direct
             },
@@ -3388,7 +3388,7 @@ mod wasm {
             &device,
             config.format,
             if backend == wgpu::Backend::Gl {
-                noon_render_wgpu::OutputTransfer::BrowserWebGlSrgb
+                noon_render_wgpu::OutputTransfer::SrgbStore
             } else {
                 noon_render_wgpu::OutputTransfer::Direct
             },

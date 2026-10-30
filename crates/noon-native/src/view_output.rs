@@ -470,7 +470,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
         let (linear, expected) = if phase == 6 {
             (
                 Vec::new(),
-                [188, 188, 188, 255].repeat((size[0] * size[1]) as usize),
+                [128, 128, 128, 255].repeat((size[0] * size[1]) as usize),
             )
         } else {
             reference(size, sigma, threshold, intensity, highlighted)
@@ -480,7 +480,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
             maximum = maximum.max(a.abs_diff(*e));
             assert!(a.abs_diff(*e) <= 2, "phase={phase}: {a} vs {e}");
         }
-        if phase != 6 && !highlighted {
+        if !highlighted {
             assert_eq!(
                 actual, capture_pixels,
                 "fixed-view native output/capture equivalence"

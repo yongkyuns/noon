@@ -2025,6 +2025,12 @@ adapter identity and failure counts are retained for independent checking.
 Native and browser hosts reuse this presenter. Its numerical proof does not
 establish physical presentation or performance acceptance.
 
+Compatibility rendering also uses the existing presentation bridge for native
+sRGB attachments, preserving the encoded-byte composition used by frame capture.
+The bridge retains one UNORM scene target (four bytes/pixel) and one final transfer
+pass; unchanged extents reuse that target. Native UNORM attachments bypass it,
+and float radiance targets keep their separate HDR output transfer.
+
 ### Native window HDR and viewer-overlay integration (#1897 M4/M5)
 
 The normal native frame loop selects its working format from the current
@@ -2055,9 +2061,10 @@ clean output instead of accumulating a tint.
 
 The real native GPU proof has thirteen phases: live parameter edits, viewer
 overlay/clear, neutral and absent Bloom, Compatibility/HDR transitions, resize,
-target recreation and a newly requested device. Every HDR phase without an
-overlay matches normal `SessionCapture` exactly at the same view/state. Float
-values use the predeclared 0.006 + 0.004*abs(expected) bound; displayed values use
+target recreation and a newly requested device. Every phase without an
+overlay matches normal `SessionCapture` exactly at the same view/state, including
+the Compatibility transition. Float values use the predeclared
+0.006 + 0.004*abs(expected) bound; displayed values use
 the existing two-byte bound. Expected values come from literal .5 radiance over
 opaque black, an independent full-2D finite Gaussian and explicit SDR transfer.
 An actual consumer that sends the viewer tint through Bloom must fail those
