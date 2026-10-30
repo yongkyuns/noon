@@ -378,7 +378,13 @@ impl FileSink {
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "invalid, out-of-order or nonopaque captured frame",
+                    format!(
+                        "invalid, out-of-order or nonopaque captured frame: pts={}/{} requested={} published={} sample={} held={} first_nonopaque={:?}",
+                        frame.frame.pts, self.frames,
+                        frame.observation.requested_time, frame.observation.published_time,
+                        frame.frame.source_sample.authored_time(), frame.frame.held,
+                        frame.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] != 255),
+                    ),
                 ));
             }
             self.encoder
