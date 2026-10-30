@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -12,6 +13,15 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
   readFile(wasmPath),
   stat(wasmPath),
 ]);
+
+for (const name of ["python-editor-bundle.js", "python-editor-licenses.txt"]) {
+  const info = await stat(join(packageDirectory, name));
+  if (!info.isFile() || info.size === 0) throw new Error(`Missing editor package asset: ${name}`);
+}
+
+if (existsSync(join(process.cwd(), "web", "node_modules"))) {
+  throw new Error("Build dependencies must stay outside the deployed web tree");
+}
 
 const expectedJavascriptSurface = [
   "export class WasmAudioSource",
