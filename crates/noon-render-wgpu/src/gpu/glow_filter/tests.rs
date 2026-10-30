@@ -64,10 +64,11 @@ fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
 
 #[test]
 fn uniform_layout_and_complete_finite_kernel_are_normalized() {
-    assert_eq!(size_of::<GlowUniform>(), 1072);
+    assert_eq!(size_of::<GlowUniform>(), 1088);
     assert_eq!(std::mem::offset_of!(GlowUniform, tint), 16);
     assert_eq!(std::mem::offset_of!(GlowUniform, control), 32);
-    assert_eq!(std::mem::offset_of!(GlowUniform, weights), 48);
+    assert_eq!(std::mem::offset_of!(GlowUniform, source_bounds), 48);
+    assert_eq!(std::mem::offset_of!(GlowUniform, weights), 64);
     for sigma in [f64::MIN_POSITIVE, 0.01, 0.5, 1.0, 3.25, 12.0, 64.0] {
         let (_, uniform) = GlowUniform::prepare(parameters(sigma), [17, 13], None).unwrap();
         assert_eq!(uniform.radius, (3.0 * sigma).ceil() as u32);

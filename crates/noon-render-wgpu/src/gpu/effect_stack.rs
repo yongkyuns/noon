@@ -359,6 +359,7 @@ impl EffectStackFilter {
             layout,
             parameters.working_format,
             defer_blur,
+            parameters.source_bounds,
         )?;
         if stats.bytes_uploaded != 0 || stats.blur_passes != 0 {
             pass.revision += 1;

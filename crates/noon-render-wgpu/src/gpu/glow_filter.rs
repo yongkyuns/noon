@@ -596,6 +596,7 @@ struct GlowUniform {
     reserved: u32,
     tint: [f32; 4],
     control: [f32; 4],
+    source_bounds: [u32; 4],
     weights: [[f32; 4]; WEIGHT_VECTORS],
 }
 
@@ -622,6 +623,7 @@ impl GlowUniform {
                 0.0,
                 0.0,
             ],
+            source_bounds: [0, 0, size[0], size[1]],
             weights: [[0.0; 4]; WEIGHT_VECTORS],
         };
         if let Some((old_sigma, old)) = cached {
@@ -646,7 +648,10 @@ impl GlowUniform {
     }
 
     fn same_kernel(&self, other: &Self) -> bool {
-        self.size == other.size && self.radius == other.radius && self.weights == other.weights
+        self.size == other.size
+            && self.radius == other.radius
+            && self.source_bounds == other.source_bounds
+            && self.weights == other.weights
     }
 }
 
@@ -788,7 +793,7 @@ impl GlowFilter {
         capture: GlowCapture<'_>,
         parameters: GlowParameters,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
-        self.prepare_inner(device, queue, scope, capture, parameters, true)
+        self.prepare_inner(device, queue, scope, capture, parameters, true, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -800,6 +805,7 @@ impl GlowFilter {
         capture: GlowCapture<'_>,
         parameters: GlowParameters,
         materialize: bool,
+        source_bounds: Option<EffectPixelBounds>,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         let size = [capture.source.width(), capture.source.height()];
         GlowUniform::validate(parameters)?;
@@ -838,7 +844,22 @@ impl GlowFilter {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
         }
         let cached = scope.sigma_pixels.zip(scope.uniform.as_ref());
-        let (sigma, uniform) = GlowUniform::prepare(parameters, size, cached)?;
+        let (sigma, mut uniform) = GlowUniform::prepare(parameters, size, cached)?;
+        if let Some(bounds) = source_bounds {
+            if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite)
+                || (0..2).any(|axis| bounds.min[axis] >= bounds.max[axis])
+            {
+                return Err(EffectPrepareError::InvalidSourceBounds);
+            }
+            // The source extent excludes retained transparent capacity. Keep a
+            // conservative two-pixel raster/AA guard; skipped texels are zero.
+            for (axis, extent) in size.into_iter().enumerate() {
+                uniform.source_bounds[axis] =
+                    (bounds.min[axis].floor() - 2.0).clamp(0.0, f64::from(extent)) as u32;
+                uniform.source_bounds[axis + 2] =
+                    (bounds.max[axis].ceil() + 2.0).clamp(0.0, f64::from(extent)) as u32;
+            }
+        }
         // All fallible input admission precedes mutation/allocation.
         stats.kernel_builds = usize::from(scope.sigma_pixels != Some(sigma));
         let programs = self.programs.get_or_insert_with(|| {
@@ -978,8 +999,17 @@ impl GlowFilter {
         layout: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
         defer_blur: bool,
+        source_bounds: Option<EffectPixelBounds>,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
-        let mut stats = self.prepare_inner(device, queue, scope, capture, parameters, false)?;
+        let mut stats = self.prepare_inner(
+            device,
+            queue,
+            scope,
+            capture,
+            parameters,
+            false,
+            source_bounds,
+        )?;
         if scope.active {
             let programs = self.programs.as_mut().expect("active glow programs");
             if programs
