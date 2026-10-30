@@ -58,6 +58,10 @@ const commit = spawnSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 });
 const commitSha = commit.status === 0 ? commit.stdout.trim() : null;
+const factory = activeGlows === null ? "createDirectAnalyticProfileRenderer" : "createDirectGlowProfileRenderer";
+assert.ok((await readFile(path.join(repoRoot, "web/pkg/noon_web.js"), "utf8"))
+  .includes(`export function ${factory}(`),
+  "Frame profiling requires a renderer-smoke browser package (NOON_RENDERER_SMOKE=1)");
 let runtimeBuildIdentity = null;
 if (activeGlows !== null) {
   runtimeBuildIdentity = JSON.parse(await readFile(path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));

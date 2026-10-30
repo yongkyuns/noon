@@ -1,4 +1,4 @@
-import init, { createDirectAnalyticProfileRenderer, createDirectGlowProfileRenderer } from "./pkg/noon_web.js";
+import init, * as wasm from "./pkg/noon_web.js";
 import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
 import {
@@ -48,13 +48,18 @@ const rawGpuRenderPassMs = activeGlows === null ? null : [];
 
 try {
   await init();
+  const factory = activeGlows === null
+    ? wasm.createDirectAnalyticProfileRenderer : wasm.createDirectGlowProfileRenderer;
+  if (typeof factory !== "function") {
+    throw new Error("Frame profiling requires a renderer-smoke browser package");
+  }
   const createStarted = performance.now();
   const offscreen = canvas.transferControlToOffscreen();
   renderer = activeGlows === null
-    ? await createDirectAnalyticProfileRenderer(
+    ? await factory(
       offscreen, objectCount, layout, width / height, driverDurationSeconds,
     )
-    : await createDirectGlowProfileRenderer(
+    : await factory(
       offscreen, activeGlows, glowProperty, driverDurationSeconds,
     );
   renderer.resize(width, height);

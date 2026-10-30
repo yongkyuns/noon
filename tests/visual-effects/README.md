@@ -1188,6 +1188,7 @@ The existing direct frame profiler selects this workload without changing its
 ordinary analytic defaults:
 
 ```sh
+NOON_RENDERER_SMOKE=1 NOON_WASM_PROFILE=release bash scripts/build-web-demo.sh
 NOON_PERF_GLOWS=100 NOON_PERF_GLOW_PROPERTY=intensity \
 NOON_PERF_WARMUP=30 NOON_PERF_FRAMES=540 NOON_PERF_TARGET_HZ=60 \
 NOON_PERF_WIDTH=1152 NOON_PERF_HEIGHT=648 node scripts/perf-profile.mjs
@@ -1201,6 +1202,8 @@ Rust/Pyodide cases on both raster backends using the existing paired harness.
 The Rust builder completes CPU authoring before rewinding the same runtime;
 this setup is not a rendered cold source pass. This workload enables authored-path
 measurements; a single run is not the frozen repeated-pair/cold-pass protocol.
+Like the existing analytic profiler, its entry points require the declared
+`renderer-smoke` build; record and freeze that profile for comparisons.
 It does not measure input-to-present, total driver/in-flight memory or authored
 attach/remove cycles. Those remain qualification gates.
 
