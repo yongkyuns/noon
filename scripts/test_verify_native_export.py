@@ -36,6 +36,8 @@ class ProofVerifierTests(TestCase):
                 raw = raw[:-4]
             if corrupt == 'empty_foreground':
                 raw = bytes([0, 0, 0, 255]) * 8
+            if corrupt == 'frozen_reference':
+                raw = raw[:16] * 2
             (root / 'mini.rgba').write_bytes(raw)
             decoded = raw
             if corrupt == 'decoded_length':
@@ -69,9 +71,11 @@ class ProofVerifierTests(TestCase):
             ]:
                 if corrupt == variant:
                     stream[key] = new
-            pts = [{'pts': 0}, {'pts': 1}]
+            pts = [{'pts': 0, 'duration': 1}, {'pts': 1, 'duration': 1}]
             if corrupt == 'pts':
                 pts[1]['pts'] = 2
+            if corrupt == 'packet_duration':
+                pts[1]['duration'] = 2
             probe = {'streams': [stream], 'frames': pts}
             image_dir = root / 'mini-png' / 'frames'
             image_dir.mkdir(parents=True)
@@ -129,9 +133,9 @@ class ProofVerifierTests(TestCase):
         corruptions = [
             'case_name', 'case_fps', 'codec', 'dimensions', 'pixel_format',
             'real_rate', 'average_rate', 'time_base', 'frame_count',
-            'start_pts', 'duration', 'pts', 'range', 'matrix',
+            'start_pts', 'duration', 'packet_duration', 'pts', 'range', 'matrix',
             'primaries', 'transfer', 'raw_length', 'decoded_length',
-            'empty_foreground', 'decoded_pixels', 'png_files', 'png_pixels',
+            'empty_foreground', 'frozen_reference', 'decoded_pixels', 'png_files', 'png_pixels',
             'manifest_header', 'manifest_complete', 'manifest_rows',
             'manifest_pts', 'manifest_requested', 'manifest_published',
             'manifest_hold', 'incomplete',
