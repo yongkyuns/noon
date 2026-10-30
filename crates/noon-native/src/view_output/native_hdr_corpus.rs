@@ -268,48 +268,11 @@ fn appearance_sources_match_offscreen_capture() {
     }
 }
 
-// Use the existing immutable scalar-animation profile. Live-authored effect
-// parameter tracks do not yet grant the native viewer-control capability.
-fn finite_glow_scene(active: usize, radius: f64) -> noon::SceneExecution {
-    use noon::{RateFunction, SemanticVec3};
-    let mut scene = Scene::new();
-    let tracker = scene.value_tracker(0.0).unwrap();
-    for index in 0..active {
-        let mut dot = scene.circle(0.12).unwrap();
-        dot.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
-        dot.disable_stroke().unwrap();
-        dot.set_glow(
-            EffectUpdate::default()
-                .radius(Pixels(radius))
-                .intensity(0.8),
-        )
-        .unwrap();
-        scene.add(&dot).unwrap();
-        let position = scene
-            .position_from_tracker(
-                &tracker,
-                SemanticVec3::new(1.0, 0.0, 0.0),
-                SemanticVec3::new(
-                    -2.25 + (index % 10) as f64 * 0.5,
-                    -2.25 + (index / 10) as f64 * 0.5,
-                    0.0,
-                ),
-            )
-            .unwrap();
-        scene.bind_position(&dot, &position).unwrap();
-    }
-    scene
-        .play_value(&tracker, 0.5)
-        .rate_func(RateFunction::Linear)
-        .run_time(10.0)
-        .unwrap();
-    scene.into_execution().unwrap()
-}
-
 #[test]
 #[ignore = "requires a native raster adapter; exercises admitted finite viewer seek"]
 fn finite_glow_seek_matches_forward_capture() {
     use crate::execution_source::StaticExecutionSource;
+    use noon::example_scenes::glow_profile::{session, Property};
     const TIMES: [f64; 5] = [0.0, 0.5, 5.0, 9.5, 10.0];
     const SEEKS: [usize; 7] = [0, 2, 1, 3, 0, 4, 2];
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -318,9 +281,9 @@ fn finite_glow_seek_matches_forward_capture() {
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mut cases = Vec::new();
     for active in [1, 100] {
-        for radius in [3.0, 6.0] {
+        for property in [Property::Intensity, Property::Radius] {
             for size in [[320, 180], [240, 160]] {
-                let mut forward = finite_glow_scene(active, radius);
+                let mut forward = session(active, property, 10.0).unwrap();
                 let mut capture = noon_export::SessionCapture::new(
                     forward.session(),
                     noon_export::CaptureOptions::new(size[0], size[1]),
@@ -345,7 +308,7 @@ fn finite_glow_seek_matches_forward_capture() {
                     .any(|p| p[..3] != [0, 0, 0]));
                 assert_ne!(expected[0], expected[4], "animated glow must change pixels");
                 let mut source = StaticExecutionSource::new(
-                    finite_glow_scene(active, radius),
+                    session(active, property, 10.0).unwrap(),
                     RustHostCallbackTable::new(),
                 );
                 assert_eq!(source.finite_transport_end(), Some(10.0));
@@ -390,12 +353,12 @@ fn finite_glow_seek_matches_forward_capture() {
                     maximum = maximum.max(error);
                     assert!(
                         error <= 2,
-                        "{active} radius={radius} {size:?} t={time}: seek/capture error {error}"
+                        "{active} {property:?} {size:?} t={time}: seek/capture error {error}"
                     );
                 }
                 source.retire_execution_source().unwrap();
-                eprintln!("native seek/capture {active} radius={radius} {size:?}: {} samples, max error {maximum}", SEEKS.len());
-                cases.push(serde_json::json!({"active":active,"radius":radius,"size":size,"times":SEEKS.map(|i|TIMES[i]),"maximum_error":maximum}));
+                eprintln!("native seek/capture {active} {property:?} {size:?}: {} samples, max error {maximum}", SEEKS.len());
+                cases.push(serde_json::json!({"active":active,"property":format!("{property:?}"),"size":size,"times":SEEKS.map(|i|TIMES[i]),"maximum_error":maximum}));
             }
         }
     }

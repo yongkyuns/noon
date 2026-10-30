@@ -2135,9 +2135,10 @@ native source adapter and offscreen exporter at four authored samples per second
 including source completion, two view sizes and the authored camera. It requires
 changing pixels and a maximum two-byte channel difference. The same step compares
 native viewer seeks, including rewind and repeated times, against forward
-`SessionCapture` output: 1/100 persistent glows moving through immutable scalar
-animation, two radii and both view sizes. Live-authored effect parameter tracks
-still lack native viewer-control admission.
+`SessionCapture` output: 1/100 glows with predeclared intensity/radius animation, through both view sizes. Initial affine/effect targets reuse the ordinary
+scheduler and animation lowerer before runtime construction, preserving immutable
+viewer admission. Parallel duplicate channels reject before publication; existing
+content-morph and live-edited playback restrictions remain explicit.
 These checks complement the operator references; they do not qualify native Python,
 arbitrary live-source seek, physical scanout, input latency or total driver memory.
 Held frames may sleep rather than republish time; active animation and explicit
