@@ -36,6 +36,8 @@ class ProofVerifierTests(TestCase):
                 raw = raw[:-4]
             if corrupt == 'empty_foreground':
                 raw = bytes([0, 0, 0, 255]) * 8
+            if corrupt == 'frozen_reference':
+                raw = raw[:16] * 2
             (root / 'mini.rgba').write_bytes(raw)
             decoded = raw
             if corrupt == 'decoded_length':
@@ -131,7 +133,7 @@ class ProofVerifierTests(TestCase):
             'real_rate', 'average_rate', 'time_base', 'frame_count',
             'start_pts', 'duration', 'pts', 'range', 'matrix',
             'primaries', 'transfer', 'raw_length', 'decoded_length',
-            'empty_foreground', 'decoded_pixels', 'png_files', 'png_pixels',
+            'empty_foreground', 'frozen_reference', 'decoded_pixels', 'png_files', 'png_pixels',
             'manifest_header', 'manifest_complete', 'manifest_rows',
             'manifest_pts', 'manifest_requested', 'manifest_published',
             'manifest_hold', 'incomplete',

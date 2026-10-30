@@ -1,9 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
+use noon::{LiveContinuation, LiveProgram, RustHostCallbackTable};
 use noon_export::output::{export_file, OutputOptions};
 use noon_export::{capture_frames, CaptureOptions};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 
 fn options(p: u32, q: u32) -> ExportFrameOptions {
     ExportFrameOptions {
@@ -18,14 +20,18 @@ fn options(p: u32, q: u32) -> ExportFrameOptions {
 
 fn capture_options() -> CaptureOptions {
     let mut options = CaptureOptions::new(320, 180);
-    options.backends = noon_export::Backends::VULKAN;
-    options.force_fallback_adapter = true;
+    options.backends = if cfg!(target_os = "macos") {
+        noon_export::Backends::METAL
+    } else {
+        noon_export::Backends::VULKAN
+    };
+    options.force_fallback_adapter = !cfg!(target_os = "macos");
     options
 }
 
 #[test]
 #[ignore = "requires software Vulkan and FFmpeg; native output gate verifies decoded results"]
-fn export_camera_to_mp4_and_png_at_integer_and_fractional_rates() {
+fn export_camera_and_effects_to_mp4_and_png_at_integer_and_fractional_rates() {
     let root = std::env::var_os("NOON_OUTPUT_PROOF_DIR")
         .map(std::path::PathBuf::from)
         .expect("set NOON_OUTPUT_PROOF_DIR for retained output evidence");
@@ -37,48 +43,85 @@ fn export_camera_to_mp4_and_png_at_integer_and_fractional_rates() {
         ("camera-2997", 30_000, 1_001, 90, false),
         ("camera-5994", 60_000, 1_001, 180, false),
     ] {
-        let (mut program, mut callbacks) =
-            noon::example_scenes::following_graph_camera::program().unwrap();
-        let result = export_file(
-            &mut program,
-            &mut callbacks,
-            options(p, q),
-            capture_options(),
-            OutputOptions::mp4(root.join(format!("{name}.mp4"))),
-        )
-        .unwrap();
-        assert_eq!(result.capture.sampling.frames, frames);
-        assert_eq!(result.capture.sampling.source_end, Some(3.0));
-        eprintln!("{name}: {} frames on {:?}", frames, result.capture.adapter);
-        let (mut reference, mut callbacks) =
-            noon::example_scenes::following_graph_camera::program().unwrap();
-        let mut raw = BufWriter::new(File::create(root.join(format!("{name}.rgba"))).unwrap());
-        let summary = capture_frames(
-            &mut reference,
-            &mut callbacks,
-            options(p, q),
-            capture_options(),
-            |frame| raw.write_all(frame.rgba),
-        )
-        .unwrap();
-        raw.flush().unwrap();
-        assert_eq!(summary.sampling.frames, frames);
-        if png {
-            let (mut source, mut callbacks) =
-                noon::example_scenes::following_graph_camera::program().unwrap();
-            let images = export_file(
-                &mut source,
-                &mut callbacks,
-                options(p, q),
-                capture_options(),
-                OutputOptions::png_sequence(root.join(format!("{name}-png"))),
-            )
-            .unwrap();
-            assert_eq!(images.capture.sampling.frames, frames);
-        }
-        writeln!(cases, "{name}\t{p}\t{q}\t320\t180\t{frames}\t{png}").unwrap();
+        export_proof_case(
+            &root,
+            &mut cases,
+            (name, p, q, frames, png, 3.0),
+            noon::example_scenes::following_graph_camera::program,
+        );
+    }
+    #[cfg(feature = "wgsl-effects")]
+    {
+        export_proof_case(
+            &root,
+            &mut cases,
+            ("shader-fade-2997", 30_000, 1_001, 210, true, 7.0),
+            || {
+                Ok((
+                    noon::example_scenes::shader_sweep::fade_in_program()?,
+                    RustHostCallbackTable::new(),
+                ))
+            },
+        );
+        export_proof_case(
+            &root,
+            &mut cases,
+            ("bloom-emission-2997", 30_000, 1_001, 150, true, 5.0),
+            || {
+                Ok((
+                    noon::example_scenes::camera_bloom::program()?,
+                    RustHostCallbackTable::new(),
+                ))
+            },
+        );
     }
     cases.flush().unwrap();
+}
+
+fn export_proof_case<C: LiveContinuation<Error = String>>(
+    root: &Path,
+    cases: &mut impl Write,
+    case: (&str, u32, u32, u64, bool, f64),
+    source: impl Fn() -> Result<(LiveProgram<C>, RustHostCallbackTable), String>,
+) {
+    let (name, p, q, frames, png, source_end) = case;
+    let (mut program, mut callbacks) = source().unwrap();
+    let result = export_file(
+        &mut program,
+        &mut callbacks,
+        options(p, q),
+        capture_options(),
+        OutputOptions::mp4(root.join(format!("{name}.mp4"))),
+    )
+    .unwrap();
+    assert_eq!(result.capture.sampling.frames, frames);
+    assert_eq!(result.capture.sampling.source_end, Some(source_end));
+    eprintln!("{name}: {} frames on {:?}", frames, result.capture.adapter);
+    let (mut reference, mut callbacks) = source().unwrap();
+    let mut raw = BufWriter::new(File::create(root.join(format!("{name}.rgba"))).unwrap());
+    let summary = capture_frames(
+        &mut reference,
+        &mut callbacks,
+        options(p, q),
+        capture_options(),
+        |frame| raw.write_all(frame.rgba),
+    )
+    .unwrap();
+    raw.flush().unwrap();
+    assert_eq!(summary.sampling.frames, frames);
+    if png {
+        let (mut source, mut callbacks) = source().unwrap();
+        let images = export_file(
+            &mut source,
+            &mut callbacks,
+            options(p, q),
+            capture_options(),
+            OutputOptions::png_sequence(root.join(format!("{name}-png"))),
+        )
+        .unwrap();
+        assert_eq!(images.capture.sampling.frames, frames);
+    }
+    writeln!(cases, "{name}\t{p}\t{q}\t320\t180\t{frames}\t{png}").unwrap();
 }
 
 #[test]

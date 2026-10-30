@@ -23,7 +23,10 @@ EXPECTED_CASES = {
     'camera-30': (30, 1, 320, 180, 90, 'true'),
     'camera-2997': (30_000, 1_001, 320, 180, 90, 'false'),
     'camera-5994': (60_000, 1_001, 320, 180, 180, 'false'),
+    'shader-fade-2997': (30_000, 1_001, 320, 180, 210, 'true'),
+    'bloom-emission-2997': (30_000, 1_001, 320, 180, 150, 'true'),
 }
+SOURCE_END_SECONDS = {'shader-fade-2997': 7, 'bloom-emission-2997': 5}
 
 
 class VerificationError(RuntimeError):
@@ -56,7 +59,7 @@ def verify(root: Path) -> list[dict]:
         require(Fraction(stream['r_frame_rate']) == Fraction(p, q), "video proof failed: Fraction(stream['r_frame_rate']) == Fraction(p, q)")
         # The final sample may be shorter than the grid interval; average FPS
         # uses exact authored duration, whereas the nominal rate stays p/q.
-        duration_ticks = min(count * q, 3 * p)
+        duration_ticks = min(count * q, SOURCE_END_SECONDS.get(name, 3) * p)
         require(Fraction(stream['avg_frame_rate']) == Fraction(count * p, duration_ticks),
                 'video proof failed: average rate does not match exact terminal duration')
         require(Fraction(stream['time_base']) == Fraction(1, p), "video proof failed: Fraction(stream['time_base']) == Fraction(1, p)")
@@ -95,6 +98,7 @@ def verify(root: Path) -> list[dict]:
             active_errors.append(active_error)
             hashes.append(hashlib.sha256(expected).hexdigest())
         png_identical = None
+        require(len(set(hashes)) > 1, f'{name}: frozen reference cannot prove animated output')
         if row['png'] == 'true':
             directory = root / f'{name}-png' / 'frames'
             files = sorted(directory.glob('frame-*.png'))

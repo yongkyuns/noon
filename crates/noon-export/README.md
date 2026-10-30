@@ -363,6 +363,13 @@ and retains media, logs, tool versions and tested revision. Process and file
 failure tests are separate from visual/timing checks. Existing architecture,
 workspace, native viewer, browser and product gates are not waived.
 
+The all-feature proof keeps the original three camera cases and adds ordinary
+shader FadeIn and material-emission/camera-Bloom sources at `30000/1001`.
+Every frame, including the shortened final packet at the seven-/five-second
+source boundary, is decoded and checked. The original codec/color bounds remain
+unchanged; frozen raw references cannot certify animated output. Local macOS
+proofs use Metal; hosted correctness uses software Vulkan.
+
 ## Session-owned native hosts
 
 `SessionCapture` is the capture-only entry point for a native host that already
