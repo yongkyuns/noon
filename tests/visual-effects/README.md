@@ -1707,8 +1707,10 @@ plateaus and real wrong-input/bounds/sampling controls at a two-byte bound.
 `scripts/effect-resource-recovery-qualification.mjs` uses actual browser device
 or context destruction. Direct Rust/WASM survives repeated viewport churn,
 a zero-sized surface and GPU replacement at the same authored state. Completed
-Python glass, shader-material and HDR/Bloom source replay agrees with forward
-Rust output, including resized views. Shader rows remain present across recovery.
+Python glass, shader-material, HDR/Bloom and 100-Glow G4 source replay agrees with
+forward Rust output, including resized views. The dense G4 radius workload also
+exercises direct Rust/WASM device/context recovery. Shader and Glow rows remain
+present across recovery.
 WebGL workers recover in place; WebGPU workers use an explicit host `restart()`
 after confirmed device loss. Idle WebGPU worker loss does not currently emit a
 callback diagnostic in this profile: automatic idle-loss notification/recovery
