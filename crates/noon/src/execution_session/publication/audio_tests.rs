@@ -226,13 +226,35 @@ fn initial_audio_seek_remains_available_without_live_history_retention() {
     let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
     assert!(session.has_audio());
     assert_eq!(session.audio_end_time(), Some(1.0));
+    session.take_frame_changes();
     let publication = session.publication_context();
-    assert_eq!(
-        session.begin_replay_retention(noon_runtime::ReplayLimits::default()),
-        Err(noon_runtime::ReplayError::UnsupportedDomain)
-    );
-    assert!(!session.replay_scope_active());
-    assert_eq!(session.publication_context(), publication);
+    let frame = session.frame().clone();
+    let revision = store.scene_revision();
+    let resources = store.audio_resources().stats();
+    let pcm = session
+        .audio_playback()
+        .unwrap()
+        .next()
+        .unwrap()
+        .pcm
+        .samples()
+        .as_ptr();
+    for _ in 0..2 {
+        let error = session
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .unwrap_err();
+        assert_eq!(error, noon_runtime::ReplayError::AudioHistoryUnavailable);
+        let message = error.to_string();
+        assert!(message.contains("audio is not supported with retained source execution"));
+        assert!(message.contains("complete finite audio timeline"));
+        assert!(!session.replay_scope_active());
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.audio_resources().stats(), resources);
+        assert_eq!(session.finite_playback_end_time(), Some(1.0));
+        assert!(session.take_frame_changes().is_empty());
+    }
     for time in [0.75, 0.25, 1.0, 0.0] {
         session.seek(time).unwrap();
         let mut playback = session.audio_playback().unwrap();
@@ -242,6 +264,7 @@ fn initial_audio_seek_remains_available_without_live_history_retention() {
             let output = playback.next().unwrap();
             assert_eq!(output.source_offset, time);
             assert_eq!(output.duration, 1.0 - time);
+            assert_eq!(output.pcm.samples().as_ptr(), pcm);
         }
     }
 }
