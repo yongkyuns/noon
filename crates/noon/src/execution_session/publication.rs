@@ -441,29 +441,6 @@ impl ExecutionSession {
         .map(|(result, _)| result)
     }
 
-    pub(crate) fn apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
-        &mut self,
-        prepared: PreparedSemanticMutationTransaction<'_>,
-        execution_prefix: Vec<ExecutionPatch>,
-        order_root: Option<SemanticNodeId>,
-        purpose: SemanticPublicationPurpose,
-        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
-        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
-    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        self.apply_prepared_semantic_transaction_with_execution_contract(
-            prepared,
-            execution_prefix,
-            None.into(),
-            purpose,
-            Some(PreparedScalarPublicationContract {
-                handled_signals: handled_scalar_signals,
-                reactive_enrollment,
-            }),
-            order_root,
-        )
-        .map(|(result, _)| result)
-    }
-
     pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,

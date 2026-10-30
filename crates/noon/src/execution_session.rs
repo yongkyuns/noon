@@ -1924,17 +1924,21 @@ impl ExecutionSession {
             projection.execution_signal(),
             runtime_value,
         )])?;
-        self.apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+        self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             Vec::new(),
-            Some(root),
+            None.into(),
             publication::SemanticPublicationPurpose::AuthoredMutation,
-            Some(publication::PreparedReactiveEnrollmentBatch {
-                projection_enrollments: vec![projection],
-                runtime_enrollment,
+            Some(publication::PreparedScalarPublicationContract {
+                handled_signals: [semantic_signal].into_iter().collect(),
+                reactive_enrollment: Some(publication::PreparedReactiveEnrollmentBatch {
+                    projection_enrollments: vec![projection],
+                    runtime_enrollment,
+                }),
             }),
-            [semantic_signal].into_iter().collect(),
+            Some(root),
         )
+        .map(|(result, _)| result)
         .map_err(ExecutionSessionAnimationError::AuthoredPublication)
     }
 
