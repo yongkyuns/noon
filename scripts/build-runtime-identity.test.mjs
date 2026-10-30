@@ -73,7 +73,7 @@ test("changing actual runtime bytes changes the build identity", async (t) => {
   assert.notEqual(changed.buildId, original.buildId);
 });
 
-test("browser evidence preserves provenance while real input changes still reject", async (t) => {
+test("verified consumers can retain browser evidence without weakening producer provenance", async (t) => {
   const { root, put, git } = await fixture(t);
   await put(".git/info/exclude", "");
   git("config", "core.excludesFile", path.join(root, ".git/info/exclude"));
@@ -83,6 +83,8 @@ test("browser evidence preserves provenance while real input changes still rejec
   const original = await createRuntimeBuildIdentity(root);
   assert.equal(original.sourceRevision, git("rev-parse", "HEAD"));
   await put("browser-smoke-artifacts/glow-profile/report.json", "{}\n");
+  assert.equal(observedSourceRevision(root), null, "untracked pre-build evidence still rejects");
+  await put(".git/info/exclude", "/browser-smoke-artifacts\n");
   assert.deepEqual(await createRuntimeBuildIdentity(root), original);
   await put("web/python-worker.js", "changed runtime bytes\n");
   assert.notEqual((await createRuntimeBuildIdentity(root)).buildId, original.buildId);

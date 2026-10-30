@@ -594,7 +594,10 @@ jobs:
           name: web-pkg
           path: web
       - name: Verify source and browser artifact provenance
-        run: node .github/ci/wasm-build.mjs verify
+        run: |
+          node .github/ci/wasm-build.mjs verify
+          # Only this verified consumer ignores its generated pixel evidence.
+          printf '\n/browser-smoke-artifacts\n' >> "$(git rev-parse --git-path info/exclude)"
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
