@@ -76,12 +76,12 @@ pub fn execution() -> Result<SceneExecution, String> {
                 .rate_func(RateFunction::Linear),
         )
         .map_err(|e| e.to_string())?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
-    scene
-        .live(&mut session)
-        .play_animation(&animation)
-        .map_err(|e| e.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|e| e.to_string())
+    let root = scene.declare_animation(
+        noon_core::SemanticAnimationIntent::Composition {
+            kind: crate::SemanticAnimationCompositionKind::Parallel,
+            children: vec![animation.node_id()],
+        },
+        AnimationOptions::new(),
+    )?;
+    scene.into_execution_with_animation_root(&root)
 }

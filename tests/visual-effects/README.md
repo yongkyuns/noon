@@ -865,6 +865,10 @@ different compiled shader programs must fail the same pixel oracle. The existing
 `shader-time-qualification.mjs` harness exercises direct Rust/WASM and real Python
 worker authoring on WebGPU/WebGL2, with independent 128x128 supersampling at
 boundary probes. Both qualifiers retain the two-byte channel tolerance.
+The Rust example declares its finite animation root so native viewer seek admits
+its two-second horizon. `native_hdr_corpus::scan_band_seek_matches_forward_capture`
+compares 14 viewer seek/rewind observations with forward offscreen captures at two
+sizes, reusing the existing finite Glow capture helper.
 
 **View scope decision:** use the existing authored camera frame:
 `self.camera.frame.add_effect(Bloom(...), name="bloom", scope="view")` and
