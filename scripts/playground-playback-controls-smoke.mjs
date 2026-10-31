@@ -361,22 +361,33 @@ class Lesson(Scene):
   const previous = page.getByRole("button", { name: "Previous lesson section", exact: true });
   const next = page.getByRole("button", { name: "Next lesson section", exact: true });
   assert.equal(await next.isDisabled(), true);
+  const panel = page.locator(".playback-controls");
+  await page.evaluate(() => {
+    window.__noonShortcutEdges = [];
+    for (const type of ["keydown", "keyup"]) {
+      window.addEventListener(type, event => {
+        if (["Space", "ArrowLeft", "ArrowRight", "Home"].includes(event.code)) {
+          window.__noonShortcutEdges.push(`${type}:${event.code}`);
+        }
+      });
+    }
+  });
   await keyPoints.selectOption("0");
   await waitForMetricNear(page, 0);
   assert.equal(await previous.isDisabled(), true);
-  await next.click();
+  await panel.press("ArrowRight");
   await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   assert.equal(await keyPoints.inputValue(), "1");
   await next.click();
   await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
   assert.equal(await keyPoints.inputValue(), "2");
-  await previous.click();
+  await panel.press("ArrowLeft");
   await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   await keyPoints.selectOption("0");
   await waitForMetricNear(page, 0);
   // Pure static waits advance Rust's observed clock without publishing frames.
   // Next must cross the Middle cue instead of jumping back to stale frame time.
-  await page.getByRole("button", { name: "Play animation", exact: true }).click();
+  await panel.press("Space");
   await page.waitForFunction(duration => {
     const controls = document.querySelector(".playback-controls");
     return controls.dataset.playing === "true" && controls.dataset.busy === "false"
@@ -386,10 +397,28 @@ class Lesson(Scene):
   await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
   assert.equal(await keyPoints.inputValue(), "2");
   assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "true");
-  await page.getByRole("button", { name: "Pause animation", exact: true }).click();
+  await panel.press("Space");
   await keyPoints.selectOption("0");
   await waitForMetricNear(page, 0);
   diagnostics.keyPoints = { count: 3, nextTime: Number(initial.scrubberMax) + 1, silent: true, staticWaitClock: true };
+  await panel.press("ArrowRight");
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  await panel.press("Home");
+  await waitForMetricNear(page, 0);
+  assert.deepEqual(await page.evaluate(() => window.__noonShortcutEdges), [],
+    "viewer shortcut key-down and key-up must not reach scene input");
+  const scrubber = page.getByRole("slider", { name: "Animation playhead", exact: true });
+  await scrubber.press("ArrowRight");
+  await page.waitForFunction(() => {
+    const c = document.querySelector(".playback-controls");
+    return c.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) > 0;
+  });
+  const nativeRangeTime = Number(await panel.getAttribute("data-elapsed-seconds"));
+  assert.ok(nativeRangeTime < Number(initial.scrubberMax) / 2,
+    "a focused slider keeps native fine seeking instead of jumping to a cue");
+  await panel.press("Home");
+  await waitForMetricNear(page, 0);
+  diagnostics.keyboard = { keys: ["Space", "ArrowLeft", "ArrowRight", "Home"], sceneEdges: [], nativeRangeTime };
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));

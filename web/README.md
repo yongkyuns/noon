@@ -39,6 +39,10 @@ viewer shows cue ticks, the active cue name/index, Previous/Next, and a named
 jump menu. These controls work with or without audio; the wave-interference
 and editorial-cover demos include examples.
 
+Tab to the playback panel itself for keyboard controls: **Space** plays/pauses,
+**Left/Right** navigate cues, and **Home** restarts. Focused buttons, menus,
+sliders and the Python editor retain their normal keys.
+
 Previous/Next use the nearest boundary strictly before/after the playhead,
 without wrapping or an epsilon. Same-time cues use the first declaration;
 duplicate names and skip sections remain available in the jump menu. Explicit

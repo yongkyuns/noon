@@ -74,6 +74,11 @@ export class PlaygroundPlaybackControls {
     }
     this.#root.className = "playback-controls";
     this.#root.setAttribute("aria-label", "Animation playback controls");
+    this.#root.setAttribute("tabindex", "0");
+    this.#root.setAttribute("aria-keyshortcuts", "Space ArrowLeft ArrowRight Home");
+    this.#root.setAttribute("aria-description", "When this panel is focused: Space plays or pauses, Left and Right navigate key points, Home restarts.");
+    this.#root.addEventListener("keydown", this.#handleKeyboard);
+    this.#root.addEventListener("keyup", this.#handleKeyboard);
     this.#root.dataset.undoSupport = String(this.#undoDragSupported);
     this.#root.replaceChildren();
 
@@ -302,6 +307,11 @@ export class PlaygroundPlaybackControls {
   destroy() {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#root.removeEventListener("keydown", this.#handleKeyboard);
+    this.#root.removeEventListener("keyup", this.#handleKeyboard);
+    this.#root.removeAttribute("tabindex");
+    this.#root.removeAttribute("aria-keyshortcuts");
+    this.#root.removeAttribute("aria-description");
     this.#playButton.removeEventListener("click", this.#handleToggle);
     this.#restartButton.removeEventListener("click", this.#handleRestart);
     this.#undoDragButton.removeEventListener("click", this.#handleUndoDrag);
@@ -314,6 +324,26 @@ export class PlaygroundPlaybackControls {
     this.#volume.removeEventListener("input", this.#handleVolume);
     renderPlaybackPlaceholder(this.#root);
   }
+
+  #handleKeyboard = event => {
+    // Native buttons, menus and the scrubber keep their own keyboard behavior.
+    if (event.target !== this.#root) return;
+    const button = {
+      Space: this.#playButton,
+      Home: this.#restartButton,
+      ArrowLeft: this.#previousSection,
+      ArrowRight: this.#nextSection,
+    }[event.code];
+    if (!button) return;
+    // Neither edge of a viewer shortcut may reach scene-native key bindings.
+    event.stopPropagation();
+    if (event.type !== "keydown" || event.defaultPrevented || event.isComposing ||
+        event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    if (event.repeat || button.disabled ||
+        (event.code.startsWith("Arrow") && this.#sectionControls.hidden)) return;
+    button.click();
+  };
 
   #handleToggle = () => {
     void this.#runCommand(async (generation) => {
@@ -647,6 +677,10 @@ function installStyles() {
       padding: 0.5rem 0.75rem;
       border-top: 1px solid var(--border);
       background: rgb(9 12 19 / 94%);
+    }
+    .playback-controls:focus-visible {
+      outline: 2px solid var(--accent-strong);
+      outline-offset: 2px;
     }
     .playback-controls[data-undo-support="true"] {
       grid-template-columns: auto auto auto minmax(4rem, 1fr) auto;
