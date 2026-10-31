@@ -46,6 +46,17 @@ impl SemanticExecutionPlayer {
         }).collect()).to_string()
     }
 
+    /// Read-only cue indices for the same Rust-authored time shown by the host.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionStateJson))]
+    pub fn section_state_json(&self, time: f64) -> Result<String, String> {
+        let index = |value: Option<(usize, &noon::SceneSection)>| value.map(|(index, _)| index);
+        Ok(serde_json::json!({
+            "current": index(self.section_navigation.current(time)?),
+            "previous": index(self.section_navigation.target(time, noon::SectionNavigation::Previous)?),
+            "next": index(self.section_navigation.target(time, noon::SectionNavigation::Next)?),
+        }).to_string())
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekSectionDeltaJson))]
     pub fn seek_section_delta_json(&mut self, previous: bool) -> Result<Option<String>, String> {
         let direction = if previous {

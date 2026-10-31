@@ -31,6 +31,22 @@ Both use the gallery's existing playback, seek and restart controls. They show
 procedural surfaces and ordinary animation working together in browser-ready
 lessons and motion design; they do not establish a speed advantage over Manim.
 
+## Lesson key points
+
+Use `self.next_section("Name")` between ordinary `play` and `wait` calls to
+annotate the current authored time. After a replayable lesson finishes, the
+viewer shows cue ticks, the active cue name/index, Previous/Next, and a named
+jump menu. These controls work with or without audio; the wave-interference
+and editorial-cover demos include examples.
+
+Previous/Next use the nearest boundary strictly before/after the playhead,
+without wrapping or an epsilon. Same-time cues use the first declaration;
+duplicate names and skip sections remain available in the jump menu. Explicit
+jumps preserve each cue's exact timestamp. Rust owns the navigation queries
+and playback clock; the viewer displays their observations. Live source,
+nonreplayable and open prepared-history profiles retain their existing seek
+gates. These navigation cues are separate from interpolation keyframes.
+
 ## Background audio and scene navigation
 
 Open <http://localhost:8080/background-audio.html> for the direct Rust/WASM audio
