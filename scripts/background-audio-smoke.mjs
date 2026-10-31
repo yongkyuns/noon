@@ -560,19 +560,31 @@ try {
       assert.equal(step.revision, burst.before.transport.sceneRevision);
       assert.ok(step.voices >= 1 && step.voices <= 2, "voice lifetime is bounded during every admitted seek");
     }
-    // The device clock can pass the deadline between source start and gain read.
-    // Require the complete observation to precede it, as in the ramp test above.
-    const waiting = burst.steps.filter(step => step.deviceTime < release.ramp.args[1]);
-    assert.ok(waiting.length >= 2, "burst must exercise multiple commands inside one release interval");
-    for (const step of waiting) {
-      const attack = rampTo({ parameters: { [step.source.busParameter]: step.bus } },
-        step.source.busParameter, 1, attackSeconds, "waiting replacement attack");
-      near(attack.hold.args[1], release.ramp.args[1], "rapid retarget preserves the original release deadline");
-      near(step.busGain, 0, "superseded replacement remains inaudible", 0);
-    }
-    const originalStops = burst.after.stops.filter(event => event.node === burst.oldSource.node
-      && event.args.length === 1 && event.args[0] > event.observedAt);
-    assert.equal(originalStops.length, 1, "rapid retargeting does not extend or reschedule the audible release");
+    // A real device deadline can expire during any synchronous render. Check
+    // every release window created by this burst, including later audible graphs;
+    // do not assume the first two observations fit inside the initial 60 ms.
+    const releaseWindows = burst.after.stops.slice(burst.before.stops.length)
+      .filter(stop => stop.args.length === 1 && stop.args[0] > stop.observedAt)
+      .map(stop => {
+        const source = burst.after.starts.find(source => source.node === stop.node);
+        assert.ok(source, "scheduled release belongs to an observed native source");
+        const ramp = rampTo(burst.after, source.busParameter, 0, releaseSeconds, "burst release");
+        sourceStoppedAt(burst.after, source, ramp.ramp.args[1], "burst releasing graph");
+        const waiting = burst.steps.filter(step => step.source.context === source.context
+          && step.source.source > source.source && step.source.observedAt >= ramp.hold.args[1]
+          && step.deviceTime < ramp.ramp.args[1]);
+        for (const step of waiting) {
+          const attack = rampTo({ parameters: { [step.source.busParameter]: step.bus } },
+            step.source.busParameter, 1, attackSeconds, "waiting replacement attack");
+          near(attack.hold.args[1], ramp.ramp.args[1], "rapid retarget preserves the original release deadline");
+          near(step.busGain, 0, "superseded replacement remains inaudible", 0);
+        }
+        return { source, ramp, waitingCommands: waiting.length };
+      });
+    assert.ok(releaseWindows.some(window => window.waitingCommands >= 2),
+      "burst must exercise multiple commands inside one release interval");
+    assert.equal(new Set(releaseWindows.map(window => window.source.node)).size, releaseWindows.length,
+      "rapid retargeting does not extend or reschedule any audible release");
     await page.waitForFunction(() => audioQualification.renderer.audioVoiceCount() === 1,
       null, { timeout: 2_000 });
     await page.waitForTimeout(80);
@@ -585,7 +597,7 @@ try {
       assert.ok(settled.disconnects.some(event => event.node === step.source.node),
         "every superseded source is disconnected after the burst settles");
     }
-    return { ...burst, release, settled };
+    return { ...burst, release, releaseWindows, settled };
   });
   await record("visibility hard-stops both graphs during a pending transport release", async () => {
     const result = await page.evaluate(() => {
