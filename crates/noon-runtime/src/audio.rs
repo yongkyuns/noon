@@ -95,6 +95,18 @@ impl SceneInstance {
         self.compiled.audio_end_time()
     }
 
+    /// Common semantic scope of a nonempty immutable audio plan, if it has one.
+    /// Session bootstrap uses this O(clips) query to classify a fixed soundtrack;
+    /// it is not called during frame evaluation or local authored publication.
+    pub fn uniform_audio_scope(&self) -> Option<SemanticNodeId> {
+        let clips = self.compiled.audio_clips();
+        let scope = clips.first()?.scope();
+        clips
+            .iter()
+            .all(|clip| clip.scope() == scope)
+            .then_some(scope)
+    }
+
     /// Derive device instructions at the SAME committed time as `frame()`.
     ///
     /// This allocation-free traversal is intended for transport reanchors,

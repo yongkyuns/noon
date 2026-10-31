@@ -101,11 +101,10 @@ impl SceneInstance {
         if self.has_temporary_glow_interactions() {
             return Err(ReplayError::UnrecordedInput);
         }
-        // Initial audio pins its immutable resource closure but does not yet
-        // participate in bounded historical publication/retention (#2263).
-        if self.has_audio() {
-            return Err(ReplayError::UnsupportedDomain);
-        }
+        // The initial immutable audio plan and shared PCM closure stay resident
+        // while visual inverse revisions are exchanged. No clip or PCM is copied
+        // into the journal. The semantic session separately protects the admitted
+        // audio scope; live clip edits and prepared-reader output remain gated.
         let unsupported = self
             .reactive
             .as_ref()

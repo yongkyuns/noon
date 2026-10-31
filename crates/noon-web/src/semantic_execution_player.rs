@@ -647,7 +647,8 @@ impl SemanticExecutionPlayer {
 
     fn require_worker_execution_profile(session: &ExecutionSession) -> Result<(), String> {
         if session.has_audio()
-            && (session.finite_timeline_end_time().is_none() || session.replay_scope_active())
+            && (session.finite_timeline_end_time().is_none()
+                || !session.supports_immutable_playback())
         {
             return Err("worker audio requires a complete finite immutable timeline without source history or callbacks (#2263)".into());
         }
@@ -663,6 +664,12 @@ impl SemanticExecutionPlayer {
     /// immutable plans already contain their complete timeline and need no journal.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn begin_replay_retention(&mut self) -> Result<(), String> {
+        // Shared root-audio history is not a worker output/continuation contract.
+        // Keep preparation, displayed-time anchoring and prefix buffering gated
+        // until that host profile is qualified (#2263, #2358).
+        if self.session.has_audio() {
+            return Err("worker audio history is not available; use a complete finite audio timeline until ordinary play/wait output is qualified (#2263, #2358)".into());
+        }
         self.session
             .begin_replay_retention(noon_runtime::ReplayLimits::default())
             .map_err(|error| error.to_string())
