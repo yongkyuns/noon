@@ -6,6 +6,7 @@ export class Element extends EventTarget {
     this.tagName = tag.toUpperCase();
     this.children = [];
     this.dataset = {};
+    this.style = {};
     this.attributes = new Map();
     this.className = "";
     this.value = "";

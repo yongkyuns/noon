@@ -53,6 +53,7 @@ function fixture(
   const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 28, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
+    sectionsJson: () => "[]",
     sealReplay: () => {},
     freshFiniteSourceDuration: () => null,
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
@@ -3054,6 +3055,7 @@ test("finite audio prepares silently and anchors resume/seek only after matching
   f.player.hasAudio = () => true;
   f.player.finiteAudioDuration = () => 2;
   f.player.sectionsJson = () => JSON.stringify([{ index: 0, name: "Opening", time: 0 }]);
+  f.player.sectionStateJson = () => JSON.stringify({ current: 0, previous: null, next: null });
   f.player.audioResourceBundleBytes = () => new Uint8Array([2, 3, 4]);
   f.player.audioAnchorJson = sampledEpochMs => JSON.stringify({
     session: 7, time: f.player.time(), playing: f.player.isPlaying(), sampledEpochMs,
@@ -3187,5 +3189,37 @@ test("source effect preparation publishes only after GPU readiness and waits for
     f.render.port2.postMessage({ type: "effect_programs_prepared", session: 7, requestId: resource.requestId });
     await cancelled;
     assert.equal(published, 1, "late device completion cannot revive a retired source");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("silent execution publishes Rust cue metadata and forwards strict section navigation", async () => {
+  const f = fixture();
+  const sections = [{ index: 0, name: "Start", time: 0 }, { index: 1, name: "Detail", time: 0.75 }];
+  f.player.sectionsJson = () => JSON.stringify(sections);
+  f.player.sectionStateJson = time => JSON.stringify({ current: 0, previous: null, next: 1, observedTime: time });
+  const directions = [];
+  f.player.playbackTimeAt = () => 0.5;
+  f.player.seekSectionDeltaJson = (previous, observedTime) => {
+    directions.push([previous, observedTime]);
+    return f.player.seekDeltaJson(previous ? 0 : 0.75);
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    assert.deepEqual((await ready).sections, sections);
+    present(f.render.port2, await initial);
+    const observation = await request(f.control.port2, "state", 1);
+    assert.deepEqual(observation.sections, sections);
+    assert.equal(observation.sectionState.observedTime, observation.time);
+    for (const [id, previous, time] of [[2, false, 0.75], [3, true, 0]]) {
+      const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      const result = request(f.control.port2, "seek_section", id, { previous });
+      present(f.render.port2, await changed);
+      assert.equal((await result).time, time);
+    }
+    assert.deepEqual(directions, [[false, 0.5], [true, 0.5]], "relative seeks use the Rust clock observation, not stale frame time");
   } finally { endpoint?.stop(); f.close(); }
 });

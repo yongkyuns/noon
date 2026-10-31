@@ -35,10 +35,14 @@ class EditorialCover(Scene):
         self.add(Line((-6.2, -3.5, 0), (6.2, -3.5, 0), color=muted, stroke_width=0.8))
         self.add(Text("ANIMATED IDENTITY", font_size=13, color=ink).move_to((-4.65, -3.73, 0)))
         self.add(Text("FORM, TEXTURE, HIERARCHY", font_size=13, color=muted).move_to((3.8, -3.73, 0)))
+        self.next_section("Establish the layout")
         self.wait(0.7)
+        self.next_section("Animate color, grain and glass")
         self.play(surface.animate.set_fill(finish), grain.animate.set_fill(grain_finish, opacity=0.09),
                   card.animate.shift((-0.35, 0.15, 0)).set_effect("glass", radius=Pixels(12)), run_time=3, rate_func=smooth)
+        self.next_section("Inspect the surface")
         self.wait(0.8)
+        self.next_section("Return to the starting design")
         self.play(surface.animate.set_fill(start), grain.animate.set_fill(grain_start, opacity=0.09),
                   card.animate.shift((0.35, -0.15, 0)).set_effect("glass", radius=Pixels(4)), run_time=3, rate_func=smooth)
         self.wait(1.5)

@@ -201,3 +201,53 @@ test("unavailable capability does not hide an outstanding seek", async () => {
   assert.equal(f.range.disabled, false);
   assert.equal(f.controls.element.title, "");
 });
+
+
+test("silent lessons expose annotated cues and delegate navigation without resolving targets in the UI", async () => {
+  const f = fixture();
+  const sections = [
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Same name", time: 0.5 },
+    { index: 2, name: "Same name", time: 0.5000000001 },
+  ];
+  f.controls.sync({ time: 0, playing: false, sections, sectionState: { current: 0, previous: null, next: 1 } });
+  assert.equal(f.preview.querySelector(".playback-audio-controls").hidden, true);
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, false);
+  const menu = f.preview.querySelector(".playback-section-names");
+  assert.deepEqual(menu.children.slice(1).map(option => option.value), ["0", "1", "2"]);
+  assert.match(menu.children[2].textContent, /2\. Same name/);
+  const markers = f.preview.querySelector(".playback-section-markers").children;
+  assert.equal(markers.length, 3);
+  assert.notEqual(markers[1].style.left, markers[2].style.left);
+  assert.equal(f.preview.querySelector(".playback-previous-section").disabled, true);
+  assert.equal(menu.value, "0");
+  f.controls.sync({ time: 0.5, playing: false, sectionState: { current: 1, previous: 0, next: 2 } });
+  const directions = [];
+  f.player.seekSection = async previous => {
+    directions.push(previous);
+    return { time: 0.5, playing: false };
+  };
+  for (const direction of ["next", "previous"]) {
+    f.preview.querySelector(`.playback-${direction}-section`).dispatchEvent(new Event("click"));
+    await flush();
+  }
+  assert.deepEqual(directions, [false, true]);
+  let selected;
+  f.player.seek = async time => { selected = time; return { time, playing: true }; };
+  menu.value = "2";
+  menu.dispatchEvent(new Event("change"));
+  await flush();
+  assert.equal(selected, sections[2].time, "explicit cue jumps preserve the exact Rust timestamp");
+  assert.equal(f.controls.element.dataset.playing, "true");
+  assert.equal(f.preview.querySelector(".playback-section-markers").children, markers,
+    "ordinary time observations do not rebuild cue annotations");
+  f.controls.setControllable(false);
+  assert.equal(menu.disabled, true);
+  selected = null;
+  menu.value = "1";
+  menu.dispatchEvent(new Event("change"));
+  await flush();
+  assert.equal(selected, null);
+  f.controls.sync({ time: 0, playing: false, sections: [] });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true);
+});

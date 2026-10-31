@@ -18,13 +18,17 @@ export class PlaygroundPlaybackControls {
   #audioControls;
   #previousSection;
   #nextSection;
+  #sectionControls;
   #sectionNames;
+  #sectionMarkers;
+  #sectionSignature = "";
   #muteButton;
   #volume;
   #hasAudio = false;
   #audioReady = false;
   #audioMuted = false;
   #sections = [];
+  #sectionState = null;
   #durationSeconds;
   // Constant-size UI observations, never a source cursor or a second clock.
   #preparedFrontier = null;
@@ -120,7 +124,10 @@ export class PlaygroundPlaybackControls {
     this.#liveStatus.textContent = "Duration pending";
     this.#liveStatus.setAttribute("role", "status");
     this.#liveStatus.setAttribute("aria-live", "polite");
-    timeline.append(this.#scrubber, this.#preparedSeek, this.#liveStatus);
+    this.#sectionMarkers = document.createElement("div");
+    this.#sectionMarkers.className = "playback-section-markers";
+    this.#sectionMarkers.setAttribute("aria-hidden", "true");
+    timeline.append(this.#scrubber, this.#sectionMarkers, this.#preparedSeek, this.#liveStatus);
 
     this.#timeOutput = document.createElement("output");
     this.#timeOutput.className = "playback-time";
@@ -143,8 +150,14 @@ export class PlaygroundPlaybackControls {
     this.#nextSection.textContent = "Next";
     this.#nextSection.setAttribute("aria-label", "Next lesson section");
     this.#nextSection.addEventListener("click", this.#handleNextSection);
-    this.#sectionNames = document.createElement("span");
+    this.#sectionNames = document.createElement("select");
     this.#sectionNames.className = "playback-section-names";
+    this.#sectionNames.setAttribute("aria-label", "Jump to lesson key point");
+    this.#sectionNames.addEventListener("change", this.#handleSectionJump);
+    this.#sectionControls = document.createElement("div");
+    this.#sectionControls.className = "playback-section-controls";
+    this.#sectionControls.append(this.#previousSection, this.#nextSection, this.#sectionNames);
+    this.#root.append(this.#sectionControls);
     this.#muteButton = document.createElement("button");
     this.#muteButton.type = "button";
     this.#muteButton.className = "playback-button playback-mute";
@@ -161,8 +174,7 @@ export class PlaygroundPlaybackControls {
     this.#volume.setAttribute("aria-label", "Music volume");
     this.#volume.addEventListener("input", this.#handleVolume);
     volumeLabel.append(this.#volume);
-    this.#audioControls.append(this.#previousSection, this.#nextSection, this.#sectionNames,
-      this.#muteButton, volumeLabel);
+    this.#audioControls.append(this.#muteButton, volumeLabel);
     this.#root.append(this.#audioControls);
     this.#render();
   }
@@ -211,7 +223,7 @@ export class PlaygroundPlaybackControls {
     // Only the completed source result may set the replay range via setDuration.
     else this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag,
       hasAudio: state.hasAudio, audioReady: state.audioReady, audioMuted: state.audioMuted,
-      audioVolume: state.audioVolume, sections: state.sections,
+      audioVolume: state.audioVolume, sections: state.sections, sectionState: state.sectionState,
       ...(state.hasAudio ? { durationSeconds: state.durationSeconds } : {}),
     });
   }
@@ -230,7 +242,7 @@ export class PlaygroundPlaybackControls {
 
   sync(state) {
     const { time, playing, durationSeconds, canUndoTranslationDrag,
-      hasAudio, audioReady, audioMuted, audioVolume, sections } = state;
+      hasAudio, audioReady, audioMuted, audioVolume, sections, sectionState } = state;
     if (!Number.isFinite(time) || time < 0) {
       throw new TypeError("playback state time must be finite and non-negative");
     }
@@ -263,7 +275,9 @@ export class PlaygroundPlaybackControls {
     if (audioReady !== undefined) this.#audioReady = audioReady === true;
     if (audioMuted !== undefined) this.#audioMuted = audioMuted === true;
     if (audioVolume !== undefined) this.#volume.value = String(audioVolume);
-    if (sections !== undefined) this.#sections = sections;
+    if (prepared) { this.#sections = []; this.#sectionState = null; }
+    else if (sections !== undefined) this.#sections = sections;
+    if (sectionState !== undefined && !prepared) this.#sectionState = sectionState;
     this.#seekNotice = null;
     if (canUndoTranslationDrag !== undefined) this.#canUndoTranslationDrag = canUndoTranslationDrag;
     this.#render();
@@ -295,6 +309,7 @@ export class PlaygroundPlaybackControls {
     this.#preparedSeek.removeEventListener("change", this.#handlePreparedSeek);
     this.#previousSection.removeEventListener("click", this.#handlePreviousSection);
     this.#nextSection.removeEventListener("click", this.#handleNextSection);
+    this.#sectionNames.removeEventListener("change", this.#handleSectionJump);
     this.#muteButton.removeEventListener("click", this.#handleMute);
     this.#volume.removeEventListener("input", this.#handleVolume);
     renderPlaybackPlaceholder(this.#root);
@@ -348,6 +363,18 @@ export class PlaygroundPlaybackControls {
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
   }
+
+  #handleSectionJump = () => {
+    const section = this.#sections.find(section => String(section.index) === this.#sectionNames.value);
+    this.#sectionNames.value = "";
+    if (!section) return;
+    // An explicit user-selected Rust cue supplies the absolute seek target;
+    // Previous/Next selection continues to run in shared Rust.
+    void this.#runCommand(async generation => {
+      const result = await this.#player.seek(section.time);
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
+    });
+  };
 
   #handleMute = () => {
     try {
@@ -467,9 +494,32 @@ export class PlaygroundPlaybackControls {
     this.#root.dataset.durationKnown = String(this.#controllable && this.#durationSeconds !== null);
 
     this.#audioControls.hidden = !this.#hasAudio;
-    this.#previousSection.hidden = this.#sections.length === 0;
-    this.#nextSection.hidden = this.#sections.length === 0;
-    this.#sectionNames.textContent = this.#sections.map(section => section.name).join(" · ");
+    this.#sectionControls.hidden = this.#sections.length === 0;
+    this.#sectionMarkers.hidden = this.#sections.length === 0 || !this.#controllable || this.#durationSeconds === null;
+    const signature = JSON.stringify([this.#sections, this.#durationSeconds]);
+    if (signature !== this.#sectionSignature) {
+      this.#sectionSignature = signature;
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Jump to a key point";
+      this.#sectionNames.replaceChildren(placeholder);
+      this.#sectionMarkers.replaceChildren();
+      for (const section of this.#sections) {
+        const label = `${section.index + 1}. ${section.name} · ${formatTime(section.time)} s`;
+        const option = document.createElement("option");
+        option.value = String(section.index);
+        option.textContent = label;
+        this.#sectionNames.append(option);
+        if (this.#durationSeconds !== null && section.time <= this.#durationSeconds) {
+          const marker = document.createElement("span");
+          marker.title = label;
+          marker.style.left = `${100 * section.time / this.#durationSeconds}%`;
+          this.#sectionMarkers.append(marker);
+        }
+      }
+      this.#sectionNames.value = "";
+    }
+    this.#sectionNames.value = this.#sectionState?.current == null ? "" : String(this.#sectionState.current);
     this.#muteButton.textContent = this.#audioMuted ? "Unmute" : "Mute";
     this.#muteButton.setAttribute("aria-pressed", String(this.#audioMuted));
     this.#renderTime();
@@ -510,8 +560,9 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending || this.#durationSeconds === null;
     // Buffering is reader readiness, not a command lock: pause and rewind stay usable.
     this.#preparedSeek.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
-    this.#previousSection.disabled = blockCommands;
-    this.#nextSection.disabled = blockCommands;
+    this.#previousSection.disabled = blockCommands || this.#sectionState?.previous === null;
+    this.#nextSection.disabled = blockCommands || this.#sectionState?.next === null;
+    this.#sectionNames.disabled = blockCommands;
     this.#muteButton.disabled = this.#externalBusy;
     this.#volume.disabled = this.#externalBusy;
     this.#root.dataset.busy = String(busy);
@@ -616,7 +667,8 @@ function installStyles() {
     .playback-button:hover:not(:disabled) { background: #20283a; }
     .playback-button:focus-visible,
     .playback-scrubber:focus-visible,
-    .playback-prepared-seek:focus-visible {
+    .playback-prepared-seek:focus-visible,
+    .playback-section-names:focus-visible {
       outline: 2px solid var(--accent-strong);
       outline-offset: 2px;
     }
@@ -668,6 +720,7 @@ function installStyles() {
       overflow-wrap: anywhere;
     }
     .playback-controls [hidden] { display: none !important; }
+    .playback-section-controls,
     .playback-audio-controls {
       grid-column: 1 / -1;
       display: flex;
@@ -677,8 +730,18 @@ function installStyles() {
     }
     .playback-section-names {
       flex: 1 1 9rem;
-      color: #b9c3d6;
-      font-size: 0.68rem;
+      min-width: 0;
+      max-width: 100%;
+      padding: 0.35rem;
+      border: 1px solid var(--border-strong);
+      border-radius: 0.4rem;
+      background: #171d2a;
+      color: #d9deeb;
+      font-size: 0.7rem;
+    }
+    .playback-section-markers { position: relative; height: 0.3rem; margin: 0 0.4rem; }
+    .playback-section-markers span {
+      position: absolute; height: 100%; border-left: 2px solid var(--accent);
     }
     .playback-volume-label {
       display: flex;

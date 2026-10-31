@@ -4219,6 +4219,8 @@ impl CanonicalAuthoringScene {
         self.prepare_local_player_for_run()?;
         if let Some(player) = self.player_ownership.local_mut() {
             player.rebind_transport(duration, transport_session)?;
+            // Source continuations may declare cues between player leases.
+            player.set_section_navigation(self.scene.section_navigation());
         } else {
             let player = self.build_live_player(duration, transport_session)?;
             self.player_ownership = PlayerOwnership::Active(player);
@@ -12511,6 +12513,35 @@ mod tests {
             .iter()
             .map(|(id, target, options)| create_request(Some(*id), target, *options))
             .collect()
+    }
+
+    #[test]
+    fn player_handoff_refreshes_cues_declared_between_source_segments() {
+        let mut context = CanonicalAuthoringScene::default();
+        context
+            .scene
+            .next_section_at("Start", noon::SectionType::Normal, 0.0)
+            .unwrap();
+        let first = context.take_execution_player(2.0, 17).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&first.sections_json())
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        context.return_execution_player(first).unwrap();
+        context
+            .scene
+            .next_section_at("Detail", noon::SectionType::Normal, 0.75)
+            .unwrap();
+        let recovered = context.take_execution_player(2.0, 18).unwrap();
+        let sections: serde_json::Value = serde_json::from_str(&recovered.sections_json()).unwrap();
+        assert_eq!(sections.as_array().unwrap().len(), 2);
+        assert_eq!(sections[1]["name"], "Detail");
+        assert_eq!(sections[1]["time"], 0.75);
+        assert!(!recovered.has_audio_wasm());
     }
 
     #[test]

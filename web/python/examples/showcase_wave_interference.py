@@ -54,14 +54,19 @@ class WaveInterference(Scene):
         self.add(same, opposite, legend)
         for x, label in [(-2.5, "-2"), (0, "0"), (2.5, "+2")]:
             self.add(Text(label, font_size=14, color=muted).move_to((x, -3.82, 0)))
+        self.next_section("Two sources, one scale")
         self.wait(0.8)
+        self.next_section("Wavefronts advance")
         self.play(*(p.animate.set_effect("field", parameters={phase: 2 * PI}) for p in panels), run_time=2.4, rate_func=linear)
         self.wait(0.6)
+        self.next_section("Change the relative phase")
         self.play(*(p.animate.set_effect("field", parameters={offset: PI}) for p in panels),
                   same.animate.set_color(muted), opposite.animate.set_color(gold), run_time=1.2, rate_func=smooth)
         self.wait(0.8)
+        self.next_section("Opposite-phase waves")
         self.play(*(p.animate.set_effect("field", parameters={phase: 4 * PI}) for p in panels), run_time=2.4, rate_func=linear)
         self.wait(0.6)
+        self.next_section("Restore the pattern")
         self.play(*(p.animate.set_effect("field", parameters={offset: 0}) for p in panels),
                   same.animate.set_color(gold), opposite.animate.set_color(muted), run_time=1.2, rate_func=smooth)
         self.wait(1)

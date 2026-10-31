@@ -344,14 +344,15 @@ export async function attachSemanticEngine(
         canUndoTranslationDrag: false,
       };
     }
+    // Cue state and the displayed playhead consume the same Rust clock sample.
+    const time = type === "state" && pacing === SEMANTIC_PACING_REALTIME
+      ? player.playbackTimeAt(performance.now()) : player.time();
     return {
-      type,
-      // Observe the Rust clock during idle waits. Command acknowledgements and
-      // external samples retain exact evaluated-frame time, independent of wall time.
-      time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
-        ? player.playbackTimeAt(performance.now()) : player.time(),
+      type, time,
+      sectionState: sections.length ? JSON.parse(player.sectionStateJson(time)) : null,
       playing: player.isPlaying(), nextPatchSequence: "0",
-      ...(hasAudio ? { hasAudio, sections, durationSeconds: player.finiteAudioDuration() } : {}),
+      sections,
+      ...(hasAudio ? { hasAudio, durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null
@@ -1021,10 +1022,15 @@ export async function attachSemanticEngine(
           case "seek_section":
           case "restart_playback": {
             latestTick = null;
+            // Static waits can advance the Rust clock without a new frame.
+            // Select relative cues from that same observed playhead before pause.
+            const sectionTime = message.type === "seek_section"
+              ? (pacing === SEMANTIC_PACING_REALTIME
+                ? player.playbackTimeAt(performance.now()) : player.time()) : null;
             const playing = hasAudio && player.isPlaying();
             if (hasAudio) player.pause();
             const delta = message.type === "seek_section"
-              ? player.seekSectionDeltaJson(message.previous)
+              ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const publication = send(delta);
             if (hasAudio) {
@@ -1324,7 +1330,7 @@ export async function attachSemanticEngine(
     }
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
-    sections = hasAudio ? JSON.parse(player.sectionsJson()) : [];
+    sections = prepared === null ? JSON.parse(player.sectionsJson()) : [];
     if (continuation === null && prepared === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
