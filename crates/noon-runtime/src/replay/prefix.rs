@@ -276,6 +276,29 @@ impl PrefixReceiver {
         self.finished.then_some(self.frontier)
     }
 
+    /// Query audio at the selected reader frame, bounded by adopted visual history.
+    /// Source preparation or an undelivered batch cannot extend this horizon.
+    /// The half-open frontier omits later starts and cuts active instructions
+    /// without inventing a fade or restarting source phase. A finished endpoint
+    /// is silent, even when an authored clip would continue beyond the scene.
+    ///
+    /// This allocation-free query is for explicit transport reanchors, not every
+    /// frame. It neither starts a device nor acknowledges a rendered picture;
+    /// the host still needs its existing playback and presentation admission.
+    pub fn audio_playback<'a>(
+        &self,
+        runtime: &'a SceneInstance,
+    ) -> Result<impl Iterator<Item = crate::AudioPlaybackClip<'a>> + 'a, PrefixError> {
+        self.validate_runtime(runtime)?;
+        let time = runtime.frame().time;
+        self.validate_time(time)?;
+        let remaining = self.frontier - time;
+        Ok(runtime
+            .audio_playback()
+            .expect("the committed reader time passed prefix admission")
+            .filter_map(move |clip| clip.limit_duration(remaining - clip.start_delay)))
+    }
+
     /// Admit an explicit seek before the session evaluates it through its ordinary
     /// seek path. All rejection precedes storage growth or interaction cancellation.
     pub fn prepare_seek(&self, runtime: &mut SceneInstance, time: f64) -> Result<(), PrefixError> {
@@ -532,6 +555,7 @@ impl SceneInstance {
 
     /// Same bootstrap with an explicit logical immutable-resource byte cap.
     /// Admission happens before cloning the projection or reserving its history.
+    /// Audio PCM/resource headers and immutable clip-table entries are included.
     /// Zero permits resource-free scenes. No history is evicted to meet the cap.
     #[doc(hidden)]
     pub fn create_prefix_projection_with_resource_budget(
@@ -577,15 +601,13 @@ impl SceneInstance {
         {
             return Err(PrefixError::NotReady);
         }
-        // Root audio can retain visual revisions, but a separate reader still
-        // needs audio resource-budget and output/frontier qualification (#2358).
-        // Keep this gate explicit now that replay admission no longer excludes
-        // every immutable audio plan.
-        if self.has_audio()
-            || self
-                .reactive
-                .as_ref()
-                .is_some_and(|reactive| !reactive.is_empty())
+        // Immutable audio remains in the original compiled resource closure.
+        // This low-level reader is device-neutral: source/host admission and
+        // output scheduling through a readable frontier are separate contracts.
+        if self
+            .reactive
+            .as_ref()
+            .is_some_and(|reactive| !reactive.is_empty())
         {
             return Err(ReplayError::UnsupportedDomain.into());
         }
@@ -616,6 +638,10 @@ impl SceneInstance {
             .compiled
             .resources()
             .prefix_resource_bytes()
+            // The immutable clip table is cloned once with the projection. A
+            // shared PCM handle must not let arbitrarily many clips bypass the
+            // bootstrap byte cap. No clip table is copied into future batches.
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(self.compiled.audio_clips())))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
