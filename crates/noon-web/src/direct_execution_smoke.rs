@@ -1738,3 +1738,12 @@ pub async fn create_direct_camera_bloom_session_renderer(
     let execution = noon::example_scenes::camera_bloom::execution().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
 }
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectScanBandSmokeRenderer)]
+pub async fn create_direct_scan_band_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let execution = noon::example_scenes::scan_band::execution().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
+}

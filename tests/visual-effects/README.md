@@ -848,6 +848,24 @@ supersample discontinuous edges. Bloom's HDR mathematics and the custom
 shader/resource ABI remain M4; this review fixes their **calling convention**,
 not unspecified HDR output or an already-extensible production enum.
 
+The executable external fixture now lives in `example_scenes/scan_band.rs` and
+`scan_band.wgsl`, paired with `web/python/examples/scan_band.py`. It uses the
+public checked WGSL schema, positive normalized width and an ordinary phase
+animation from 0 to 1 over two seconds. `cargo run -p noon-native --features
+wgsl-effects --example scan_band` runs the Rust example. This adds no built-in
+effect variant or animation channel.
+
+The shader integrates affine pixel coverage at band edges with WGSL derivatives.
+The renderer invokes the authored shader before source-alpha clipping, uniformly
+across fragment quads, with safe unassociation for transparent inputs. The native
+`composed::scan_band` test compares 42 images against an independent polygon-area
+reference at three sizes and two cameras, including exact rewind. Its reference
+also checks the literal mask values and independent supersampling. Six genuinely
+different compiled shader programs must fail the same pixel oracle. The existing
+`shader-time-qualification.mjs` harness exercises direct Rust/WASM and real Python
+worker authoring on WebGPU/WebGL2, with independent 128x128 supersampling at
+boundary probes. Both qualifiers retain the two-byte channel tolerance.
+
 **View scope decision:** use the existing authored camera frame:
 `self.camera.frame.add_effect(Bloom(...), name="bloom", scope="view")` and
 `self.camera.frame.animate.set_effect("bloom", ...)`. Rust obtains the same
