@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "125c590d2d48121b18af889c70b4b451b12c15f9",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "125c590d2d48121b18af889c70b4b451b12c15f9",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "2f0805f12a65ac9ebcb4389af148c5c489dd4297a02d89b25ea9f928ae5768f8"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "d3eda99ec33b8eceb6144ce2febbc41d378eafd8833d2d073e63442dbd5b3e55"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "ef5a102bb10ce7fef02acd4888afe6ce2f06f2e46f18613fb0348d87824dcbb5"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "6715c617ba752b5d36bc1f63523c0b1f8c0c0ddac944f9c74940d20537a79f88"
+  },
+  "posters": [
+    {
+      "id": "showcase-wave-interference",
+      "captureBuildId": "6715c617ba752b5d36bc1f63523c0b1f8c0c0ddac944f9c74940d20537a79f88",
+      "sourceSha256": "d57beb76c98a1b1b23d376804d4f48c7bedcc183a0b83ff66319c342e3fe5107",
+      "thumbnailTime": 5.4,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 195975,
+        "pngSha256": "1795c690ef041f8340781073f601f6990072284044f372d9e44d4c2b21093104",
+        "pixelSha256": "a87de26da1c531ed2ab4108f0ec1fd591454e7edabf38a2d0afbded59c1da5bb"
+      },
+      "sample": {
+        "requestedTime": 5.4,
+        "publishedTime": 5.4,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

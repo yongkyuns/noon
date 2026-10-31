@@ -11,6 +11,26 @@ python3 -m http.server --directory web 8080
 
 Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `requestAnimationFrame` timestamp is converted to deterministic scene time in Rust; JavaScript only owns browser scheduling and canvas sizing.
 
+## Visual design and animated explanations
+
+Two showcase scenes put the existing effects to work in complete compositions:
+
+- **Interference is addition** (`/?catalog=showcase&example=showcase-wave-interference`)
+  ([source](python/examples/showcase_wave_interference.py)) draws two analytic
+  wave fields and their signed sum on the same color scale. One shared shader
+  material shades three persistent rectangles; ordinary typed parameter tracks
+  animate phase without a Python updater or a grid of animated cells. This is
+  an analytic illustration, not a numerical wave simulation.
+- **Make it move** (`/?catalog=showcase&example=showcase-editorial-cover`)
+  ([source](python/examples/showcase_editorial_cover.py)) combines editable type,
+  animated radial color, seeded procedural grain and a frosted caption into an
+  editorial cover. The backdrop blurs the artwork beneath the caption while
+  keeping its text sharp.
+
+Both use the gallery's existing playback, seek and restart controls. They show
+procedural surfaces and ordinary animation working together in browser-ready
+lessons and motion design; they do not establish a speed advantage over Manim.
+
 ## Background audio and scene navigation
 
 Open <http://localhost:8080/background-audio.html> for the direct Rust/WASM audio
