@@ -1,7 +1,8 @@
 name: Prefix audio task 2358
-on:
+'on':
   push:
-    branches: [codex/scratch-prefix-audio-2358]
+    branches:
+    - codex/scratch-prefix-audio-2358
 permissions:
   contents: read
 jobs:
@@ -11,116 +12,140 @@ jobs:
     permissions:
       contents: write
     env:
-      BASE: ac4bf0c935add0732a6cae33a5aeb6da1a704da7
+      BASE: d40bf3db46da416d2e511720ede34da18c1bbfca
       CARGO_INCREMENTAL: 0
       CARGO_TARGET_DIR: /tmp/noon-prefix-audio-target
       RUSTC_WRAPPER: ''
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Apply pinned candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REPOSITORY" = yongkyuns/noon
-          test "$GITHUB_REF" = refs/heads/codex/scratch-prefix-audio-2358
-          mkdir -p /tmp/noon-prefix-audio-evidence
-          cp .github/task/prefix-audio-2358.patch.gz /tmp/noon-prefix-audio-evidence/input.patch.gz
-          echo 'dfa60fafc60252f94f3221a1e58b9bb3124cc32590c1e637c5b7bc6d756518b5  /tmp/noon-prefix-audio-evidence/input.patch.gz' | sha256sum -c -
-          gzip -dc /tmp/noon-prefix-audio-evidence/input.patch.gz > /tmp/noon-prefix-audio-evidence/input.patch
-          echo '126f88a9722584550349218e591f121df881563aa729ab23244492904e56af40  /tmp/noon-prefix-audio-evidence/input.patch' | sha256sum -c -
-          git fetch --no-tags --depth=1 origin "$BASE"
-          git checkout --detach "$BASE"
-          git apply --check /tmp/noon-prefix-audio-evidence/input.patch
-          git apply /tmp/noon-prefix-audio-evidence/input.patch
-          git add -N crates/noon-runtime/tests/prefix_audio.rs
-          git diff --check
-          git diff --name-only > /tmp/noon-prefix-audio-evidence/paths.txt
-          test "$(wc -l < /tmp/noon-prefix-audio-evidence/paths.txt)" = 6
-          ! grep -vE '^(crates/noon-compile/src/replay_revision/prefix/(resources.rs|resources/resource_bytes_tests.rs)|crates/noon-runtime/src/(audio/tests.rs|replay/prefix.rs)|crates/noon-runtime/tests/prefix_audio.rs|docs/architecture.md)$' /tmp/noon-prefix-audio-evidence/paths.txt
-      - name: Install pinned toolchain and format
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustup install
-          rustup target add wasm32-unknown-unknown
-          rustc --version --verbose | tee /tmp/noon-prefix-audio-evidence/rustc.txt
-          cargo fmt --all
-          cargo fmt --all -- --check
-          git diff --check
-          bash scripts/check.sh architecture "$BASE" 2>&1 | tee /tmp/noon-prefix-audio-evidence/architecture.log
-      - name: Require unchanged-base behavioral failure
-        shell: bash
-        run: |
-          set -euo pipefail
-          git worktree add --detach /tmp/noon-prefix-audio-negative "$BASE"
-          cp crates/noon-runtime/tests/prefix_audio.rs /tmp/noon-prefix-audio-negative/crates/noon-runtime/tests/
-          set +e
-          (cd /tmp/noon-prefix-audio-negative && CARGO_TARGET_DIR=/tmp/noon-prefix-audio-negative-target cargo test -p noon-runtime --features prepared-prefix --test prefix_audio) > /tmp/noon-prefix-audio-evidence/negative-base.log 2>&1
-          result=$?
-          set -e
-          cat /tmp/noon-prefix-audio-evidence/negative-base.log
-          test "$result" -ne 0
-          grep -F 'test result: FAILED. 0 passed; 5 failed;' /tmp/noon-prefix-audio-evidence/negative-base.log
-          grep -F 'UnsupportedDomain' /tmp/noon-prefix-audio-evidence/negative-base.log
-      - name: Qualify compiler resources and runtime history
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test -p noon-compile --features prepared-prefix --lib 2>&1 | tee /tmp/noon-prefix-audio-evidence/compiler.log
-          cargo test -p noon-runtime --features prepared-prefix --lib --tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/runtime.log
-      - name: Require failure when PCM accounting is removed
-        shell: bash
-        run: |
-          set -euo pipefail
-          path=crates/noon-compile/src/replay_revision/prefix/resources.rs
-          cp "$path" /tmp/noon-prefix-audio-evidence/resources.rs.saved
-          trap 'cp /tmp/noon-prefix-audio-evidence/resources.rs.saved "$path"' EXIT
-          git show "$BASE:$path" > "$path"
-          set +e
-          cargo test -p noon-runtime --features prepared-prefix --test prefix_audio audio_bootstrap_charges_pcm_and_every_clip_before_cloning_and_can_retry -- --exact > /tmp/noon-prefix-audio-evidence/negative-accounting.log 2>&1
-          result=$?
-          set -e
-          cat /tmp/noon-prefix-audio-evidence/negative-accounting.log
-          test "$result" -ne 0
-          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/noon-prefix-audio-evidence/negative-accounting.log
-      - name: Qualify restored accounting and preserved session and worker gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test -p noon-runtime --features prepared-prefix --test prefix_audio 2>&1 | tee /tmp/noon-prefix-audio-evidence/restored-audio.log
-          cargo test -p noon --no-default-features --features prepared-prefix --lib execution_session::publication::audio_tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/session-audio.log
-          cargo test -p noon --no-default-features --features prepared-prefix --test immutable_root_audio_history --test prepared_prefix_lifecycle --test prepared_prefix_incremental 2>&1 | tee /tmp/noon-prefix-audio-evidence/session-history.log
-          cargo test -p noon-web --no-default-features --features prepared-prefix --lib semantic_execution_player::tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/worker.log
-          cargo clippy -p noon-compile -p noon-runtime --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee /tmp/noon-prefix-audio-evidence/clippy.log
-          cargo check -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-prefix-audio-evidence/wasm.log
-      - name: Publish tested code only
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$BASE"
-          cargo fmt --all -- --check
-          git diff --check
-          git diff --name-only > /tmp/noon-prefix-audio-evidence/final-paths.txt
-          cmp /tmp/noon-prefix-audio-evidence/paths.txt /tmp/noon-prefix-audio-evidence/final-paths.txt
-          git diff --binary > /tmp/noon-prefix-audio-evidence/tested.patch
-          while IFS= read -r file; do sha256sum "$file"; done < /tmp/noon-prefix-audio-evidence/final-paths.txt > /tmp/noon-prefix-audio-evidence/tested-source-sha256.txt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          while IFS= read -r file; do git add -- "$file"; done < /tmp/noon-prefix-audio-evidence/final-paths.txt
-          git commit -m 'feat: budget immutable audio in raw prepared history readers (#2358)'
-          git show -s --format='%H %T %P' HEAD > /tmp/noon-prefix-audio-evidence/commit.txt
-          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          echo "::add-mask::$auth"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/codex/prefix-audio-resources-2358
-      - name: Retain candidate evidence including failures
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: prefix-audio-2358-${{ github.run_number }}
-          path: /tmp/noon-prefix-audio-evidence/
-          if-no-files-found: error
-          retention-days: 7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - name: Apply pinned accounting and horizon candidate
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$GITHUB_REPOSITORY" = yongkyuns/noon
+        test "$GITHUB_REF" = refs/heads/codex/scratch-prefix-audio-2358
+        mkdir -p /tmp/noon-prefix-audio-evidence
+        cat .github/task/prefix-audio-horizon-2358.part0 .github/task/prefix-audio-horizon-2358.part1 .github/task/prefix-audio-horizon-2358.part2 > /tmp/noon-prefix-audio-evidence/input.patch.gz
+        echo '551a87ab361935637a5e3ac2aee24f418abc32f04cade211272073576bf27c07  /tmp/noon-prefix-audio-evidence/input.patch.gz' | sha256sum -c -
+        gzip -dc /tmp/noon-prefix-audio-evidence/input.patch.gz > /tmp/noon-prefix-audio-evidence/input.patch
+        echo 'eb81a5abe2670f782c9698742121809393f151a03cb07537621e8aed1844e7bf  /tmp/noon-prefix-audio-evidence/input.patch' | sha256sum -c -
+        git fetch --no-tags --depth=1 origin "$BASE"
+        git checkout --detach "$BASE"
+        git apply --check /tmp/noon-prefix-audio-evidence/input.patch
+        git apply /tmp/noon-prefix-audio-evidence/input.patch
+        git add -N crates/noon-runtime/tests/prefix_audio.rs
+        git diff --check
+        git diff --name-only > /tmp/noon-prefix-audio-evidence/paths.txt
+        test "$(wc -l < /tmp/noon-prefix-audio-evidence/paths.txt)" = 7
+        ! grep -vE '^(crates/noon-compile/src/replay_revision/prefix/(resources.rs|resources/resource_bytes_tests.rs)|crates/noon-runtime/src/(audio.rs|audio/tests.rs|replay/prefix.rs)|crates/noon-runtime/tests/prefix_audio.rs|docs/architecture.md)$' /tmp/noon-prefix-audio-evidence/paths.txt
+    - name: Install pinned toolchain and format
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup install
+        rustup target add wasm32-unknown-unknown
+        rustc --version --verbose | tee /tmp/noon-prefix-audio-evidence/rustc.txt
+        cargo fmt --all
+        cargo fmt --all -- --check
+        git diff --check
+        bash scripts/check.sh architecture "$BASE" 2>&1 | tee /tmp/noon-prefix-audio-evidence/architecture.log
+    - name: Require unchanged-base behavioral failure
+      shell: bash
+      run: |
+        set -euo pipefail
+        git worktree add --detach /tmp/noon-prefix-audio-negative "$BASE"
+        cp crates/noon-runtime/tests/prefix_audio.rs /tmp/noon-prefix-audio-negative/crates/noon-runtime/tests/
+        set +e
+        (cd /tmp/noon-prefix-audio-negative && CARGO_TARGET_DIR=/tmp/noon-prefix-audio-negative-target cargo test -p noon-runtime --features prepared-prefix --test prefix_audio) > /tmp/noon-prefix-audio-evidence/negative-base.log 2>&1
+        result=$?
+        set -e
+        cat /tmp/noon-prefix-audio-evidence/negative-base.log
+        test "$result" -ne 0
+        grep -F 'test result: FAILED. 0 passed; 5 failed;' /tmp/noon-prefix-audio-evidence/negative-base.log
+        grep -F 'UnsupportedDomain' /tmp/noon-prefix-audio-evidence/negative-base.log
+    - name: Qualify compiler resources and runtime history
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test -p noon-compile --features prepared-prefix --lib 2>&1 | tee /tmp/noon-prefix-audio-evidence/compiler.log
+        cargo test -p noon-runtime --features prepared-prefix --lib --tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/runtime.log
+    - name: Require failure when PCM accounting is removed
+      shell: bash
+      run: |
+        set -euo pipefail
+        path=crates/noon-compile/src/replay_revision/prefix/resources.rs
+        cp "$path" /tmp/noon-prefix-audio-evidence/resources.rs.saved
+        trap 'cp /tmp/noon-prefix-audio-evidence/resources.rs.saved "$path"' EXIT
+        git show "$BASE:$path" > "$path"
+        set +e
+        cargo test -p noon-runtime --features prepared-prefix --test prefix_audio audio_bootstrap_charges_pcm_and_every_clip_before_cloning_and_can_retry -- --exact > /tmp/noon-prefix-audio-evidence/negative-accounting.log 2>&1
+        result=$?
+        set -e
+        cat /tmp/noon-prefix-audio-evidence/negative-accounting.log
+        test "$result" -ne 0
+        grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/noon-prefix-audio-evidence/negative-accounting.log
+    - name: Require failure when sound escapes the delivered frontier
+      shell: bash
+      run: |
+        set -euo pipefail
+        path=crates/noon-runtime/src/replay/prefix.rs
+        cp "$path" /tmp/noon-prefix-audio-evidence/prefix.rs.saved
+        trap 'cp /tmp/noon-prefix-audio-evidence/prefix.rs.saved "$path"' EXIT
+        python3 - <<'MUTATE'
+        from pathlib import Path
+        path = Path('crates/noon-runtime/src/replay/prefix.rs')
+        text = path.read_text()
+        needle = 'clip.limit_duration(remaining - clip.start_delay)'
+        assert text.count(needle) == 1
+        path.write_text(text.replace(needle, 'clip.limit_duration(remaining - clip.start_delay + 60.0)'))
+        MUTATE
+        set +e
+        cargo test -p noon-runtime --features prepared-prefix --lib audio::tests::prefix_audio_horizon_is_adopted_not_prepared_and_preserves_fades -- --exact > /tmp/noon-prefix-audio-evidence/negative-horizon.log 2>&1
+        result=$?
+        set -e
+        cat /tmp/noon-prefix-audio-evidence/negative-horizon.log
+        test "$result" -ne 0
+        grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/noon-prefix-audio-evidence/negative-horizon.log
+    - name: Qualify restored source and preserved session and worker gates
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test -p noon-runtime --features prepared-prefix --test prefix_audio 2>&1 | tee /tmp/noon-prefix-audio-evidence/restored-audio.log
+        cargo test -p noon-runtime --features prepared-prefix --lib audio::tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/restored-horizon.log
+        cargo test -p noon --no-default-features --features prepared-prefix --lib execution_session::publication::audio_tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/session-audio.log
+        cargo test -p noon --no-default-features --features prepared-prefix --test immutable_root_audio_history --test prepared_prefix_lifecycle --test prepared_prefix_incremental 2>&1 | tee /tmp/noon-prefix-audio-evidence/session-history.log
+        cargo test -p noon-web --no-default-features --features prepared-prefix --lib semantic_execution_player::tests 2>&1 | tee /tmp/noon-prefix-audio-evidence/worker.log
+        cargo clippy -p noon-compile -p noon-runtime --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee /tmp/noon-prefix-audio-evidence/clippy.log
+        cargo check -p noon-runtime --no-default-features 2>&1 | tee /tmp/noon-prefix-audio-evidence/runtime-default.log
+        cargo check -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-prefix-audio-evidence/wasm.log
+    - name: Publish tested code only
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$BASE"
+        cargo fmt --all -- --check
+        git diff --check
+        git diff --name-only > /tmp/noon-prefix-audio-evidence/final-paths.txt
+        cmp /tmp/noon-prefix-audio-evidence/paths.txt /tmp/noon-prefix-audio-evidence/final-paths.txt
+        git diff --binary > /tmp/noon-prefix-audio-evidence/tested.patch
+        while IFS= read -r file; do sha256sum "$file"; done < /tmp/noon-prefix-audio-evidence/final-paths.txt > /tmp/noon-prefix-audio-evidence/tested-source-sha256.txt
+        git config user.name 'github-actions[bot]'
+        git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+        while IFS= read -r file; do git add -- "$file"; done < /tmp/noon-prefix-audio-evidence/final-paths.txt
+        git commit -m 'feat: budget and bound immutable audio in prepared history readers (#2358)'
+        git show -s --format='%H %T %P' HEAD > /tmp/noon-prefix-audio-evidence/commit.txt
+        auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+        echo "::add-mask::$auth"
+        git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/codex/prefix-audio-horizon-2358
+      env:
+        GH_TOKEN: ${{ github.token }}
+    - name: Retain candidate evidence including failures
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: prefix-audio-horizon-2358-${{ github.run_number }}
+        path: /tmp/noon-prefix-audio-evidence/
+        if-no-files-found: error
+        retention-days: 7
