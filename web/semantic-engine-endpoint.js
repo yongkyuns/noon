@@ -1022,10 +1022,15 @@ export async function attachSemanticEngine(
           case "seek_section":
           case "restart_playback": {
             latestTick = null;
+            // Static waits can advance the Rust clock without a new frame.
+            // Select relative cues from that same observed playhead before pause.
+            const sectionTime = message.type === "seek_section"
+              ? (pacing === SEMANTIC_PACING_REALTIME
+                ? player.playbackTimeAt(performance.now()) : player.time()) : null;
             const playing = hasAudio && player.isPlaying();
             if (hasAudio) player.pause();
             const delta = message.type === "seek_section"
-              ? player.seekSectionDeltaJson(message.previous)
+              ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const publication = send(delta);
             if (hasAudio) {

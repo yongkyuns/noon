@@ -57,8 +57,13 @@ impl SemanticExecutionPlayer {
         }).to_string())
     }
 
+    /// Navigate from a Rust clock observation, which may lead the last static frame.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekSectionDeltaJson))]
-    pub fn seek_section_delta_json(&mut self, previous: bool) -> Result<Option<String>, String> {
+    pub fn seek_section_delta_json(
+        &mut self,
+        previous: bool,
+        observed_time: f64,
+    ) -> Result<Option<String>, String> {
         let direction = if previous {
             noon::SectionNavigation::Previous
         } else {
@@ -66,7 +71,7 @@ impl SemanticExecutionPlayer {
         };
         let time = self
             .section_navigation
-            .target(self.time(), direction)?
+            .target(observed_time, direction)?
             .map(|(_, section)| section.time);
         match time {
             Some(time) => self.seek_delta_json(time),

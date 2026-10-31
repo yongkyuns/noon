@@ -166,19 +166,64 @@ fn worker_audio_sections_use_shared_strict_nonwrapping_navigation() {
             .unwrap();
     player.set_section_navigation(navigation);
     player.pause();
-    player.seek_section_delta_json(false).unwrap();
+    player
+        .seek_section_delta_json(false, player.time())
+        .unwrap();
     assert_eq!(player.time(), 10.0);
-    player.seek_section_delta_json(false).unwrap();
+    player
+        .seek_section_delta_json(false, player.time())
+        .unwrap();
     assert_eq!(player.time(), 20.0);
-    player.seek_section_delta_json(false).unwrap();
+    player
+        .seek_section_delta_json(false, player.time())
+        .unwrap();
     assert_eq!(player.time(), 20.0);
-    player.seek_section_delta_json(true).unwrap();
+    player.seek_section_delta_json(true, player.time()).unwrap();
     assert_eq!(player.time(), 10.0);
-    player.seek_section_delta_json(true).unwrap();
+    player.seek_section_delta_json(true, player.time()).unwrap();
     assert_eq!(player.time(), 0.0);
-    player.seek_section_delta_json(true).unwrap();
+    player.seek_section_delta_json(true, player.time()).unwrap();
     assert_eq!(player.time(), 0.0);
     assert!(!player.is_playing());
+}
+
+#[test]
+fn section_seek_uses_observed_playhead_during_static_waits() {
+    let mut scene = noon::Scene::new();
+    for (name, time) in [("Start", 0.0), ("Middle", 0.25), ("End", 1.0)] {
+        scene
+            .next_section_at(name, noon::SectionType::Normal, time)
+            .unwrap();
+    }
+    let navigation = scene.section_navigation();
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 109)
+            .unwrap();
+    player.set_section_navigation(navigation);
+    player.initial_delta_json().unwrap();
+    player.live_wait(2.0).unwrap();
+    player.live_drive_segment_to_authored_time(2.0).unwrap();
+    player.live_complete_segment().unwrap();
+    player.seek_delta_json(0.0).unwrap();
+    player.resume();
+    assert_eq!(player.execution_wake(1_000.0).unwrap().cadence(), "timer");
+    let observed = player.playback_time_at(1_500.0).unwrap();
+    assert_eq!(observed, 0.5);
+    assert_eq!(
+        player.time(),
+        0.0,
+        "static observation must not evaluate a frame"
+    );
+    player.seek_section_delta_json(false, observed).unwrap();
+    assert_eq!(player.time(), 1.0);
+    assert!(player.is_playing());
+    player.execution_wake(2_000.0).unwrap();
+    let observed = player.playback_time_at(2_500.0).unwrap();
+    assert_eq!(observed, 1.5);
+    assert_eq!(player.time(), 1.0);
+    player.seek_section_delta_json(true, observed).unwrap();
+    assert_eq!(player.time(), 1.0);
+    assert!(player.is_playing());
 }
 
 #[test]

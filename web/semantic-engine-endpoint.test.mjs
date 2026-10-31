@@ -3199,8 +3199,9 @@ test("silent execution publishes Rust cue metadata and forwards strict section n
   f.player.sectionsJson = () => JSON.stringify(sections);
   f.player.sectionStateJson = time => JSON.stringify({ current: 0, previous: null, next: 1, observedTime: time });
   const directions = [];
-  f.player.seekSectionDeltaJson = previous => {
-    directions.push(previous);
+  f.player.playbackTimeAt = () => 0.5;
+  f.player.seekSectionDeltaJson = (previous, observedTime) => {
+    directions.push([previous, observedTime]);
     return f.player.seekDeltaJson(previous ? 0 : 0.75);
   };
   let endpoint;
@@ -3219,6 +3220,6 @@ test("silent execution publishes Rust cue metadata and forwards strict section n
       present(f.render.port2, await changed);
       assert.equal((await result).time, time);
     }
-    assert.deepEqual(directions, [false, true]);
+    assert.deepEqual(directions, [[false, 0.5], [true, 0.5]], "relative seeks use the Rust clock observation, not stale frame time");
   } finally { endpoint?.stop(); f.close(); }
 });

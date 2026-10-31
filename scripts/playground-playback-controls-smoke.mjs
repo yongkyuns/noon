@@ -304,9 +304,18 @@ try {
   const initialGeneration = initial.runGeneration;
   await page.evaluate(() => {
     const source = document.querySelector("#python-scene-source");
-    if (!source.value.includes("def construct(self):")) throw new Error("fixture requires an ordinary construct scene");
-    source.value = source.value.replace("def construct(self):", 'def construct(self):\n        self.next_section("Opening")');
-    source.value = `${source.value.trimEnd()}\n        self.next_section("Review")\n        self.wait(0.25)\n`;
+    const halfDuration = Number(document.querySelector(".playback-scrubber").max) / 2;
+    source.value = `from noon import *
+class Lesson(Scene):
+    def construct(self):
+        self.add(Circle())
+        self.next_section("Opening")
+        self.wait(${halfDuration})
+        self.next_section("Middle")
+        self.wait(${halfDuration + 1})
+        self.next_section("Review")
+        self.wait(1)
+`;
     source.dispatchEvent(new Event("input", { bubbles: true }));
   });
   const edited = await playbackSnapshot(page);
@@ -335,8 +344,8 @@ try {
   assert.ok(rerun.runGeneration > initialGeneration, "automatic restart must apply the newest source generation");
   assert.equal(
     Number(rerun.scrubberMax),
-    Number(initial.scrubberMax) + 0.25,
-    "Run must execute the edited source's added wait",
+    Number(initial.scrubberMax) + 2,
+    "Run must execute the replacement lesson's waits",
   );
   assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
@@ -347,8 +356,8 @@ try {
   const keyPoints = page.getByRole("combobox", { name: "Jump to lesson key point" });
   assert.equal(await keyPoints.isVisible(), true);
   assert.equal(await page.locator(".playback-audio-controls").isVisible(), false);
-  assert.equal(await keyPoints.locator("option").count(), 3);
-  assert.equal(await keyPoints.inputValue(), "1");
+  assert.equal(await keyPoints.locator("option").count(), 4);
+  assert.equal(await keyPoints.inputValue(), "2");
   const previous = page.getByRole("button", { name: "Previous lesson section", exact: true });
   const next = page.getByRole("button", { name: "Next lesson section", exact: true });
   assert.equal(await next.isDisabled(), true);
@@ -356,12 +365,31 @@ try {
   await waitForMetricNear(page, 0);
   assert.equal(await previous.isDisabled(), true);
   await next.click();
-  await waitForMetricNear(page, Number(initial.scrubberMax));
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   assert.equal(await keyPoints.inputValue(), "1");
+  await next.click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
+  assert.equal(await keyPoints.inputValue(), "2");
   await previous.click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  await keyPoints.selectOption("0");
   await waitForMetricNear(page, 0);
-  assert.equal(await keyPoints.inputValue(), "0");
-  diagnostics.keyPoints = { count: 2, nextTime: Number(initial.scrubberMax), silent: true };
+  // Pure static waits advance Rust's observed clock without publishing frames.
+  // Next must cross the Middle cue instead of jumping back to stale frame time.
+  await page.getByRole("button", { name: "Play animation", exact: true }).click();
+  await page.waitForFunction(duration => {
+    const controls = document.querySelector(".playback-controls");
+    return controls.dataset.playing === "true" && controls.dataset.busy === "false"
+      && Number(controls.dataset.elapsedSeconds) > duration * 0.65;
+  }, Number(initial.scrubberMax));
+  await next.click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
+  assert.equal(await keyPoints.inputValue(), "2");
+  assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "true");
+  await page.getByRole("button", { name: "Pause animation", exact: true }).click();
+  await keyPoints.selectOption("0");
+  await waitForMetricNear(page, 0);
+  diagnostics.keyPoints = { count: 3, nextTime: Number(initial.scrubberMax) + 1, silent: true, staticWaitClock: true };
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
