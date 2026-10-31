@@ -248,6 +248,7 @@ try {
 
   const fallbackContext = await browser.newContext({ viewport: { width: 1200, height: 800 } });
   await fallbackContext.route("https://esm.sh/**", (route) => route.abort("failed"));
+  await fallbackContext.route("**/web/pkg/python-editor-bundle.js", (route) => route.abort("failed"));
   const fallbackPage = await fallbackContext.newPage();
   const fallbackErrors = [];
   const fallbackWarnings = [];

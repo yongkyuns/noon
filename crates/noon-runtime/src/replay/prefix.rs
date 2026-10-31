@@ -276,6 +276,29 @@ impl PrefixReceiver {
         self.finished.then_some(self.frontier)
     }
 
+    /// Query audio at the selected reader frame, bounded by adopted visual history.
+    /// Source preparation or an undelivered batch cannot extend this horizon.
+    /// The half-open frontier omits later starts and cuts active instructions
+    /// without inventing a fade or restarting source phase. A finished endpoint
+    /// is silent, even when an authored clip would continue beyond the scene.
+    ///
+    /// This allocation-free query is for explicit transport reanchors, not every
+    /// frame. It neither starts a device nor acknowledges a rendered picture;
+    /// the host still needs its existing playback and presentation admission.
+    pub fn audio_playback<'a>(
+        &self,
+        runtime: &'a SceneInstance,
+    ) -> Result<impl Iterator<Item = crate::AudioPlaybackClip<'a>> + 'a, PrefixError> {
+        self.validate_runtime(runtime)?;
+        let time = runtime.frame().time;
+        self.validate_time(time)?;
+        let remaining = self.frontier - time;
+        Ok(runtime
+            .audio_playback()
+            .expect("the committed reader time passed prefix admission")
+            .filter_map(move |clip| clip.limit_duration(remaining - clip.start_delay)))
+    }
+
     /// Admit an explicit seek before the session evaluates it through its ordinary
     /// seek path. All rejection precedes storage growth or interaction cancellation.
     pub fn prepare_seek(&self, runtime: &mut SceneInstance, time: f64) -> Result<(), PrefixError> {

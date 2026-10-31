@@ -242,8 +242,12 @@ once per resource handle and the immutable clip table once per reader before any
 projection clone. Subsequent visual-only history batches neither copy nor recharge
 that audio closure. Readiness still excludes the open frontier until terminal
 adoption; preparing or delivering future history does not move the reader's frame
-or audio query time. This is a device-neutral resource/history primitive, not
-permission for a host to schedule sound beyond a readable frontier. The public
+or audio query time. The paired receiver's audio query validates reader identity
+and displayed time, omits starts at or beyond the adopted frontier, and truncates
+active instructions at that frontier. It preserves source phase and the authored
+gain at the cutoff rather than adding a fade; a delivered terminal endpoint is
+silent even when a clip extends beyond the completed source. This allocation-free
+reanchor query is not a presentation receipt or device-output admission. The public
 session, cooperative continuation, Python and prepared-canvas audio gates remain
 closed until their displayed-time output contract is qualified.
 

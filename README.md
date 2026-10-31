@@ -359,6 +359,9 @@ bash scripts/build-web-demo.sh
 python3 -m http.server --directory web 8080
 ```
 
+The web build uses npm's lockfile to include CodeMirror in the generated package.
+Ruff's pinned linter/formatter remains lazy and loads on first use.
+
 Then open `http://localhost:8080`.
 
 Every scene exposed by the playground picker is authored through the shared Rust semantic operations and executed by the common runtime in CI before deployment.

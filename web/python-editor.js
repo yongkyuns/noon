@@ -1,9 +1,6 @@
 import { installPythonEditorTools } from "./python-editor-tools.js";
 
-const CODEMIRROR_URL = "https://esm.sh/codemirror@6.0.2";
-const PYTHON_URL = "https://esm.sh/@codemirror/lang-python@6.2.1";
-const LINT_URL = "https://esm.sh/@codemirror/lint@6.9.7";
-const THEME_URL = "https://esm.sh/@codemirror/theme-one-dark@6.1.3";
+const EDITOR_DEPENDENCIES_URL = "./pkg/python-editor-bundle.js";
 const RUFF_URL = "https://esm.sh/@astral-sh/ruff-wasm-web@0.16.4";
 
 export const PYTHON_RUFF_SETTINGS = {
@@ -22,7 +19,7 @@ let ruffWorkspacePromise = null;
 const ruffEnabledViews = new WeakSet();
 
 if (typeof document !== "undefined") {
-  // CodeMirror/Ruff are progressive enhancement. A transient CDN, CSP, or WASM
+  // CodeMirror/Ruff are progressive enhancement. A missing asset, CSP, or WASM
   // failure must leave the native textarea usable instead of rejecting the
   // playground's module graph and taking Python authoring down with it.
   void enhancePythonEditors().catch((error) => {
@@ -48,13 +45,8 @@ async function enhancePythonEditors() {
     installPythonEditorTools(textarea, async (source) => (await getRuffWorkspace()).format(source)),
   ]));
 
-  const [{ EditorView, basicSetup }, { python }, { linter, lintGutter }, { oneDark }] =
-    await Promise.all([
-      import(CODEMIRROR_URL),
-      import(PYTHON_URL),
-      import(LINT_URL),
-      import(THEME_URL),
-    ]);
+  const { EditorView, basicSetup, python, linter, lintGutter, oneDark } =
+    await import(EDITOR_DEPENDENCIES_URL);
 
   const editorTheme = EditorView.theme({
     "&": {

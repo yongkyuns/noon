@@ -144,6 +144,44 @@ impl SceneInstance {
 }
 
 impl<'a> AudioPlaybackClip<'a> {
+    /// Clip a derived instruction to the readable prefix, not its authored
+    /// definition. Preserve source phase and the original gain at the cutoff:
+    /// availability is not a new fade-out or a new loop boundary.
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn limit_duration(mut self, maximum: f64) -> Option<Self> {
+        debug_assert!(
+            maximum.is_finite(),
+            "prefix admission provides a finite horizon"
+        );
+        if maximum <= 0.0 {
+            return None;
+        }
+        if maximum >= self.duration {
+            return Some(self);
+        }
+        let mut envelope = AudioGainEnvelope {
+            points: [AudioGainPoint::default(); 4],
+            len: 0,
+        };
+        for point in self.gain_points.points() {
+            if point.offset < maximum {
+                envelope.push(point.offset, point.gain);
+                continue;
+            }
+            // The positive cutoff follows the initial zero-offset point.
+            let previous = envelope.points[envelope.len - 1];
+            let fraction = (maximum - previous.offset) / (point.offset - previous.offset);
+            envelope.push(
+                maximum,
+                previous.gain + fraction * (point.gain - previous.gain),
+            );
+            break;
+        }
+        self.duration = maximum;
+        self.gain_points = envelope;
+        Some(self)
+    }
+
     /// The shared stateless projection used by the Runtime and a validated audio
     /// resource mirror at a genuine worker boundary. This owns no playback clock.
     pub fn at_time(
