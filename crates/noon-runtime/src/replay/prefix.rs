@@ -532,6 +532,7 @@ impl SceneInstance {
 
     /// Same bootstrap with an explicit logical immutable-resource byte cap.
     /// Admission happens before cloning the projection or reserving its history.
+    /// Audio PCM/resource headers and immutable clip-table entries are included.
     /// Zero permits resource-free scenes. No history is evicted to meet the cap.
     #[doc(hidden)]
     pub fn create_prefix_projection_with_resource_budget(
@@ -577,15 +578,13 @@ impl SceneInstance {
         {
             return Err(PrefixError::NotReady);
         }
-        // Root audio can retain visual revisions, but a separate reader still
-        // needs audio resource-budget and output/frontier qualification (#2358).
-        // Keep this gate explicit now that replay admission no longer excludes
-        // every immutable audio plan.
-        if self.has_audio()
-            || self
-                .reactive
-                .as_ref()
-                .is_some_and(|reactive| !reactive.is_empty())
+        // Immutable audio remains in the original compiled resource closure.
+        // This low-level reader is device-neutral: source/host admission and
+        // output scheduling through a readable frontier are separate contracts.
+        if self
+            .reactive
+            .as_ref()
+            .is_some_and(|reactive| !reactive.is_empty())
         {
             return Err(ReplayError::UnsupportedDomain.into());
         }
@@ -616,6 +615,10 @@ impl SceneInstance {
             .compiled
             .resources()
             .prefix_resource_bytes()
+            // The immutable clip table is cloned once with the projection. A
+            // shared PCM handle must not let arbitrarily many clips bypass the
+            // bootstrap byte cap. No clip table is copied into future batches.
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(self.compiled.audio_clips())))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;

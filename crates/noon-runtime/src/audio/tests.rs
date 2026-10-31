@@ -316,10 +316,12 @@ fn audio_history_does_not_bypass_prefix_resource_admission() {
     runtime.advance_to(3.0).unwrap();
     let publication = runtime.publication_context();
     assert!(matches!(
-        runtime.create_prefix_projection(),
-        Err(crate::PrefixError::Replay(
-            crate::ReplayError::UnsupportedDomain
-        ))
+        runtime.create_prefix_projection_with_resource_budget(0),
+        Err(crate::PrefixError::ResourceBudgetExceeded {
+            retained_bytes: 0,
+            additional_bytes,
+            limit_bytes: 0,
+        }) if additional_bytes > 128_000
     ));
     assert_eq!(runtime.publication_context(), publication);
     assert_eq!(runtime.frame().time, 3.0);
