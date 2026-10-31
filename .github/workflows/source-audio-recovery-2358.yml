@@ -1,35 +1,125 @@
-name: Source audio recovery 2358
+name: Source audio qualification 2358
 on:
   push:
     branches: [codex/scratch-source-audio-2358-next]
 permissions:
   contents: read
 jobs:
-  recover:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      BASE: 8e785d28cb94f74c983e91c1703a81b39a5b500b
+      CARGO_INCREMENTAL: 0
+      CARGO_TARGET_DIR: /tmp/noon-source-audio-target
+      RUSTC_WRAPPER: ''
+      EVIDENCE: /tmp/noon-source-audio-evidence
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Preserve exact source and unfinished candidate
+      - name: Apply pinned source candidate
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/source-audio-recovery
-          git archive --format=tar.gz HEAD > /tmp/source-audio-recovery/source.tar.gz
-          cp .github/task/source-audio-recovery.patch.gz /tmp/source-audio-recovery/unfinished.patch.gz
+          test "$GITHUB_REPOSITORY" = yongkyuns/noon
+          test "$GITHUB_REF" = refs/heads/codex/scratch-source-audio-2358-next
+          mkdir -p "$EVIDENCE"
+          cat .github/task/source-audio-next.part0 .github/task/source-audio-next.part1a .github/task/source-audio-next.part1b .github/task/source-audio-next.part2 .github/task/source-audio-next.part3 .github/task/source-audio-next.part4 > "$EVIDENCE/input.patch.gz"
+          echo 'd5db9eeaccd7e310a2eba8211505fd81c0f0854a74eee4e5ec6c314051805b95  /tmp/noon-source-audio-evidence/input.patch.gz' | sha256sum -c -
+          gzip -dc "$EVIDENCE/input.patch.gz" > "$EVIDENCE/input.patch"
+          echo '72f88d42fcbe260e0efa382dab7fa2cbdf36221f5dd5353d2c13b08afe5050da  /tmp/noon-source-audio-evidence/input.patch' | sha256sum -c -
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git checkout --detach "$BASE"
+          git apply --check "$EVIDENCE/input.patch"
+          git apply "$EVIDENCE/input.patch"
+          git add -N .
+          git diff --check
+          git diff --name-only > "$EVIDENCE/paths.txt"
+          test "$(wc -l < "$EVIDENCE/paths.txt")" = 26
+          ! grep -vE '^(crates/noon(-web)?/|docs/architecture.md$|scripts/(audio-source-preparation-qualification.mjs|build-web-demo.sh)$|tests/fixtures/fourier_audio/(audio_ordinary_play.py|fourier_epicycles.py)$)' "$EVIDENCE/paths.txt"
+      - name: Install pinned toolchain and check architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose > "$EVIDENCE/rustc.txt"
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          bash scripts/check.sh architecture "$BASE" 2>&1 | tee "$EVIDENCE/architecture.log"
+          node --check scripts/audio-source-preparation-qualification.mjs
+      - name: Require a behavioral source failure on the unchanged parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/noon-source-audio-negative "$BASE"
+          cp crates/noon/tests/prepared_audio_source.rs /tmp/noon-source-audio-negative/crates/noon/tests/
           set +e
-          gzip -dc /tmp/source-audio-recovery/unfinished.patch.gz > /tmp/source-audio-recovery/unfinished.patch
-          result=$?
+          (cd /tmp/noon-source-audio-negative && CARGO_TARGET_DIR=/tmp/noon-source-audio-negative-target cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source) > "$EVIDENCE/negative-base.log" 2>&1
+          status=$?
           set -e
-          printf '%s\n' "$result" > /tmp/source-audio-recovery/decompression-status.txt
-          git rev-parse HEAD HEAD^{tree} > /tmp/source-audio-recovery/identity.txt
-          sha256sum /tmp/source-audio-recovery/* > /tmp/source-audio-recovery/SHA256SUMS
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
+          cat "$EVIDENCE/negative-base.log"
+          test "$status" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' "$EVIDENCE/negative-base.log"
+          grep -F 'AudioExecutionUnavailable' "$EVIDENCE/negative-base.log"
+      - name: Qualify native source completion and history
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --features prepared-prefix --lib live_program::prepared 2>&1 | tee "$EVIDENCE/native-source.log"
+          cargo test -p noon --no-default-features --features prepared-prefix --lib execution_session::publication::audio_tests 2>&1 | tee "$EVIDENCE/session-audio.log"
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source --test immutable_root_audio_history --test prepared_prefix_lifecycle --test prepared_prefix_incremental 2>&1 | tee "$EVIDENCE/native-history.log"
+          cargo test -p noon-runtime --features prepared-prefix --lib audio::tests 2>&1 | tee "$EVIDENCE/runtime-audio.log"
+      - name: Qualify canonical source and fail-closed playback hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --no-default-features --features prepared-prefix --lib 2>&1 | tee "$EVIDENCE/web-tests.log"
+          cargo clippy -p noon -p noon-web --no-default-features --features prepared-prefix --lib --tests -- -D warnings 2>&1 | tee "$EVIDENCE/clippy.log"
+          cargo check -p noon-web --no-default-features 2>&1 | tee "$EVIDENCE/no-feature.log"
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
-          name: source-audio-recovery-2358
-          path: /tmp/source-audio-recovery/
-          retention-days: 3
+          tool: wasm-pack@0.15.0
+      - name: Build actual WASM and qualify ordinary Python source
+        shell: bash
+        env:
+          NOON_SOURCE_AUDIO_ARTIFACTS: /tmp/noon-source-audio-evidence/python
+        run: |
+          set -euo pipefail
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --no-default-features --features prepared-prefix --locked 2>&1 | tee "$EVIDENCE/wasm-build.log"
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+          timeout --signal=TERM 600s node scripts/audio-source-preparation-qualification.mjs 2>&1 | tee "$EVIDENCE/python.log"
+      - name: Publish exact tested source only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE"
+          cargo fmt --all -- --check
+          git diff --check
+          git diff --name-only > "$EVIDENCE/final-paths.txt"
+          cmp "$EVIDENCE/paths.txt" "$EVIDENCE/final-paths.txt"
+          git diff --binary > "$EVIDENCE/tested.patch"
+          while IFS= read -r file; do sha256sum "$file"; done < "$EVIDENCE/final-paths.txt" > "$EVIDENCE/tested-source-sha256.txt"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          while IFS= read -r file; do git add -- "$file"; done < "$EVIDENCE/final-paths.txt"
+          git commit -m 'feat: prepare fixed soundtracks through ordinary source barriers (#2358)'
+          git show -s --format='%H %T %P' HEAD > "$EVIDENCE/commit.txt"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/codex/headless-source-audio-2358
+      - name: Retain all evidence including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: source-audio-2358-${{ github.run_number }}
+          path: /tmp/noon-source-audio-evidence/
+          retention-days: 7
           if-no-files-found: error
