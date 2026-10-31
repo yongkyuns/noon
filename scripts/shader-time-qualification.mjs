@@ -38,6 +38,30 @@ const fadeLesson = materialLesson
 ${materialAttachment}`);
 const fadeSource = sourceForMode(fadeLesson);
 
+async function qualifyTimeProgramCompletion(context, baseUrl, backend) {
+  const page = await context.newPage();
+  try {
+    await page.goto(baseUrl + "/web/manim-raster-host.html");
+    const result = await page.evaluate(async () => {
+      const wasm = await import("./pkg/noon_web.js"); await wasm.default();
+      const renderer = await wasm.createDirectShaderTimeProgramSmokeRenderer(
+        document.querySelector("#scene").transferControlToOffscreen());
+      const { sampleDirectProgram, sampleDirectProgramThrough } = await import("../scripts/direct-program-sample.mjs");
+      renderer.advanceDirectRealtime(0);
+      await sampleDirectProgram(renderer, 0);
+      await sampleDirectProgramThrough(renderer, 2);
+      renderer.advanceDirectRealtime(9000);
+      return { backend: renderer.rendererBackend(), time: renderer.time(),
+        wake: JSON.parse(renderer.directWakeDirectiveJson(9000)) };
+    });
+    assert.equal(result.backend, backend);
+    assert.equal(result.time, 2, "completed source must freeze an otherwise unbounded time material");
+    assert.equal(result.wake.cadence, "idle");
+    assert.equal(result.wake.presentNow, false);
+    return { ...result, pixels: reference(PNG.sync.read(await page.locator("#scene").screenshot()), 2) };
+  } finally { await page.close(); }
+}
+
 async function qualifyColdFade(context, baseUrl, backend) {
   const page = await context.newPage();
   try {
@@ -362,6 +386,11 @@ await qualifyPairedAuthoring({
       factory: "createDirectShaderFadeSmokeRenderer", duration: 7, sampleTime, playback: "live",
       boundaries: [0.5, 1.5, 3.5, 4, 6, 6.5], stopAtSourceCompletion: sampleTime === 7,
     })),
+    ...(sourceMode === "portable" ? [0, 0.75, 2] : []).map(sampleTime => ({
+      id: `shader-time-program-${sampleTime}`, file: "shader_time.py",
+      factory: "createDirectShaderTimeProgramSmokeRenderer", duration: 2, sampleTime,
+      playback: "live", objectCount: 1, stopAtSourceCompletion: sampleTime === 2,
+    })),
     ...(sourceMode === "portable" ? [0, 0.5, 1, 2] : []).map(sampleTime => ({
       id: `scan-band-${sampleTime}`, file: "scan_band.py", factory: "createDirectScanBandSmokeRenderer",
       duration: 2, sampleTime, objectCount: 1,
@@ -425,6 +454,7 @@ await qualifyPairedAuthoring({
       } finally { await page.close(); }
     }
     return { backend, trials,
+      timeProgramCompletion: await qualifyTimeProgramCompletion(context, baseUrl, backend),
       latePreparation: await qualifyLatePreparation(context, baseUrl, backend),
       pythonPreparation: await qualifyPythonPreparation(context, baseUrl, backend),
       pythonMembership: [await qualifyPythonPreparation(context, baseUrl, backend, "scene"),

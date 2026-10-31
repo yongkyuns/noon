@@ -1721,6 +1721,15 @@ pub async fn create_direct_shader_time_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderTimeProgramSmokeRenderer)]
+pub async fn create_direct_shader_time_program_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::authored_time_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Same ordinary Rust material/view program as the native camera_bloom example.
 #[wasm_bindgen(js_name = createDirectCameraBloomRenderer)]
 pub async fn create_direct_camera_bloom_renderer(

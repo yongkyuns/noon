@@ -274,3 +274,41 @@ fn native_source_forwards_each_committed_scene_control_receipt_once() {
         }
     }
 }
+
+#[cfg(feature = "wgsl-effects")]
+#[test]
+fn time_material_uses_source_completion_without_immutable_viewer_seek() {
+    let mut source = StaticExecutionSource::new(
+        noon::example_scenes::shader_sweep::authored_time_session().unwrap(),
+        RustHostCallbackTable::new(),
+    );
+    assert_eq!(source.finite_transport_end(), None);
+    assert!(matches!(
+        source.seek_to(0.5),
+        Err(NativeHostError::PlaybackControlsUnavailable)
+    ));
+
+    let mut program = noon::example_scenes::shader_sweep::authored_time_program().unwrap();
+    let mut callbacks = RustHostCallbackTable::new();
+    program.resume().unwrap();
+    program.take_renderer_publication();
+    program.drive_to(&mut callbacks, 0.5).unwrap();
+    assert_eq!(program.session().frame().time, 0.5);
+    let status = program.drive_to(&mut callbacks, 2.0).unwrap();
+    if matches!(status, noon::LiveProgramStatus::PublicationPending(_)) {
+        let context = program.take_renderer_publication().context();
+        program.admit_publication(context).unwrap();
+    } else {
+        assert_eq!(status, noon::LiveProgramStatus::ReadyToResume);
+    }
+    assert_eq!(program.resume().unwrap(), noon::LiveProgramStatus::Finished);
+    assert!(matches!(
+        program.drive_to(&mut callbacks, 9.0),
+        Err(noon::LiveProgramError::InvalidState { .. })
+    ));
+    assert_eq!(program.session().frame().time, 2.0);
+    assert_eq!(
+        program.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    );
+}

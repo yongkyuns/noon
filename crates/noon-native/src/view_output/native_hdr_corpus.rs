@@ -246,6 +246,13 @@ fn appearance_sources_match_offscreen_capture() {
             &queue,
         ),
         compare_program(
+            "shader-time",
+            scenes::shader_sweep::authored_time_program,
+            &adapter,
+            &device,
+            &queue,
+        ),
+        compare_program(
             "shader-fade",
             scenes::shader_sweep::fade_in_program,
             &adapter,
@@ -253,7 +260,7 @@ fn appearance_sources_match_offscreen_capture() {
             &queue,
         ),
     ];
-    assert_eq!(cases.len(), 17);
+    assert_eq!(cases.len(), 18);
     if let Some(root) = std::env::var_os("NOON_NATIVE_HDR_ARTIFACTS") {
         let root = std::path::PathBuf::from(root);
         std::fs::create_dir_all(&root).unwrap();
