@@ -557,6 +557,49 @@
       "still_intervals": [[0, 0.5], [2, 2.5], [4, 4.5], [4.5, 5], [5, 5.5], [6.5, 7], [8, 8.5]],
       "beats": [{"time": 0.5, "label": "Move the lens and soften the backdrop"}, {"time": 2.25, "label": "Glass over a texture"}, {"time": 4.25, "label": "Neutral radius"}, {"time": 4.75, "label": "Remove the lens"}, {"time": 5.25, "label": "Restore the lens"}, {"time": 6.5, "label": "Dissolve the card"}, {"time": 8.25, "label": "Reveal with the same seed"}],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-wave-interference",
+      "title": "Interference is addition",
+      "lesson": "Watch two circular wave fields add on a common signed color scale, then shift one source by half a cycle. Scrub the same phase animation forward and backward.",
+      "primary_feature": "analytic-wave-field-tutorial",
+      "category": "Visual explanations",
+      "path": "python/examples/showcase_wave_interference.py",
+      "features": ["analytic wave fields", "shared shader material", "typed phase controls", "signed color scale", "retained replay"],
+      "duration": 11,
+      "thumbnail_time": 5.4,
+      "thumbnail": "thumbnails/showcase/showcase-wave-interference.png",
+      "thumbnail_alt": "Two blue and gold circular wave fields beside their signed sum, with equal color scales and a half-cycle phase offset",
+      "still_intervals": [[0, 0.8], [3.2, 3.8], [5, 5.8], [8.2, 8.8], [10, 11]],
+      "beats": [
+        {"time": 0.5, "label": "Two sources, one color scale"},
+        {"time": 2, "label": "Wavefronts advance"},
+        {"time": 5.4, "label": "Shift the relative phase"},
+        {"time": 7, "label": "Add the opposite-phase fields"},
+        {"time": 10.5, "label": "Restore the starting pattern"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-editorial-cover",
+      "title": "Make it move",
+      "lesson": "Art-direct a finished editorial cover: move its color field and seeded grain while a frosted caption stays sharp and the typography holds its layout.",
+      "primary_feature": "editorial-motion-design",
+      "category": "Visual design",
+      "path": "python/examples/showcase_editorial_cover.py",
+      "features": ["editorial typography", "RadialGradient", "NoisePaint", "BackdropBlur", "ordinary parameter animation"],
+      "duration": 9,
+      "thumbnail_time": 4.1,
+      "thumbnail": "thumbnails/showcase/showcase-editorial-cover.png",
+      "thumbnail_alt": "A cream editorial cover with large navy MAKE IT MOVE typography, warm textured artwork and a sharp frosted-glass caption",
+      "still_intervals": [[0, 0.7], [3.7, 4.5], [7.5, 9]],
+      "beats": [
+        {"time": 0.4, "label": "Establish the layout"},
+        {"time": 2.2, "label": "Animate the surface"},
+        {"time": 4.1, "label": "Grain and glass"},
+        {"time": 8, "label": "Resolve the cover"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }
