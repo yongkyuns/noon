@@ -51,12 +51,30 @@ jobs:
           cargo fmt --all -- --check
           git diff --check
           bash scripts/check.sh architecture "$BASE" 2>&1 | tee "$EVIDENCE/architecture.log"
+      - name: Diagnose unchanged-base decimal fixture configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/noon-source-audio-baseline "$BASE"
+          oracle=path_editing::scalar::xyz_tests::scalar_planar_line_preserves_xyz_prefix_from_actual_ce
+          set +e
+          (cd /tmp/noon-source-audio-baseline && CARGO_TARGET_DIR=/tmp/noon-source-audio-baseline-target cargo test -p noon --no-default-features --features prepared-prefix --lib "$oracle" -- --exact) > "$EVIDENCE/baseline-decimal-failure.log" 2>&1
+          result=$?
+          set -e
+          cat "$EVIDENCE/baseline-decimal-failure.log"
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' "$EVIDENCE/baseline-decimal-failure.log"
+          grep -F '0.9375308604937508' "$EVIDENCE/baseline-decimal-failure.log"
+          # noon-web/noon-export already select float_roundtrip in normal workspace
+          # builds. Verify that precise fixture decoding repairs the unchanged test;
+          # do not modify the assertion, oracle, library or Cargo manifests.
+          (cd /tmp/noon-source-audio-baseline && CARGO_TARGET_DIR=/tmp/noon-source-audio-baseline-target cargo test -p noon --no-default-features --features prepared-prefix,serde_json/float_roundtrip --lib "$oracle" -- --exact) 2>&1 | tee "$EVIDENCE/baseline-decimal-roundtrip.log"
       - name: Qualify public headless source and existing histories
         shell: bash
         run: |
           set -euo pipefail
           cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source --test immutable_root_audio_history --test prepared_prefix_lifecycle --test prepared_prefix_incremental --test finite_replay_history --test scalar_timeline_replay 2>&1 | tee "$EVIDENCE/source-history.log"
-          cargo test -p noon --no-default-features --features prepared-prefix --lib 2>&1 | tee "$EVIDENCE/noon-lib.log"
+          cargo test -p noon --no-default-features --features prepared-prefix,serde_json/float_roundtrip --lib 2>&1 | tee "$EVIDENCE/noon-lib-roundtrip.log"
           cargo test -p noon-runtime --features prepared-prefix --lib audio::tests 2>&1 | tee "$EVIDENCE/runtime-audio.log"
       - name: Qualify interpreter and host rejection boundary
         shell: bash
