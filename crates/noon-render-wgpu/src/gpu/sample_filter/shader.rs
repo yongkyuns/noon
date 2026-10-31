@@ -347,7 +347,7 @@ fn wrapper(program: &WgslEffectProgram) -> String {
         source.push_str("0u");
     }
     source.push_str(
-        ");\nlet input = NoonShaderInput(vec4<f32>(original.rgb / original.a, 1.0), mapped",
+        ");\nlet input = NoonShaderInput(vec4<f32>(original.rgb / select(1.0, original.a, original.a > 0.0), 1.0), mapped",
     );
     if program.schema().dependencies.authored_time {
         source.push_str(", noon_uniform.control.y");
@@ -355,7 +355,7 @@ fn wrapper(program: &WgslEffectProgram) -> String {
     if program.schema().dependencies.seed {
         source.push_str(", noon_uniform.integers.x");
     }
-    writeln!(source, ");\nlet value = shade(input, p);\nlet rgba = vec4<f32>(noon_unit(value.x),noon_unit(value.y),noon_unit(value.z),noon_unit(value.w));\nlet alpha = original.a * rgba.a * noon_uniform.control.x;\nreturn vec4<f32>(rgba.rgb * alpha, alpha);\n}}").expect("write String");
+    writeln!(source, ");\nlet value = shade(input, p);\nif original.a <= 0.0 {{ return vec4<f32>(0.0); }}\nlet rgba = vec4<f32>(noon_unit(value.x),noon_unit(value.y),noon_unit(value.z),noon_unit(value.w));\nlet alpha = original.a * rgba.a * noon_uniform.control.x;\nreturn vec4<f32>(rgba.rgb * alpha, alpha);\n}}").expect("write String");
     source
 }
 
@@ -373,7 +373,7 @@ struct NoonGpuUniform {
 fn noon_unit(value: f32) -> f32 { return select(0.0, clamp(value,0.0,1.0), value == value); }
 @fragment fn fs_sample(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let original = textureLoad(noon_source,vec2<i32>(position.xy),0);
-    if original.a <= 0.0 { return vec4<f32>(0.0); }
+    // Invoke authored derivatives uniformly, including transparent source pixels.
     let xy = vec3<f32>(position.xy, 1.0);
     let mapped = vec2<f32>(dot(noon_uniform.position_x.xyz,xy),dot(noon_uniform.position_y.xyz,xy));
 ";
