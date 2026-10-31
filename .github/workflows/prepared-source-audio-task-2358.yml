@@ -51,7 +51,7 @@ jobs:
           cargo fmt --all -- --check
           git diff --check
           bash scripts/check.sh architecture "$BASE" 2>&1 | tee "$EVIDENCE/architecture.log"
-      - name: Diagnose unchanged-base decimal fixture configuration
+      - name: Diagnose unchanged-base reduced-feature configurations
         shell: bash
         run: |
           set -euo pipefail
@@ -65,10 +65,21 @@ jobs:
           test "$result" -ne 0
           grep -F 'test result: FAILED. 0 passed; 1 failed;' "$EVIDENCE/baseline-decimal-failure.log"
           grep -F '0.9375308604937508' "$EVIDENCE/baseline-decimal-failure.log"
-          # noon-web/noon-export already select float_roundtrip in normal workspace
-          # builds. Verify that precise fixture decoding repairs the unchanged test;
-          # do not modify the assertion, oracle, library or Cargo manifests.
           (cd /tmp/noon-source-audio-baseline && CARGO_TARGET_DIR=/tmp/noon-source-audio-baseline-target cargo test -p noon --no-default-features --features prepared-prefix,serde_json/float_roundtrip --lib "$oracle" -- --exact) 2>&1 | tee "$EVIDENCE/baseline-decimal-roundtrip.log"
+          # The normal repository lint contract uses all features. Keep the failed
+          # reduced-feature configuration visible and require the same diagnostics
+          # on the untouched parent before qualifying the normal configuration.
+          set +e
+          (cd /tmp/noon-source-audio-baseline && CARGO_TARGET_DIR=/tmp/noon-source-audio-baseline-target cargo clippy -p noon-web --no-default-features --features prepared-prefix --all-targets -- -D warnings) > "$EVIDENCE/baseline-worker-clippy.log" 2>&1
+          result=$?
+          set -e
+          cat "$EVIDENCE/baseline-worker-clippy.log"
+          test "$result" -ne 0
+          grep -F 'error: struct `BindingReservations` is never constructed' "$EVIDENCE/baseline-worker-clippy.log"
+          grep -F 'error: method `into_binding_reservations` is never used' "$EVIDENCE/baseline-worker-clippy.log"
+          grep -F 'error: methods `prepare_ordinary_mixed_composition`, `validate_binding_reservations`, and `publish_prepared_effects` are never used' "$EVIDENCE/baseline-worker-clippy.log"
+          grep -F 'error: methods `publish_effect_addition` and `prepare_composition` are never used' "$EVIDENCE/baseline-worker-clippy.log"
+          test "$(grep -c '^error:' "$EVIDENCE/baseline-worker-clippy.log")" = 5
       - name: Qualify public headless source and existing histories
         shell: bash
         run: |
@@ -133,7 +144,7 @@ jobs:
           cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source 2>&1 | tee "$EVIDENCE/restored-source.log"
           cargo test -p noon-web --no-default-features --features prepared-prefix --lib prepared_canvas_playback::tests 2>&1 | tee "$EVIDENCE/restored-host.log"
           cargo clippy -p noon --no-default-features --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee "$EVIDENCE/noon-clippy.log"
-          cargo clippy -p noon-web --no-default-features --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee "$EVIDENCE/worker-clippy.log"
+          cargo clippy -p noon-web --all-features --all-targets -- -D warnings 2>&1 | tee "$EVIDENCE/worker-clippy-all-features.log"
           cargo check -p noon --no-default-features 2>&1 | tee "$EVIDENCE/noon-default.log"
           cargo check -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-no-renderer.log"
           cargo check -p noon-web --features prepared-prefix,renderer-smoke --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-renderer.log"
