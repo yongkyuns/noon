@@ -38,9 +38,12 @@ const workerLessons = [
     boundaries: [0.5, 2.5, 3, 5, 5.5], factory: "createDirectShaderSweepSmokeRenderer" },
   { id: "bloom", file: "camera_bloom.py", duration: 5, time: 1.5,
     boundaries: [0.5, 2.5, 3], factory: "createDirectCameraBloomRenderer" },
+  { id: "glow-100", file: "glow_profile.py", duration: 10, time: 5, boundaries: [],
+    sourcePrefix: 'context = {"active_glows": 100, "property": "radius", "duration": 10}\n',
+    factory: "createDirectGlowProfileRenderer", factoryArgs: [100, "radius", 10] },
 ];
 report.pythonSources = Object.fromEntries(await Promise.all(workerLessons.map(async lesson =>
-  [lesson.file, hash(await readFile(path.join(root, "web/python/examples", lesson.file)))])));
+  [lesson.file, hash((lesson.sourcePrefix ?? "") + await readFile(path.join(root, "web/python/examples", lesson.file), "utf8"))])));
 
 async function picture(page, name) {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -61,20 +64,20 @@ function literalPrefixWitness(image) {
   }
 }
 
-async function direct(context, backend, size = [320, 180], time = 6, factory = "createDirectGlassLensSmokeRenderer") {
+async function direct(context, backend, size = [320, 180], time = 6, factory = "createDirectGlassLensSmokeRenderer", factoryArgs = []) {
   const page = await context.newPage();
   page.setDefaultTimeout(60_000);
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   if (backend === "WebGPU") await installWebGpuDeviceCapture(page);
   await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
-  const state = await page.evaluate(async ({ size, time, boundaries, factory }) => {
+  const state = await page.evaluate(async ({ size, time, boundaries, factory, factoryArgs }) => {
     const wasm = await import("./pkg/noon_web.js"); await wasm.default();
     const canvas = document.querySelector("#scene");
     [canvas.width, canvas.height] = size;
     [canvas.style.width, canvas.style.height] = size.map(v => `${v}px`);
     const surface = canvas.transferControlToOffscreen();
-    const renderer = await wasm[factory](surface);
+    const renderer = await wasm[factory](surface, ...factoryArgs);
     const { sampleDirectProgram, sampleDirectProgramThrough } = await import("../scripts/direct-program-sample.mjs");
     renderer.advanceDirectRealtime(0);
     await sampleDirectProgram(renderer, 0);
@@ -102,7 +105,7 @@ async function direct(context, backend, size = [320, 180], time = 6, factory = "
     }
     window.glass = { renderer, surface, snapshot, present };
     return snapshot();
-  }, { size, time, boundaries, factory });
+  }, { size, time, boundaries, factory, factoryArgs });
   assert.equal(state.backend, backend);
   assert.equal(state.time, time);
   return { page, state, errors, async close() {
@@ -116,12 +119,15 @@ async function direct(context, backend, size = [320, 180], time = 6, factory = "
   } };
 }
 
-async function directProfile(context, backend) {
-  const owner = await direct(context, backend);
+async function directProfile(context, backend, lesson) {
+  const owner = await direct(context, backend, [320, 180], lesson.time, lesson.factory, lesson.factoryArgs ?? []);
   const { page, state } = owner;
-  const result = { host: "direct-rust-wasm", backend, initial: state, resizes: [] };
+  const result = { host: "direct-rust-wasm", lesson: lesson.id, backend, initial: state, resizes: [] };
+  const name = lesson.id === "glass" ? `${backend}-direct` : `${backend}-${lesson.id}-direct`;
   try {
-    const initial = await picture(page, `${backend}-direct-initial`); literalPrefixWitness(initial);
+    const initial = await picture(page, `${name}-initial`);
+    if (lesson.id === "glass") literalPrefixWitness(initial);
+    if (lesson.id === "glow-100") assert.equal(state.frame.objects.flatMap(object => object.effects).length, 100);
     for (const [index, size] of [[640, 360], [240, 160], [320, 180], [640, 360], [320, 180]].entries()) {
       const after = await page.evaluate(async size => {
         const canvas = document.querySelector("#scene");
@@ -131,9 +137,9 @@ async function directProfile(context, backend) {
       }, size);
       assert.equal(after.time, state.time); assert.equal(after.revision, state.revision);
       assert.deepEqual(after.frame, state.frame, "viewport changes retain the exact authored state");
-      const warm = await picture(page, `${backend}-direct-resize-${index}`);
-      const cold = await direct(context, backend, size);
-      try { exact(warm, await picture(cold.page, `${backend}-direct-cold-${index}`), "warm resize equals a cold renderer exactly"); }
+      const warm = await picture(page, `${name}-resize-${index}`);
+      const cold = await direct(context, backend, size, lesson.time, lesson.factory, lesson.factoryArgs ?? []);
+      try { exact(warm, await picture(cold.page, `${name}-cold-${index}`), "warm resize equals a cold renderer exactly"); }
       finally { await cold.close(); }
       if (size[0] === 320) exact(warm, initial, "return viewport restores initial pixels");
       result.resizes.push({ size, coldExact: true, authoredStateUnchanged: true });
@@ -144,7 +150,7 @@ async function directProfile(context, backend) {
     });
     assert.equal(hidden.presented, false); assert.deepEqual(hidden.state.frame, state.frame);
     await page.evaluate(async () => { window.glass.renderer.resize(320, 180); await window.glass.present(); });
-    exact(await picture(page, `${backend}-direct-visible-again`), initial, "zero-sized surface preserves authored state and returns exactly");
+    exact(await picture(page, `${name}-visible-again`), initial, "zero-sized surface preserves authored state and returns exactly");
     if (backend === "WebGPU") {
       await page.evaluate(() => {
         const capture = window.__noonWebGpuDeviceCapture;
@@ -179,7 +185,7 @@ async function directProfile(context, backend) {
     assert.equal(recovered.gpuGeneration, state.gpuGeneration + 1);
     assert.equal(recovered.revision, state.revision); assert.equal(recovered.time, state.time);
     assert.deepEqual(recovered.frame, state.frame, "GPU loss cannot restart or advance the authored continuation");
-    exact(await picture(page, `${backend}-direct-recovered`), initial, "recovered glass frame is exact");
+    exact(await picture(page, `${name}-recovered`), initial, "recovered effect frame is exact");
     result.loss = { gpuGeneration: recovered.gpuGeneration, pixelsExact: true, authoredStateUnchanged: true };
     result.zeroSize = { presented: false, restoredExact: true };
     return result;
@@ -228,7 +234,7 @@ async function waitWorker(worker, predicate, label) {
 async function pythonProfile(context, backend, lesson) {
   const page = await context.newPage(); page.setDefaultTimeout(60_000);
   const errors = []; page.on("pageerror", error => errors.push(String(error)));
-  const source = await readFile(path.join(root, "web/python/examples", lesson.file), "utf8");
+  const source = (lesson.sourcePrefix ?? "") + await readFile(path.join(root, "web/python/examples", lesson.file), "utf8");
   await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
   const state = await page.evaluate(async ({ source, boundaries, duration, time }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
@@ -270,7 +276,8 @@ async function pythonProfile(context, backend, lesson) {
     const initial = await picture(page, `${backend}-${lesson.id}-python-initial`);
     if (lesson.id === "glass") literalPrefixWitness(initial);
     if (lesson.id === "shader") assert.equal(state.frame.objects.flatMap(object => object.effects).length, 2);
-    const coldInitial = await direct(context, backend, [320, 180], lesson.time, lesson.factory);
+    if (lesson.id === "glow-100") assert.equal(state.frame.objects.flatMap(object => object.effects).length, 100);
+    const coldInitial = await direct(context, backend, [320, 180], lesson.time, lesson.factory, lesson.factoryArgs ?? []);
     try { exact(initial, await picture(coldInitial.page, `${backend}-${lesson.id}-python-direct-oracle`), "completed Python seek equals direct Rust forward execution"); }
     finally { await coldInitial.close(); }
     for (const [index, size] of [[640, 360], [240, 160], [320, 180]].entries()) {
@@ -283,7 +290,7 @@ async function pythonProfile(context, backend, lesson) {
       }, {size, time: lesson.time});
       assert.equal(after.metrics.time, lesson.time); assert.deepEqual(after.frame, state.frame);
       const warm = await picture(page, `${backend}-${lesson.id}-python-resize-${index}`);
-      const cold = await direct(context, backend, size, lesson.time, lesson.factory);
+      const cold = await direct(context, backend, size, lesson.time, lesson.factory, lesson.factoryArgs ?? []);
       try { exact(warm, await picture(cold.page, `${backend}-${lesson.id}-python-cold-${index}`), "resized Python replay equals cold direct Rust exactly"); }
       finally { await cold.close(); }
       if (size[0] === 320) exact(warm, initial, "Python return viewport is exact");
@@ -365,15 +372,17 @@ try {
     try {
       const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
       await resourceCache.install(context); await disableAuthoringJspi(context); await instrumentRenderWorker(context);
-      const result = await directProfile(context, backend); report.profiles.push(result);
-      console.log(`[PASS] ${backend}: direct glass resize, zero surface and real GPU loss recovery`);
+      for (const lesson of workerLessons.filter(lesson => ["glass", "glow-100"].includes(lesson.id))) {
+        report.profiles.push(await directProfile(context, backend, lesson));
+        console.log(`[PASS] ${backend}/${lesson.id}: direct resize, zero surface and real GPU loss recovery`);
+      }
       for (const lesson of workerLessons) {
         report.profiles.push(await pythonProfile(context, backend, lesson));
         console.log(`[PASS] ${backend}/${lesson.id}: Python seek, resize, real loss and worker recreation`);
       }
     } finally { await browser.close(); }
   }
-  assert.equal(report.profiles.length, 8);
+  assert.equal(report.profiles.length, 12);
   report.status = "passed";
 } catch (error) { report.status = "failed"; report.error = String(error.stack ?? error); throw error; }
 finally {

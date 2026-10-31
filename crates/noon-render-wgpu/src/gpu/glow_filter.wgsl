@@ -8,6 +8,7 @@ struct GlowUniform {
     reserved: u32,
     tint: vec4<f32>,
     control: vec4<f32>, // intensity, final scope opacity, reserved, reserved
+    source_bounds: vec4<u32>, // conservative source min.xy / exclusive max.xy
     weights: array<vec4<f32>, 64>, // nonnegative offsets 0..192, vec4 UBO stride
 }
 @group(0) @binding(0) var<uniform> glow: GlowUniform;
@@ -47,8 +48,13 @@ fn kernel_weight(offset: i32) -> f32 {
 @fragment
 fn fs_horizontal(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let point = vec2<i32>(position.xy);
+    if point.y < i32(glow.source_bounds.y) || point.y >= i32(glow.source_bounds.w) {
+        return pack_mask(0.0);
+    }
     var value = 0.0;
-    for (var offset = -i32(glow.radius); offset <= i32(glow.radius); offset += 1) {
+    let first = max(-i32(glow.radius), i32(glow.source_bounds.x) - point.x);
+    let last = min(i32(glow.radius), i32(glow.source_bounds.z) - 1 - point.x);
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + vec2<i32>(offset, 0);
         if in_capture(sample_point) {
             value += kernel_weight(offset) * textureLoad(input_image, sample_point, 0).a;
@@ -62,7 +68,9 @@ fn fs_horizontal(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
 fn fs_vertical(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let point = vec2<i32>(position.xy);
     var value = 0.0;
-    for (var offset = -i32(glow.radius); offset <= i32(glow.radius); offset += 1) {
+    let first = max(-i32(glow.radius), i32(glow.source_bounds.y) - point.y);
+    let last = min(i32(glow.radius), i32(glow.source_bounds.w) - 1 - point.y);
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + vec2<i32>(0, offset);
         if in_capture(sample_point) {
             value += kernel_weight(offset) * unpack_mask(textureLoad(input_image, sample_point, 0));
