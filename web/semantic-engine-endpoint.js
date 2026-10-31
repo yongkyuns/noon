@@ -1325,7 +1325,7 @@ export async function attachSemanticEngine(
     }
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
-    sections = typeof player.sectionsJson === "function" ? JSON.parse(player.sectionsJson()) : [];
+    sections = prepared === null ? JSON.parse(player.sectionsJson()) : [];
     if (continuation === null && prepared === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }

@@ -53,6 +53,7 @@ function fixture(
   const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 28, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
+    sectionsJson: () => "[]",
     sealReplay: () => {},
     freshFiniteSourceDuration: () => null,
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
