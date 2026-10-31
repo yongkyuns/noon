@@ -1,0 +1,150 @@
+name: Prepared source audio task 2358
+on:
+  push:
+    branches: [codex/scratch-prepared-source-audio-2358]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      BASE: 8e785d28cb94f74c983e91c1703a81b39a5b500b
+      EVIDENCE: /tmp/noon-prepared-source-audio-evidence
+      CARGO_INCREMENTAL: 0
+      CARGO_TARGET_DIR: /tmp/noon-prepared-source-audio-target
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Apply authenticated source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = yongkyuns/noon
+          test "$GITHUB_REF" = refs/heads/codex/scratch-prepared-source-audio-2358
+          mkdir -p "$EVIDENCE"
+          cp .github/task/prepared-source-audio-2358.patch.gz "$EVIDENCE/input.patch.gz"
+          echo "11c3d32ee25fc900d78b8f2ebf10cbb4305851bfe6bcb50294391813587dba79  $EVIDENCE/input.patch.gz" | sha256sum -c -
+          gzip -dc "$EVIDENCE/input.patch.gz" > "$EVIDENCE/input.patch"
+          echo "4d7ae7a15dca1f10d132ae7b125acd66848de384e8f17024a4c25db6784d295d  $EVIDENCE/input.patch" | sha256sum -c -
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git checkout --detach "$BASE"
+          git apply --check "$EVIDENCE/input.patch"
+          git apply "$EVIDENCE/input.patch"
+          git add -N crates/noon/tests/prepared_audio_source.rs
+          git diff --check
+          git diff --name-only > "$EVIDENCE/paths.txt"
+          test "$(wc -l < "$EVIDENCE/paths.txt")" = 16
+          ! grep -vE '^(crates/noon-web/src/(canonical_authoring_scene/prepared/tests/worker.rs|execution_canvas.rs|prepared_canvas_playback.rs|prepared_canvas_playback/tests.rs|prepared_canvas_smoke.rs|prepared_execution_player.rs|prepared_execution_player/(source.rs|source/tests.rs|tests.rs))|crates/noon/src/(execution_session/replay/prefix.rs|execution_session/replay/prefix/reader.rs|live_program.rs|live_program/prepared.rs)|crates/noon/tests/(immutable_root_audio_history.rs|prepared_audio_source.rs)|docs/architecture.md)$' "$EVIDENCE/paths.txt"
+      - name: Install pinned toolchain and check architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$EVIDENCE/rustc.txt"
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          bash scripts/check.sh architecture "$BASE" 2>&1 | tee "$EVIDENCE/architecture.log"
+      - name: Qualify public headless source and existing histories
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source --test immutable_root_audio_history --test prepared_prefix_lifecycle --test prepared_prefix_incremental --test finite_replay_history --test scalar_timeline_replay 2>&1 | tee "$EVIDENCE/source-history.log"
+          cargo test -p noon --no-default-features --features prepared-prefix --lib 2>&1 | tee "$EVIDENCE/noon-lib.log"
+          cargo test -p noon-runtime --features prepared-prefix --lib audio::tests 2>&1 | tee "$EVIDENCE/runtime-audio.log"
+      - name: Qualify interpreter and host rejection boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --no-default-features --features prepared-prefix --lib 2>&1 | tee "$EVIDENCE/worker-lib.log"
+      - name: Require behavioral failure with the old source gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=crates/noon/src/execution_session/replay/prefix.rs
+          cp "$path" "$EVIDENCE/prefix.rs.saved"
+          trap 'cp "$EVIDENCE/prefix.rs.saved" "$path"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon/src/execution_session/replay/prefix.rs')
+          text = path.read_text()
+          needle = '|| (self.has_audio() && self.immutable_audio_root.is_none())'
+          assert text.count(needle) == 1
+          path.write_text(text.replace(needle, '|| self.has_audio()'))
+          PY
+          set +e
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source soundtrack_prepares_once_and_only_delivery_extends_reader_audio -- --exact > "$EVIDENCE/negative-source.log" 2>&1
+          result=$?
+          set -e
+          cat "$EVIDENCE/negative-source.log"
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' "$EVIDENCE/negative-source.log"
+          grep -F UnsupportedDomain "$EVIDENCE/negative-source.log"
+      - name: Require behavioral failure when hosts silently omit audio
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=crates/noon-web/src/prepared_canvas_playback.rs
+          cp "$path" "$EVIDENCE/canvas.rs.saved"
+          trap 'cp "$EVIDENCE/canvas.rs.saved" "$path"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-web/src/prepared_canvas_playback.rs')
+          text = path.read_text()
+          needle = 'if reader.has_audio() {'
+          assert text.count(needle) == 1
+          path.write_text(text.replace(needle, 'if false && reader.has_audio() {'))
+          PY
+          set +e
+          cargo test -p noon-web --no-default-features --features prepared-prefix --lib prepared_canvas_playback::tests::prepared_canvas_rejects_audio_before_installation_even_before_clip_onset -- --exact > "$EVIDENCE/negative-host.log" 2>&1
+          result=$?
+          set -e
+          cat "$EVIDENCE/negative-host.log"
+          test "$result" -ne 0
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' "$EVIDENCE/negative-host.log"
+      - name: Recheck restored source and compile feature boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_audio_source 2>&1 | tee "$EVIDENCE/restored-source.log"
+          cargo test -p noon-web --no-default-features --features prepared-prefix --lib prepared_canvas_playback::tests 2>&1 | tee "$EVIDENCE/restored-host.log"
+          cargo clippy -p noon --no-default-features --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee "$EVIDENCE/noon-clippy.log"
+          cargo clippy -p noon-web --no-default-features --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee "$EVIDENCE/worker-clippy.log"
+          cargo check -p noon --no-default-features 2>&1 | tee "$EVIDENCE/noon-default.log"
+          cargo check -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-no-renderer.log"
+          cargo check -p noon-web --features prepared-prefix,renderer-smoke --target wasm32-unknown-unknown 2>&1 | tee "$EVIDENCE/wasm-renderer.log"
+      - name: Publish tested code only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE"
+          cargo fmt --all -- --check
+          git diff --check
+          git diff --name-only > "$EVIDENCE/final-paths.txt"
+          cmp "$EVIDENCE/paths.txt" "$EVIDENCE/final-paths.txt"
+          git diff --binary > "$EVIDENCE/tested.patch"
+          while IFS= read -r file; do sha256sum "$file"; done < "$EVIDENCE/final-paths.txt" > "$EVIDENCE/tested-source-sha256.txt"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          while IFS= read -r file; do git add -- "$file"; done < "$EVIDENCE/final-paths.txt"
+          git commit -m 'feat: admit fixed soundtracks through silent prepared sources (#2358)'
+          git show -s --format='%H %T %P' HEAD > "$EVIDENCE/commit.txt"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/codex/prepared-source-audio-2358
+      - name: Preserve all evidence including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: prepared-source-audio-2358-${{ github.run_number }}
+          path: /tmp/noon-prepared-source-audio-evidence/
+          if-no-files-found: error
+          retention-days: 7
