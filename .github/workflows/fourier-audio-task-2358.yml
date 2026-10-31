@@ -27,23 +27,31 @@ jobs:
           test "$GITHUB_REF" = refs/heads/codex/scratch-fourier-audio-2358
           mkdir -p /tmp/noon-audio-evidence
           cp .github/task/immutable-root-audio.patch.gz /tmp/noon-audio-evidence/input.patch.gz
+          cp .github/task/immutable-root-audio-fix.patch.gz /tmp/noon-audio-evidence/fix.patch.gz
           echo 'ece587b1ce75176c875b49176b9337d17110772ab0fe4b35c06469d230af9438  /tmp/noon-audio-evidence/input.patch.gz' | sha256sum -c -
+          echo '0296f994af95326e70a5d212cce861c86b77b1724010cd894733b77ed04a2fc0  /tmp/noon-audio-evidence/fix.patch.gz' | sha256sum -c -
           gzip -dc /tmp/noon-audio-evidence/input.patch.gz > /tmp/noon-audio-evidence/input.patch
+          gzip -dc /tmp/noon-audio-evidence/fix.patch.gz > /tmp/noon-audio-evidence/fix.patch
           echo 'b94f313381353b81df30156af61911096ab983b3625249a123575a679f54a0b5  /tmp/noon-audio-evidence/input.patch' | sha256sum -c -
+          echo '5ff3d5346c67752cd0908adfdce5282c08a301bae4d0c370393af67b83ccf736  /tmp/noon-audio-evidence/fix.patch' | sha256sum -c -
           git fetch --no-tags --depth=1 origin "$BASE"
           git checkout --detach "$BASE"
           git apply --check /tmp/noon-audio-evidence/input.patch
           git apply /tmp/noon-audio-evidence/input.patch
+          git apply --check /tmp/noon-audio-evidence/fix.patch
+          git apply /tmp/noon-audio-evidence/fix.patch
           git add -N crates/noon/tests/immutable_root_audio_history.rs
           git diff --check
           git diff --name-only > /tmp/noon-audio-evidence/changed-paths.txt
-          test "$(wc -l < /tmp/noon-audio-evidence/changed-paths.txt)" = 11
-          ! grep -vE '^(crates/noon-runtime/src/(audio.rs|audio/tests.rs|replay.rs|replay/prefix.rs)|crates/noon-web/src/semantic_execution_player.rs|crates/noon/src/(execution_session.rs|execution_session/(publication.rs|publication/audio_tests.rs|replay.rs))|crates/noon/tests/immutable_root_audio_history.rs|docs/architecture.md)$' /tmp/noon-audio-evidence/changed-paths.txt
-      - name: Install repository-pinned toolchain
+          test "$(wc -l < /tmp/noon-audio-evidence/changed-paths.txt)" = 15
+          ! grep -vE '^(crates/noon-native/src/(audio_output.rs|audio_output/tests.rs)|crates/noon-runtime/src/(audio.rs|audio/tests.rs|replay.rs|replay/prefix.rs)|crates/noon-web/src/(execution_canvas.rs|semantic_execution_player.rs|semantic_execution_player/tests.rs)|crates/noon/src/(execution_session.rs|execution_session/(publication.rs|publication/audio_tests.rs|replay.rs))|crates/noon/tests/immutable_root_audio_history.rs|docs/architecture.md)$' /tmp/noon-audio-evidence/changed-paths.txt
+      - name: Install repository-pinned toolchain and native headers
         run: |
           rustup install
           rustup target add wasm32-unknown-unknown
           rustc --version --verbose | tee /tmp/noon-audio-evidence/rustc.txt
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libudev-dev
       - name: Format and architecture gate
         shell: bash
         run: |
@@ -76,11 +84,18 @@ jobs:
           cargo test -p noon --no-default-features --features prepared-prefix --lib execution_session::publication::audio_tests 2>&1 | tee /tmp/noon-audio-evidence/session-audio.log
           cargo test -p noon --no-default-features --features prepared-prefix --test immutable_root_audio_history --test finite_replay_history --test scalar_timeline_replay 2>&1 | tee /tmp/noon-audio-evidence/history.log
           cargo test -p noon-runtime --features prepared-prefix --test finite_replay_locality 2>&1 | tee /tmp/noon-audio-evidence/locality.log
-      - name: Check worker WASM with existing gates retained
+      - name: Qualify explicit host admission without device playback
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-native --features audio --lib audio_output::tests 2>&1 | tee /tmp/noon-audio-evidence/native-admission.log
+          cargo test -p noon-web --no-default-features --features prepared-prefix --lib semantic_execution_player::tests 2>&1 | tee /tmp/noon-audio-evidence/worker-admission.log
+      - name: Check worker and direct-renderer WASM
         shell: bash
         run: |
           set -euo pipefail
           cargo check -p noon-web --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-audio-evidence/wasm-check.log
+          cargo check -p noon-web --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee /tmp/noon-audio-evidence/wasm-renderer-check.log
       - name: Publish only the tested code to a new task branch
         env:
           GH_TOKEN: ${{ github.token }}
