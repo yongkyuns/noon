@@ -36,3 +36,7 @@ noon-export = { path = "../noon-export" }
 serde_json = "1"
 half = "2"
 wgpu = { version = "30.0.1", default-features = false, features = ["noop"] }
+
+[[example]]
+name = "scan_band"
+required-features = ["wgsl-effects"]
