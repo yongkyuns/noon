@@ -37,7 +37,7 @@ fn fixture() -> (
     (
         source,
         publisher,
-        PreparedCanvasPlayback::new(reader),
+        PreparedCanvasPlayback::new(reader).unwrap(),
         object,
     )
 }
@@ -309,4 +309,68 @@ fn prepared_canvas_interpreter_demand_refills_open_wait_but_not_a_terminal_reade
     playback.seek(0.25).unwrap();
     assert!(!playback.needs_preparation(100.0).unwrap());
     assert!(playback.needs_preparation(f64::NAN).is_err());
+}
+
+// The public headless reader may now own audio. These hosts still lack a
+// picture-qualified output anchor, so reject rather than silently discard it.
+fn audio_reader(start_time: f64) -> (PrefixReader, std::sync::Weak<[f32]>) {
+    let mut scene = Scene::new();
+    let samples: std::sync::Arc<[f32]> = vec![0.125; 8_000].into();
+    let weak = std::sync::Arc::downgrade(&samples);
+    scene
+        .audio(
+            noon::AudioResource::from_interleaved(8_000, 1, samples, 32_000).unwrap(),
+            noon::AudioClipOptions {
+                start_time,
+                duration: Some(4.0),
+                looped: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.wait_segment(1.0).unwrap();
+    source.advance_to(segment.end_time()).unwrap();
+    let (_, mut reader) = source.create_prepared_prefix(segment).unwrap();
+    reader.seek(0.5).unwrap();
+    assert!(reader.has_audio());
+    (reader, weak)
+}
+
+#[test]
+fn prepared_canvas_rejects_audio_before_installation_even_before_clip_onset() {
+    for start in [0.0, 2.0] {
+        let (reader, pcm) = audio_reader(start);
+        assert_eq!(
+            reader.audio_playback().unwrap().count(),
+            usize::from(start < 1.0)
+        );
+        assert!(matches!(
+            PreparedCanvasPlayback::new(reader),
+            Err("prepared audio output requires displayed-time synchronization (#2358)")
+        ));
+        assert!(
+            pcm.upgrade().is_none(),
+            "rejected ownership releases reader PCM"
+        );
+    }
+}
+
+#[test]
+fn prepared_worker_rejects_audio_before_creating_a_visual_only_transport() {
+    for start in [0.0, 2.0] {
+        let (reader, pcm) = audio_reader(start);
+        let result = crate::PreparedExecutionPlayer::from_reader(reader, 123);
+        match result {
+            Err(message) => assert_eq!(
+                message,
+                "prepared audio output requires displayed-time synchronization (#2358)"
+            ),
+            Ok(_) => panic!("an audio reader must not acquire a silently muted worker host"),
+        }
+        assert!(pcm.upgrade().is_none());
+    }
 }

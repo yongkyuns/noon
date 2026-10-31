@@ -11,12 +11,18 @@ pub(crate) struct PreparedCanvasPlayback {
 }
 
 impl PreparedCanvasPlayback {
-    pub(crate) fn new(reader: PrefixReader) -> Self {
-        Self {
+    pub(crate) fn new(reader: PrefixReader) -> Result<Self, &'static str> {
+        // Source/reader admission is not an audible-output contract. Reject at
+        // the common host boundary before a device or transport is constructed,
+        // rather than silently displaying an audio scene without its soundtrack.
+        if reader.has_audio() {
+            return Err("prepared audio output requires displayed-time synchronization (#2358)");
+        }
+        Ok(Self {
             reader,
             playing: true,
             buffering: false,
-        }
+        })
     }
     pub(crate) fn playing(&self) -> bool {
         self.playing

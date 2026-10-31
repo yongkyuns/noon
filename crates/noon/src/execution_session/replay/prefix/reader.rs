@@ -31,6 +31,21 @@ impl PrefixReader {
     pub fn publication_context(&self) -> PublicationContext {
         self.session.publication_context()
     }
+    /// Immutable soundtrack presence, independent of the selected clip phase.
+    pub fn has_audio(&self) -> bool {
+        self.session.has_audio()
+    }
+
+    /// Device-neutral instructions at this reader's selected historical time.
+    /// The existing receiver bounds them to adopted visual history; preparation,
+    /// an undelivered suffix, and source completion cannot extend that horizon.
+    /// Querying does not start output, acknowledge a picture, or advance time.
+    pub fn audio_playback(
+        &self,
+    ) -> Result<impl Iterator<Item = noon_runtime::AudioPlaybackClip<'_>>, PrefixError> {
+        self.receiver.audio_playback(&self.session.runtime)
+    }
+
     pub fn frontier(&self) -> f64 {
         self.receiver.frontier()
     }

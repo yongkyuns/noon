@@ -156,7 +156,7 @@ impl PreparedCanvasFixture {
             .reader
             .take()
             .ok_or_else(|| js_error("fixture reader already moved"))?;
-        Ok(crate::PreparedExecutionPlayer::from_reader(reader, session))
+        crate::PreparedExecutionPlayer::from_reader(reader, session).map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = publishNextToWorker)]
