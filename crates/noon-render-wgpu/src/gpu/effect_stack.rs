@@ -151,6 +151,13 @@ pub struct EffectStackScope {
     warm_sample: Option<Box<SampleScope>>,
 }
 impl EffectStackScope {
+    pub(super) fn take_placement_blur(&mut self) -> Option<super::glow_filter::BlurJob> {
+        self.placement_glow()?;
+        let PassFilter::Glow(scope) = &mut self.passes[0].filter else {
+            unreachable!()
+        };
+        GlowFilter::take_blur_job(scope)
+    }
     pub(super) fn placement_glow(&self) -> Option<&GlowScope> {
         if self.output != Some(0) || self.passes.len() != 1 {
             return None;
@@ -324,6 +331,7 @@ impl EffectStackFilter {
         effects: &[EffectDefinition],
         parameters: EffectStackParameters,
         layout: &wgpu::BindGroupLayout,
+        defer_blur: bool,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         let prepared = preflight(device, &self.sample, scope, capture, effects, parameters)?;
         let [EffectDefinition::Glow(definition)] = effects else {
@@ -350,6 +358,8 @@ impl EffectStackFilter {
             },
             layout,
             parameters.working_format,
+            defer_blur,
+            parameters.source_bounds,
         )?;
         if stats.bytes_uploaded != 0 || stats.blur_passes != 0 {
             pass.revision += 1;
@@ -359,6 +369,15 @@ impl EffectStackFilter {
             scratch_bytes: scope.scratch_bytes(),
             ..stats
         })
+    }
+
+    pub(super) fn encode_glow_blurs(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        jobs: Vec<super::glow_filter::BlurJob>,
+    ) -> EffectRasterStats {
+        self.glow.encode_blur_jobs(device, encoder, jobs)
     }
 
     pub(super) fn draw_glow_placement<'a>(

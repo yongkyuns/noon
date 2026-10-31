@@ -1185,6 +1185,17 @@ retires all capture textures. It requires one examined row, no geometry upload,
 stable attached residency and no filter recompilation after the first cycle.
 These paused live edits do not qualify a timed source or the physical cohorts.
 
+`noon::example_scenes::glow_churn` and `web/python/examples/glow_churn.py`
+add ordinary forward source execution: 100 dots attach/remove Glow ten times
+among the same 600-dot grid, using normal wait segments and no frame callback.
+The native `glow_churn` example runs that source; the existing public Scene
+raster test renders every mutation boundary at 1152×648, checking restoration,
+locality and bounded capture residency. The existing G4 browser qualifier checks
+initial/attached/removed/completed pixels through Rust/WASM and Pyodide.
+This qualifies forward source and lifecycle behavior. Live continuations retain
+their existing arbitrary-seek rejection; the static profiler's rewind protocol,
+physical timing and total driver/in-flight memory remain separate gates.
+
 The paired [Rust G4 builder](../../crates/noon/src/example_scenes/glow_profile.rs)
 and [Python source](../../web/python/examples/glow_profile.py) author the same
 600-dot grid, with 1 or 100 named glows. Ordinary linear target animation changes
@@ -1205,7 +1216,8 @@ selected backend for the other trials. Reports retain every measured rAF/CPU
 sample, available GPU-pass samples and actual renderer-device identity.
 `node scripts/glow-profile-qualification.mjs` compares twelve exact-time
 Rust/Pyodide cases on both raster backends using the existing paired harness.
-The Rust builder completes CPU authoring before rewinding the same runtime.
+The Rust builder declares the complete animation before constructing its
+immutable runtime; exact seeks reuse that plan.
 For G4, the profiler then renders every target-Hz sample through the full authored
 horizon, including its endpoint, before rewind, warmup and measurement. Reports
 keep cold-frame samples/timing separate from measured samples; the CLI requires
@@ -1296,6 +1308,16 @@ that output before reading it; its target stays warm for later reuse. Aggregate
 capture admission retains the conservative 12-byte Glow reservation, while
 `GlowScope::scratch_bytes` reports allocated filter images. Neither counter
 measures driver or in-flight memory.
+
+Independent placement-only Glow masks of equal size can share four-target
+horizontal/vertical passes. Each mask keeps its own images and kernel; no
+resolution or precision changes. Only prepared dirty owners enter the batch.
+Remainders and devices below the four-target/binding limits use scalar passes;
+materialized consumers retain their existing ordering. Two shared pipelines are
+created lazily, with no added textures. `blur_passes` counts physical passes
+(50 for 100 masks), not individual masks. Existing native Gaussian and retained
+host tests compare independent kernels and scalar output, including radius edits,
+one-owner invalidation, clean reuse and the scalar remainder.
 
 `gpu::effect_stack::tests` includes literal CPU witnesses, sparse invalidation,
 aggregate budget, neutral, retirement and late-failure tests. Its ignored native
@@ -1697,8 +1719,10 @@ plateaus and real wrong-input/bounds/sampling controls at a two-byte bound.
 `scripts/effect-resource-recovery-qualification.mjs` uses actual browser device
 or context destruction. Direct Rust/WASM survives repeated viewport churn,
 a zero-sized surface and GPU replacement at the same authored state. Completed
-Python glass, shader-material and HDR/Bloom source replay agrees with forward
-Rust output, including resized views. Shader rows remain present across recovery.
+Python glass, shader-material, HDR/Bloom and 100-Glow G4 source replay agrees with
+forward Rust output, including resized views. The dense G4 radius workload also
+exercises direct Rust/WASM device/context recovery. Shader and Glow rows remain
+present across recovery.
 WebGL workers recover in place; WebGPU workers use an explicit host `restart()`
 after confirmed device loss. Idle WebGPU worker loss does not currently emit a
 callback diagnostic in this profile: automatic idle-loss notification/recovery
@@ -2025,6 +2049,12 @@ adapter identity and failure counts are retained for independent checking.
 Native and browser hosts reuse this presenter. Its numerical proof does not
 establish physical presentation or performance acceptance.
 
+Compatibility rendering also uses the existing presentation bridge for native
+sRGB attachments, preserving the encoded-byte composition used by frame capture.
+The bridge retains one UNORM scene target (four bytes/pixel) and one final transfer
+pass; unchanged extents reuse that target. Native UNORM attachments bypass it,
+and float radiance targets keep their separate HDR output transfer.
+
 ### Native window HDR and viewer-overlay integration (#1897 M4/M5)
 
 The normal native frame loop selects its working format from the current
@@ -2055,9 +2085,10 @@ clean output instead of accumulating a tint.
 
 The real native GPU proof has thirteen phases: live parameter edits, viewer
 overlay/clear, neutral and absent Bloom, Compatibility/HDR transitions, resize,
-target recreation and a newly requested device. Every HDR phase without an
-overlay matches normal `SessionCapture` exactly at the same view/state. Float
-values use the predeclared 0.006 + 0.004*abs(expected) bound; displayed values use
+target recreation and a newly requested device. Every phase without an
+overlay matches normal `SessionCapture` exactly at the same view/state, including
+the Compatibility transition. Float values use the predeclared
+0.006 + 0.004*abs(expected) bound; displayed values use
 the existing two-byte bound. Expected values come from literal .5 radiance over
 opaque black, an independent full-2D finite Gaussian and explicit SDR transfer.
 An actual consumer that sends the viewer tint through Bloom must fail those
@@ -2122,7 +2153,18 @@ before replacing those targets.
 `node scripts/direct-view-output-qualification.mjs` checks actual WebGPU/WebGL2
 pixels against an independent f64 uniform-interior reference, live/finite source
 modes, exact seek/restoration and resize admission. The native full-field oracle
-remains `cargo test -p noon-native --lib view_output::native_hdr -- --include-ignored`.
+remains `cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored`.
+The same CI step also compares 17 ordinary Rust appearance programs through the
+native source adapter and offscreen exporter at four authored samples per second,
+including source completion, two view sizes and the authored camera. It requires
+changing pixels and a maximum two-byte channel difference. The same step compares
+native viewer seeks, including rewind and repeated times, against forward
+`SessionCapture` output: 1/100 glows with predeclared intensity/radius animation, through both view sizes. Initial affine/effect targets reuse the ordinary
+scheduler and animation lowerer before runtime construction, preserving immutable
+viewer admission. Parallel duplicate channels reject before publication; existing
+content-morph and live-edited playback restrictions remain explicit.
+These checks complement the operator references; they do not qualify native Python,
+arbitrary live-source seek, physical scanout, input latency or total driver memory.
 Held frames may sleep rather than republish time; active animation and explicit
 seek still sample canonical authored time. These software-GPU checks do not
 qualify physical-device performance.

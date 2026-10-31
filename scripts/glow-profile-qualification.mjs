@@ -12,10 +12,11 @@ const identity = JSON.parse(await readFile(root + "/web/runtime-build-identity.j
 assert.deepEqual(await createRuntimeBuildIdentity(root), identity, "exact clean source/package required");
 assert.ok(identity.sourceRevision, "committed source revision required");
 const source = await readFile(root + "/web/python/examples/glow_profile.py", "utf8");
+const ordinaryChurnFrames = new Map();
 await qualifyPairedAuthoring({
   artifactDirectory: "browser-smoke-artifacts/glow-profile",
   prepareContext: disableAuthoringJspi,
-  cases: [1, 100].flatMap(active => ["intensity", "radius"].flatMap(property =>
+  cases: [...[1, 100].flatMap(active => ["intensity", "radius"].flatMap(property =>
     [0.5, 5, 9.5].map(sampleTime => ({
       id: `g4-${active}-${property}-${sampleTime}`,
       source: `context = ${JSON.stringify({ active_glows: active, property, duration: 10 })}\n${source}`,
@@ -25,7 +26,34 @@ await qualifyPairedAuthoring({
       duration: 10,
       sampleTime,
       objectCount: 601,
-    })))),
+    })))), ...[0.01, 0.2, 0.5, 10].map(sampleTime => ({
+      id: `g4-churn-${sampleTime}`, file: "glow_churn.py",
+      factory: "createDirectGlowChurnRenderer", canvasSize: [1152, 648],
+      duration: 10, sampleTime, objectCount: 601, playback: "live",
+      boundaries: Array.from({ length: 21 }, (_, phase) => (1 + phase * 26) / 60),
+      directHeldSampleTime: sampleTime === 10 ? undefined : sampleTime < 1 / 60 ? 0
+        : sampleTime < 27 / 60 ? 1 / 60 : 27 / 60,
+      stopAtSourceCompletion: sampleTime === 10,
+    }))],
+  qualifyPixels({ fixture, backend, rust }) {
+    if (!fixture.id.startsWith("g4-churn-")) return;
+    if (fixture.sampleTime === 0.01) {
+      ordinaryChurnFrames.set(backend, Buffer.from(rust.data));
+      return { ordinary: true };
+    }
+    const ordinary = ordinaryChurnFrames.get(backend);
+    if (fixture.sampleTime === 0.2) {
+      let changedPixels = 0;
+      for (let at = 0; at < ordinary.length; at += 4) {
+        if (rust.data[at] !== ordinary[at] || rust.data[at + 1] !== ordinary[at + 1]
+          || rust.data[at + 2] !== ordinary[at + 2]) changedPixels++;
+      }
+      assert.ok(changedPixels > 1000, "attached Glows must visibly change the grid");
+      return { changedPixels };
+    }
+    assert.ok(rust.data.equals(ordinary), "removal and source completion restore exact ordinary pixels");
+    return { ordinaryRestored: true };
+  },
   async qualifyLifecycle(context, baseUrl, backend) {
     const page = await context.newPage();
     try {

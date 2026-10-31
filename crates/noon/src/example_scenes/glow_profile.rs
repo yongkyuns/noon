@@ -2,8 +2,8 @@
 //! Paired with `web/python/examples/glow_profile.py`; no per-frame host callback.
 use crate::{
     effects::{EffectUpdate, Pixels},
-    AnimationOptions, MobjectTarget, RateFunction, Scene, SceneExecution,
-    SemanticAnimationCompositionKind, TransformToRequest,
+    AnimationOptions, Mobject, MobjectTarget, RateFunction, Scene, SceneExecution,
+    SemanticAnimationCompositionKind,
 };
 
 pub const OBJECT_COUNT: usize = 600;
@@ -34,6 +34,32 @@ pub fn session(active: usize, property: Property, duration: f64) -> Result<Scene
     if !duration.is_finite() || duration < 10.0 {
         return Err("G4 duration must be finite and at least 10 seconds".into());
     }
+    let (scene, objects) = grid(active)?;
+    let options = AnimationOptions::new()
+        .run_time(duration)
+        .rate_func(RateFunction::Linear);
+    let mut children = Vec::with_capacity(active);
+    for dot in &objects[..active] {
+        let mut target = dot.target_editor().map_err(message)?;
+        target
+            .set_glow(match property {
+                Property::Intensity => EffectUpdate::default().intensity(1.0),
+                Property::Radius => EffectUpdate::default().radius(Pixels(6.0)),
+            })
+            .map_err(message)?;
+        children.push(scene.declare_transform_to(dot, &target, options)?.node_id());
+    }
+    let root = scene.declare_animation(
+        noon_core::SemanticAnimationIntent::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children,
+        },
+        AnimationOptions::new(),
+    )?;
+    scene.into_execution_with_animation_root(&root)
+}
+
+pub(super) fn grid(active: usize) -> Result<(Scene, Vec<Mobject>), String> {
     let mut scene = Scene::new();
     let mut camera = scene.camera_frame().map_err(message)?;
     let scale = 6.0 / f64::from(noon_core::DEFAULT_FRAME_HEIGHT);
@@ -57,46 +83,7 @@ pub fn session(active: usize, property: Property, duration: f64) -> Result<Scene
     scene
         .add_many(&objects.iter().map(MobjectTarget::from).collect::<Vec<_>>())
         .map_err(message)?;
-    let options = AnimationOptions::new()
-        .run_time(duration)
-        .rate_func(RateFunction::Linear);
-    let mut execution = scene.into_execution().map_err(message)?;
-    {
-        let mut live = execution.live();
-        let mut targets = Vec::with_capacity(active);
-        for dot in &objects[..active] {
-            let target = live.target_editor(dot).map_err(message)?;
-            live.set_glow(
-                &target,
-                match property {
-                    Property::Intensity => EffectUpdate::default().intensity(1.0),
-                    Property::Radius => EffectUpdate::default().radius(Pixels(6.0)),
-                },
-            )
-            .map_err(message)?;
-            targets.push(target);
-        }
-        let requests = objects[..active]
-            .iter()
-            .zip(&targets)
-            .map(|(dot, target)| TransformToRequest::new(dot, target, options).method_target())
-            .collect::<Vec<_>>();
-        let segment = live
-            .declare_and_activate_transform_composition(
-                SemanticAnimationCompositionKind::Parallel,
-                &requests,
-                AnimationOptions::new().rate_func(RateFunction::Linear),
-                AnimationOptions::new(),
-            )
-            .map_err(message)?;
-        // Finish ordinary CPU authoring, then use its existing replay interval.
-        // This is setup, not the completed rendered cold pass required by M5.
-        live.advance_segment_to(segment, duration)
-            .map_err(message)?;
-        live.complete_segment(segment).map_err(message)?;
-    }
-    execution.seek(0.0).map_err(message)?;
-    Ok(execution)
+    Ok((scene, objects))
 }
 
 fn message(error: impl std::fmt::Display) -> String {

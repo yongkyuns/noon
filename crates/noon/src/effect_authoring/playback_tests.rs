@@ -711,3 +711,198 @@ fn ordinary_composition_rejects_stacked_absent_glow_without_any_publication() {
     assert_eq!(scene.integration_store().borrow().len(), node_count);
     assert!(source.get_effect("glow").is_err());
 }
+
+fn immutable_glow_execution(rate: RateFunction) -> (crate::SceneExecution, Mobject) {
+    use noon_core::SemanticAnimationIntent;
+    let (scene, source) = fixture(true);
+    let mut target = source.target_editor().unwrap();
+    target.shift(2.0, 0.0).unwrap();
+    target
+        .set_glow(EffectUpdate::default().radius(Pixels(6.5)).intensity(1.4))
+        .unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &source,
+            &target,
+            AnimationOptions::new().run_time(1.0).rate_func(rate),
+        )
+        .unwrap();
+    let root = scene
+        .declare_animation(
+            SemanticAnimationIntent::Composition {
+                kind: crate::SemanticAnimationCompositionKind::Parallel,
+                children: vec![animation.node_id()],
+            },
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    (
+        scene.into_execution_with_animation_root(&root).unwrap(),
+        source,
+    )
+}
+
+#[test]
+fn initial_glow_targets_admit_immutable_seek_with_exact_endpoints_and_authored_state() {
+    for rate in [RateFunction::Linear, RateFunction::ThereAndBack] {
+        let (mut execution, source) = immutable_glow_execution(rate);
+        let authored = definition(&source);
+        let attachment = source.get_effect("glow").unwrap().node_id();
+        let revision = execution.session().publication_context().scene_revision();
+        assert!(execution.session().supports_immutable_playback());
+        assert_eq!(execution.session().finite_playback_end_time(), Some(1.0));
+        for (time, returning) in [
+            (0.0, 0.0),
+            (0.5, 1.0),
+            (0.25, 0.5),
+            (0.75, 0.5),
+            (1.0, 0.0),
+            (0.25, 0.5),
+        ] {
+            execution.seek(time).unwrap();
+            let progress = if rate == RateFunction::Linear {
+                time
+            } else {
+                returning
+            };
+            let actual = row(execution.session(), &source);
+            let effect = only_effect(actual.effects.as_ref().unwrap());
+            let glow = effect.definition.as_glow().unwrap();
+            assert_eq!(effect.attachment, attachment);
+            assert!(
+                (glow.intensity()
+                    - (authored.intensity() + (1.4 - authored.intensity()) * progress))
+                    .abs()
+                    < 1e-12
+            );
+            assert!((glow.radius().value() - (3.25 + 3.25 * progress)).abs() < 1e-12);
+            assert!((f64::from(actual.transform.translation.x) - 2.0 * progress).abs() < 1e-6);
+            assert_eq!(definition(&source), authored);
+            assert_eq!(
+                execution.session().publication_context().scene_revision(),
+                revision
+            );
+        }
+    }
+}
+
+#[test]
+fn initial_effect_targets_allow_disjoint_channels_and_reject_conflicts_without_mutation() {
+    use noon_core::SemanticAnimationIntent;
+    for conflicting in [false, true] {
+        let (scene, source) = fixture(true);
+        let mut first = source.target_editor().unwrap();
+        first
+            .set_glow(EffectUpdate::default().intensity(1.4))
+            .unwrap();
+        let mut second = source.target_editor().unwrap();
+        second
+            .set_glow(if conflicting {
+                EffectUpdate::default().intensity(2.0)
+            } else {
+                EffectUpdate::default().radius(Pixels(6.5))
+            })
+            .unwrap();
+        let a = scene
+            .declare_transform_to(&source, &first, options())
+            .unwrap();
+        let b = scene
+            .declare_transform_to(&source, &second, options())
+            .unwrap();
+        let root = scene
+            .declare_animation(
+                SemanticAnimationIntent::Composition {
+                    kind: crate::SemanticAnimationCompositionKind::Parallel,
+                    children: vec![a.node_id(), b.node_id()],
+                },
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let revision = scene.revision();
+        let authored = definition(&source);
+        let result = scene.execution_session_with_animation_root(&root);
+        if conflicting {
+            assert!(result.is_err(), "parallel writes must conflict");
+            let fallback = scene.execution_session().unwrap();
+            assert_eq!(
+                only_effect(row(&fallback, &source).effects.as_ref().unwrap())
+                    .definition
+                    .as_glow()
+                    .unwrap(),
+                authored
+            );
+        } else {
+            let mut execution = result.unwrap();
+            execution.seek(0.5).unwrap();
+            let glow = only_effect(row(&execution, &source).effects.as_ref().unwrap())
+                .definition
+                .as_glow()
+                .unwrap();
+            assert!((glow.intensity() - 0.9).abs() < 1e-12);
+            assert_eq!(glow.radius().value(), 4.875);
+        }
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(definition(&source), authored);
+    }
+}
+
+#[test]
+fn initial_affine_target_rejects_overlapping_exact_tracks_in_either_child_order() {
+    use noon_core::{
+        CompositionTimeMap, SemanticAnimationIntent, SemanticObjectTrackProperty,
+        SemanticObjectTrackValues, TrackTiming,
+    };
+    for (reversed, start) in [(false, 0.0), (true, 0.0), (false, 2.0), (true, 2.0)] {
+        let (scene, source) = fixture(true);
+        let mut target = source.target_editor().unwrap();
+        target.shift(2.0, 0.0).unwrap();
+        let affine = scene
+            .declare_transform_to(&source, &target, options())
+            .unwrap();
+        let exact = scene
+            .declare_animation(
+                SemanticAnimationIntent::ObjectPropertyTrack {
+                    target: source.node_id(),
+                    property: SemanticObjectTrackProperty::Position,
+                    values: SemanticObjectTrackValues::Vec3 {
+                        from: crate::SemanticVec3::new(0.0, 0.0, 0.0),
+                        to: crate::SemanticVec3::new(3.0, 0.0, 0.0),
+                    },
+                    timing: TrackTiming::new(start, 1.0, RateFunction::Linear),
+                    time_map: CompositionTimeMap::identity(),
+                },
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let mut children = vec![affine.node_id(), exact.node_id()];
+        if reversed {
+            children.reverse();
+        }
+        let root = scene
+            .declare_animation(
+                SemanticAnimationIntent::Composition {
+                    kind: crate::SemanticAnimationCompositionKind::Parallel,
+                    children,
+                },
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let revision = scene.revision();
+        let result = scene.execution_session_with_animation_root(&root);
+        if start == 0.0 {
+            assert!(result.is_err());
+        } else {
+            let mut execution = result.unwrap();
+            execution.seek(2.5).unwrap();
+            assert_eq!(row(&execution, &source).transform.translation.x, 1.5);
+        }
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(
+            row(&scene.execution_session().unwrap(), &source)
+                .transform
+                .translation
+                .x,
+            0.0
+        );
+    }
+}

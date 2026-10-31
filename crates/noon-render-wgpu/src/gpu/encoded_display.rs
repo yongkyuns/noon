@@ -53,7 +53,7 @@ impl EncodedDisplayPresenter {
         Ok(Self {
             device: device.clone(),
             format,
-            decode_before_store: format.is_srgb() || transfer == OutputTransfer::BrowserWebGlSrgb,
+            decode_before_store: format.is_srgb() || transfer == OutputTransfer::SrgbStore,
             program: None,
             source: None,
             binding: None,
