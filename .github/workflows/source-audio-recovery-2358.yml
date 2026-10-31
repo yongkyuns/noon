@@ -1,0 +1,30 @@
+name: Source audio recovery 2358
+on:
+  push:
+    branches: [codex/scratch-source-audio-2358-next]
+permissions:
+  contents: read
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Preserve exact source and unfinished candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/source-audio-recovery
+          git archive --format=tar.gz HEAD > /tmp/source-audio-recovery/source.tar.gz
+          cp .github/task/source-audio-recovery.patch.gz /tmp/source-audio-recovery/unfinished.patch.gz
+          gzip -dc /tmp/source-audio-recovery/unfinished.patch.gz > /tmp/source-audio-recovery/unfinished.patch
+          git rev-parse HEAD HEAD^{tree} > /tmp/source-audio-recovery/identity.txt
+          sha256sum /tmp/source-audio-recovery/* > /tmp/source-audio-recovery/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: source-audio-recovery-2358
+          path: /tmp/source-audio-recovery/
+          retention-days: 3
+          if-no-files-found: error
