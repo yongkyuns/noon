@@ -309,13 +309,17 @@ try {
                 emit('pointerdown', 0, 1);
                 emit('pointermove', 0, 1); // Unchanged held label is ordinary motion.
                 emit('pointerup', 0, 0);
+                // Bound this stimulus before yielding to real browser focus/view
+                // events. Still await and validate every subsequent delivery.
+                const injectedInputs = inputs.slice();
                 let count;
                 do {
                   count = deliveries.length;
                   await Promise.all(deliveries);
                   await new Promise(resolve => setTimeout(resolve, 0));
                 } while (deliveries.length !== count);
-                return { stimulus: 'injected-pointer-events', inputs,
+                return { stimulus: 'injected-pointer-events', inputs: injectedInputs,
+                  subsequentInputs: inputs.slice(injectedInputs.length),
                   errors: (await Promise.all(deliveries)).filter(Boolean),
                   state: document.querySelector('#patch-status').dataset.state };
               } finally { ExecutionWorkerClient.prototype.submitBrowserPointerInput = original; }
