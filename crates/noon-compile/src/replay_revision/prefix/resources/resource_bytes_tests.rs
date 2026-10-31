@@ -134,3 +134,67 @@ fn text_resource_payload_is_included() {
         std::mem::size_of::<TextResource>() + text.source.len()
     );
 }
+
+#[test]
+fn audio_payload_bytes_include_headers_and_count_each_handle_once() {
+    use noon_core::{AudioResource, AudioResourceHandle, AudioResourceId};
+    let pcm =
+        Arc::new(AudioResource::from_interleaved(8_000, 2, vec![0.25; 32_000], 128_000).unwrap());
+    let handle = AudioResourceHandle {
+        arena: 1,
+        id: AudioResourceId::new(0),
+        version: 0,
+    };
+    let mut resources = CompiledResources::default();
+    resources.audio.insert(handle, pcm.clone());
+    assert_eq!(resources.prefix_payload_count(), 1);
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(pcm.retained_bytes())
+    );
+    assert_eq!(
+        pcm.retained_bytes(),
+        std::mem::size_of::<AudioResource>() + 128_000
+    );
+    let mut duplicate = CompiledResources::default();
+    duplicate.audio.insert(handle, pcm.clone());
+    resources.extend_prefix_knowledge(&duplicate);
+    assert_eq!(resources.prefix_payload_count(), 1);
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(pcm.retained_bytes())
+    );
+    // Distinct resource handles are charged conservatively even when sharing PCM.
+    let second = AudioResourceHandle {
+        id: AudioResourceId::new(1),
+        ..handle
+    };
+    resources.audio.insert(second, pcm.clone());
+    assert_eq!(resources.prefix_payload_count(), 2);
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(2 * pcm.retained_bytes())
+    );
+}
+
+#[test]
+fn audio_and_visual_resource_charges_add_without_copying_pcm() {
+    use noon_core::{AudioResource, AudioResourceHandle, AudioResourceId};
+    let pcm =
+        Arc::new(AudioResource::from_interleaved(8_000, 1, vec![0.125; 8_000], 32_000).unwrap());
+    let address = pcm.samples().as_ptr();
+    let audio = AudioResourceHandle {
+        arena: 1,
+        id: AudioResourceId::new(0),
+        version: 0,
+    };
+    let (image_handle, image) = image_resource(0, 64);
+    let expected = pcm.retained_bytes() + image.retained_bytes();
+    let mut resources = CompiledResources::default();
+    resources.audio.insert(audio, pcm);
+    resources.images.insert(image_handle, image);
+    let copied = resources.clone();
+    assert_eq!(copied.prefix_payload_count(), 2);
+    assert_eq!(copied.prefix_resource_bytes(), Some(expected));
+    assert_eq!(copied.audio(audio).unwrap().samples().as_ptr(), address);
+}
