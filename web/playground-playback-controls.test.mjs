@@ -251,3 +251,45 @@ test("silent lessons expose annotated cues and delegate navigation without resol
   f.controls.sync({ time: 0, playing: false, sections: [] });
   assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true);
 });
+
+test("focused panel shortcuts reuse admitted buttons and leave native controls alone", async () => {
+  const f = fixture();
+  const root = f.controls.element;
+  const sections = [{ index: 0, name: "Start", time: 0 }, { index: 1, name: "Detail", time: 0.5 }];
+  const state = (time, playing = false) => ({ time, playing, sections,
+    sectionState: { current: time ? 1 : 0, previous: time ? 0 : null, next: time ? null : 1 } });
+  f.controls.sync(state(0));
+  f.player.resume = async () => { f.calls.push("resume"); return state(0, true); };
+  f.player.seekSection = async previous => { f.calls.push(previous ? "previous" : "next"); return state(previous ? 0 : 0.5); };
+  const key = (code, options = {}, target = root, type = "keydown") => {
+    const event = Object.assign(new Event(type, { cancelable: true }), { code, ...options });
+    Object.defineProperty(event, "target", { value: target });
+    root.dispatchEvent(event);
+    return event;
+  };
+  assert.equal(root.getAttribute("tabindex"), "0");
+  assert.match(root.getAttribute("aria-keyshortcuts"), /ArrowRight/);
+  assert.equal(key("Space").defaultPrevented, true); await flush();
+  key("Space", { repeat: true }); key("Space", {}, root, "keyup"); await flush();
+  assert.deepEqual(f.calls, ["resume"]);
+  key("Space"); await flush();
+  key("ArrowRight"); await flush();
+  const atEnd = f.calls.length;
+  key("ArrowRight"); await flush();
+  assert.equal(f.calls.length, atEnd, "the disabled boundary button admits no shortcut");
+  key("ArrowLeft"); await flush();
+  key("Home"); await flush();
+  assert.deepEqual(f.calls, ["resume", "pause", "next", "previous", "restartPlayback"]);
+  for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) {
+    assert.equal(key("Space", options).defaultPrevented, false);
+  }
+  assert.equal(key("ArrowRight", {}, f.range).defaultPrevented, false);
+  assert.equal(key("KeyA").defaultPrevented, false);
+  f.controls.setBusy(true); key("Space"); await flush();
+  f.controls.setBusy(false); f.controls.setControllable(false); key("Home"); await flush();
+  assert.equal(f.calls.length, 5, "busy and source-owned playback retain their command gates");
+  f.controls.destroy();
+  assert.equal(key("Space").defaultPrevented, false);
+  assert.equal(root.getAttribute("tabindex"), null);
+  assert.equal(root.getAttribute("aria-keyshortcuts"), null);
+});

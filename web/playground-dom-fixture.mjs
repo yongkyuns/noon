@@ -13,6 +13,7 @@ export class Element extends EventTarget {
     this.title = "";
     this.disabled = false;
   }
+  click() { if (!this.disabled) this.dispatchEvent(new Event("click")); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   removeAttribute(name) {
