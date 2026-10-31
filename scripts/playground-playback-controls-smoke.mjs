@@ -304,7 +304,9 @@ try {
   const initialGeneration = initial.runGeneration;
   await page.evaluate(() => {
     const source = document.querySelector("#python-scene-source");
-    source.value = `${source.value.trimEnd()}\n        self.wait(0.25)\n`;
+    if (!source.value.includes("def construct(self):")) throw new Error("fixture requires an ordinary construct scene");
+    source.value = source.value.replace("def construct(self):", 'def construct(self):\n        self.next_section("Opening")');
+    source.value = `${source.value.trimEnd()}\n        self.next_section("Review")\n        self.wait(0.25)\n`;
     source.dispatchEvent(new Event("input", { bubbles: true }));
   });
   const edited = await playbackSnapshot(page);
@@ -339,6 +341,27 @@ try {
   assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
+
+  // The existing edit/rerun also proves silent lesson annotations reach the
+  // viewer through shared Rust, without an additional scene or browser job.
+  const keyPoints = page.getByRole("combobox", { name: "Jump to lesson key point" });
+  assert.equal(await keyPoints.isVisible(), true);
+  assert.equal(await page.locator(".playback-audio-controls").isVisible(), false);
+  assert.equal(await keyPoints.locator("option").count(), 3);
+  assert.equal(await keyPoints.inputValue(), "1");
+  const previous = page.getByRole("button", { name: "Previous lesson section", exact: true });
+  const next = page.getByRole("button", { name: "Next lesson section", exact: true });
+  assert.equal(await next.isDisabled(), true);
+  await keyPoints.selectOption("0");
+  await waitForMetricNear(page, 0);
+  assert.equal(await previous.isDisabled(), true);
+  await next.click();
+  await waitForMetricNear(page, Number(initial.scrubberMax));
+  assert.equal(await keyPoints.inputValue(), "1");
+  await previous.click();
+  await waitForMetricNear(page, 0);
+  assert.equal(await keyPoints.inputValue(), "0");
+  diagnostics.keyPoints = { count: 2, nextTime: Number(initial.scrubberMax), silent: true };
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
