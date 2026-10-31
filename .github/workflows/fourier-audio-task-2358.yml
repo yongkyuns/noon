@@ -1,0 +1,31 @@
+name: Fourier audio task 2358
+on:
+  push:
+    branches: [codex/scratch-fourier-audio-2358]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Retain exact source for isolated issue 2358 work
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=cf0062032a253b24fe511d85b41c2333027e398e
+          test "$(git rev-parse HEAD^)" = "$base"
+          mkdir -p /tmp/noon-task-source
+          git archive --format=tar "$base" | gzip -n > /tmp/noon-task-source/source.tar.gz
+          git show -s --format='%H %T' "$base" > /tmp/noon-task-source/identity.txt
+          sha256sum /tmp/noon-task-source/source.tar.gz > /tmp/noon-task-source/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fourier-audio-source-2358
+          path: /tmp/noon-task-source/
+          if-no-files-found: error
+          retention-days: 3
