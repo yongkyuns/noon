@@ -527,7 +527,7 @@ try {
     assert.ok(result.settled.transport.time > result.before.transport.time);
     return { ...result, firstRamp: first, secondRamp: second, thirdRamp: third };
   });
-  await record("rapid admitted seeks keep only the latest muted replacement and one releasing graph", async () => {
+  await record("rapid admitted seeks keep only the latest muted replacement and one releasing graph", async evidence => {
     const burst = await page.evaluate(() => {
       const qualification = audioQualification;
       const renderer = qualification.renderer;
@@ -543,10 +543,12 @@ try {
         steps.push({ target, time: renderer.time(), voices: renderer.audioVoiceCount(),
           revision: String(renderer.directSceneRevision()), source,
           busGain: qualification.parameterValue(source.busParameter),
+          deviceTime: qualification.contexts[source.context].context.currentTime,
           bus: structuredClone(qualification.parameters[source.busParameter]) });
       }
       return { before, oldSource, steps, after: qualification.snapshot() };
     });
+    Object.assign(evidence, burst);
     const release = rampTo(burst.after, burst.oldSource.busParameter, 0, releaseSeconds, "burst initial release");
     sourceStoppedAt(burst.after, burst.oldSource, release.ramp.args[1], "burst initial graph");
     assert.equal(burst.after.starts.length - burst.before.starts.length, burst.steps.length,
@@ -558,7 +560,9 @@ try {
       assert.equal(step.revision, burst.before.transport.sceneRevision);
       assert.ok(step.voices >= 1 && step.voices <= 2, "voice lifetime is bounded during every admitted seek");
     }
-    const waiting = burst.steps.filter(step => step.source.args[0] < release.ramp.args[1]);
+    // The device clock can pass the deadline between source start and gain read.
+    // Require the complete observation to precede it, as in the ramp test above.
+    const waiting = burst.steps.filter(step => step.deviceTime < release.ramp.args[1]);
     assert.ok(waiting.length >= 2, "burst must exercise multiple commands inside one release interval");
     for (const step of waiting) {
       const attack = rampTo({ parameters: { [step.source.busParameter]: step.bus } },
