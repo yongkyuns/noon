@@ -458,8 +458,8 @@ mod wasm {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => session.session().has_audio(),
                 DirectSourceAuthority::Program(program) => program.session().has_audio(),
-                // Prepared source admission rejects authored audio before a
-                // reader exists; observing that invariant does not allocate.
+                // The prepared canvas constructor rejects audio readers before
+                // host installation; source preparation itself may retain audio.
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(_) => false,
             }
@@ -2169,7 +2169,8 @@ mod wasm {
             let camera = reader.inspection_camera().map_err(js_error)?;
             let source = DirectExecutionSource {
                 authority: DirectSourceAuthority::Prepared(Box::new(
-                    crate::prepared_canvas_playback::PreparedCanvasPlayback::new(reader),
+                    crate::prepared_canvas_playback::PreparedCanvasPlayback::new(reader)
+                        .map_err(js_message)?,
                 )),
                 next_native_event_sequence: 0,
                 browser_pointer_binding: None,

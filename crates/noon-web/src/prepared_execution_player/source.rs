@@ -20,7 +20,7 @@ impl PreparedExecutionPlayer {
         let (publisher, reader) = context
             .create_prepared_prefix()
             .map_err(|e| e.to_string())?;
-        let mut player = Self::from_reader(reader, transport_session);
+        let mut player = Self::from_reader(reader, transport_session)?;
         player.source = Some(SourceDelivery {
             publisher,
             pending: None,

@@ -37,7 +37,7 @@ impl Fixture {
         source.advance_to(1.0).unwrap();
         let (publisher, mut reader) = source.create_prepared_prefix(segment).unwrap();
         reader.seek(0.5).unwrap();
-        let mut player = PreparedExecutionPlayer::from_reader(reader, session);
+        let mut player = PreparedExecutionPlayer::from_reader(reader, session).unwrap();
         player.set_prepared_playing(false);
         player
             .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
