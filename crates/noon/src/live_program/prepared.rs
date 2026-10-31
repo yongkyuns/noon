@@ -80,18 +80,19 @@ impl Scene {
         continuation: C,
         limits: ReplayLimits,
     ) -> Result<PreparedSource<C>, PreparedSourceError<C::Error>> {
-        let mut program = self
-            .into_live_program(continuation)
+        // Headless preparation has a different admission contract from realtime
+        // source playback. Validate before installing the one scene/session pair;
+        // do not open the live/device profile to admit a fixed soundtrack here.
+        let mut execution = self
+            .execution_session()
             .map_err(PreparedSourceError::Lowering)?;
-        program
-            .session()
+        execution
             .validate_prepared_source_domain()
             .map_err(PreparedSourceError::Prefix)?;
-        program
-            .scene
-            .owned_execution_mut()
+        execution
             .begin_replay_retention(limits)
             .map_err(PreparedSourceError::Replay)?;
+        let program = LiveProgram::from_admitted_scene(self, continuation, execution);
         let published_until = program.session().frame().time;
         Ok(PreparedSource {
             program: Some(program),

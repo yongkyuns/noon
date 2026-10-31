@@ -167,7 +167,7 @@ impl Scene {
     /// Lowering happens once before the continuation starts. All later semantic
     /// work is available only through the program's temporary [`LiveSession`].
     pub fn into_live_program<C: LiveContinuation>(
-        mut self,
+        self,
         continuation: C,
     ) -> Result<LiveProgram<C>, noon_compile::SemanticExecutionLoweringError> {
         let execution = self.execution_session()?;
@@ -185,17 +185,27 @@ impl Scene {
                 },
             );
         }
-        self.install_execution(execution);
-        Ok(LiveProgram {
-            scene: self,
+        Ok(LiveProgram::from_admitted_scene(
+            self,
             continuation,
-            phase: LiveProgramPhase::ReadyToResume,
-            pending_effects: None,
-        })
+            execution,
+        ))
     }
 }
 
 impl<C: LiveContinuation> LiveProgram<C> {
+    // The live and headless entry points validate their own execution profile
+    // before installing the same scene/session pair. No continuation runs here.
+    fn from_admitted_scene(mut scene: Scene, continuation: C, execution: ExecutionSession) -> Self {
+        scene.install_execution(execution);
+        Self {
+            scene,
+            continuation,
+            phase: LiveProgramPhase::ReadyToResume,
+            pending_effects: None,
+        }
+    }
+
     /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
     pub const fn session(&self) -> &ExecutionSession {
         self.scene.owned_execution()

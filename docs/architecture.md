@@ -232,11 +232,11 @@ publication rejects its removal before resource materialization. Ordinary visual
 edits and segment completion can continue, including after a history budget is
 exhausted, while backward replay remains subject to that budget. Nested or mixed
 clip scopes, live clip creation/replacement/removal, callback/input publication,
-cooperative source continuation, prepared readers, and worker/device playback of
-this history retain their explicit gates under #2263 and #2358. Device-neutral
-phase/envelope queries are not proof of audible output or host synchronization.
+realtime source continuation and worker/device playback of this history retain
+their explicit gates under #2263 and #2358. Device-neutral phase/envelope queries
+are not proof of audible output or host synchronization.
 
-Below that source/host gate, the raw Runtime's completed-prefix projection can
+Below the device-output gate, the Runtime's completed-prefix projection can
 retain a fixed compiled soundtrack. Bootstrap charges shared PCM/resource headers
 once per resource handle and the immutable clip table once per reader before any
 projection clone. Subsequent visual-only history batches neither copy nor recharge
@@ -248,8 +248,14 @@ active instructions at that frontier. It preserves source phase and the authored
 gain at the cutoff rather than adding a fade; a delivered terminal endpoint is
 silent even when a clip extends beyond the completed source. This allocation-free
 reanchor query is not a presentation receipt or device-output admission. The public
-session, cooperative continuation, Python and prepared-canvas audio gates remain
-closed until their displayed-time output contract is qualified.
+`PrefixReader` delegates that bounded query without exposing a mutable runtime.
+Headless `PreparedSource` admits fixed root soundtracks through the same session
+and continuation completion path, with its existing cancellation/backpressure
+contract. It does not pass through realtime live-source admission or start output.
+Prepared canvas and worker constructors explicitly reject audio readers before
+host installation until their displayed-time output contract is qualified. Python
+ordinary-play/output admission remains closed; unsupported hosts must not silently
+render an otherwise valid audio reader without its soundtrack.
 
 Finite Python audio uses the existing complete `result = Scene()` authoring handoff. Predeclared scalar animation, section metadata and audio lower into the same Rust scene and execution session. The authoring worker remains the sole runtime and playback-clock owner. At the worker/Window boundary, a bounded immutable PCM/clip resource bundle prepares a disposable Rust Web Audio output mirror; it contains no mutable scene or playhead. Accepted controls wait for their retained picture publication, then carry one worker clock sample and host timestamp. The output uses the shared Rust clip-phase/envelope query, including transport age, without driving execution from device time. Preparation is silent, explicit browser activation enables sound, and superseded commands or platform interruption retire output. Host playback controls and viewer mute/volume are available for this profile; source continuations, retained history and scene-authored worker click-control dispatch retain their explicit gates.
 
