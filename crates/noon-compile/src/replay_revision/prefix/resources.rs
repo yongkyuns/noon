@@ -173,7 +173,11 @@ impl CompiledScene {
 impl CompiledResources {
     /// Count immutable dependency entries, not bytes or process/VRAM usage.
     pub fn prefix_payload_count(&self) -> usize {
-        self.images.len() + self.texts.len() + self.fonts.len() + self.geometries.len()
+        self.images.len()
+            + self.texts.len()
+            + self.fonts.len()
+            + self.geometries.len()
+            + self.audio.len()
     }
     /// Logical payload bytes for this immutable dependency closure, once per handle.
     /// Uses the resource types' existing retained-byte estimates. Alias maps do
@@ -197,6 +201,11 @@ impl CompiledResources {
             )
             .chain(
                 self.geometries
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
+            .chain(
+                self.audio
                     .values()
                     .map(|resource| resource.retained_bytes()),
             )
