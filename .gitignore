@@ -15,3 +15,5 @@ __pycache__/
 /web/ci-artifact.json
 /web/ci-Cargo.lock
 /node_modules
+
+/tools/python-editor/node_modules

@@ -267,6 +267,8 @@ jobs:
         run: |
           wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
           node scripts/build-python-worker.mjs
+          npm ci --prefix tools/python-editor --include=dev --ignore-scripts --no-audit --no-fund
+          node scripts/build-python-editor.mjs
           node scripts/build-runtime-identity.mjs
           node scripts/check-web-package.mjs
       - uses: actions/cache@v6
