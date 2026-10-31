@@ -230,14 +230,37 @@ fn prepared_time_does_not_change_audio_until_the_coherent_frame_commits() {
 #[test]
 fn unsupported_audio_history_does_not_open_a_retention_scope() {
     let mut runtime = runtime();
+    runtime.take_frame_changes();
     let publication = runtime.publication_context();
-    assert_eq!(
-        runtime.begin_replay_retention(crate::ReplayLimits::default()),
-        Err(crate::ReplayError::UnsupportedDomain)
-    );
-    assert!(!runtime.replay_scope_active());
-    assert_eq!(runtime.publication_context(), publication);
-    assert_eq!(runtime.frame().time, 0.0);
+    let frame = runtime.frame().clone();
+    let pcm = runtime
+        .audio_playback()
+        .unwrap()
+        .next()
+        .unwrap()
+        .pcm
+        .samples()
+        .as_ptr();
+    for _ in 0..2 {
+        let error = runtime
+            .begin_replay_retention(crate::ReplayLimits::default())
+            .unwrap_err();
+        assert_eq!(error, crate::ReplayError::AudioHistoryUnavailable);
+        assert!(error.to_string().contains("complete finite audio timeline"));
+        assert!(!runtime.replay_scope_active());
+        assert_eq!(runtime.publication_context(), publication);
+        assert_eq!(runtime.frame(), &frame);
+        assert!(runtime.take_frame_changes().is_empty());
+        assert!(runtime.supports_immutable_playback());
+    }
+    // Rejecting history must not poison ordinary immutable seek or replace PCM.
+    runtime.seek(3.0).unwrap();
+    let clip = runtime.audio_playback().unwrap().next().unwrap();
+    assert_eq!(clip.pcm.samples().as_ptr(), pcm);
+    assert_eq!(clip.source_offset, 2.0);
+    assert_eq!(clip.duration, 7.0);
+    runtime.seek(10.0).unwrap();
+    assert_eq!(runtime.audio_playback().unwrap().count(), 0);
 }
 
 #[test]

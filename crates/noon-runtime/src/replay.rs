@@ -30,6 +30,8 @@ pub enum ReplayError {
     NotRecording,
     Incomplete,
     UnsupportedDomain,
+    /// Immutable audio playback exists, but source-history retention is not qualified.
+    AudioHistoryUnavailable,
     /// A live reactive input changed without a recorded input history.
     UnrecordedInput,
     RetentionLimit,
@@ -37,6 +39,13 @@ pub enum ReplayError {
 }
 impl std::fmt::Display for ReplayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if matches!(self, Self::AudioHistoryUnavailable) {
+            return f.write_str(concat!(
+                "replay unavailable: audio is not supported with retained source execution; ",
+                "use a complete finite audio timeline until audio history is implemented ",
+                "(#2263, #2358)"
+            ));
+        }
         write!(f, "replay unavailable: {self:?}")
     }
 }
@@ -104,7 +113,7 @@ impl SceneInstance {
         // Initial audio pins its immutable resource closure but does not yet
         // participate in bounded historical publication/retention (#2263).
         if self.has_audio() {
-            return Err(ReplayError::UnsupportedDomain);
+            return Err(ReplayError::AudioHistoryUnavailable);
         }
         let unsupported = self
             .reactive
