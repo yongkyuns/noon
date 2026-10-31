@@ -39,6 +39,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/build-python-worker.mjs
   node --test scripts/worker-composite-rows.test.mjs
   node --check scripts/build-runtime-identity.mjs
+  node --check scripts/build-python-editor.mjs
+  node --check tools/python-editor/dependencies.js
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs
   node --check scripts/shader-time-qualification.mjs
@@ -237,6 +239,11 @@ fi
 if (( worker_status != 0 )); then
   exit "$worker_status"
 fi
+
+# Local editor assets share the existing package artifact. Preflight-only checks
+# stay offline; npm's lockfile pins the graph and package scripts never execute.
+npm ci --prefix tools/python-editor --include=dev --ignore-scripts --no-audit --no-fund
+node scripts/build-python-editor.mjs
 
 node scripts/build-runtime-identity.mjs
 node scripts/check-web-package.mjs

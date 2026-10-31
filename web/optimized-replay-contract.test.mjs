@@ -68,6 +68,7 @@ async function buildArguments(env) {
     await mkdir(path.join(temp, "bin"));
     await writeFile(path.join(temp, "scripts/build-web-demo.sh"), await source("scripts/build-web-demo.sh"));
     await writeFile(path.join(temp, "bin/node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(path.join(temp, "bin/npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     await writeFile(path.join(temp, "bin/cargo"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_CARGO_ARGS"\nexit "$NOON_TEST_CARGO_STATUS"\n', { mode: 0o755 });
     await writeFile(path.join(temp, "bin/wasm-pack"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_ARGS"\n', { mode: 0o755 });
     const argsFile = path.join(temp, "args.txt");
