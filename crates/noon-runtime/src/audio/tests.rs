@@ -228,16 +228,54 @@ fn prepared_time_does_not_change_audio_until_the_coherent_frame_commits() {
 }
 
 #[test]
-fn unsupported_audio_history_does_not_open_a_retention_scope() {
+fn immutable_audio_history_reuses_pcm_and_reconstructs_clip_phase() {
     let mut runtime = runtime();
+    let times = [0.0, 2.0, 3.0, 5.0, 9.0, 10.0];
+    let observe = |runtime: &SceneInstance| {
+        runtime
+            .audio_playback()
+            .unwrap()
+            .map(|clip| {
+                (
+                    clip.clip,
+                    *clip.definition,
+                    clip.resource,
+                    clip.pcm.samples().as_ptr(),
+                    clip.start_delay,
+                    clip.source_offset,
+                    clip.duration,
+                    clip.gain_points,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = times
+        .iter()
+        .map(|&time| {
+            runtime.seek(time).unwrap();
+            observe(&runtime)
+        })
+        .collect::<Vec<_>>();
+    runtime.seek(0.0).unwrap();
     let publication = runtime.publication_context();
-    assert_eq!(
-        runtime.begin_replay_retention(crate::ReplayLimits::default()),
-        Err(crate::ReplayError::UnsupportedDomain)
-    );
-    assert!(!runtime.replay_scope_active());
+    runtime
+        .begin_replay_retention(crate::ReplayLimits {
+            revisions: 0,
+            payloads: 0,
+        })
+        .unwrap();
     assert_eq!(runtime.publication_context(), publication);
-    assert_eq!(runtime.frame().time, 0.0);
+    runtime.advance_to(10.0).unwrap();
+    runtime.seal_replay().unwrap();
+    for (&time, expected) in times.iter().zip(&expected).rev() {
+        runtime.seek(time).unwrap();
+        assert_eq!(&observe(&runtime), expected, "audio at {time}");
+    }
+    assert_eq!(runtime.replay_stats().payloads_retained, 0);
+    assert_eq!(runtime.replay_stats().revisions_retained, 0);
+    runtime.discard_replay_retention();
+    assert_eq!(runtime.frame().time, 10.0);
+    assert!(runtime.audio_playback().unwrap().next().is_none());
 }
 
 #[test]
@@ -266,4 +304,32 @@ fn many_audio_clips_do_not_enter_per_frame_active_group_traversal() {
     assert_eq!(runtime.last_stats().groups_evaluated, 0);
     assert!(runtime.take_frame_changes().is_empty());
     assert_eq!(runtime.audio_playback().unwrap().count(), 128);
+}
+
+#[cfg(feature = "prepared-prefix")]
+#[test]
+fn audio_history_does_not_bypass_prefix_resource_admission() {
+    let mut runtime = runtime();
+    runtime
+        .begin_replay_retention(crate::ReplayLimits::default())
+        .unwrap();
+    runtime.advance_to(3.0).unwrap();
+    let publication = runtime.publication_context();
+    assert!(matches!(
+        runtime.create_prefix_projection(),
+        Err(crate::PrefixError::Replay(
+            crate::ReplayError::UnsupportedDomain
+        ))
+    ));
+    assert_eq!(runtime.publication_context(), publication);
+    assert_eq!(runtime.frame().time, 3.0);
+    assert_eq!(
+        runtime
+            .audio_playback()
+            .unwrap()
+            .next()
+            .unwrap()
+            .source_offset,
+        2.0
+    );
 }

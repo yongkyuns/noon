@@ -176,10 +176,12 @@ fn adding_existing_empty_audio_scope_rejects_without_changing_membership() {
 }
 
 #[test]
-fn initial_audio_execution_rejects_all_authored_mutations_atomically() {
+fn nested_audio_execution_rejects_all_authored_mutations_atomically() {
     let (mut store, root, object, definition) = fixture();
+    let nested = store.insert_family();
+    store.add_member(root, nested).unwrap();
     let mut declaration = SemanticMutationTransaction::new();
-    let token = declaration.create_audio_clip(root, definition);
+    let token = declaration.create_audio_clip(nested, definition);
     let clip = declaration
         .apply(&mut store)
         .unwrap()
@@ -218,10 +220,12 @@ fn initial_audio_execution_rejects_all_authored_mutations_atomically() {
 }
 
 #[test]
-fn initial_audio_seek_remains_available_without_live_history_retention() {
+fn nested_audio_seek_remains_available_after_rejected_history() {
     let (mut store, root, _, definition) = fixture();
+    let nested = store.insert_family();
+    store.add_member(root, nested).unwrap();
     let mut declaration = SemanticMutationTransaction::new();
-    declaration.create_audio_clip(root, definition);
+    declaration.create_audio_clip(nested, definition);
     declaration.apply(&mut store).unwrap();
     let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
     assert!(session.has_audio());
@@ -272,5 +276,50 @@ fn audio_scene_cannot_enter_an_unqualified_source_continuation() {
                 operation: "live source continuation",
             }
         )
+    ));
+}
+
+#[test]
+fn root_and_nested_audio_mixture_does_not_grant_visual_history() {
+    let (mut store, root, _, definition) = fixture();
+    let nested = store.insert_family();
+    store.add_member(root, nested).unwrap();
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.create_audio_clip(root, definition);
+    declaration.create_audio_clip(nested, definition);
+    declaration.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let before = session.frame().clone();
+    let publication = session.publication_context();
+    assert_eq!(session.immutable_audio_root, None);
+    assert_eq!(
+        session.begin_replay_retention(Default::default()),
+        Err(noon_runtime::ReplayError::UnsupportedDomain)
+    );
+    assert!(!session.replay_scope_active());
+    assert_eq!(session.frame(), &before);
+    assert_eq!(session.publication_context(), publication);
+    session.seek(0.5).unwrap();
+    assert_eq!(session.audio_playback().unwrap().count(), 2);
+}
+
+#[test]
+fn fixed_root_audio_does_not_grant_unqualified_interaction_publication() {
+    let (mut store, root, _, definition) = fixture();
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.create_audio_clip(root, definition);
+    declaration.apply(&mut store).unwrap();
+    let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    assert_eq!(session.immutable_audio_root, Some(root));
+    assert!(session
+        .require_publication_ready(SemanticPublicationPurpose::AuthoredMutation)
+        .is_ok());
+    assert!(matches!(
+        session.require_publication_ready(SemanticPublicationPurpose::TransientGlowLifecycle),
+        Err(ExecutionSessionPublicationError::AudioExecutionImmutable)
+    ));
+    assert!(matches!(
+        session.require_publication_ready(SemanticPublicationPurpose::TranslationDrag(root)),
+        Err(ExecutionSessionPublicationError::AudioExecutionImmutable)
     ));
 }

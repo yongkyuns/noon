@@ -577,10 +577,15 @@ impl SceneInstance {
         {
             return Err(PrefixError::NotReady);
         }
-        if self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| !reactive.is_empty())
+        // Root audio can retain visual revisions, but a separate reader still
+        // needs audio resource-budget and output/frontier qualification (#2358).
+        // Keep this gate explicit now that replay admission no longer excludes
+        // every immutable audio plan.
+        if self.has_audio()
+            || self
+                .reactive
+                .as_ref()
+                .is_some_and(|reactive| !reactive.is_empty())
         {
             return Err(ReplayError::UnsupportedDomain.into());
         }

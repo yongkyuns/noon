@@ -2570,9 +2570,13 @@ mod wasm {
 
         fn ensure_audio_profile(&self) -> Result<(), JsValue> {
             self.ensure_direct_transport_profile()?;
-            if self.source.authored_session()?.replay_scope_active() {
+            if !self
+                .source
+                .authored_session()?
+                .supports_immutable_playback()
+            {
                 return Err(js_message(
-                    "direct audio output does not yet support retained source history",
+                    "direct audio output requires immutable playback without retained source history or live edits",
                 ));
             }
             Ok(())
@@ -2688,8 +2692,7 @@ mod wasm {
             let has_controls = source.has_playback_controls();
             if (has_audio || has_controls)
                 && (!matches!(source.authority, DirectSourceAuthority::Session { .. })
-                    || source.authored_session()?.has_required_callbacks()
-                    || source.authored_session()?.replay_scope_active())
+                    || !source.authored_session()?.supports_immutable_playback())
             {
                 return Err(js_message(
                     "direct audio and scene controls require a finite pre-authored session without callbacks or retained source history",

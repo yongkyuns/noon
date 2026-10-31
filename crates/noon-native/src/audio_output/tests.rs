@@ -633,6 +633,48 @@ fn finite_audio_profile_passes_before_device_access_and_limits_clip_work() {
 }
 
 #[test]
+fn root_audio_history_and_live_edits_do_not_grant_native_device_playback() {
+    for mode in 0..4 {
+        let mut scene = Scene::new();
+        let marker = scene.circle(0.5).unwrap();
+        scene.add(&marker).unwrap();
+        scene
+            .audio(
+                pcm(8_000, 1, &[0.25]),
+                AudioClipOptions {
+                    duration: Some(2.0),
+                    looped: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        if mode != 3 {
+            execution
+                .begin_replay_retention(Default::default())
+                .unwrap();
+        }
+        scene.live(&mut execution).shift(&marker, 1.0, 0.0).unwrap();
+        execution.advance_to(1.0).unwrap();
+        if mode < 3 && mode > 0 {
+            execution.seal_replay().unwrap();
+        }
+        if mode == 2 {
+            execution.discard_replay_retention();
+        }
+        assert!(!execution.supports_immutable_playback());
+        // With width zero, successful audio admission would instead reach the
+        // platform-size guard. All four unsupported profiles stop before it.
+        let source = scene.into_execution_with_session(execution).unwrap();
+        assert!(
+            matches!(crate::run_with_config(source, NativeViewportConfig {
+            width: 0, ..Default::default()
+        }), Err(NativeHostError::Audio(message)) if message.contains("immutable"))
+        );
+    }
+}
+
+#[test]
 fn required_callbacks_and_unfinished_sources_reject_before_device_access() {
     let mut scene = Scene::new();
     let marker = scene.circle(0.5).unwrap();
