@@ -230,6 +230,7 @@ impl EffectCaptureTile {
             viewport,
             &[parameters.definition],
             super::EffectStackParameters {
+                shader: None,
                 working_format: wgpu::TextureFormat::Rgba8Unorm,
                 output_height: parameters.output_height,
                 world_view_height: parameters.world_view_height,
@@ -314,9 +315,9 @@ impl EffectCaptureTile {
         let texel_bytes = capture_texel_bytes(parameters.working_format)?;
         let mut cost_per_pixel = texel_bytes;
         let mut silhouette = original_by_parent;
-        for &definition in definitions {
+        for definition in definitions {
             let value = EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: parameters.output_height,
                 world_view_height: parameters.world_view_height,
                 scope_opacity: parameters.scope_opacity,
@@ -426,7 +427,7 @@ impl EffectCaptureTile {
 }
 
 /// Common isolated capture footprint for the finite built-ins.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct EffectCaptureParameters {
     pub definition: noon_core::EffectDefinition,
     pub output_height: u32,
@@ -434,7 +435,7 @@ pub struct EffectCaptureParameters {
     pub scope_opacity: f32,
 }
 impl EffectCaptureParameters {
-    pub(super) fn is_neutral_at_sigma(self, sigma: f64) -> bool {
+    pub(super) fn is_neutral_at_sigma(&self, sigma: f64) -> bool {
         self.definition.is_neutral()
             || (matches!(self.definition, noon_core::EffectDefinition::Blur(_)) && sigma == 0.0)
             || self.definition.as_pixelate().is_some_and(|v| {
@@ -446,7 +447,7 @@ impl EffectCaptureParameters {
                 .is_ok_and(|size| size <= 1.0)
             })
     }
-    pub(super) fn sigma_pixels(self) -> Result<f64, EffectPrepareError> {
+    pub(super) fn sigma_pixels(&self) -> Result<f64, EffectPrepareError> {
         if let Some(pixelate) = self.definition.as_pixelate() {
             super::sample_filter::checked_cell_size(
                 pixelate,
@@ -468,7 +469,7 @@ impl EffectCaptureParameters {
         }
         Ok(sigma)
     }
-    pub(super) fn offset_pixels(self) -> Result<[f64; 2], EffectPrepareError> {
+    pub(super) fn offset_pixels(&self) -> Result<[f64; 2], EffectPrepareError> {
         let Some(shadow) = self.definition.as_shadow() else {
             return Ok([0.0; 2]);
         };
@@ -485,23 +486,24 @@ impl EffectCaptureParameters {
         Ok([x, -y])
     }
     pub(crate) fn filter_bytes_per_pixel(
-        self,
+        &self,
         format: wgpu::TextureFormat,
     ) -> Result<u64, EffectPrepareError> {
         capture_texel_bytes(format)?;
         if format == wgpu::TextureFormat::Rgba16Float {
-            return match self.definition {
+            return match &self.definition {
                 noon_core::EffectDefinition::Blur(_)
                 | noon_core::EffectDefinition::BackdropBlur(_) => Ok(24),
                 _ => Err(EffectPrepareError::UnsupportedCapture),
             };
         }
-        Ok(match self.definition {
+        Ok(match &self.definition {
             noon_core::EffectDefinition::Bloom(_) => {
                 return Err(EffectPrepareError::UnsupportedCapture)
             }
             noon_core::EffectDefinition::NoiseDissolve(_)
-            | noon_core::EffectDefinition::Pixelate(_) => 4,
+            | noon_core::EffectDefinition::Pixelate(_)
+            | noon_core::EffectDefinition::Shader(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
             noon_core::EffectDefinition::Blur(_) | noon_core::EffectDefinition::BackdropBlur(_) => {
                 28
@@ -538,6 +540,7 @@ pub struct GlowParameters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectPrepareError {
     CellSizeExceedsProfile,
+    ShaderProgramNotPrepared,
     Blur(super::gaussian_blur::GaussianBlurPrepareError),
     Parameter(EffectParameterError),
     InvalidScopeOpacity,
@@ -675,7 +678,7 @@ struct Resources {
     size: [u32; 2],
     horizontal: Image,
     vertical: Image,
-    output: Image,
+    output: Option<Image>,
     uniform: wgpu::Buffer,
     horizontal_binding: wgpu::BindGroup,
     vertical_binding: wgpu::BindGroup,
@@ -695,26 +698,29 @@ pub struct GlowScope {
     sigma_pixels: Option<f64>,
     blur_dirty: bool,
     output_dirty: bool,
+    compose_in_placement: bool,
     active: bool,
 }
 impl GlowScope {
     /// The final encoded-premultiplied local image, after `encode` completes.
     /// Neutral treatment returns None: use the ordinary path, not a copied image.
     pub fn output(&self) -> Option<&wgpu::Texture> {
-        if self.active {
+        if self.active && !self.compose_in_placement {
             self.resources
                 .as_ref()
-                .map(|resource| &resource.output.texture)
+                .and_then(|resource| resource.output.as_ref())
+                .map(|output| &output.texture)
         } else {
             None
         }
     }
 
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
-        if self.active {
+        if self.active && !self.compose_in_placement {
             self.resources
                 .as_ref()
-                .map(|resource| &resource.output.view)
+                .and_then(|resource| resource.output.as_ref())
+                .map(|output| &output.view)
         } else {
             None
         }
@@ -722,7 +728,9 @@ impl GlowScope {
 
     pub fn scratch_bytes(&self) -> u64 {
         self.resources.as_ref().map_or(0, |resource| {
-            u64::from(resource.size[0]) * u64::from(resource.size[1]) * SCRATCH_BYTES_PER_PIXEL
+            u64::from(resource.size[0])
+                * u64::from(resource.size[1])
+                * (8 + 4 * u64::from(resource.output.is_some()))
         })
     }
 
@@ -740,11 +748,20 @@ impl GlowScope {
 
 #[derive(Debug)]
 struct Programs {
+    shader: wgpu::ShaderModule,
     blur_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     horizontal: wgpu::RenderPipeline,
     vertical: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
+    placement: Option<GlowPlacement>,
+}
+
+#[derive(Debug)]
+struct GlowPlacement {
+    format: wgpu::TextureFormat,
+    layout: wgpu::BindGroupLayout,
+    pipelines: [wgpu::RenderPipeline; 2],
 }
 
 /// Renderer-local operator, lazy and shared across all glow scopes. No device,
@@ -764,6 +781,19 @@ impl GlowFilter {
         scope: &mut GlowScope,
         capture: GlowCapture<'_>,
         parameters: GlowParameters,
+    ) -> Result<EffectRasterStats, EffectPrepareError> {
+        self.prepare_inner(device, queue, scope, capture, parameters, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_inner(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scope: &mut GlowScope,
+        capture: GlowCapture<'_>,
+        parameters: GlowParameters,
+        materialize: bool,
     ) -> Result<EffectRasterStats, EffectPrepareError> {
         let size = [capture.source.width(), capture.source.height()];
         GlowUniform::validate(parameters)?;
@@ -790,7 +820,13 @@ impl GlowFilter {
         }
         let scratch_bytes = u64::from(size[0])
             .checked_mul(u64::from(size[1]))
-            .and_then(|pixels| pixels.checked_mul(SCRATCH_BYTES_PER_PIXEL))
+            .and_then(|pixels| {
+                pixels.checked_mul(if materialize {
+                    SCRATCH_BYTES_PER_PIXEL
+                } else {
+                    8
+                })
+            })
             .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
         if scratch_bytes > parameters.scratch_budget_bytes {
             return Err(EffectPrepareError::ScratchBudgetExceeded);
@@ -812,14 +848,21 @@ impl GlowFilter {
             .as_ref()
             .is_none_or(|resources| resources.source != *capture.source || resources.mask != *mask);
         if recreate {
-            scope.resources = Some(programs.resources(device, capture.source, mask, size));
-            stats.texture_allocations = 3;
+            scope.resources =
+                Some(programs.resources(device, capture.source, mask, size, materialize));
+            stats.texture_allocations = 2 + usize::from(materialize);
             stats.buffer_allocations = 1;
             stats.bind_group_creations = 3;
         } else if sources_changed {
             let resources = scope.resources.as_mut().expect("retained scope resources");
             programs.rebind_sources(device, resources, capture.source, mask);
             stats.bind_group_creations = 2;
+        }
+        let resources = scope.resources.as_mut().expect("prepared scope resources");
+        if materialize && resources.output.is_none() {
+            resources.output = Some(Image::new(device, size, "Noon glow composed RGBA8"));
+            stats.texture_allocations += 1;
+            scope.output_dirty = true;
         }
         let resources = scope.resources.as_ref().expect("prepared scope resources");
         let kernel_changed = scope
@@ -842,8 +885,10 @@ impl GlowFilter {
         scope.uniform = Some(uniform);
         scope.sigma_pixels = Some(sigma);
         scope.source_revision = Some(capture.revision);
+        scope.compose_in_placement = !materialize;
         scope.active = true;
-        stats.scratch_bytes = scratch_bytes;
+        // A formerly consumed scope keeps its output target warm for reuse.
+        stats.scratch_bytes = scope.scratch_bytes();
         Ok(stats)
     }
 
@@ -858,6 +903,15 @@ impl GlowFilter {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scope: &mut GlowScope,
+    ) -> EffectRasterStats {
+        self.encode_inner(encoder, scope, true)
+    }
+
+    fn encode_inner(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scope: &mut GlowScope,
+        materialize: bool,
     ) -> EffectRasterStats {
         let mut stats = EffectRasterStats {
             scratch_bytes: scope.scratch_bytes(),
@@ -885,10 +939,14 @@ impl GlowFilter {
             );
             stats.blur_passes = 2;
         }
-        if scope.output_dirty {
+        if scope.output_dirty && materialize {
             encode_pass(
                 encoder,
-                &resources.output.view,
+                &resources
+                    .output
+                    .as_ref()
+                    .expect("materialized glow target")
+                    .view,
                 &programs.composite,
                 &resources.composite_binding,
                 "Noon glow source-over-halo",
@@ -896,8 +954,58 @@ impl GlowFilter {
             stats.composite_passes = 1;
         }
         scope.blur_dirty = false;
-        scope.output_dirty = false;
+        if materialize {
+            scope.output_dirty = false;
+        }
         stats
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_placement(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scope: &mut GlowScope,
+        capture: GlowCapture<'_>,
+        parameters: GlowParameters,
+        layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+    ) -> Result<EffectRasterStats, EffectPrepareError> {
+        let mut stats = self.prepare_inner(device, queue, scope, capture, parameters, false)?;
+        if scope.active {
+            let programs = self.programs.as_mut().expect("active glow programs");
+            if programs
+                .placement
+                .as_ref()
+                .is_none_or(|old| old.format != format || old.layout != *layout)
+            {
+                programs.placement = Some(programs.placement(device, layout, format));
+                stats.pipeline_compiles += 2;
+            }
+        }
+        let encoded = self.encode_inner(encoder, scope, false);
+        stats.blur_passes = encoded.blur_passes;
+        Ok(stats)
+    }
+
+    pub(super) fn draw_placement<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        scope: &'a GlowScope,
+        placement: &'a wgpu::BindGroup,
+        single_sample: bool,
+    ) {
+        let programs = self.programs.as_ref().expect("prepared glow placement");
+        let pipelines = &programs
+            .placement
+            .as_ref()
+            .expect("prepared glow placement")
+            .pipelines;
+        pass.set_pipeline(&pipelines[usize::from(!single_sample)]);
+        pass.set_bind_group(0, &scope.resources.as_ref().unwrap().composite_binding, &[]);
+        pass.set_bind_group(1, placement, &[]);
+        pass.draw(0..6, 0..1);
     }
 }
 
@@ -1035,11 +1143,13 @@ impl Programs {
         let vertical = pipeline(&blur_layout, "fs_vertical");
         let composite = pipeline(&composite_layout, "fs_composite");
         Self {
+            shader,
             blur_layout,
             composite_layout,
             horizontal,
             vertical,
             composite,
+            placement: None,
         }
     }
 
@@ -1049,10 +1159,11 @@ impl Programs {
         source: &wgpu::Texture,
         mask: &wgpu::Texture,
         size: [u32; 2],
+        materialize: bool,
     ) -> Resources {
         let horizontal = Image::new(device, size, "Noon glow horizontal RGB24");
         let vertical = Image::new(device, size, "Noon glow vertical RGB24");
-        let output = Image::new(device, size, "Noon glow composed RGBA8");
+        let output = materialize.then(|| Image::new(device, size, "Noon glow composed RGBA8"));
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Noon glow uniform"),
             size: size_of::<GlowUniform>() as u64,
@@ -1102,6 +1213,54 @@ impl Programs {
         );
         resources.source = source.clone();
         resources.mask = mask.clone();
+    }
+
+    fn placement(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+    ) -> GlowPlacement {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Noon fused glow placement"),
+            bind_group_layouts: &[Some(&self.composite_layout), Some(layout)],
+            immediate_size: 0,
+        });
+        let pipelines = [1, super::PATH_SAMPLE_COUNT].map(|count| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Noon fused glow placement"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &self.shader,
+                    entry_point: Some("vs_placement"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.shader,
+                    entry_point: Some("fs_placement"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+        GlowPlacement {
+            format,
+            layout: layout.clone(),
+            pipelines,
+        }
     }
 }
 

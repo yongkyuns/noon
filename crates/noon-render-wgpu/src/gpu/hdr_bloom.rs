@@ -9,7 +9,9 @@ use bytemuck::{Pod, Zeroable};
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DISPLAY: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const BYTES_PER_PIXEL: u64 = 36;
+const BYTES_PER_PIXEL: u64 = 20;
+// Extract/vertical and horizontal/combine never need their outputs together.
+const PASS_TARGET: [usize; 5] = [0, 1, 0, 1, 2];
 const SHADER: &str = include_str!("hdr_bloom.wgsl");
 
 /// Linear, alpha-associated radiance. The caller guarantees finite nonnegative
@@ -30,7 +32,7 @@ pub struct HdrBloomParameters {
     /// Added bloom energy multiplier, [0, 8]. Zero still resolves the HDR base.
     pub intensity: f32,
     /// Retained image budget, excluding source/in-flight images. A fresh neutral
-    /// scope needs 12 bytes/pixel; enabling Bloom adds 24 bytes/pixel, kept warm
+    /// scope needs 12 bytes/pixel; enabling Bloom adds 8 bytes/pixel, kept warm
     /// until resize or clear to avoid allocation churn during animation.
     pub scratch_budget_bytes: u64,
 }
@@ -132,7 +134,7 @@ impl Image {
 #[derive(Debug)]
 struct Resources {
     size: [u32; 2],
-    images: [Option<Image>; 5],
+    images: [Option<Image>; 3],
     uniform: wgpu::Buffer,
     bindings: [Option<wgpu::BindGroup>; 5],
     source: wgpu::Texture,
@@ -150,14 +152,14 @@ pub struct HdrBloomScope {
 impl HdrBloomScope {
     /// Valid after encoding and submitting all current dirty work.
     pub fn linear_output(&self) -> Option<&wgpu::Texture> {
-        self.resources.as_ref()?.images[3]
+        self.resources.as_ref()?.images[1]
             .as_ref()
             .map(|i| &i.texture)
     }
     /// Encoded-premultiplied SDR bytes, for a non-sRGB attachment/presentation
     /// path. Applying another output transfer would be incorrect.
     pub fn display_output(&self) -> Option<&wgpu::Texture> {
-        self.resources.as_ref()?.images[4]
+        self.resources.as_ref()?.images[2]
             .as_ref()
             .map(|i| &i.texture)
     }
@@ -401,7 +403,9 @@ impl HdrBloomFilter {
         let intensity_changed = scope
             .uniform
             .is_none_or(|old| old.control[1] != p.intensity);
-        scope.dirty[0] |= input_changed || threshold_changed;
+        // Vertical output overwrites extraction, so a new kernel must extract
+        // again. Intensity-only changes still reuse the completed vertical image.
+        scope.dirty[0] |= input_changed || threshold_changed || kernel_changed;
         scope.dirty[1] |= scope.dirty[0] || kernel_changed;
         scope.dirty[2] |= scope.dirty[1];
         scope.dirty[3] |=
@@ -435,12 +439,12 @@ impl HdrBloomFilter {
         );
         let programs = self.programs.as_ref().expect("prepared HDR programs");
         let enabled = scope.uniform.expect("prepared HDR parameters").control[1] != 0.0;
-        for at in 0..5 {
+        for (at, target) in PASS_TARGET.into_iter().enumerate() {
             if scope.dirty[at] && (at >= 3 || enabled) {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Noon linear HDR bloom pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &r.images[at].as_ref().expect("prepared HDR image").view,
+                        view: &r.images[target].as_ref().expect("prepared HDR image").view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -593,13 +597,13 @@ impl Programs {
         enabled: bool,
         stats: &mut HdrBloomStats,
     ) {
-        let mut added = [false; 5];
+        let mut added = [false; 3];
         for (at, image) in r.images.iter_mut().enumerate() {
-            if image.is_none() && (at >= 3 || enabled) {
+            if image.is_none() && (at >= 1 || enabled) {
                 *image = Some(Image::new(
                     device,
                     r.size,
-                    if at == 4 { DISPLAY } else { HDR },
+                    if at == 2 { DISPLAY } else { HDR },
                 ));
                 added[at] = true;
                 stats.texture_allocations += 1;
@@ -610,10 +614,17 @@ impl Programs {
             return;
         }
         let view = source.create_view(&Default::default());
-        for at in 0..5 {
-            if r.images[at].is_none()
-                || !(added[at] || (source_changed && (at == 0 || at == 3)) || (at == 3 && added[2]))
-            {
+        for (at, target) in PASS_TARGET.into_iter().enumerate() {
+            if at < 3 && r.images[0].is_none() {
+                continue;
+            }
+            let input_changed = match at {
+                0 => source_changed,
+                1 => added[0],
+                2 | 4 => added[1],
+                _ => source_changed || added[0],
+            };
+            if r.bindings[at].is_some() && !added[target] && !input_changed {
                 continue;
             }
             let image_view = |index: usize| &r.images[index].as_ref().unwrap().view;
@@ -621,8 +632,8 @@ impl Programs {
                 0 => [&view, &view],
                 1 => [image_view(0), image_view(0)],
                 2 => [image_view(1), image_view(1)],
-                3 => [&view, r.images[2].as_ref().map_or(&view, |i| &i.view)],
-                _ => [image_view(3), image_view(3)],
+                3 => [&view, r.images[0].as_ref().map_or(&view, |i| &i.view)],
+                _ => [image_view(1), image_view(1)],
             };
             r.bindings[at] = Some(self.binding(device, &r.uniform, views));
             stats.bind_group_creations += 1;

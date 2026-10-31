@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { createRuntimeBuildIdentity } from "./build-runtime-identity.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -25,20 +26,31 @@ assert.ok(
   "NOON_PERF_REQUIRE_GPU_TIMESTAMPS requires the WebGPU backend",
 );
 
-const counts = integerList(process.env.NOON_PERF_COUNTS ?? "1000,10000,100000");
-const layouts = stringList(process.env.NOON_PERF_LAYOUTS ?? "fit,fixed,overdraw");
+const activeGlows = process.env.NOON_PERF_GLOWS === undefined ? null
+  : positiveInteger(process.env.NOON_PERF_GLOWS, "NOON_PERF_GLOWS");
+const glowProperty = process.env.NOON_PERF_GLOW_PROPERTY ?? "intensity";
+const counts = integerList(process.env.NOON_PERF_COUNTS ?? (activeGlows === null ? "1000,10000,100000" : "600"));
+const layouts = stringList(process.env.NOON_PERF_LAYOUTS ?? (activeGlows === null ? "fit,fixed,overdraw" : "fixed"));
+if (activeGlows !== null) {
+  assert.ok([1, 100].includes(activeGlows), "NOON_PERF_GLOWS must be 1 or 100");
+  assert.ok(["intensity", "radius"].includes(glowProperty), "NOON_PERF_GLOW_PROPERTY must be intensity or radius");
+  assert.deepEqual(counts, [600], "G4 uses exactly 600 objects");
+  assert.deepEqual(layouts, ["fixed"], "G4 uses the frozen fixed layout");
+}
 for (const layout of layouts) {
   assert.ok(["fit", "fixed", "overdraw"].includes(layout), `unknown layout: ${layout}`);
 }
 const warmup = positiveInteger(process.env.NOON_PERF_WARMUP ?? "30", "NOON_PERF_WARMUP");
 const frames = positiveInteger(process.env.NOON_PERF_FRAMES ?? "300", "NOON_PERF_FRAMES");
 const targetHz = positiveNumber(process.env.NOON_PERF_TARGET_HZ ?? "60", "NOON_PERF_TARGET_HZ");
-const width = positiveInteger(process.env.NOON_PERF_WIDTH ?? "960", "NOON_PERF_WIDTH");
-const height = positiveInteger(process.env.NOON_PERF_HEIGHT ?? "540", "NOON_PERF_HEIGHT");
+const width = positiveInteger(process.env.NOON_PERF_WIDTH ?? (activeGlows === null ? "960" : "1152"), "NOON_PERF_WIDTH");
+const height = positiveInteger(process.env.NOON_PERF_HEIGHT ?? (activeGlows === null ? "540" : "648"), "NOON_PERF_HEIGHT");
 const dpr = positiveNumber(process.env.NOON_PERF_DPR ?? "1", "NOON_PERF_DPR");
 const artifactPath = path.resolve(
   repoRoot,
-  process.env.NOON_PERF_ARTIFACT ?? `perf-artifacts/perf-profile-${backend}.json`,
+  process.env.NOON_PERF_ARTIFACT ?? (activeGlows === null
+    ? `perf-artifacts/perf-profile-${backend}.json`
+    : `perf-artifacts/perf-profile-glow-${activeGlows}-${glowProperty}-${backend}.json`),
 );
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], {
@@ -46,6 +58,17 @@ const commit = spawnSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 });
 const commitSha = commit.status === 0 ? commit.stdout.trim() : null;
+const factory = activeGlows === null ? "createDirectAnalyticProfileRenderer" : "createDirectGlowProfileRenderer";
+assert.ok((await readFile(path.join(repoRoot, "web/pkg/noon_web.js"), "utf8"))
+  .includes(`export function ${factory}(`),
+  "Frame profiling requires a renderer-smoke browser package (NOON_RENDERER_SMOKE=1)");
+let runtimeBuildIdentity = null;
+if (activeGlows !== null) {
+  runtimeBuildIdentity = JSON.parse(await readFile(path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));
+  assert.deepEqual(await createRuntimeBuildIdentity(repoRoot), runtimeBuildIdentity,
+    "G4 profiling requires the exact clean source/package");
+  assert.equal(runtimeBuildIdentity.sourceRevision, commitSha, "G4 source revision must be committed");
+}
 
 let serverOutput = "";
 const server = spawn(
@@ -61,6 +84,7 @@ server.stderr.on("data", (chunk) => {
 });
 
 let browser = null;
+const rawFiles = [];
 try {
   await waitForServer();
   browser = await chromium.launch({
@@ -77,6 +101,9 @@ try {
         deviceScaleFactor: dpr,
       });
       const page = await context.newPage();
+      if (backend === "webgl") {
+        await page.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
+      }
       const errors = [];
       page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
       page.on("console", (message) => {
@@ -93,6 +120,7 @@ try {
         targetHz: String(targetHz),
         width: String(width),
         height: String(height),
+        ...(activeGlows === null ? {} : { glows: String(activeGlows), glowProperty }),
       });
       process.stdout.write(`Profiling ${backend} ${layout} ${objects.toLocaleString()} objects… `);
       await page.goto(`${baseUrl}/web/perf-profile.html?${query}`, { waitUntil: "load" });
@@ -104,14 +132,39 @@ try {
       const state = await page.locator("#status").getAttribute("data-state");
       if (state === "error") {
         const message = await page.locator("#status").textContent();
+        const partial = await page.evaluate(() => window.__NOON_PERF_FAILURE__ ?? null);
+        await mkdir(path.dirname(artifactPath), { recursive: true });
+        await writeFile(`${artifactPath}.invalid.json`,
+          JSON.stringify({ commit: commitSha, runtimeBuildIdentity, requestedBackend: backend, partial }));
         throw new Error(`${layout}/${objects} failed: ${message}\n${errors.join("\n")}`);
       }
       const report = await page.evaluate(() => window.__NOON_PERF_REPORT__);
+      // Preserve completed measurements even when a profile assertion rejects.
+      // Successful aggregate publication removes these temporary duplicates.
+      const rawPath = `${artifactPath}.${layout}-${objects}.raw.json`;
+      await mkdir(path.dirname(rawPath), { recursive: true });
+      await writeFile(rawPath, JSON.stringify({ commit: commitSha, runtimeBuildIdentity, requestedBackend: backend, report }));
+      rawFiles.push(rawPath);
       assert.equal(report.schemaVersion, 2);
       assert.equal(report.workload.execution, "typed-direct-rust");
       assert.equal(report.workload.objects, objects);
       assert.equal(report.workload.layout, layout);
+      if (activeGlows !== null) {
+        assert.equal(report.workload.family, "glow-direct");
+        assert.equal(report.workload.activeGlows, activeGlows);
+        assert.equal(report.workload.glowProperty, glowProperty);
+        assert.equal(report.rawSamples.frames.length, frames);
+        assert.ok(report.workload.driverDurationSeconds >= 10);
+        const cold = report.setup.coldPass;
+        assert.equal(cold?.completed, true, "G4 requires one complete rendered cold pass");
+        assert.equal(cold.initialPublicationRendered, true);
+        assert.equal(cold.renderedFrames, Math.ceil(report.workload.driverDurationSeconds * targetHz) + 1);
+        assert.equal(report.rawSamples.coldFrames.length, cold.renderedFrames - 1);
+        assert.ok(Math.abs(cold.authoredEndTime - report.workload.driverDurationSeconds) < 1e-6);
+      }
       assert.equal(report.environment.devicePixelRatio, dpr);
+      assert.equal(report.environment.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2",
+        "observed renderer backend must match the requested profile");
       if (requireGpuTimestamps) {
         assert.equal(
           report.gpu?.timestampSupported,
@@ -153,6 +206,7 @@ try {
     benchmark: "Noon direct Rust browser performance matrix",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
+    ...(runtimeBuildIdentity === null ? {} : { runtimeBuildIdentity }),
     host: {
       platform: os.platform(),
       release: os.release(),
@@ -174,11 +228,13 @@ try {
       dpr,
       forceSoftwareWebGpu,
       requireGpuTimestamps,
+      ...(activeGlows === null ? {} : { activeGlows, glowProperty }),
     },
     cases: results,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
   await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+  await Promise.all(rawFiles.map(file => unlink(file)));
   console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
 } finally {
   await browser?.close();

@@ -76,7 +76,7 @@ impl Glow {
 
 impl sealed::Sealed for Glow {}
 impl EffectValue for Glow {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.require_parameters(&[
             EffectParameter::Color,
             EffectParameter::Radius,
@@ -91,7 +91,7 @@ impl EffectValue for Glow {
             source: update.source.unwrap_or(self.source),
         })
     }
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
         if !self.radius.same_unit(target.radius) {
             return Err(EffectParameterError::DiscreteTransition(
                 EffectParameter::Radius,
@@ -105,9 +105,9 @@ impl EffectValue for Glow {
         Ok(())
     }
     fn sample_effect_parameters(
-        self,
-        target: Self,
-        request: EffectUpdate,
+        &self,
+        target: &Self,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let color = |from: f32, to: f32| interpolate(f64::from(from), f64::from(to), alpha) as f32;
@@ -131,7 +131,7 @@ impl EffectValue for Glow {
             ..EffectUpdate::default()
         };
         // Keep even extreme finite radius arithmetic fail-closed.
-        update.apply_to(self)?;
+        update.apply_to(*self)?;
         Ok(update)
     }
 }

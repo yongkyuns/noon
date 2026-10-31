@@ -35,7 +35,7 @@ pub(super) fn values(
         .ok_or(EffectTargetLoweringError::MissingEffectiveValue)?;
     EffectUpdate::default()
         .intensity(intensity)
-        .prepare(effective.definition)
+        .prepare(effective.definition.clone())
         .map_err(EffectTargetLoweringError::Parameter)?;
     Ok(TrackValues::Effect {
         attachment: attachment.attachment,

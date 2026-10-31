@@ -106,6 +106,15 @@ def _diagnostic(value: object) -> NoonErrorCause | None:
     return NoonErrorCause(category, code, message, _diagnostic(cause))
 
 
+def is_effect_preparation_required(error: Exception) -> bool:
+    diagnostic = map_engine_error(error)
+    while diagnostic is not None:
+        if getattr(diagnostic, "code", None) == "publication.effect_preparation_required":
+            return True
+        diagnostic = getattr(diagnostic, "rust_cause", None) or getattr(diagnostic, "cause", None)
+    return False
+
+
 def map_engine_error(error: Exception, *, operation: str | None = None) -> Exception:
     """Map only the typed Noon boundary. Unknown/ordinary Python errors pass through."""
     if isinstance(error, NoonError):

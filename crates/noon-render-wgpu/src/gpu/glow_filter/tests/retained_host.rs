@@ -1,5 +1,5 @@
 //! Automatic host-facing retained preparation. No per-object effect requests.
-//! Public Scene activation and cross-worker transport remain separately gated.
+//! These raster/resource tests complement authored Scene and worker qualification.
 use super::analytic_scene::{expected, frame, semantic_runtime, target, SIGMA, VIEW};
 use super::pixels::{device, readback};
 use crate::text::TextDeviceMetrics;
@@ -97,21 +97,39 @@ struct Host {
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
     target: wgpu::Texture,
+    last_geometry_bytes: usize,
+    last_geometry_misses: usize,
+    effect_budget: u64,
 }
 impl Host {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::with_view(device, queue, VIEW, 1_000_000)
+    }
+    fn with_view(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: [u32; 2],
+        effect_budget: u64,
+    ) -> Self {
         let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
-        renderer.set_viewport(device, queue, VIEW[0], VIEW[1]);
+        renderer.set_viewport(device, queue, view[0], view[1]);
         renderer.set_camera(
             queue,
-            Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+            Camera2D::new(
+                Vec2::ZERO,
+                Vec2::new(6.0 * view[0] as f32 / view[1] as f32, 6.0),
+            )
+            .unwrap(),
         );
         let text = renderer.create_retained_text_state(device, queue);
         Self {
             renderer,
             text,
             preparer: RetainedFramePreparer::new(),
-            target: target(device, VIEW),
+            target: target(device, view),
+            last_geometry_bytes: 0,
+            last_geometry_misses: 0,
+            effect_budget,
         }
     }
     fn render(
@@ -132,16 +150,23 @@ impl Host {
             .renderer
             .effect_source_visibility(&publication, &visible)
             .unwrap();
-        let metrics = TextDeviceMetrics::uniform(10.0)
+        let metrics = TextDeviceMetrics::uniform(self.target.height() as f32 / 6.0)
             .unwrap()
-            .with_world_origin_pixels(Vec2::new(40.0, 30.0))
+            .with_world_origin_pixels(Vec2::new(
+                self.target.width() as f32 / 2.0,
+                self.target.height() as f32 / 2.0,
+            ))
             .unwrap();
         let prepared = self
             .preparer
             .prepare_planned_publication_visible(device, &publication, expanded, metrics)
             .unwrap();
-        self.renderer
-            .upload_retained(device, queue, &prepared, &mut self.text);
+        self.last_geometry_misses = prepared.geometry_stats().geometry_cache_misses;
+        self.last_geometry_bytes = self
+            .renderer
+            .upload_retained(device, queue, &prepared, &mut self.text)
+            .geometry
+            .bytes_uploaded;
         let mut encoder = device.create_command_encoder(&Default::default());
         let stats = self
             .renderer
@@ -153,7 +178,7 @@ impl Host {
                 &self.text,
                 &publication,
                 wgpu::Color::TRANSPARENT,
-                1_000_000,
+                self.effect_budget,
             )
             .unwrap();
         self.renderer
@@ -307,7 +332,7 @@ fn automatic_retained_host_glow_pixels() {
                     edit.composite_passes,
                     edit.bytes_uploaded
                 ),
-                (0, 0, 1, 32)
+                (0, 0, 0, 32)
             );
             edit_intensity(&mut runtime, 0.0);
             let (neutral, _) = host.render(&device, &queue, &mut runtime, offscreen);
@@ -347,4 +372,155 @@ fn automatic_retained_host_glow_pixels() {
         }
     }
     eprintln!("automatic-host frames={frames}; full-image comparisons=50; neutral comparisons=10");
+    g4_locality_and_retirement(&device, &queue);
+}
+
+// Renderer/resource qualification, not Scene lowering or physical pacing evidence.
+fn g4_locality_and_retirement(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let glow = |index: usize, generation: u32, intensity: f64| {
+        Arc::new(
+            noon_compile::CompiledEffectStack::new([CompiledEffect {
+                attachment: SemanticNodeId::new(600 + index as u32, generation),
+                definition: Glow::new(
+                    EffectUpdate::default()
+                        .radius(Pixels(3.0))
+                        .intensity(intensity),
+                )
+                .unwrap()
+                .into(),
+            }])
+            .unwrap(),
+        )
+    };
+    let scene = |active: usize| {
+        let objects = (0..600)
+            .map(|index| {
+                let mut object = CompiledObject::new(
+                    ObjectId::new(index as u64),
+                    noon_core::GeometryRef::circle(0.05),
+                    Transform2D {
+                        translation: Vec2::new(
+                            -3.75 + (index % 30) as f32 * 0.25,
+                            -2.375 + (index / 30) as f32 * 0.25,
+                        ),
+                        ..Transform2D::IDENTITY
+                    },
+                    Style {
+                        fill: Some(Color::WHITE),
+                        stroke: None,
+                        ..Style::default()
+                    },
+                );
+                if index < active {
+                    object.effects = Some(glow(index, 1, 1.0));
+                }
+                object
+            })
+            .collect();
+        SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap())
+    };
+    for view in [[1152, 648], [2304, 1296], [1920, 1080]] {
+        for active in [1, 100] {
+            let mut runtime = scene(active);
+            let budget = if view == [1152, 648] { 32 } else { 64 } * 1024 * 1024;
+            let mut host = Host::with_view(device, queue, view, budget);
+            let (initial, warm) = host.render(device, queue, &mut runtime, false);
+            assert_eq!(warm.rows_examined, 600);
+            assert!(warm.retained_texture_bytes > 0 && warm.retained_texture_bytes <= budget);
+            let (_, clean) = host.render(device, queue, &mut runtime, false);
+            assert_eq!(
+                clean,
+                RetainedEffectStats {
+                    retained_texture_bytes: warm.retained_texture_bytes,
+                    ..Default::default()
+                }
+            );
+            for index in 0..active {
+                runtime
+                    .apply_execution_patch(&ExecutionPatch::SetEffects {
+                        object: ObjectId::new(index as u64),
+                        effects: glow(index, 1, 0.4),
+                    })
+                    .unwrap();
+            }
+            assert_eq!(runtime.frame_changes().object_indices().len(), active);
+            let (edited, work) = host.render(device, queue, &mut runtime, false);
+            assert!(edited != initial, "intensity edit must reach actual pixels");
+            assert_eq!(
+                (host.last_geometry_bytes, host.last_geometry_misses),
+                (0, 0)
+            );
+            assert_eq!(
+                (
+                    work.rows_examined,
+                    work.sources_prepared,
+                    work.source_passes,
+                    work.blur_passes,
+                    work.composite_passes,
+                    work.bytes_uploaded,
+                    work.texture_allocations,
+                    work.pipeline_compiles
+                ),
+                (active, active, 0, 0, 0, 32 * active, 0, 0)
+            );
+            assert_eq!(work.retained_texture_bytes, warm.retained_texture_bytes);
+            eprintln!("G4 view={view:?} active={active}/600 resident={} intensity_bytes={} geometry_bytes=0 allocations=0 compiles=0", work.retained_texture_bytes, work.bytes_uploaded);
+        }
+    }
+    let mut runtime = scene(0);
+    let mut host = Host::new(device, queue);
+    let (ordinary, absent) = host.render(device, queue, &mut runtime, false);
+    assert_eq!(
+        (absent.sources_prepared, absent.retained_texture_bytes),
+        (0, 0)
+    );
+    assert_eq!(
+        host.render(device, queue, &mut runtime, false).1,
+        RetainedEffectStats::default()
+    );
+    let mut plateau = None;
+    let mut compiles = 0;
+    let mut allocations = 0;
+    for generation in 1..=1000 {
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(0),
+                expected: Box::new([]),
+                effects: Some(glow(0, generation, 1.0)),
+            })
+            .unwrap();
+        let (_, attached) = host.render(device, queue, &mut runtime, false);
+        compiles += attached.pipeline_compiles;
+        allocations += attached.texture_allocations;
+        if generation > 1 {
+            assert_eq!(
+                attached.pipeline_compiles, 0,
+                "retired attachments reuse filter programs"
+            );
+        }
+        assert_eq!(attached.rows_examined, 1);
+        assert_eq!(
+            attached.retained_texture_bytes,
+            *plateau.get_or_insert(attached.retained_texture_bytes)
+        );
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(0),
+                expected: Box::new([SemanticNodeId::new(600, generation)]),
+                effects: None,
+            })
+            .unwrap();
+        let (removed, work) = host.render(device, queue, &mut runtime, false);
+        assert!(
+            removed == ordinary,
+            "retirement must restore ordinary pixels"
+        );
+        assert_eq!((work.rows_examined, work.retained_texture_bytes), (1, 0));
+        assert!(!host.renderer.has_retained_effect_sources());
+    }
+    assert_eq!(
+        host.render(device, queue, &mut runtime, false).1,
+        RetainedEffectStats::default()
+    );
+    eprintln!("G4 attach/remove cycles=1000 resident_plateau={} retired_bytes=0 pipeline_compiles={compiles} texture_allocations={allocations}", plateau.unwrap());
 }

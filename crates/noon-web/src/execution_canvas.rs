@@ -46,6 +46,8 @@ mod wasm {
         BrowserHostWake,
     };
 
+    use crate::gpu_effect_programs::EffectProgramTask;
+
     use super::MANIM_DEFAULT_CLEAR_COLOR;
 
     #[derive(Debug)]
@@ -105,6 +107,8 @@ mod wasm {
         /// A pending authoring/publication barrier is not a user pause.
         fn source_active(&self) -> bool;
         fn pending_endpoint(&self) -> Option<noon_core::PublicationContext>;
+        fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]>;
+        fn publish_prepared_effects(&mut self) -> Result<(), JsValue>;
         fn query_viewports(&mut self, bounds: &[Rect])
             -> noon::integration::ExecutionViewportQuery;
         /// Returns whether this operation resumed a subsequent continuation stage.
@@ -136,10 +140,13 @@ mod wasm {
             mut program: LiveProgram<C>,
             mut callbacks: RustHostCallbackTable,
         ) -> Result<Self, JsValue> {
+            program.require_effect_resource_preparation();
             let status = program.resume().map_err(js_error)?;
             if !matches!(
                 status,
-                LiveProgramStatus::Awaiting(_) | LiveProgramStatus::Finished
+                LiveProgramStatus::Awaiting(_)
+                    | LiveProgramStatus::Finished
+                    | LiveProgramStatus::PreparingResources
             ) {
                 return Err(js_message(
                     "direct live continuation did not begin at an await or finished state",
@@ -170,6 +177,15 @@ mod wasm {
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
     {
+        fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+            self.program.pending_effect_programs()
+        }
+        fn publish_prepared_effects(&mut self) -> Result<(), JsValue> {
+            self.program
+                .publish_prepared_effects()
+                .map(|_| ())
+                .map_err(js_error)
+        }
         fn session(&self) -> &ExecutionSession {
             self.program.session()
         }
@@ -253,7 +269,8 @@ mod wasm {
                             return Ok(());
                         }
                     }
-                    ForwardSampleStatus::PublicationPending(_)
+                    ForwardSampleStatus::ResourcePreparationPending
+                    | ForwardSampleStatus::PublicationPending(_)
                     | ForwardSampleStatus::Ready(_)
                     | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
                 }
@@ -665,6 +682,18 @@ mod wasm {
             }
         }
 
+        fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+            match &self.authority {
+                DirectSourceAuthority::Program(p) => p.pending_effect_programs(),
+                _ => None,
+            }
+        }
+        fn publish_prepared_effects(&mut self) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Program(p) => p.publish_prepared_effects(),
+                _ => Err(js_message("source has no staged publication")),
+            }
+        }
         fn source_active(&self) -> bool {
             match &self.authority {
                 DirectSourceAuthority::Session { .. } => false,
@@ -769,6 +798,17 @@ mod wasm {
                 DirectSourceAuthority::Prepared(playback) => {
                     playback.advance(requested_time).map_err(js_error)
                 }
+            }
+        }
+
+        fn resource_publication(&self) -> RendererPublication<'_> {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().resource_publication()
+                }
+                DirectSourceAuthority::Program(program) => program.session().resource_publication(),
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => playback.reader.resource_publication(),
             }
         }
 
@@ -990,6 +1030,8 @@ mod wasm {
         sampled_scene_target: Option<f64>,
         direct_preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
+        effect_program_task: EffectProgramTask,
+        prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
         view_output: AuthoredViewOutput,
         working_profile: noon_core::ViewColorProfile,
         direct_text_gpu: RetainedTextGpuState,
@@ -1018,7 +1060,10 @@ mod wasm {
         /// GPU recovery retains the source and must not call this boundary.
         #[wasm_bindgen(js_name = retireExecutionSource)]
         pub fn retire_execution_source(&mut self) -> Result<(), JsValue> {
-            self.source.retire_execution_source()
+            self.source.retire_execution_source()?;
+            self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
+            Ok(())
         }
 
         /// Recreate the complete WebGL wgpu stack after context restoration:
@@ -1057,7 +1102,15 @@ mod wasm {
                 backend,
                 self.gpu_diagnostics.clone(),
             );
-            let renderer = GpuRenderer::new(&device, &queue, config.format);
+            let mut renderer = GpuRenderer::new(&device, &queue, config.format);
+            {
+                let publication = self.source.resource_publication();
+                let work = renderer
+                    .prepare_effect_programs(&device, &publication)
+                    .await
+                    .map_err(js_error)?;
+                self.effect_program_task.record(work);
+            }
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             self.instance = instance;
@@ -1068,6 +1121,8 @@ mod wasm {
             self.config = config;
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
+            self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
             self.view_output = view_output;
             self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.direct_text_gpu = direct_text_gpu;
@@ -1130,7 +1185,15 @@ mod wasm {
                 backend,
                 self.gpu_diagnostics.clone(),
             );
-            let renderer = GpuRenderer::new(&device, &queue, config.format);
+            let mut renderer = GpuRenderer::new(&device, &queue, config.format);
+            {
+                let publication = self.source.resource_publication();
+                let work = renderer
+                    .prepare_effect_programs(&device, &publication)
+                    .await
+                    .map_err(js_error)?;
+                self.effect_program_task.record(work);
+            }
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             // The WebGPU backend has no destructor-side browser teardown. Once
@@ -1146,6 +1209,8 @@ mod wasm {
             self.config = config;
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
+            self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
             self.view_output = view_output;
             self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.direct_text_gpu = direct_text_gpu;
@@ -1163,6 +1228,19 @@ mod wasm {
             self.update_camera()?;
             self.gpu_diagnostics.clear_device_loss(lost_generation);
             Ok(true)
+        }
+
+        /// Device-resource observations only; no scene/time state is mirrored here.
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = debugEffectProgramsJson)]
+        pub fn debug_effect_programs_json(&self) -> String {
+            let [rows, programs] = self.renderer.resident_effect_program_counts();
+            serde_json::json!({
+                "rows": rows, "programs": programs,
+                "pipelineCompiles": self.effect_program_task.pipeline_compiles,
+                "pending": self.effect_program_task.is_pending(),
+            })
+            .to_string()
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
@@ -1187,6 +1265,7 @@ mod wasm {
                     return Ok(false);
                 }
                 let changes_pending = self.source.frame_pending()
+                    || self.source.pending_effect_programs().is_some()
                     || self.surface_frame_pending
                     || self
                         .pointer_presentation
@@ -1200,6 +1279,9 @@ mod wasm {
                     return Ok(false);
                 }
 
+                if !self.prepare_direct_effect_programs()? {
+                    return Ok(false);
+                }
                 let (surface_texture, reconfigure_after_present) =
                     match self.surface.get_current_texture() {
                         wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
@@ -1301,6 +1383,12 @@ mod wasm {
         #[wasm_bindgen(js_name = gpuGeneration)]
         pub fn gpu_generation(&self) -> u32 {
             self.gpu_generation
+        }
+
+        /// Actual device identity, queried once outside a measurement loop.
+        #[wasm_bindgen(js_name = rendererAdapterInfo)]
+        pub fn renderer_adapter_info(&self) -> Result<String, JsValue> {
+            crate::gpu_diagnostics::renderer_adapter_info(&self.device).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
@@ -1674,6 +1762,7 @@ mod wasm {
             serde_json::to_string(&DirectWakeDirectiveJson {
                 present_now: self.drawable
                     && (directive.present_now()
+                        || self.source.pending_effect_programs().is_some()
                         || self.surface_frame_pending
                         || self
                             .pointer_presentation
@@ -2658,6 +2747,8 @@ mod wasm {
                 sampled_scene_target: None,
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,
+                effect_program_task: EffectProgramTask::default(),
+                prepared_effect_modules: None,
                 view_output,
                 working_profile: noon_core::ViewColorProfile::Compatibility,
                 direct_text_gpu,
@@ -2680,7 +2771,69 @@ mod wasm {
                 last_selection_presentation: None,
             };
             result.update_camera()?;
+            {
+                let publication = result.source.resource_publication();
+                let work = result
+                    .renderer
+                    .prepare_effect_programs(&result.device, &publication)
+                    .await
+                    .map_err(js_error)?;
+                result.effect_program_task.record(work);
+            }
             Ok(result)
+        }
+
+        // A cold module is one owned device job. Dirty source state stays pending
+        // while compilation awaits; input and time still use the existing source.
+        // If that publication advances, reuse successful immutable modules while
+        // replanning its current delta instead of installing stale row bindings.
+        fn prepare_direct_effect_programs(&mut self) -> Result<bool, JsValue> {
+            if let Some(programs) = self.source.pending_effect_programs() {
+                let Some(prepared) = self
+                    .effect_program_task
+                    .poll_modules(&mut self.renderer, &self.device, programs)
+                    .map_err(js_error)?
+                else {
+                    return Ok(false);
+                };
+                self.source.publish_prepared_effects()?;
+                self.prepared_effect_modules = Some(prepared);
+            }
+            let insets = !self.source.inset_2d_views()?.is_empty();
+            let publication = self.source.resource_publication();
+            if prepare_working_profile(
+                &self.device,
+                &self.queue,
+                &self.config,
+                self.pointer_presentation.viewport().unwrap_or(Vec2::new(
+                    self.config.width as f32,
+                    self.config.height as f32,
+                )),
+                &publication,
+                insets,
+                &mut self.view_output,
+                &mut self.working_profile,
+                &mut self.renderer,
+                &mut self.direct_text_gpu,
+                &mut self.direct_preparer,
+            )? {
+                self.effect_program_task.cancel();
+            }
+            if !self.effect_program_task.is_pending()
+                && self
+                    .renderer
+                    .effect_programs_current(&self.device, self.source.publication_context())
+            {
+                return Ok(true);
+            }
+            let ready = self
+                .effect_program_task
+                .poll(&mut self.renderer, &self.device, &publication)
+                .map_err(js_error)?;
+            if ready {
+                self.prepared_effect_modules = None;
+            }
+            Ok(ready)
         }
 
         /// Keep one exact endpoint in the production retained GPU renderer
@@ -2722,22 +2875,6 @@ mod wasm {
                     "intermediate direct endpoint changed during retained preparation",
                 ));
             }
-            prepare_working_profile(
-                &self.device,
-                &self.queue,
-                &self.config,
-                self.pointer_presentation.viewport().unwrap_or(Vec2::new(
-                    self.config.width as f32,
-                    self.config.height as f32,
-                )),
-                &publication,
-                !inset_views.is_empty(),
-                &mut self.view_output,
-                &mut self.working_profile,
-                &mut self.renderer,
-                &mut self.direct_text_gpu,
-                &mut self.direct_preparer,
-            )?;
             self.direct_preparer
                 .set_inset_views_active(!inset_views.is_empty());
             self.renderer
@@ -2808,6 +2945,9 @@ mod wasm {
                     let Some(expected) = self.source.pending_endpoint() else {
                         break;
                     };
+                    if !self.prepare_direct_effect_programs()? {
+                        return Ok(false);
+                    }
                     let (bytes, misses) = self.retain_direct_endpoint(expected)?;
                     retained_bytes = retained_bytes.saturating_add(bytes);
                     retained_misses = retained_misses.saturating_add(misses);
@@ -2824,6 +2964,9 @@ mod wasm {
                     let camera = self.source.inspection_camera().map_err(js_error)?;
                     self.sync_camera(camera)?;
                 }
+            }
+            if !self.prepare_direct_effect_programs()? {
+                return Ok(false);
             }
             let metrics = {
                 let camera = self.renderer.camera();
@@ -2879,22 +3022,6 @@ mod wasm {
                 let visibility = direct.query_viewports(&view_bounds);
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
-                prepare_working_profile(
-                    &self.device,
-                    &self.queue,
-                    &self.config,
-                    self.pointer_presentation.viewport().unwrap_or(Vec2::new(
-                        self.config.width as f32,
-                        self.config.height as f32,
-                    )),
-                    &publication,
-                    !inset_views.is_empty(),
-                    &mut self.view_output,
-                    &mut self.working_profile,
-                    &mut self.renderer,
-                    &mut self.direct_text_gpu,
-                    &mut self.direct_preparer,
-                )?;
                 self.direct_preparer
                     .set_inset_views_active(!inset_views.is_empty());
                 self.renderer
@@ -3136,11 +3263,12 @@ mod wasm {
         renderer: &mut GpuRenderer,
         text: &mut RetainedTextGpuState,
         preparer: &mut RetainedFramePreparer,
-    ) -> Result<(), JsValue> {
+    ) -> Result<bool, JsValue> {
         let profile = output
             .prepare(device, publication, insets, [config.width, config.height])
             .map_err(js_error)?;
-        if profile != *working_profile {
+        let changed = profile != *working_profile;
+        if changed {
             let camera = renderer.camera();
             let format = if profile == noon_core::ViewColorProfile::LinearHdr {
                 wgpu::TextureFormat::Rgba16Float
@@ -3148,6 +3276,7 @@ mod wasm {
                 config.format
             };
             let mut replacement = GpuRenderer::new(device, queue, format);
+            replacement.copy_effect_program_cache_from(device, renderer);
             replacement
                 .set_viewport_with_logical_size(device, queue, config.width, config.height, logical)
                 .map_err(js_error)?;
@@ -3157,7 +3286,7 @@ mod wasm {
             *preparer = RetainedFramePreparer::new();
             *working_profile = profile;
         }
-        Ok(())
+        Ok(changed)
     }
 
     async fn initialize_gpu(

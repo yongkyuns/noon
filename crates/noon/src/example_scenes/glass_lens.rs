@@ -1,5 +1,5 @@
 //! A moving glass card treats the earlier texture while retaining its own paint.
-//! Paired with `web/python/examples/glass_lens.py` on the ordinary live timeline.
+//! Paired with `web/python/examples/showcase_glass_lens.py` on the ordinary live timeline.
 use crate::{
     effects::{BackdropBlur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, ImageMobjectOptions,

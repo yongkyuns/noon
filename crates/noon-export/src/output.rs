@@ -361,6 +361,13 @@ impl FileSink {
 
     fn write(&mut self, frame: CapturedFrame<'_>) -> io::Result<()> {
         let result = (|| {
+            // Both qualified capture profiles contain encoded SDR RGBA8. HDR
+            // capture has already applied Reinhard and sRGB exactly once.
+            // A future pixel format must make an explicit admission decision.
+            let encoded_rgba = match frame.format {
+                CapturePixelFormat::RendererRgba8UnormOpaque
+                | CapturePixelFormat::LinearHdrSdrRgba8Opaque => frame.rgba,
+            };
             if self.failed
                 || frame.frame.pts != self.frames
                 || frame.frame.source_sample.time_base() != self.rate.time_base()
@@ -372,19 +379,24 @@ impl FileSink {
                     && frame.observation.published_time != frame.observation.requested_time)
                 || frame.width != self.width
                 || frame.height != self.height
-                || frame.format != CapturePixelFormat::RendererRgba8UnormOpaque
-                || frame.rgba.len() != self.bytes
-                || frame.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255)
+                || encoded_rgba.len() != self.bytes
+                || encoded_rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "invalid, out-of-order or nonopaque captured frame",
+                    format!(
+                        "invalid, out-of-order or nonopaque captured frame: pts={}/{} requested={} published={} sample={} held={} format={:?} first_nonopaque={:?}",
+                        frame.frame.pts, self.frames,
+                        frame.observation.requested_time, frame.observation.published_time,
+                        frame.frame.source_sample.authored_time(), frame.frame.held, frame.format,
+                        encoded_rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] != 255),
+                    ),
                 ));
             }
             self.encoder
                 .as_mut()
                 .ok_or_else(|| io::Error::other("encoder already finished"))?
-                .enqueue(frame.rgba)?;
+                .enqueue(encoded_rgba)?;
             if let Some(manifest) = self.manifest.as_mut() {
                 writeln!(
                     manifest,

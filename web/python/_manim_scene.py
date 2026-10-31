@@ -28,7 +28,7 @@ import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import current_source_invocation
-from _noon_errors import engine_await, engine_call, raise_engine_error
+from _noon_errors import engine_await, engine_call, is_effect_preparation_required, raise_engine_error
 import _noon_ir as _ir
 import noon as _base
 
@@ -437,7 +437,7 @@ def _canonical_edit_membership(
     *,
     key: str | None = None,
     spatial_domain: str | None = None,
-) -> None:
+):
     from _manim_updaters import active_callback_membership_context
 
     callback = active_callback_membership_context(scene)
@@ -480,12 +480,36 @@ def _canonical_edit_membership(
     # explicit/default key collisions within this batch before Rust publication.
     if len({item.key for item in binding_reservations.values()}) != len(binding_reservations):
         raise ValueError("duplicate object key in membership batch")
-    engine_call(context.editMembership, batch, operation="Scene." + kind)
-    for member, reservation, handle in reservations:
-        _commit_typed_binding(member, scene, reservation, handle)
-    for value in values:
-        _register_membership_wrappers(scene, value)
-    _sync_membership_wrapper_attachments(scene, kind, values)
+    pending = engine_call(context.editMembership, batch, operation="Scene." + kind)
+
+    def commit():
+        for member, reservation, handle in reservations:
+            _commit_typed_binding(member, scene, reservation, handle)
+        for value in values:
+            _register_membership_wrappers(scene, value)
+        _sync_membership_wrapper_attachments(scene, kind, values)
+
+    return _complete_prepared_publication(scene, context, pending, commit, None)
+
+
+def _complete_prepared_publication(scene, context, pending, commit, result):
+    if pending is None:
+        commit()
+        return result
+    if not (_async_continuation_active(scene) or _synchronous_continuation_active(scene)):
+        pending.free()
+        raise RuntimeError("shader-bearing membership requires a portable or async source barrier")
+    from js import noonPrepareSemanticEffects
+
+    async def publish():
+        await engine_await(noonPrepareSemanticEffects(context, pending), operation="membership")
+
+    if _async_continuation_active(scene):
+        return _SemanticContinuationAwaitable(scene, commit, operation=publish, result=result)
+    from pyodide.ffi import run_sync
+    engine_call(run_sync, noonPrepareSemanticEffects(context, pending), operation="membership")
+    commit()
+    return result
 
 
 def _stage_callback_membership(
@@ -809,7 +833,7 @@ def _finish_async_continuation_construct(scene: _base.Scene) -> None:
     try:
         if pending:
             raise RuntimeError(
-                "async construct must await every supported Scene.play/Scene.wait continuation"
+                "async construct must await every supported continuation or shader attachment"
             )
     finally:
         setattr(scene, _ASYNC_CONTINUATION_MODE, False)
@@ -995,6 +1019,9 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
     """Adapt a module-level call without replay or changes to arbitrary callables."""
     if not inspect.ismethod(method):
         return method(*args, **kwargs)
+    if getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait):
+        pending = method(*args, **kwargs)
+        return await pending if isinstance(pending, _SemanticContinuationAwaitable) else pending
     scene = method.__self__
     invocation = current_source_invocation()
     from _manim_source_execution import has_portable_scene_methods
@@ -1025,24 +1052,29 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
 class _SemanticContinuationAwaitable:
     """One consumed Python await over the worker-owned semantic endpoint lease."""
 
-    def __init__(self, scene: _base.Scene, on_complete=None) -> None:
+    def __init__(self, scene: _base.Scene, on_complete=None, *, operation=None, result=None) -> None:
         self._scene = scene
         self._on_complete = on_complete
+        self._operation = operation
+        self._result = result
         self._consumed = False
         getattr(scene, _ASYNC_CONTINUATION_PENDING).add(self)
 
     def __await__(self):
         if self._consumed:
-            raise RuntimeError("a Scene.play/Scene.wait continuation can be awaited only once")
+            raise RuntimeError("a source operation can be awaited only once")
         self._consumed = True
         return self._wait().__await__()
 
     async def _wait(self) -> _base.Scene:
         try:
-            await _await_semantic_continuation(self._scene)
+            if self._operation is None:
+                await _await_semantic_continuation(self._scene)
+            else:
+                await self._operation()
             if self._on_complete is not None:
                 self._on_complete()
-            return self._scene
+            return self._scene if self._result is None else self._result
         finally:
             getattr(self._scene, _ASYNC_CONTINUATION_PENDING).discard(self)
 
@@ -1271,10 +1303,11 @@ def _service_semantic_continuation_event(
     return noonCompleteSemanticContinuationCallback(context, token_json, batch_json)
 
 
-async def _await_semantic_continuation(scene: _base.Scene) -> None:
+async def _await_semantic_continuation(scene: _base.Scene, event_json=None) -> None:
     from js import noonAwaitSemanticContinuation
 
-    event_json = await engine_await(noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
+    if event_json is None:
+        event_json = await engine_await(noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
         prepared = None
         event = _continuation_event(event_json)
@@ -1308,14 +1341,15 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
             raise
 
 
-def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
+def _synchronous_continuation_wait(scene: _base.Scene, event_json=None) -> _base.Scene:
     """Suspend the current JSPI-enabled Python stack on the worker lease."""
     if not _synchronous_continuation_active(scene):
         raise RuntimeError("synchronous semantic continuation is not active")
     from js import noonAwaitSemanticContinuation
     from pyodide.ffi import run_sync
 
-    event_json = engine_call(run_sync, noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
+    if event_json is None:
+        event_json = engine_call(run_sync, noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
         event = _continuation_event(event_json)
         next_event = _service_semantic_continuation_event(scene, event_json)
@@ -3014,32 +3048,57 @@ def _play_canonical_composition(
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     _start_default_synchronous_continuation(self)
     context = _context(self)
+    pending = None
     try:
         if _semantic_continuation_active(self):
             _require_semantic_continuation_active(self)
             _prepare_semantic_continuation_callbacks(self, context)
-            context.beginOrdinaryComposition(candidate)
+            try:
+                context.beginOrdinaryComposition(candidate)
+            except Exception as error:
+                if not is_effect_preparation_required(error):
+                    raise
+                pending = context.prepareOrdinaryComposition(candidate)
         else:
             context.ordinaryPlayComposition(candidate)
     except Exception as error:
         raise_engine_error(error, operation="Scene.play")
-    for tracker in tracker_associations:
-        tracker._commit_canonical_association(self, context)
-    for source, reservation in reservations:
-        handle = getattr(source, "_semantic_handle")
-        _commit_typed_binding(source, self, reservation, handle)
+    def activated() -> None:
+        for tracker in tracker_associations:
+            tracker._commit_canonical_association(self, context)
+        for source, reservation in reservations:
+            handle = getattr(source, "_semantic_handle")
+            _commit_typed_binding(source, self, reservation, handle)
+            register = getattr(self, "_register_top_level", None)
+            if register is not None:
+                register(source)
         register = getattr(self, "_register_top_level", None)
         if register is not None:
-            register(source)
-    register = getattr(self, "_register_top_level", None)
-    if register is not None:
-        for family in family_registrations:
-            register(family)
+            for family in family_registrations:
+                register(family)
     def completed() -> None:
         _reconcile_completed_family_bindings(self, completed_families)
         for target in removals:
             _reconcile_fade_membership(self, target, "out")
 
+    if pending is not None:
+        from js import noonPrepareSemanticEffects
+
+        if _async_continuation_active(self):
+            async def play_prepared():
+                event_json = await engine_await(noonPrepareSemanticEffects(context, pending), operation="Scene.play")
+                activated()
+                await _await_semantic_continuation(self, event_json)
+
+            return _SemanticContinuationAwaitable(self, completed, operation=play_prepared)
+        from pyodide.ffi import run_sync
+        event_json = engine_call(run_sync, noonPrepareSemanticEffects(context, pending), operation="Scene.play")
+        activated()
+        _synchronous_continuation_wait(self, event_json)
+        completed()
+        return self
+
+    activated()
     if _async_continuation_active(self):
         return _continuation_awaitable(self, completed)
     if _synchronous_continuation_active(self):

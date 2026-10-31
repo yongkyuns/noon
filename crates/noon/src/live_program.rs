@@ -34,9 +34,11 @@ use noon_runtime::{FrameState, RendererPublication};
 /// The continuation owns ordinary Rust locals and semantic handles. It supplies
 /// an existing segment created through the borrowed [`LiveSession`], never a
 /// host-defined interval, clock, scheduler entry, or semantic identity.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ContinuationStep {
     Await(ExecutionSegment),
+    /// Publish this existing transaction only after the host prepares its resources.
+    Publish(crate::StagedEffectPublication),
     Finished,
 }
 
@@ -55,6 +57,7 @@ pub trait LiveContinuation {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LiveProgramStatus {
     ReadyToResume,
+    PreparingResources,
     Awaiting(ExecutionSegmentState),
     PublicationPending(PublicationContext),
     Finished,
@@ -64,6 +67,7 @@ pub enum LiveProgramStatus {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum LiveProgramPhase {
     ReadyToResume,
+    PreparingResources,
     Awaiting(ExecutionSegment),
     PublicationPending(PublicationContext),
     Finished,
@@ -154,6 +158,7 @@ pub struct LiveProgram<C> {
     scene: Scene,
     continuation: C,
     phase: LiveProgramPhase,
+    pending_effects: Option<crate::StagedEffectPublication>,
 }
 
 impl Scene {
@@ -185,6 +190,7 @@ impl Scene {
             scene: self,
             continuation,
             phase: LiveProgramPhase::ReadyToResume,
+            pending_effects: None,
         })
     }
 }
@@ -202,6 +208,10 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// underlying tokenless wait already reports a complete interval.
     pub fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
         let wake = self.session().wake_state();
+        if self.phase == LiveProgramPhase::PreparingResources {
+            // Poll external preparation without advancing the authoritative frame.
+            return wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous);
+        }
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             // Only an awaited segment authorizes authored-time advancement.
             // Endpoint presentation, authoring resumption, and a finished source
@@ -241,14 +251,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
     }
 
     /// Retire input-owned state before releasing this source's canonical owner.
-    /// This leaves authored time and continuation state unchanged; renderer
-    /// recovery that retains the source must not call this method.
+    /// This leaves authored time unchanged and cancels unpublished resource work.
+    /// Renderer recovery that retains the source must not call this method.
     pub fn retire_execution_source(&mut self) -> Result<(), LiveProgramError<C::Error>> {
         let store = std::rc::Rc::clone(self.scene.integration_store());
         self.scene
             .owned_execution_mut()
             .retire_interactions_for_source_replacement(&mut store.borrow_mut())
             .map_err(LiveProgramError::Input)?;
+        if self.pending_effects.take().is_some() {
+            self.phase = LiveProgramPhase::Terminal;
+        }
         self.refresh_pending_publication();
         Ok(())
     }
@@ -405,6 +418,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
     pub fn status(&self) -> LiveProgramStatus {
         match self.phase {
             LiveProgramPhase::ReadyToResume => LiveProgramStatus::ReadyToResume,
+            LiveProgramPhase::PreparingResources => LiveProgramStatus::PreparingResources,
             LiveProgramPhase::Awaiting(segment) => {
                 LiveProgramStatus::Awaiting(self.session().segment_state(segment))
             }
@@ -414,6 +428,50 @@ impl<C: LiveContinuation> LiveProgram<C> {
             LiveProgramPhase::Finished => LiveProgramStatus::Finished,
             LiveProgramPhase::Terminal => LiveProgramStatus::Terminal,
         }
+    }
+
+    /// Renderer integration enables mandatory preparation for later shader
+    /// introductions. Detached/headless semantic construction stays device-free.
+    pub fn require_effect_resource_preparation(&mut self) {
+        self.scene
+            .owned_execution_mut()
+            .require_effect_resource_preparation();
+    }
+
+    /// Owned immutable requests only; borrowing these is never necessary while
+    /// awaiting compilation. The semantic transaction remains unpublished.
+    pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.pending_effects
+            .as_ref()
+            .map(|pending| pending.programs())
+    }
+
+    /// Host acknowledgement after successful resource preparation. The normal
+    /// publisher reruns semantic/compiler/runtime preflight against current state.
+    /// The resulting frame must then pass the existing retention barrier before
+    /// the authoring continuation can resume.
+    pub fn publish_prepared_effects(
+        &mut self,
+    ) -> Result<LiveProgramStatus, LiveProgramError<C::Error>> {
+        if self.phase != LiveProgramPhase::PreparingResources {
+            return Err(self.invalid_state("publish prepared effects"));
+        }
+        let pending = self
+            .pending_effects
+            .take()
+            .expect("preparation owns a transaction");
+        let segment = match self.scene.owned_live().publish_staged_effects(pending) {
+            Ok(segment) => segment,
+            Err(error) => {
+                self.phase = LiveProgramPhase::Terminal;
+                return Err(LiveProgramError::Completion(error));
+            }
+        };
+        self.phase = match segment {
+            Some(segment) => LiveProgramPhase::Awaiting(segment),
+            None => LiveProgramPhase::PublicationPending(self.session().publication_context()),
+        };
+        Ok(self.status())
     }
 
     /// Invoke the application continuation exactly once from a ready barrier.
@@ -443,6 +501,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
                     }
                 }
                 self.phase = LiveProgramPhase::Awaiting(segment);
+                Ok(self.status())
+            }
+            Ok(ContinuationStep::Publish(pending)) => {
+                if !pending.belongs_to(self.session()) {
+                    self.phase = LiveProgramPhase::Terminal;
+                    return Err(LiveProgramError::Completion(
+                        crate::ExecutionSessionPublicationError::ForeignSemanticStore.into(),
+                    ));
+                }
+                self.pending_effects = Some(pending);
+                self.phase = LiveProgramPhase::PreparingResources;
                 Ok(self.status())
             }
             Ok(ContinuationStep::Finished) => {
@@ -559,6 +628,145 @@ mod tests {
 
     use super::*;
     use noon_runtime::TimelineWakeState;
+
+    #[cfg(feature = "wgsl-effects")]
+    struct AttachShaders([crate::Mobject; 2], bool);
+    #[cfg(feature = "wgsl-effects")]
+    impl LiveContinuation for AttachShaders {
+        type Error = crate::LiveSessionError;
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            use crate::effects::{
+                ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderProfile, ShaderSchema,
+                WgslEffectProgram,
+            };
+            if self.1 {
+                // Ordinary controls and detached animation targets must still work.
+                let target = live.target_editor(&self.0[0])?;
+                live.set_translation(&target, 1.0, 0.0)?;
+                let definition = target.get_effect("stripes")?.authored_definition()?;
+                let detached =
+                    live.prepare_effect_attachments([(&target, definition, "detached")])?;
+                assert!(
+                    detached.programs().is_empty(),
+                    "detached authoring needs no GPU work"
+                );
+                return Ok(ContinuationStep::Finished);
+            }
+            let material = WgslEffectProgram::prepare(ShaderSchema {
+                profile: ShaderProfile::PaintedPointwiseV1,
+                dependencies: ShaderDependencies { coordinates: ShaderCoordinates::Scene, authored_time: false, seed: false },
+                parameters: Box::new([]),
+            }, "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return input.color; }").unwrap();
+            assert!(matches!(
+                live.add_effect(&self.0[0], ShaderEffect::new(material.clone()), "stripes"),
+                Err(crate::LiveSessionError::Publication(
+                    crate::ExecutionSessionPublicationError::ExternalEffectPreparationRequired
+                ))
+            ));
+            self.1 = true;
+            Ok(ContinuationStep::Publish(live.prepare_effect_attachments(
+                self.0.iter().map(|object| {
+                    (
+                        object,
+                        ShaderEffect::new(material.clone()).into(),
+                        "stripes",
+                    )
+                }),
+            )?))
+        }
+    }
+
+    #[cfg(feature = "wgsl-effects")]
+    fn shader_attachment_program() -> LiveProgram<AttachShaders> {
+        let mut scene = Scene::new();
+        let panels = [scene.circle(0.4).unwrap(), scene.circle(0.5).unwrap()];
+        for panel in &panels {
+            scene.add(panel).unwrap();
+        }
+        let mut program = scene
+            .into_live_program(AttachShaders(panels, false))
+            .unwrap();
+        program.require_effect_resource_preparation();
+        program.take_renderer_publication();
+        program
+    }
+
+    #[cfg(feature = "wgsl-effects")]
+    #[test]
+    fn shader_resources_are_staged_before_one_coherent_publication_and_retention() {
+        let mut program = shader_attachment_program();
+        let store = Rc::clone(program.scene.integration_store());
+        let before = program.session().publication_context();
+        let revision = store.borrow().scene_revision();
+        let count = store.borrow().len();
+        assert_eq!(
+            program.resume().unwrap(),
+            LiveProgramStatus::PreparingResources
+        );
+        assert_eq!(program.pending_effect_programs().unwrap().len(), 1);
+        assert_eq!(program.session().publication_context(), before);
+        assert_eq!(store.borrow().scene_revision(), revision);
+        assert_eq!(store.borrow().len(), count);
+        for panel in &program.continuation.0 {
+            assert!(store
+                .borrow()
+                .effect_by_name(panel.node_id(), "stripes")
+                .unwrap()
+                .is_none());
+        }
+        assert!(program.take_renderer_publication().changes().is_empty());
+        assert!(program.resume().is_err());
+        let LiveProgramStatus::PublicationPending(published) =
+            program.publish_prepared_effects().unwrap()
+        else {
+            panic!("the published frame still needs renderer retention");
+        };
+        assert_eq!(
+            store.borrow().scene_revision(),
+            revision.checked_next().unwrap()
+        );
+        assert_eq!(store.borrow().len(), count + 2);
+        assert_ne!(published, before);
+        assert!(program.resume().is_err());
+        program.take_renderer_publication();
+        program.admit_publication(published).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[cfg(feature = "wgsl-effects")]
+    #[test]
+    fn shader_preparation_revalidates_current_state_and_source_retirement_cancels_it() {
+        let mut program = shader_attachment_program();
+        program.resume().unwrap();
+        let panels = program.continuation.0.clone();
+        program
+            .scene
+            .owned_live()
+            .add_effect(&panels[1], crate::effects::Glow::default(), "stripes")
+            .unwrap();
+        let store = Rc::clone(program.scene.integration_store());
+        let revision = store.borrow().scene_revision();
+        let count = store.borrow().len();
+        let before = program.session().publication_context();
+        assert!(program.publish_prepared_effects().is_err());
+        assert_eq!(program.status(), LiveProgramStatus::Terminal);
+        assert_eq!(program.session().publication_context(), before);
+        assert_eq!(store.borrow().scene_revision(), revision);
+        assert_eq!(store.borrow().len(), count);
+        assert!(store
+            .borrow()
+            .effect_by_name(panels[0].node_id(), "stripes")
+            .unwrap()
+            .is_none());
+
+        let mut retired = shader_attachment_program();
+        retired.resume().unwrap();
+        let before = retired.session().publication_context();
+        retired.retire_execution_source().unwrap();
+        assert!(retired.pending_effect_programs().is_none());
+        assert!(retired.publish_prepared_effects().is_err());
+        assert_eq!(retired.session().publication_context(), before);
+    }
 
     struct AnimatedContinuation {
         source: crate::Mobject,
@@ -763,6 +971,7 @@ mod tests {
             scene,
             continuation: ReturnSegment(stale),
             phase: LiveProgramPhase::ReadyToResume,
+            pending_effects: None,
         };
         assert!(matches!(
             stale_program.resume(),

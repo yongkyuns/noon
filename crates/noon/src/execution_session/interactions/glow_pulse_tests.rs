@@ -150,7 +150,7 @@ fn click_pulse_rejects_non_glow_attachments_without_publishing_or_acknowledging_
         let mut f = Fixture::new(None);
         f.scene
             .live(&mut f.session)
-            .add_effect(&f.targets[0], definition, "glow")
+            .add_effect(&f.targets[0], definition.clone(), "glow")
             .unwrap();
         let attachment = f.effect(0).unwrap();
         f.send(1, 0, true).unwrap();

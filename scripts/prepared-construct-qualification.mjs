@@ -157,11 +157,11 @@ try {
           host.done = host.driver.run(() => pyodide.runPythonAsync(`
 import sys
 sys.path.insert(0, "/tmp")
-from _manim_source_execution import compile_authoring_source, BARRIER_GLOBAL, authoring_source_scope, execute_authoring_module
-from _manim_scene import execute_construct, await_source_barrier
+from _manim_source_execution import compile_authoring_source, BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, authoring_source_scope, execute_authoring_module
+from _manim_scene import execute_construct, await_source_barrier, await_module_source_barrier
 code, pairs = compile_authoring_source(construct_source, filename="prepared-ordinary.py")
 assert pairs, "ordinary construct must use the existing portable compiler"
-namespace = {"__name__": "__main__", "mode": construct_mode, BARRIER_GLOBAL: await_source_barrier}
+namespace = {"__name__": "__main__", "mode": construct_mode, BARRIER_GLOBAL: await_source_barrier, MODULE_BARRIER_GLOBAL: await_module_source_barrier}
 with authoring_source_scope():
     await execute_authoring_module(code, namespace)
 scene = namespace["OrdinaryPrepared"]()

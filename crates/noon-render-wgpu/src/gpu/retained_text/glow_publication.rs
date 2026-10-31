@@ -36,6 +36,8 @@ pub struct RetainedEffectStats {
     pub source_passes: usize,
     pub blur_passes: usize,
     pub composite_passes: usize,
+    /// Filter-program compilations reported by the existing operator counters.
+    pub pipeline_compiles: usize,
     pub bytes_uploaded: usize,
     pub texture_allocations: usize,
     pub retained_texture_bytes: u64,
@@ -49,6 +51,7 @@ impl RetainedEffectStats {
         self.source_passes += value.source_passes;
         self.blur_passes += value.filter.blur_passes;
         self.composite_passes += value.filter.composite_passes;
+        self.pipeline_compiles += value.filter.pipeline_compiles;
         self.bytes_uploaded += value.source_bytes_uploaded
             + value.placement_bytes_uploaded
             + value.filter.bytes_uploaded;
@@ -93,9 +96,9 @@ impl RetainedEffectPublication {
             return Ok(false);
         };
         let mut active = false;
-        for &definition in effects.definitions() {
+        for definition in effects.definitions() {
             let parameters = crate::EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: view.1[1],
                 world_view_height: f64::from(view.0.world_size.y),
                 scope_opacity: opacity,
@@ -368,6 +371,7 @@ impl GpuRenderer {
     pub fn reset_retained_effect_publication(&mut self) {
         self.retained_effects = RetainedEffectPublication::default();
         self.effect_captures = None;
+        self.effect_programs = Default::default();
     }
 
     /// Add only effect-source indices to the execution-owned, painter-ordered
@@ -587,7 +591,7 @@ impl GpuRenderer {
                 let original = self
                     .retained_effects
                     .original_by_parent(frame, index, view)?;
-                if (!self.retained_input_is_ready(index, object)
+                if (!self.retained_input_is_materialized(index, object)
                     || (original && !self.retained_original_is_ready(index, object)))
                     && (original || RetainedEffectPublication::active_source(frame, index, view)?)
                 {
@@ -632,7 +636,7 @@ impl GpuRenderer {
                     .as_ref()
                     .ok_or(EffectPrepareError::PublicationMismatch)?;
                 let analytic = matches!(
-                    row.geometry(),
+                    frame.render_geometry(index),
                     Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
                 ) && row.style.fill.is_some()
                     && row.fill_paint.is_none()
@@ -640,7 +644,29 @@ impl GpuRenderer {
                     && effect.backdrop_blur().is_none()
                     && frame.reveal(index) == 1.0
                     && publication.active_family_animation_indices().is_empty();
-                if !analytic {
+                // The worker may retain an analytic semantic primitive while
+                // preparing its effective geometry as a path mesh. Select the
+                // capture fast path from the actual prepared draw as well.
+                let analytic = analytic
+                    .then(|| {
+                        let scratch = if prepared.geometry_only {
+                            Some(index)
+                        } else {
+                            prepared
+                                .source_geometry_slots
+                                .and_then(|slots| slots.get(index))
+                                .copied()
+                                .flatten()
+                        }?;
+                        let observation = prepared.geometry.observe_object(scratch).ok()?;
+                        matches!(
+                            observation.primitive,
+                            RenderPrimitive::Circle | RenderPrimitive::Rectangle
+                        )
+                        .then_some((scratch, observation))
+                    })
+                    .flatten();
+                let Some((scratch, mut observation)) = analytic else {
                     if prepared.object_indices.get(&object) != Some(&index)
                         || prepared.capture_items(object).is_none()
                         || !prepared.source_is_visible(object)
@@ -649,21 +675,7 @@ impl GpuRenderer {
                     }
                     sources.push((index, Some((object, index, effect.definitions(), None))));
                     continue;
-                }
-                let scratch = if prepared.geometry_only {
-                    index
-                } else {
-                    prepared
-                        .source_geometry_slots
-                        .and_then(|slots| slots.get(index))
-                        .copied()
-                        .flatten()
-                        .ok_or(EffectPrepareError::UnsupportedCapture)?
                 };
-                let mut observation = prepared
-                    .geometry
-                    .observe_object(scratch)
-                    .map_err(|_| EffectPrepareError::UnsupportedCapture)?;
                 let geometry = match observation.primitive {
                     RenderPrimitive::Circle => GeometryRef::circle(
                         prepared.geometry.circles[observation.instance_index].radius,
@@ -791,13 +803,12 @@ impl GpuRenderer {
                 let prefix = self.retained_effects.backdrops.entries.get(&index).cloned();
                 let backdrop = definitions
                     .iter()
-                    .copied()
                     .find(|d| d.input_role() == noon_core::EffectInputRole::PainterPrefix);
                 let painted = backdrop.map(|_| {
                     definitions
                         .iter()
-                        .copied()
                         .filter(|d| d.input_role() == noon_core::EffectInputRole::Painted)
+                        .cloned()
                         .collect::<Vec<_>>()
                 });
                 let definitions = painted.as_deref().unwrap_or(definitions);
@@ -808,7 +819,13 @@ impl GpuRenderer {
                     self.retire_backdrop_output(object);
                 }
                 let extra_bytes = self.backdrop_texture_bytes();
+                let shader_context = definitions
+                    .iter()
+                    .any(|d| d.as_shader().is_some())
+                    .then(|| self.effect_shader_context(publication, index))
+                    .transpose()?;
                 let request = EffectCaptureRequest {
+                    shader: shader_context.as_ref(),
                     object_index: scratch,
                     definitions,
                     texture_budget_bytes: texture_budget_bytes
@@ -817,7 +834,7 @@ impl GpuRenderer {
                 };
                 let demand = if let Some(definition) = backdrop.filter(|_| prefix.is_some()) {
                     let sigma = crate::EffectCaptureParameters {
-                        definition,
+                        definition: definition.clone(),
                         output_height: self.viewport_size[1],
                         world_view_height: f64::from(self.camera.world_size.y),
                         scope_opacity: crate::pack_style(&frame.objects[index]).opacity,
@@ -881,7 +898,7 @@ impl GpuRenderer {
                         text_state,
                         index,
                         object,
-                        definition,
+                        definition.clone(),
                         super::super::source_capture::PainterPrefixCaptureRequest {
                             anchor: prefix.anchor,
                             candidates: prefix.candidates,

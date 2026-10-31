@@ -48,6 +48,8 @@ export function createAuthoringRenderController(host) {
   let sharedReader = null;
   let transferableReceiver = null;
   let renderer = null;
+  // Opaque owned GPU leases only; semantic publication stays in the author worker.
+  let effectPreparation = null;
   let resourceBytes = null;
   let reconnectResourceBundlePending = false;
   let canvas = null;
@@ -428,6 +430,8 @@ export function createAuthoringRenderController(host) {
   }
 
   function detachRenderPort() {
+    effectPreparation?.prepared?.free?.();
+    effectPreparation = null;
     cancelScheduledFrame();
     engineWake = null;
     continuousPresentation = false;
@@ -476,6 +480,17 @@ export function createAuthoringRenderController(host) {
       }
       return;
     }
+    if (message.type === "prepare_effect_programs") {
+      void prepareEffectPrograms(message);
+      return;
+    }
+    if (message.type === "release_effect_programs") {
+      if (effectPreparation?.session === message.session && effectPreparation.requestId === message.requestId) {
+        effectPreparation.prepared?.free?.();
+        effectPreparation = null;
+      }
+      return;
+    }
     if (message.type === "retained_resources") {
       handleRetainedResources(message);
       return;
@@ -511,6 +526,35 @@ export function createAuthoringRenderController(host) {
       } catch (error) {
         fail(error, null);
       }
+    }
+  }
+
+  async function prepareEffectPrograms(message) {
+    const port = renderPort, owner = renderer;
+    const entry = { session: message.session, requestId: message.requestId, prepared: null };
+    try {
+      requireBootstrappedRenderer("prepare effect programs");
+      if (!Number.isSafeInteger(message.requestId) || message.requestId <= 0 ||
+          !Number.isInteger(message.session) || message.session < 0 || message.session > 0xffffffff ||
+          !(message.bytes instanceof Uint8Array) || effectPreparation !== null) {
+        throw new Error("invalid effect preparation request");
+      }
+      effectPreparation = entry;
+      const prepared = await owner.prepareEffectPrograms(message.bytes);
+      if (renderPort !== port || renderer !== owner || effectPreparation !== entry) {
+        prepared.free();
+        return;
+      }
+      entry.prepared = prepared;
+      // This checks the current device/cache authority after the external await.
+      owner.cacheEffectPrograms(prepared);
+      port.postMessage({ type: "effect_programs_prepared", session: message.session, requestId: message.requestId });
+    } catch (error) {
+      if (effectPreparation === entry) effectPreparation = null;
+      if (error instanceof WebAssembly.RuntimeError) { fail(error, null); return; }
+      entry.prepared?.free?.();
+      if (renderPort === port) port?.postMessage({ type: "effect_programs_prepared",
+        session: message.session, requestId: message.requestId, error: String(error?.message ?? error) });
     }
   }
 

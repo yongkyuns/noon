@@ -221,7 +221,7 @@ impl SemanticStore {
             self.insert_semantic_effect(
                 copy,
                 name,
-                definition,
+                definition.clone(),
                 Some(crate::SemanticEffectCopyProvenance::new(
                     attachment, definition,
                 )),

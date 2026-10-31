@@ -79,16 +79,26 @@ impl ComposedSourceGraphView for View<'_> {
     fn source(&self, owner: ObjectId) -> Option<&ComposedSource> {
         self.row(owner)?.state.content.composed_source()
     }
-    fn owner_valid(&self, owner: ObjectId) -> bool {
-        self.row(owner).is_some_and(|row| {
-            !row.state.draw_enabled
-                && row.state.spatial.is_none()
-                && row.state.transform == Transform2D::IDENTITY
-                && row.state.style.fill.is_none()
-                && row.state.style.stroke.is_none()
-                && row.state.fill_paint.is_none()
-                && row.state.text_bounds.is_none()
-        })
+    fn owner_error(&self, owner: ObjectId) -> Option<Kind> {
+        let Some(row) = self.row(owner) else {
+            return Some(Kind::InvalidOwner);
+        };
+        if row
+            .state
+            .effects
+            .as_deref()
+            .is_some_and(noon_compile::CompiledEffectStack::uses_local_shader_coordinates)
+        {
+            return Some(Kind::UnsupportedLocalShaderCoordinates);
+        }
+        let valid = !row.state.draw_enabled
+            && row.state.spatial.is_none()
+            && row.state.transform == Transform2D::IDENTITY
+            && row.state.style.fill.is_none()
+            && row.state.style.stroke.is_none()
+            && row.state.fill_paint.is_none()
+            && row.state.text_bounds.is_none();
+        (!valid).then_some(Kind::InvalidOwner)
     }
     fn input_valid(&self, input: ObjectId) -> Option<bool> {
         self.row(input)

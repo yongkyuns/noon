@@ -159,7 +159,7 @@ pub(super) fn prepare_initial(
                 CompiledEffectStack::new_with_visibility(
                     effects.iter().map(|effect| CompiledEffect {
                         attachment: effect.attachment,
-                        definition: effect.definition,
+                        definition: effect.definition.clone(),
                     }),
                     effects
                         .iter()

@@ -45,8 +45,8 @@ pub(super) fn effect_snapshot(
         result.push(SemanticAnimationEffectSnapshot {
             attachment: planned_nodes[token],
             name: name.clone(),
-            definition: *definition,
-            copy_provenance: *copy_provenance,
+            definition: definition.clone(),
+            copy_provenance: copy_provenance.clone(),
         });
     }
     // Named additions precede the one visibility binding even when they were

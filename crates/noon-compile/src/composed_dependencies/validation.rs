@@ -16,7 +16,7 @@ pub(super) fn validate(
             continue;
         }
         if let Some(source) = view.source(owner) {
-            if !view.owner_valid(owner) {
+            if view.owner_error(owner).is_some() {
                 return Err(error(
                     owner,
                     CompiledComposedSourceErrorKind::InvalidBackdropSource,
@@ -115,8 +115,8 @@ pub(super) fn validate(
     let mut intervals = Vec::with_capacity(candidates.len());
     for owner in candidates {
         let source = view.source(owner).expect("validated scope ancestry");
-        if !view.owner_valid(owner) {
-            return Err(error(owner, CompiledComposedSourceErrorKind::InvalidOwner));
+        if let Some(kind) = view.owner_error(owner) {
+            return Err(error(owner, kind));
         }
         let first = source.members()[0];
         let start = view

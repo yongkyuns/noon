@@ -640,15 +640,16 @@ fn dense_style_updates_preserve_new_and_changed_effect_definitions_as_full_rows(
             .iter()
             .find(|row| row.object == f.inner_id)
             .unwrap()
-            .effects[0];
+            .effects[0]
+            .clone();
         effect.definition = crate::TransportEffectDefinition::Blur {
             radius: noon_core::EffectRadius::Pixels(2.0 + step as f64),
         };
-        delta.retained.objects[0].effects = vec![effect];
+        delta.retained.objects[0].effects = vec![effect.clone()];
         let mut compact = delta.clone();
         compactor.compact_dense_rows(&mut compact);
         assert_eq!(compact.retained.objects.len(), 1);
-        assert_eq!(compact.retained.objects[0].effects, [effect]);
+        assert_eq!(compact.retained.objects[0].effects, [effect.clone()]);
         assert_eq!(compact.retained.object_patches.len(), 127);
         mirror.apply(compact.retained).unwrap();
         let installed = mirror.frame().unwrap().objects[0]

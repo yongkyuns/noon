@@ -40,7 +40,7 @@ impl Shadow {
 }
 impl sealed::Sealed for Shadow {}
 impl EffectValue for Shadow {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
         update.require_parameters(&[
             EffectParameter::Color,
             EffectParameter::Radius,
@@ -53,7 +53,7 @@ impl EffectValue for Shadow {
             offset: update.offset.unwrap_or(self.offset),
         })
     }
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
         if !self.radius.same_unit(target.radius) {
             return Err(EffectParameterError::DiscreteTransition(
                 EffectParameter::Radius,
@@ -67,9 +67,9 @@ impl EffectValue for Shadow {
         Ok(())
     }
     fn sample_effect_parameters(
-        self,
-        target: Self,
-        request: EffectUpdate,
+        &self,
+        target: &Self,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let channel = |a: f32, b: f32| interpolate(f64::from(a), f64::from(b), alpha) as f32;
@@ -90,7 +90,7 @@ impl EffectValue for Shadow {
                 .map(|_| self.offset.interpolate(target.offset, alpha)),
             ..EffectUpdate::default()
         };
-        update.apply_to(self)?;
+        update.apply_to(*self)?;
         Ok(update)
     }
 }

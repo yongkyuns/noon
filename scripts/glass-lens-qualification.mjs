@@ -22,7 +22,7 @@ function prefix(image) {
 }
 await qualifyPairedAuthoring({
   cases: times.map(sampleTime => ({
-    id: `glass-${sampleTime}`, file: "glass_lens.py", factory: "createDirectGlassLensSmokeRenderer",
+    id: `glass-${sampleTime}`, file: "showcase_glass_lens.py", factory: "createDirectGlassLensSmokeRenderer",
     duration: 8.5, sampleTime, playback: "live", canvasSize: [320, 180],
     directHeldSampleTime: held.get(sampleTime),
     boundaries: [0.5, 2, 2.5, 4, 4.5, 5, 5.5, 6.5, 7, 8],

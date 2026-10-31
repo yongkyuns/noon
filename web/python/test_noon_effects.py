@@ -51,6 +51,48 @@ class EffectFacadeTests(unittest.TestCase):
         self.addCleanup(context.__exit__, None, None, None)
         return value
 
+    def test_shader_updates_keep_typed_rust_keys_and_strict_language_values(self):
+        from _noon_shaders import _ShaderParameterKey
+        keys = {}
+        for kind in ("scalar", "vector2", "color", "boolean", "unsigned"):
+            key = object.__new__(_ShaderParameterKey)
+            key._key = types.SimpleNamespace(kind=kind)
+            keys[kind] = key
+        self.object.set_effect("material", parameters={
+            keys["scalar"]: 0.25, keys["vector2"]: (-0.0, 0.5),
+            keys["color"]: noon.Color(1, 0.5, 0, 0.25),
+            keys["boolean"]: False, keys["unsigned"]: 4294967295,
+        })
+        self.request.setShaderScalar.assert_called_once_with(keys["scalar"]._key, 0.25)
+        self.request.setShaderVector2.assert_called_once_with(keys["vector2"]._key, (-0.0, 0.5))
+        self.request.setShaderColor.assert_called_once_with(keys["color"]._key, (1, 0.5, 0, 0.25))
+        self.request.setShaderBoolean.assert_called_once_with(keys["boolean"]._key, False)
+        self.request.setShaderUnsigned.assert_called_once_with(keys["unsigned"]._key, 4294967295.0)
+        self.handle.setEffect.assert_called_once_with("material", self.request)
+        for parameters in ({"gain": 0.5}, {keys["scalar"]: True},
+                           {keys["boolean"]: 1}, {keys["unsigned"]: 1.5}):
+            with self.assertRaises(TypeError):
+                self.object.set_effect("material", parameters=parameters)
+        self.assertEqual(self.request.free.call_count, 5)
+        self.assertIs(copy.deepcopy(keys["scalar"]), keys["scalar"])
+
+    def test_shader_float_queries_preserve_signed_zero_from_double_buffers(self):
+        import array
+        import math
+        from _noon_shaders import ShaderEffect, _ShaderParameterKey
+        definition = Mock()
+        value = ShaderEffect._from_definition(definition)
+        for kind, numbers in (("scalar", [-0.0]), ("vector2", [-0.0, 0.5])):
+            key = object.__new__(_ShaderParameterKey)
+            key._key = types.SimpleNamespace(kind=kind)
+            buffer = Mock()
+            buffer.to_py.return_value = memoryview(array.array("d", numbers))
+            definition.shaderValue.return_value = buffer
+            observed = value.value(key)
+            self.assertEqual(math.copysign(1, observed if kind == "scalar" else observed[0]), -1)
+            buffer.to_py.assert_called_once_with()
+        self.assertIs(copy.deepcopy(value), value)
+
     def test_bloom_keeps_camera_parameters_in_rust_and_reuses_effect_routing(self):
         definition = types.SimpleNamespace(kind="bloom", radius=4.0, pixels=True, threshold=0.15, intensity=3.0)
         with patch.object(sys.modules["js"], "noonBloom", return_value=definition, create=True) as make:

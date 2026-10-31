@@ -242,7 +242,7 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
                 edited.composite_passes,
                 edited.texture_allocations
             ),
-            (1, 0, 0, 1, 0)
+            (1, 0, 0, 0, 0)
         );
         assert_eq!(fixture.last_image_upload, RasterImageUploadStats::default());
 
@@ -610,7 +610,7 @@ fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
                 edited.blur_passes,
                 edited.composite_passes
             ),
-            (0, 0, 1)
+            (0, 0, 0)
         );
         assert_eq!((edited.bytes_uploaded, edited.texture_allocations), (32, 0));
         let removed = runtime.frame().objects[1].id;
@@ -747,7 +747,7 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
                 presented.blur_passes,
                 presented.composite_passes,
             ),
-            (2, 1, 1, 2, 1)
+            (2, 1, 1, 2, 0)
         );
         assert_eq!(
             prepared.geometry.observe_object(1).unwrap().transform,
@@ -1038,8 +1038,8 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
             (1, 1, 2)
         );
         assert_eq!(
-            first.texture_allocations, 5,
-            "source, MSAA, and three filter images"
+            first.texture_allocations, 4,
+            "source, MSAA, and two filter masks"
         );
         assert!(fixture.renderer.has_draw_source_effect(object));
         let clean = fixture.prepare(&mut runtime, true);
@@ -1074,7 +1074,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
                 edited.bytes_uploaded,
                 edited.texture_allocations
             ),
-            (1, 1, 0, 0, 1, 32, 0)
+            (1, 1, 0, 0, 0, 32, 0)
         );
         let mut style = runtime.frame().objects[1].style;
         style.opacity = 0.35;

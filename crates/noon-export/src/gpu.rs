@@ -85,6 +85,7 @@ pub(super) struct NativeCapture {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: GpuRenderer,
+    prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
     overlay: OverlayGpuState,
@@ -107,6 +108,20 @@ pub(super) struct NativeCapture {
 }
 
 impl NativeCapture {
+    pub(super) fn prepare_effect_modules(
+        &mut self,
+        programs: &[noon_core::WgslEffectProgram],
+    ) -> Result<(), CaptureError> {
+        let request = self
+            .renderer
+            .effect_module_preparation(&self.device, programs);
+        let prepared = pollster::block_on(request.prepare()).map_err(CaptureError::gpu)?;
+        self.renderer
+            .cache_effect_programs(&self.device, &prepared)
+            .map_err(CaptureError::gpu)?;
+        self.prepared_effect_modules = Some(prepared);
+        Ok(())
+    }
     pub async fn new(
         options: &CaptureOptions,
         layout: Rgba8ReadbackLayout,
@@ -199,6 +214,7 @@ impl NativeCapture {
             device,
             queue,
             renderer,
+            prepared_effect_modules: None,
             preparer: RetainedFramePreparer::new(),
             text,
             overlay: OverlayGpuState::default(),
@@ -274,6 +290,7 @@ impl NativeCapture {
             FORMAT
         };
         let mut renderer = GpuRenderer::new(&self.device, &self.queue, format);
+        renderer.copy_effect_program_cache_from(&self.device, &self.renderer);
         renderer.set_viewport(
             &self.device,
             &self.queue,
@@ -330,6 +347,12 @@ impl NativeCapture {
     ) -> Result<CaptureWork, CaptureError> {
         self.fault.check()?;
         self.prepare_working_profile(publication, view)?;
+        pollster::block_on(
+            self.renderer
+                .prepare_effect_programs(&self.device, publication),
+        )
+        .map_err(CaptureError::gpu)?;
+        self.prepared_effect_modules = None;
         let clear = noon_render_wgpu::authored_clear_color(self.clear, self.working_profile);
         let camera = view.camera;
         let width = self.layout.width();

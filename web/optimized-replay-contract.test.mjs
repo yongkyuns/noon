@@ -49,9 +49,12 @@ test("optimized identity rejects debug, no-opt and unrelated feature overrides",
 
 test("release fixture export is opt-in without enabling renderer diagnostics", async () => {
   const cargo = await source("crates/noon-web/Cargo.toml");
-  assert.match(cargo, /^default = \["renderer"\]$/m);
+  const defaults = cargo.match(/^default = \[(.*)\]$/m)?.[1];
+  assert.equal(typeof defaults, "string");
+  assert.match(defaults, /"renderer"/);
+  assert.doesNotMatch(defaults, /"(?:renderer-smoke|replay-smoke|prepared-prefix)"/);
   assert.match(cargo, /^replay-smoke = \[\]$/m);
-  assert.match(cargo, /^renderer-smoke = \["renderer"\]$/m);
+  assert.match(cargo, /^renderer-smoke = \[[^\n]*"renderer"[^\n]*\]$/m);
   const rust = await source("crates/noon-web/src/determinism.rs");
   assert.match(rust, /#\[cfg\(all\(\s*target_arch = "wasm32",\s*any\(debug_assertions, feature = "replay-smoke"\)\s*\)\)\]\s*mod wasm/);
 });

@@ -18,7 +18,7 @@ fn appearance(
 ) -> Vec<(noon_core::SemanticEffectName, EffectDefinition)> {
     snapshot
         .iter()
-        .map(|effect| (effect.name.clone(), effect.definition))
+        .map(|effect| (effect.name.clone(), effect.definition.clone()))
         .collect()
 }
 

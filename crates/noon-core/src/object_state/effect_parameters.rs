@@ -1,5 +1,6 @@
 //! Finite checked effect parameters shared by the built-in leaf filters.
-use crate::{Color, EffectDefinition, GlowSource};
+use crate::{Color, EffectDefinition, GlowSource, ShaderParameterKey, ShaderValue};
+use std::sync::Arc;
 
 /// A radius explicitly measured in final output pixels, not CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -148,6 +149,7 @@ pub enum EffectParameter {
     Softness,
     Seed,
     Size,
+    Shader(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -161,6 +163,9 @@ pub enum EffectParameterError {
     InvalidProgress,
     InvalidSoftness,
     InvalidView,
+    InvalidShaderParameter(u8),
+    InvalidShaderParameters,
+    ShaderProgramMismatch,
     DiscreteTransition(EffectParameter),
     UnsupportedParameter(EffectParameter),
     IncompatibleDefinition,
@@ -179,6 +184,13 @@ impl std::fmt::Display for EffectParameterError {
             Self::InvalidThreshold => f.write_str("Bloom threshold must be finite and in [0, 64]"),
             Self::InvalidProgress => f.write_str("effect progress must be finite and in [0, 1]"),
             Self::InvalidSoftness => f.write_str("effect softness must be finite and in [0, 1]"),
+            Self::InvalidShaderParameter(index) => write!(f, "invalid shader parameter {index}"),
+            Self::InvalidShaderParameters => {
+                f.write_str("shader updates require at most 16 distinct checked parameter keys")
+            }
+            Self::ShaderProgramMismatch => {
+                f.write_str("shader parameter/program identity mismatch")
+            }
             Self::InvalidView => f.write_str("effect requires a positive finite uniform 2D view"),
             Self::UnsupportedParameter(parameter) => write!(
                 f,
@@ -208,7 +220,7 @@ impl std::error::Error for EffectParameterError {}
 /// use noon_core::EffectUpdate;
 /// let _ = EffectUpdate::default().intensity(true);
 /// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EffectUpdate {
     pub color: Option<Color>,
     pub offset: Option<EffectOffset>,
@@ -220,9 +232,32 @@ pub struct EffectUpdate {
     pub softness: Option<f64>,
     pub seed: Option<u32>,
     pub size: Option<EffectRadius>,
+    pub shader: Option<Arc<Vec<ShaderParameterWrite>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderParameterWrite {
+    pub key: ShaderParameterKey,
+    pub value: ShaderValue,
 }
 
 impl EffectUpdate {
+    pub fn shader_parameter(mut self, key: &ShaderParameterKey, value: ShaderValue) -> Self {
+        let values = Arc::make_mut(self.shader.get_or_insert_with(|| Arc::new(Vec::new())));
+        if let Some(write) = values.iter_mut().find(|w| w.key == *key) {
+            write.value = value;
+        } else {
+            values.push(ShaderParameterWrite {
+                key: key.clone(),
+                value,
+            });
+            values.sort_by_key(|w| w.key.index());
+        }
+        self
+    }
+    pub fn shader_parameters(&self) -> &[ShaderParameterWrite] {
+        self.shader.as_deref().map_or(&[], Vec::as_slice)
+    }
     pub fn threshold(mut self, value: f64) -> Self {
         self.threshold = Some(value);
         self
@@ -239,7 +274,22 @@ impl EffectUpdate {
     }
 
     /// Validate supplied fields before choosing a finite definition.
-    pub fn validate(self) -> Result<(), EffectParameterError> {
+    pub fn validate(&self) -> Result<(), EffectParameterError> {
+        let shader = self.shader_parameters();
+        if shader.len() > 16
+            || shader
+                .windows(2)
+                .any(|pair| pair[0].key.index() >= pair[1].key.index())
+        {
+            return Err(EffectParameterError::InvalidShaderParameters);
+        }
+        for write in shader {
+            if !write.key.definition().kind.accepts(write.value) {
+                return Err(EffectParameterError::InvalidShaderParameter(
+                    write.key.index() as u8,
+                ));
+            }
+        }
         if self
             .threshold
             .is_some_and(|v| !v.is_finite() || !(0.0..=64.0).contains(&v))
@@ -318,7 +368,7 @@ impl EffectUpdate {
     }
 
     pub(crate) fn require_parameters(
-        self,
+        &self,
         supported: &[EffectParameter],
     ) -> Result<(), EffectParameterError> {
         for parameter in self.parameters() {
@@ -331,7 +381,7 @@ impl EffectUpdate {
 
     /// Schema-ordered explicit write channels, including unchanged values.
     /// Empty patches own no channels. This iterator allocates no storage.
-    pub fn parameters(self) -> impl Iterator<Item = EffectParameter> {
+    pub fn parameters(&self) -> impl Iterator<Item = EffectParameter> + '_ {
         [
             EffectParameter::Color,
             EffectParameter::Offset,
@@ -346,9 +396,14 @@ impl EffectUpdate {
         ]
         .into_iter()
         .filter(move |parameter| self.writes(*parameter))
+        .chain(
+            self.shader_parameters()
+                .iter()
+                .map(|w| EffectParameter::Shader(w.key.index() as u8)),
+        )
     }
 
-    pub const fn writes(self, parameter: EffectParameter) -> bool {
+    pub fn writes(&self, parameter: EffectParameter) -> bool {
         match parameter {
             EffectParameter::Color => self.color.is_some(),
             EffectParameter::Offset => self.offset.is_some(),
@@ -360,23 +415,27 @@ impl EffectUpdate {
             EffectParameter::Softness => self.softness.is_some(),
             EffectParameter::Seed => self.seed.is_some(),
             EffectParameter::Size => self.size.is_some(),
+            EffectParameter::Shader(index) => self
+                .shader_parameters()
+                .iter()
+                .any(|w| w.key.index() == usize::from(index)),
         }
     }
 
-    pub fn apply_to<T: EffectValue>(self, current: T) -> Result<T, EffectParameterError> {
+    pub fn apply_to<T: EffectValue>(&self, current: T) -> Result<T, EffectParameterError> {
         current.apply_effect_update(self)
     }
 
     pub fn prepare<T: EffectValue>(
-        self,
+        &self,
         captured: T,
     ) -> Result<PreparedEffectUpdate<T>, EffectParameterError> {
-        let target = self.apply_to(captured)?;
-        captured.validate_effect_transition(target)?;
+        let target = self.apply_to(captured.clone())?;
+        captured.validate_effect_transition(&target)?;
         Ok(PreparedEffectUpdate {
             captured,
             target,
-            request: self,
+            request: self.clone(),
         })
     }
 }
@@ -387,45 +446,45 @@ pub(crate) mod sealed {
 
 /// Closed value operations for the finite built-ins and their shared definition.
 /// External shader schemas are a separate checked resource surface.
-pub trait EffectValue: sealed::Sealed + Copy {
+pub trait EffectValue: sealed::Sealed + Clone {
     #[doc(hidden)]
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError>;
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError>;
     /// Validate replacement of a persistent value while retaining its attachment
     /// and any compatible drivers. This need not permit interpolation between
     /// the values: a dissolve seed is discrete and has no animation channel.
     #[doc(hidden)]
-    fn validate_effect_value_update(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_value_update(&self, target: &Self) -> Result<(), EffectParameterError> {
         self.validate_effect_transition(target)
     }
     #[doc(hidden)]
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError>;
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError>;
     #[doc(hidden)]
     fn sample_effect_parameters(
-        self,
-        target: Self,
-        request: EffectUpdate,
+        &self,
+        target: &Self,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError>;
 }
 
 /// Immutable captured endpoints. Runtime supplies progress and owns all clocks,
 /// attachment identity and publication; this value samples requested fields only.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PreparedEffectUpdate<T: EffectValue = EffectDefinition> {
     captured: T,
     target: T,
     request: EffectUpdate,
 }
 impl<T: EffectValue> PreparedEffectUpdate<T> {
-    pub const fn writes(self, parameter: EffectParameter) -> bool {
+    pub fn writes(&self, parameter: EffectParameter) -> bool {
         self.request.writes(parameter)
     }
-    pub fn sample(self, alpha: f64) -> Result<EffectUpdate, EffectParameterError> {
+    pub fn sample(&self, alpha: f64) -> Result<EffectUpdate, EffectParameterError> {
         if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
             return Err(EffectParameterError::InvalidProgress);
         }
         self.captured
-            .sample_effect_parameters(self.target, self.request, alpha)
+            .sample_effect_parameters(&self.target, &self.request, alpha)
     }
 }
 

@@ -144,7 +144,7 @@ fn large_group_parameter_edit_borrows_source_and_only_member_changes_recapture()
             assert_eq!(work.source_passes, usize::from(step == 2));
             assert_eq!(work.sources_prepared, usize::from(step != 3));
             assert_eq!(
-                Arc::ptr_eq(previous.as_ref().unwrap(), source),
+                CaptureSourceLease::ptr_eq(previous.as_ref().unwrap(), source),
                 step != 2,
                 "parameter/unrelated edits must borrow the existing immutable prepared source"
             );
@@ -294,7 +294,7 @@ fn neutral_parent_releases_retired_child_inputs_and_reactivation_captures_curren
                     .unwrap();
                 assert!(
                     scope.source_instance.same_source(&SourceInstance::Draws {
-                        source: Arc::new(raw),
+                        source: CaptureSourceLease::new(raw),
                         silhouette: None
                     }),
                     "neutral parent must drop its old filtered-child snapshots"

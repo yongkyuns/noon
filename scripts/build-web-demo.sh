@@ -41,6 +41,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs
+  node --check scripts/shader-time-qualification.mjs
+  node --check scripts/glow-profile-qualification.mjs
   node --check scripts/gaussian-blur-qualification.mjs
   node --test scripts/gaussian-blur-reference.test.mjs
   node --test scripts/dissolve-mask-reference.test.mjs
@@ -48,7 +50,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/effect-restore-qualification.mjs
   node --check scripts/pixelate-qualification.mjs
   node --check scripts/glass-lens-qualification.mjs
-  node --check scripts/glass-lens-recovery-qualification.mjs
+  node --check scripts/effect-resource-recovery-qualification.mjs
   node --check scripts/linear-gradient-qualification.mjs
   node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/noise-paint-qualification.mjs

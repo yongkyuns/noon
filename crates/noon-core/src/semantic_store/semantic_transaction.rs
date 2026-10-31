@@ -3791,7 +3791,7 @@ impl SemanticMutationTransaction {
                         .semantic_effect_state(*effect)
                         .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
                     let previous = staged_effects.get(effect).unwrap_or(state);
-                    let next = previous.updated(*update).map_err(|error| {
+                    let next = previous.updated(update).map_err(|error| {
                         SemanticMutationTransactionError::EffectParameter {
                             index,
                             effect: *effect,

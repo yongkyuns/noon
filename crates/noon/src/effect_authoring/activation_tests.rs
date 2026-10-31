@@ -163,7 +163,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
     let object = index.execution_object_id(source.node_id()).unwrap();
     let base = only_effect(&effective(&runtime, object).effects.unwrap());
     let [(property, values)] = base
-        .parameter_channels(EffectUpdate::default().intensity(1.2))
+        .parameter_channels(&EffectUpdate::default().intensity(1.2))
         .unwrap()
         .try_into()
         .unwrap();

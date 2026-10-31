@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -203,6 +204,44 @@ test("tracked Cargo.lock files are preserved and validated without resolver writ
   assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), before);
   assert.deepEqual(prepared.results.map(result => result.mode), ["tracked-preserved", "tracked-preserved"]);
 });
+
+test("qualified anchor lock is source/hash checked and never re-resolved", async (t) => {
+  const { root, git } = await fixture(t);
+  const baseline = await mkdtemp(path.join(os.tmpdir(), "noon-pinned-lock-baseline-"));
+  t.after(() => rm(baseline, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", `file://${root}`, baseline]);
+  const file = path.join(root, ".git/qualified-Cargo.lock"), bytes = "version = 4\n# qualified anchor\n";
+  await writeFile(file, bytes);
+  const pin = { file, source: git("rev-parse", "HEAD"), sha256: createHash("sha256").update(bytes).digest("hex") };
+  const cargo = fakeCargo();
+  const prepared = await prepareProductDependencies(baseline, [root], {
+    runCargo: cargo.runCargo, pinnedLockfiles: new Map([[root, pin]]),
+  });
+  assert.equal(prepared.results[1].mode, "pinned-qualified");
+  assert.equal(prepared.results[1].lockDigest, pin.sha256);
+  assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), bytes);
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 1);
+  assert.equal(cargo.calls.filter(call => call.args[0] === "metadata").length, 2);
+});
+
+for (const field of ["source", "sha256"]) {
+  test(`invalid qualified lock ${field} rejects without replacing or resolving the target`, async (t) => {
+    const { root, git } = await fixture(t);
+    const baseline = await mkdtemp(path.join(os.tmpdir(), "noon-pinned-lock-baseline-"));
+    t.after(() => rm(baseline, { recursive: true, force: true }));
+    execFileSync("git", ["clone", "--quiet", `file://${root}`, baseline]);
+    const file = path.join(root, ".git/qualified-Cargo.lock"), bytes = "version = 4\n# qualified\n";
+    await writeFile(file, bytes);
+    const pin = { file, source: git("rev-parse", "HEAD"), sha256: createHash("sha256").update(bytes).digest("hex") };
+    pin[field] = "0".repeat(field === "source" ? 40 : 64);
+    const before = await readFile(path.join(root, "Cargo.lock"), "utf8"), cargo = fakeCargo();
+    await assert.rejects(prepareProductDependencies(baseline, [root], {
+      runCargo: cargo.runCargo, pinnedLockfiles: new Map([[root, pin]]),
+    }), /pinned dependency lock (source|hash) mismatch/);
+    assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), before);
+    assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 1);
+  });
+}
 
 test("symlink Cargo.lock is rejected before a reusable lock can be copied", async (t) => {
   const { root } = await fixture(t);

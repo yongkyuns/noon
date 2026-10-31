@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from _noon_errors import NoonPendingError, raise_engine_error
+from _noon_errors import NoonPendingError, is_effect_preparation_required, raise_engine_error
 
 
 @dataclass
@@ -146,6 +146,7 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '_ir': SimpleNamespace(Object=ExportObject, _authoring_key=lambda label, key, default: default if key is None else key),
             'engine_call': lambda method, *args, operation=None: method(*args),
             'raise_engine_error': raise_engine_error,
+            'is_effect_preparation_required': is_effect_preparation_required,
             '_canonical_play_options': lambda options: None,
             '_start_default_synchronous_continuation': lambda scene: None,
             '_semantic_continuation_active': lambda scene: scene.mode != 'endpoint',

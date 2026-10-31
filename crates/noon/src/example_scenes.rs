@@ -40,6 +40,7 @@ pub mod foreground_matching;
 pub mod foreground_membership;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod glass_lens;
+pub mod glow_profile;
 pub mod glow_pulse;
 pub mod graph_queries;
 pub mod hatch_paint;
@@ -80,6 +81,8 @@ pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
 pub mod scope_opacity;
+#[cfg(feature = "wgsl-effects")]
+pub mod shader_sweep;
 pub mod shadow;
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub mod spatial_camera_labels;

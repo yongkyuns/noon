@@ -1516,3 +1516,30 @@ test("WebGL recovery waits for later restoration listeners, beyond a microtask c
   assert.equal(recoveries, 1);
   assert.equal(vm.runInContext('webglContextLost', harness.context), false);
 });
+
+
+test("owned effect jobs drop late results and retain modules until source acknowledgement", async () => {
+  const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  const cold = deferred();
+  let cached = 0, freed = 0;
+  const prepared = { free: () => { freed++; } };
+  harness.createdRenderer.prepareEffectPrograms = () => cold.promise;
+  harness.createdRenderer.cacheEffectPrograms = () => { cached++; };
+  harness.context.bytes = new Uint8Array([1]);
+  const stale = vm.runInContext("prepareEffectPrograms({session:11, requestId:1, bytes})", harness.context);
+  vm.runInContext("handleEngineMessage({type:'release_effect_programs', session:11, requestId:1})", harness.context);
+  cold.resolve(prepared);
+  await stale;
+  assert.equal(cached, 0);
+  assert.equal(freed, 1, "cancelled preparation cannot install a late module");
+
+  harness.createdRenderer.prepareEffectPrograms = async () => prepared;
+  await vm.runInContext("prepareEffectPrograms({session:11, requestId:2, bytes})", harness.context);
+  assert.equal(cached, 1);
+  assert.equal(freed, 1, "the live preparation keeps its opaque module lease");
+  vm.runInContext("handleEngineMessage({type:'release_effect_programs', session:11, requestId:2})", harness.context);
+  assert.equal(freed, 2);
+  assert.equal(harness.nextPort.messages.at(-1).type, "effect_programs_prepared");
+});

@@ -70,6 +70,47 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
+### Paints, effects and shader materials
+
+Paints change a surface's fill; effects treat its rendered appearance; camera
+Bloom treats the selected view. Objects retain ordinary geometry, layout and
+animation. Named attachments let you animate independent treatments through
+`.animate.set_effect(...)`. `set_glow(...)` addresses the canonical `"glow"`
+attachment, while `GlowPulse` temporarily owns intensity and restores its captured
+value. Radii use scene units unless written as `Pixels(...)`.
+
+The [composed-effects lesson](web/python/examples/showcase_layered_effects.py)
+creates a `VGroup` named `treated`, then uses ordinary authoring:
+
+```python
+treated.add_effect(Blur(radius=Pixels(0)), name="soften", scope="composed")
+treated.set_glow(radius=Pixels(8), intensity=0, color=Color(0.35, 0.65, 1),
+                 scope="composed")
+self.play(treated.animate.set_effect("soften", radius=Pixels(2))
+          .set_effect("glow", intensity=1.6), run_time=2, rate_func=smooth)
+```
+
+| Implemented profile | Use | Boundaries |
+| --- | --- | --- |
+| Compatibility 2D | Image/linear/radial/noise/hatch fills; ordered Glow, Blur, Shadow, Pixelate and seeded dissolve | Composed effects require supported painter isolation; backdrop sampling uses an explicit bounded painter prefix |
+| Linear HDR | Checked material emission, camera Bloom and qualified composed Blur | Primary planar view; float blending/MSAA support and target budget required; unsupported HDR operators, insets and spatial rows reject |
+| `PaintedPointwiseV1` WGSL | Reusable material color/coverage with typed controls, declared coordinates, authored time and seed | Compatibility output; composed scopes use scene/output-pixel coordinates; source point morphs and arbitrary render/compute passes are excluded |
+
+Custom authors prepare an immutable trusted `WgslEffectProgram` and attach a
+`ShaderEffect` by name. Parameter keys belong to their schema; ordinary target
+animation and seek reuse the program. `shade` returns unassociated encoded RGB
+and a coverage multiplier; the renderer combines source coverage and object/scope
+opacity once. See the [executed material lesson](web/python/examples/showcase_shader_material.py)
+and [extension contract](tests/visual-effects/README.md#candidate-typed-wgsl-profile).
+
+Quality, color/alpha rules, independent references and explicit unsupported
+combinations live in the [effects contract](tests/visual-effects/README.md).
+Profiles use fixed declared quality; unsupported capabilities and budgets reject
+before replacing published output. Native Rust, direct Rust/WASM and browser Pyodide
+have separate execution evidence; native CPython integration and the remaining
+performance/promotion gates stay open in [#1897](https://github.com/yongkyuns/noon/issues/1897)
+and [#2015](https://github.com/yongkyuns/noon/issues/2015).
+
 ### Code blocks
 
 `Code` displays source with native syntax highlighting and preserved indentation.
@@ -190,11 +231,21 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Retained images | [raster_image.rs](crates/noon-native/examples/raster_image.rs) | [raster_image.py](web/python/examples/raster_image.py) |
 | Image glow and motion | [image_glow.rs](crates/noon-native/examples/image_glow.rs) | [image_glow.py](web/python/examples/image_glow.py) |
 | Temporary glow pulses | [glow_pulse.rs](crates/noon-native/examples/glow_pulse.rs) | [glow_pulse.py](web/python/examples/glow_pulse.py) |
+| Radial and patterned fills | [radial_gradient.rs](crates/noon-native/examples/radial_gradient.rs), [hatch_paint.rs](crates/noon-native/examples/hatch_paint.rs) | [radial_gradient.py](web/python/examples/radial_gradient.py), [hatch_paint.py](web/python/examples/hatch_paint.py) |
+| Ordered leaf effects | [ordered_effects.rs](crates/noon-native/examples/ordered_effects.rs) | [ordered_effects.py](web/python/examples/ordered_effects.py) |
+| Composed family effects | [composed_effects.rs](crates/noon-native/examples/composed_effects.rs) | [composed_effects.py](web/python/examples/composed_effects.py) |
+| Material emission and camera Bloom | [camera_bloom.rs](crates/noon-native/examples/camera_bloom.rs) | [camera_bloom.py](web/python/examples/camera_bloom.py) |
+| Explicit backdrop glass | [glass_lens.rs](crates/noon-native/examples/glass_lens.rs) | [showcase_glass_lens.py](web/python/examples/showcase_glass_lens.py) |
+| Custom shader material | [shader_sweep.rs](crates/noon-native/examples/shader_sweep.rs) | [showcase_shader_material.py](web/python/examples/showcase_shader_material.py) |
 | Finite background music | [background_music_lesson.rs](crates/noon-native/examples/background_music_lesson.rs) | [background_music_lesson.py](web/python/examples/background_music_lesson.py) |
 
 The complete qualification corpus lives under [`crates/noon-native/examples`](crates/noon-native/examples) and [`web/python/examples`](web/python/examples).
 
 Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.
+
+The material example opts into trusted WGSL validation:
+`cargo run -p noon-native --features wgsl-effects --example shader_sweep`.
+Pass `-- --late` to introduce shader-bearing objects after execution starts.
 
 The broader example corpus covers callback ordering, sparse reads, family operations, composition, transforms, text, and renderer behavior. Required host callbacks hold authored progress at their ordered barrier; deterministic segments do not require per-frame Python execution when no host-dynamic work is scheduled. Unsupported compatibility behavior remains explicit rather than silently approximated.
 

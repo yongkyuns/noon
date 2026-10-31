@@ -79,7 +79,7 @@ fn alpha_sample(image: &[[f64; 4]], size: [u32; 2], point: [f64; 2]) -> f64 {
     }
     value
 }
-fn neutral(effect: EffectDefinition, height: u32, world: f64) -> bool {
+fn neutral(effect: &EffectDefinition, height: u32, world: f64) -> bool {
     match effect {
         EffectDefinition::Bloom(_) => {
             panic!("view Bloom is outside the compatibility capture oracle")
@@ -92,6 +92,7 @@ fn neutral(effect: EffectDefinition, height: u32, world: f64) -> bool {
         EffectDefinition::Shadow(v) => v.color().alpha == 0.0,
         EffectDefinition::NoiseDissolve(v) => v.is_neutral(),
         EffectDefinition::Pixelate(v) => scalar(v.size(), height, world) <= 1.0,
+        EffectDefinition::Shader(_) => false,
     }
 }
 
@@ -106,9 +107,9 @@ pub(super) fn evaluate(
 ) -> Vec<u8> {
     let last = effects
         .iter()
-        .rposition(|&effect| !neutral(effect, height, world));
+        .rposition(|effect| !neutral(effect, height, world));
     let mut input = source.to_vec();
-    for (index, &effect) in effects.iter().enumerate() {
+    for (index, effect) in effects.iter().enumerate() {
         if neutral(effect, height, world) {
             continue;
         }
@@ -127,7 +128,8 @@ pub(super) fn evaluate(
             input = crate::gpu::sample_filter::tests::reference(
                 &input,
                 crate::SampleParameters {
-                    definition: definition.into(),
+                    shader: None,
+                    definition: (*definition).into(),
                     output_height: height,
                     world_view_height: world,
                     source_bounds: crate::EffectPixelBounds {
@@ -158,6 +160,9 @@ pub(super) fn evaluate(
             .flat_map(|(at, pixel)| {
                 let source: [f64; 4] = std::array::from_fn(|c| f64::from(pixel[c]) / 255.0);
                 let value: [f64; 4] = match effect {
+                    EffectDefinition::Shader(_) => {
+                        panic!("custom programs require a separate independent reference")
+                    }
                     EffectDefinition::Bloom(_) => {
                         unreachable!("view Bloom rejected before compatibility evaluation")
                     }

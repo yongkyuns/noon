@@ -97,6 +97,20 @@ pub async fn create_direct_analytic_profile_renderer(
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
+/// G4 authored glow workload shared with native Rust and the Python example.
+#[wasm_bindgen(js_name = createDirectGlowProfileRenderer)]
+pub async fn create_direct_glow_profile_renderer(
+    canvas: OffscreenCanvas,
+    active: u32,
+    property: &str,
+    duration: f64,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let property = property.parse().map_err(js_error)?;
+    let session = noon::example_scenes::glow_profile::session(active as usize, property, duration)
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
 /// Direct-WASM real-GPU qualification for a local change in a sparse 100k scene.
 #[wasm_bindgen(js_name = createDirectRetainedLocalityRenderer)]
 pub async fn create_direct_retained_locality_renderer(
@@ -1658,6 +1672,43 @@ pub async fn create_direct_lingering_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::polynomial_rates::lingering_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
+/// The same checked custom-material lesson as the native Rust example.
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepSmokeRenderer)]
+pub async fn create_direct_shader_sweep_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepLateSmokeRenderer)]
+pub async fn create_direct_shader_sweep_late_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::late_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderFadeSmokeRenderer)]
+pub async fn create_direct_shader_fade_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::fade_in_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderTimeSmokeRenderer)]
+pub async fn create_direct_shader_time_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::shader_sweep::authored_time_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 

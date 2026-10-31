@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, threshold=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -63,6 +63,9 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
         if size is not None:
             size_pixels = isinstance(size, Pixels)
             engine_call(request.setSize, _number(size.value if size_pixels else size, "size"), size_pixels)
+        if parameters is not None:
+            from _noon_shaders import _write_parameters
+            _write_parameters(request, parameters)
         if threshold is not None:
             engine_call(request.setThreshold, _number(threshold, "threshold"))
         yield request
@@ -397,7 +400,8 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"bloom": Bloom, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
+        from _noon_shaders import ShaderEffect
+        return {"shader": ShaderEffect, "bloom": Bloom, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -453,10 +457,41 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate)):
-        raise TypeError("this effect profile supports Glow, Blur, BackdropBlur, Shadow, NoiseDissolve and Pixelate definitions")
+    """Attach an effect; explicit async live source awaits shader additions."""
+    from _noon_shaders import ShaderEffect
+    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate, ShaderEffect)):
+        raise TypeError("expected a supported immutable Noon effect definition")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
+    if isinstance(definition, ShaderEffect):
+        handle, context, family = _target(value, scope)
+        if context is not None:
+            from _manim_reactive import _current_authoring_scene
+            from _manim_scene import (
+                _async_continuation_active, _synchronous_continuation_active,
+                _SemanticContinuationAwaitable,
+            )
+            from js import noonPrepareSemanticEffects
+            scene = _current_authoring_scene()
+            if scene is None:
+                raise RuntimeError("live shader attachment requires its active authoring source")
+            if not (_async_continuation_active(scene) or _synchronous_continuation_active(scene)):
+                raise RuntimeError("live shader attachment requires a portable or async source barrier")
+
+            def prepare():
+                method = context.prepareFamilyEffectAddition if family else context.prepareEffectAddition
+                staged = engine_call(method, handle, definition._definition, name)
+                return noonPrepareSemanticEffects(context, staged)
+
+            async def publish():
+                from _noon_errors import engine_await
+                await engine_await(prepare(), operation="add_effect")
+
+            if _async_continuation_active(scene):
+                return _SemanticContinuationAwaitable(scene, operation=publish, result=value)
+            from pyodide.ffi import run_sync
+            engine_call(run_sync, prepare(), operation="add_effect")
+            return value
     _call(value, "addEffect", definition._definition, name, scope=scope)
     return value
 
@@ -469,9 +504,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, threshold=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, threshold=threshold) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

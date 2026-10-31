@@ -89,6 +89,8 @@ pub struct EvaluationStats {
     pub groups_evaluated: usize,
     pub tracks_advanced: usize,
     pub binary_search_steps: usize,
+    /// Active declared time-effect rows invalidated by a changed authored time.
+    pub time_effect_rows: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -238,6 +240,8 @@ pub struct SceneInstance {
     /// transient lifetime cannot restore immutable playback admission.
     immutable_playback_revision: noon_core::ExecutionRevision,
     effective_driver_rows: BTreeSet<usize>,
+    time_effect_rows: BTreeSet<usize>,
+    active_time_effect_rows: BTreeSet<usize>,
     effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
     effective_images: BTreeMap<
         noon_core::RasterImageResourceHandle,
@@ -292,6 +296,8 @@ impl Clone for SceneInstance {
             publication: self.publication,
             immutable_playback_revision: self.immutable_playback_revision,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            time_effect_rows: self.time_effect_rows.clone(),
+            active_time_effect_rows: self.active_time_effect_rows.clone(),
             effective_content_drivers,
             effective_images: self.effective_images.clone(),
             effective_geometries: self.effective_geometries.clone(),
@@ -402,6 +408,8 @@ impl SceneInstance {
             publication: PublicationContext::default(),
             immutable_playback_revision: noon_core::ExecutionRevision::default(),
             effective_driver_rows: BTreeSet::new(),
+            time_effect_rows: BTreeSet::new(),
+            active_time_effect_rows: BTreeSet::new(),
             effective_content_drivers: BTreeMap::new(),
             effective_images: BTreeMap::new(),
             effective_geometries: BTreeMap::new(),
@@ -536,9 +544,13 @@ impl SceneInstance {
         &self.changes
     }
 
-    /// Consume one renderer publication atomically with its accumulated changes.
-    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        let changes = self.take_frame_changes();
+    /// Borrow a coherent publication for fallible resource preparation without
+    /// consuming dirty changes or acknowledging any presentation/continuation.
+    pub fn resource_publication(&self) -> RendererPublication<'_> {
+        self.publication_with_changes(self.changes.clone())
+    }
+
+    fn publication_with_changes(&self, changes: FrameChanges) -> RendererPublication<'_> {
         RendererPublication::new(
             self.publication,
             &self.frame,
@@ -553,6 +565,12 @@ impl SceneInstance {
             self,
         )
         .with_view_color_profiles(self)
+    }
+
+    /// Consume one renderer publication atomically with its accumulated changes.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let changes = self.take_frame_changes();
+        self.publication_with_changes(changes)
     }
 
     /// Consume one renderer publication while queueing a presentation-only redraw
@@ -567,20 +585,7 @@ impl SceneInstance {
     ) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();
         self.changes = FrameChanges::presentation_redraw();
-        RendererPublication::new(
-            self.publication,
-            &self.frame,
-            changes,
-            self,
-            self.compiled.font_resources(),
-            self,
-            self,
-            self.compiled.family_animation_plans(),
-            &self.active_family_animation_indices,
-            &self.painter_order,
-            self,
-        )
-        .with_view_color_profiles(self)
+        self.publication_with_changes(changes)
     }
 
     /// Consume derived spatial invalidation for the execution-session index owner.
@@ -589,6 +594,7 @@ impl SceneInstance {
     }
 
     pub(crate) fn mark_changed(&mut self, object_index: usize) {
+        self.refresh_time_effect_row(object_index);
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
         if let Ok(index) = u32::try_from(object_index) {
@@ -636,12 +642,15 @@ impl SceneInstance {
     }
 
     pub(crate) fn mark_added(&mut self, object_index: usize) {
+        self.refresh_time_effect_row(object_index);
         self.changes.insert_added(object_index);
         self.spatial_changes.insert_added(object_index);
         self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
     pub(crate) fn mark_removed(&mut self, object_index: usize) {
+        self.time_effect_rows.remove(&object_index);
+        self.active_time_effect_rows.remove(&object_index);
         self.changes.insert_removed(object_index);
         self.spatial_changes.insert_removed(object_index);
     }
@@ -652,6 +661,7 @@ impl SceneInstance {
     }
 
     pub(crate) fn mark_all_changed(&mut self) {
+        self.rebuild_time_effect_rows();
         self.changes.invalidate_all();
         self.spatial_changes.invalidate_all();
     }
@@ -1411,6 +1421,7 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
+        self.refresh_time_effect_row(index);
         if matches!(
             patch,
             ExecutionPatch::SetEffects { .. } | ExecutionPatch::SetDrawEnabled { .. }
@@ -1503,6 +1514,7 @@ impl SceneInstance {
                 | Property::EffectProgress
                 | Property::EffectSoftness
                 | Property::EffectSize
+                | Property::EffectShader(_)
                 | Property::EffectSeed => {
                     // Reset only the edited channel; independent glow/motion lanes
                     // retain their effective values when tracks are added/removed.
@@ -1518,11 +1530,12 @@ impl SceneInstance {
                         };
                         let next = noon_core::EffectTrackValue::from_definition(
                             channel.property,
-                            base.definition,
+                            &base.definition,
                         )
                         .expect("glow channel")
-                        .update()
-                        .apply_to(current.definition)
+                        .update(&base.definition)
+                        .expect("validated base effect field")
+                        .apply_to(current.definition.clone())
                         .expect("validated base glow");
                         if current.definition != next {
                             current.definition = next;
@@ -1640,9 +1653,7 @@ impl SceneInstance {
 
     fn relower_object(&mut self, object_index: usize, time: f64, stats: &mut EvaluationStats) {
         reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-        for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
-            evaluation_property_channels(&self.compiled, object_index as u32, property)
-        }) {
+        for channel in evaluation_object_channels(&self.compiled, object_index as u32) {
             let tracks = self.compiled.channel_tracks(channel);
             let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
@@ -1739,7 +1750,6 @@ impl SceneInstance {
         self.translation_drag_rows.clear();
         self.active_family_animation_indices.clear();
         self.pending_family_endpoint_expirations.clear();
-        self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
         for group in self.groups.values_mut() {
@@ -1776,6 +1786,7 @@ impl SceneInstance {
         }
         self.refresh_all_graph_dependencies();
         self.refresh_all_spatial_anchors();
+        self.mark_all_changed();
         self.last_stats = stats;
     }
 
@@ -1833,6 +1844,9 @@ impl SceneInstance {
 
         self.flush_spatial_anchor_changes();
 
+        if self.frame.time != previous_time {
+            stats.time_effect_rows = self.invalidate_time_effects();
+        }
         self.last_stats = stats;
         if self.frame.time != previous_time {
             self.publish_effective_change();
@@ -2021,7 +2035,7 @@ fn reset_base_frame(compiled: &CompiledScene, frame: &mut FrameState, time: f64)
     frame.family_animation_plan_indices.resize(count, None);
 }
 
-const PROPERTY_ORDER: [Property; 24] = [
+const PROPERTY_ORDER: [Property; 16] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -2038,15 +2052,21 @@ const PROPERTY_ORDER: [Property; 24] = [
     Property::Appearance,
     Property::Reveal,
     Property::Morph,
-    Property::EffectColor,
-    Property::EffectRadius,
-    Property::EffectIntensity,
-    Property::EffectOffset,
-    Property::EffectProgress,
-    Property::EffectSoftness,
-    Property::EffectSeed,
-    Property::EffectSize,
 ];
+
+fn evaluation_object_channels(
+    compiled: &CompiledScene,
+    object_index: u32,
+) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+    PROPERTY_ORDER
+        .into_iter()
+        .map(move |property| CompiledChannelKey::new(object_index, property))
+        .chain(
+            compiled
+                .channels_for_object_index(object_index)
+                .filter(|c| c.property.is_effect()),
+        )
+}
 
 /// Ordinary channels can have derived drivers without explicit tracks (camera
 /// angular motion). Keep those addresses and add exact effect attachment lanes.
@@ -2809,6 +2829,7 @@ fn apply_group_to_row(
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectShader(_)
             | Property::EffectSeed
             | Property::Presence
             | Property::ZIndex
@@ -3135,7 +3156,7 @@ fn apply_effect_channel(
     if effect.attachment != attachment {
         return false; // an old generation can never control a replacement
     }
-    let current = *effect;
+    let current = &*effect;
     let patch = if restore_base
         || (tracks.last().is_some_and(|last| last.id == track.id)
             && track.reconciled
@@ -3144,15 +3165,16 @@ fn apply_effect_channel(
         let Some(base) = base.filter(|base| base.attachment == attachment) else {
             return false;
         };
-        noon_core::EffectTrackValue::from_definition(track.property, base.definition)
+        noon_core::EffectTrackValue::from_definition(track.property, &base.definition)
             .expect("validated effect channel")
-            .update()
+            .update(&base.definition)
+            .expect("validated base effect field")
     } else {
-        from.sample(to, alpha)
+        from.sample(to, alpha, &current.definition)
             .expect("validated glow endpoints and normalized timing")
     };
     let next = patch
-        .apply_to(current.definition)
+        .apply_to(current.definition.clone())
         .expect("validated single-channel glow update");
     if current.definition == next {
         return false;

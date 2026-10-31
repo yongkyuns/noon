@@ -7,9 +7,9 @@ use noon_core::{ReactiveValue, SignalId};
 use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
-    effective_object_conservative_bounds_with_resources, evaluation_property_channels,
+    effective_object_conservative_bounds_with_resources, evaluation_object_channels,
     upper_bound_start, EffectiveBoundsBasis, EffectiveObjectProperties, EffectivePropertyWrite,
-    FrameRowState, FrameState, RuntimeIdentity, SceneInstance, TrackGroup, PROPERTY_ORDER,
+    FrameRowState, FrameState, RuntimeIdentity, SceneInstance, TrackGroup,
 };
 use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
 
@@ -354,9 +354,7 @@ impl SceneInstance {
             prior_driver_rows += 1;
             let mut row = FrameRowState::from_frame(&self.frame, object_index);
             let base_content = &self.frame.objects[object_index].content;
-            for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
-                evaluation_property_channels(&self.compiled, object_index as u32, property)
-            }) {
+            for channel in evaluation_object_channels(&self.compiled, object_index as u32) {
                 let tracks = self.compiled.channel_tracks(channel);
                 let Some(group) = self.groups.get(&channel) else {
                     continue;
@@ -745,6 +743,9 @@ impl SceneInstance {
         self.effective_driver_rows = next_drivers;
         self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
+        if time_changed {
+            self.last_stats.time_effect_rows = self.invalidate_time_effects();
+        }
         let changed = time_changed || changed || reactive_changed;
         if publish && changed {
             self.publication = self.publication.with_frame_epoch(

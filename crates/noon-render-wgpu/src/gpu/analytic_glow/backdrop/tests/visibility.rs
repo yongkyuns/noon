@@ -26,6 +26,7 @@ fn mask(pixels: &[u8], progress: f64) -> Vec<u8> {
     crate::gpu::sample_filter::tests::reference(
         pixels,
         crate::SampleParameters {
+            shader: None,
             definition: NoiseDissolve::new(7, 0.2)
                 .unwrap()
                 .with_progress(progress)

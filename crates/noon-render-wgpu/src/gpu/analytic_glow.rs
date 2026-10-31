@@ -7,12 +7,7 @@
 
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
-// Prepared captures lease backend GPU resources. WASM resources stay within
-// their owning context; native leases retain their Send/Sync sharing contract.
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc as CaptureSourceLease;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc as CaptureSourceLease;
+use super::GpuLease as CaptureSourceLease;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{EffectDefinition, GeometryRef, GlowSource, ObjectId, Transform2D, Vec2};
@@ -33,6 +28,8 @@ mod inputs;
 pub struct EffectCaptureRequest<'a> {
     pub object_index: usize,
     pub definitions: &'a [EffectDefinition],
+    /// Maps from full output pixels; capture translates by the padded tile origin.
+    pub shader: Option<&'a super::ShaderSampleContext>,
     /// Total retained capture + filter texture budget for this renderer, not just
     /// the current object. Source buffers and shared pipeline metadata are separate.
     /// Resources retained by already-submitted frames require an additional host
@@ -234,7 +231,7 @@ pub(super) struct EffectCaptureGpu {
     // cache keys; owners retain their normal published object identities.
     scopes: BTreeMap<(u8, usize), ResidentEffect>,
     owners: BTreeMap<ObjectId, (u8, usize)>,
-    filter: EffectStackFilter,
+    pub(super) filter: EffectStackFilter,
     placement: Option<PlacementPrograms>,
     bytes: u64,
     backdrops: backdrop::BackdropGpu,
@@ -307,6 +304,7 @@ impl GpuRenderer {
             encoder,
             prepared,
             EffectCaptureRequest {
+                shader: None,
                 object_index: request.object_index,
                 definitions: effect.definitions(),
                 texture_budget_bytes: request.texture_budget_bytes,
@@ -490,9 +488,9 @@ impl GpuRenderer {
             return Err(EffectPrepareError::UnsupportedCapture);
         }
         let mut own_capture = demand.isolate || (composed.is_some() && opacity != 1.0);
-        for &definition in request.definitions {
+        for definition in request.definitions {
             let parameters = crate::EffectCaptureParameters {
-                definition,
+                definition: definition.clone(),
                 output_height: self.viewport_size[1],
                 world_view_height: f64::from(self.camera.world_size.y),
                 scope_opacity: opacity,
@@ -537,7 +535,7 @@ impl GpuRenderer {
             });
             let leaf = [(object, opacity.max(f32::MIN_POSITIVE))];
             let members = members.as_deref().unwrap_or(&leaf);
-            let replacements = if let Some(composed) = &composed {
+            let replacements = if let Some(composed) = composed.as_ref().filter(|_| own_capture) {
                 self.prepare_composed_replacements(
                     prepared,
                     request.object_index,
@@ -654,6 +652,7 @@ impl GpuRenderer {
         }
         let texel_bytes = super::glow_filter::capture_texel_bytes(self.target_format)?;
         let parameters = EffectStackParameters {
+            shader: None,
             working_format: self.target_format,
             output_height: self.viewport_size[1],
             world_view_height: f64::from(self.camera.world_size.y),
@@ -787,6 +786,27 @@ impl GpuRenderer {
         let source_bounds = EffectPixelBounds {
             min: std::array::from_fn(|axis| bounds.min[axis] - f64::from(tile.origin[axis])),
             max: std::array::from_fn(|axis| bounds.max[axis] - f64::from(tile.origin[axis])),
+        };
+        let shader_context = request
+            .shader
+            .map(|context| context.for_capture(tile.origin));
+        super::sample_filter::validate_effect_shader_context(
+            request.definitions,
+            shader_context.as_ref(),
+            tile.size,
+        )?;
+        let _shader_programs = if request.definitions.iter().any(|d| d.as_shader().is_some()) {
+            let cache = self
+                .effect_captures
+                .as_deref()
+                .ok_or(EffectPrepareError::ShaderProgramNotPrepared)?;
+            Some(cache.filter.pin_shader_programs(
+                device,
+                old.map(|old| &old.filter),
+                request.definitions,
+            )?)
+        } else {
+            None
         };
         if request
             .definitions
@@ -1132,28 +1152,53 @@ impl GpuRenderer {
             // and operator; final scope opacity still belongs to placement.
             scope.original_masked = demand.original_by_parent
                 && visibility.is_some_and(|definition| !definition.is_neutral());
-            let upload = glows.filter.prepare_encode(
-                device,
-                queue,
-                encoder,
-                &mut scope.filter,
-                GlowCapture {
-                    source: &scope.source.texture,
-                    silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
-                    revision: scope.revision,
-                },
-                request.definitions,
-                EffectStackParameters {
-                    working_format: self.target_format,
-                    output_height: parameters.output_height,
-                    world_view_height: parameters.world_view_height,
-                    // Keep the captured/filter image independent of final
-                    // placement opacity, including when a parent consumes it.
-                    scope_opacity: 1.0,
-                    scratch_budget_bytes: request.texture_budget_bytes,
-                    source_bounds: Some(source_bounds),
-                },
-            )?;
+            let capture = GlowCapture {
+                source: &scope.source.texture,
+                silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
+                revision: scope.revision,
+            };
+            let filter_parameters = EffectStackParameters {
+                shader: shader_context.as_ref(),
+                working_format: self.target_format,
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                // Keep the captured/filter image independent of final
+                // placement opacity, including when a parent consumes it.
+                scope_opacity: 1.0,
+                scratch_budget_bytes: request.texture_budget_bytes,
+                source_bounds: Some(source_bounds),
+            };
+            // A parent/prefix needs a real image. Otherwise the final pointwise
+            // Glow composition can run in the existing painter-placement draw.
+            // Keep the planner's materialized reservation for later consumers.
+            let placement_only = !demand.required_by_parent
+                && !demand.original_by_parent
+                && !demand.isolate
+                && visibility.is_none()
+                && matches!(request.definitions, [EffectDefinition::Glow(_)])
+                && EffectStackFilter::supports_glow_placement(device, self.target_format);
+            let upload = if placement_only {
+                glows.filter.prepare_glow_placement(
+                    device,
+                    queue,
+                    encoder,
+                    &mut scope.filter,
+                    capture,
+                    request.definitions,
+                    filter_parameters,
+                    &programs.layout,
+                )?
+            } else {
+                glows.filter.prepare_encode(
+                    device,
+                    queue,
+                    encoder,
+                    &mut scope.filter,
+                    capture,
+                    request.definitions,
+                    filter_parameters,
+                )?
+            };
             // The authored stack checks every later pass, including the same
             // Visibility domain/profile, before this additional mask draw.
             let original_work = if scope.original_masked {
@@ -1171,6 +1216,7 @@ impl GpuRenderer {
                         revision: scope.revision,
                     },
                     super::SampleParameters {
+                        shader: None,
                         definition: visibility.expect("active private visibility").into(),
                         output_height: parameters.output_height,
                         world_view_height: parameters.world_view_height,
@@ -1201,6 +1247,7 @@ impl GpuRenderer {
                 .clone();
             if source_changed
                 || stats.filter.composite_passes > 0
+                || (scope.filter.placement_glow().is_some() && stats.filter.bytes_uploaded != 0)
                 || scope.placement.opacity != placement.opacity
                 || scope.placement_output.as_ref() != Some(&output)
             {
@@ -1344,15 +1391,21 @@ impl GpuRenderer {
             "source capture must follow resize"
         );
         let programs = glows.placement.as_ref().expect("prepared placement");
-        programs.draw(
-            pass,
-            scope
-                .placement_binding
-                .as_ref()
-                .expect("prepared source output"),
-            scope.placement_erase_binding.as_ref(),
-            single_sample,
-        );
+        let placement = scope
+            .placement_binding
+            .as_ref()
+            .expect("prepared source output");
+        if !glows
+            .filter
+            .draw_glow_placement(pass, &scope.filter, placement, single_sample)
+        {
+            programs.draw(
+                pass,
+                placement,
+                scope.placement_erase_binding.as_ref(),
+                single_sample,
+            );
+        }
 
         true
     }
@@ -1414,20 +1467,21 @@ impl GpuRenderer {
                     self.draw_plain_ordered_batch(pass, prepared, &segment, single_sample, binding);
             }
             let programs = glows.placement.as_ref().expect("prepared glow programs");
-            pass.set_pipeline(if single_sample {
-                &programs.single
-            } else {
-                &programs.multisampled
-            });
-            pass.set_bind_group(
-                0,
-                scope
-                    .placement_binding
-                    .as_ref()
-                    .expect("prepared glow image"),
-                &[],
-            );
-            pass.draw(0..6, 0..1);
+            let placement = scope
+                .placement_binding
+                .as_ref()
+                .expect("prepared glow image");
+            if !glows
+                .filter
+                .draw_glow_placement(pass, &scope.filter, placement, single_sample)
+            {
+                programs.draw(
+                    pass,
+                    placement,
+                    scope.placement_erase_binding.as_ref(),
+                    single_sample,
+                );
+            }
             stats.draw_calls += 1;
             stats.instances_drawn += 1;
             // The tile's layout differs from the ordinary geometry layout.

@@ -73,6 +73,25 @@ test("changing actual runtime bytes changes the build identity", async (t) => {
   assert.notEqual(changed.buildId, original.buildId);
 });
 
+test("verified consumers can retain browser evidence without weakening producer provenance", async (t) => {
+  const { root, put, git } = await fixture(t);
+  await put(".git/info/exclude", "");
+  git("config", "core.excludesFile", path.join(root, ".git/info/exclude"));
+  await put(".gitignore", await readFile(new URL("../.gitignore", import.meta.url), "utf8"));
+  git("add", ".gitignore");
+  git("-c", "user.name=Noon Test", "-c", "user.email=noon@example.invalid", "commit", "-qm", "repository ignore rules");
+  const original = await createRuntimeBuildIdentity(root);
+  assert.equal(original.sourceRevision, git("rev-parse", "HEAD"));
+  await put("browser-smoke-artifacts/glow-profile/report.json", "{}\n");
+  assert.equal(observedSourceRevision(root), null, "untracked pre-build evidence still rejects");
+  await put(".git/info/exclude", "/browser-smoke-artifacts\n");
+  assert.deepEqual(await createRuntimeBuildIdentity(root), original);
+  await put("web/python-worker.js", "changed runtime bytes\n");
+  assert.notEqual((await createRuntimeBuildIdentity(root)).buildId, original.buildId);
+  await put("unexpected-source.py", "changed source\n");
+  assert.equal(observedSourceRevision(root), null);
+});
+
 test("dirty or unavailable checkout provenance is explicit null, never guessed", async (t) => {
   const { root, put } = await fixture(t);
   await put("tracked.txt", "dirty\n");

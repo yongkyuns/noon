@@ -68,9 +68,11 @@ impl ComposedSourceGraphView for View<'_> {
     fn source(&self, owner: ObjectId) -> Option<&ComposedSource> {
         self.row(owner)?.source.as_ref()
     }
-    fn owner_valid(&self, owner: ObjectId) -> bool {
-        self.row(owner)
-            .is_some_and(|row| row.source.is_some() && row.valid)
+    fn owner_error(&self, owner: ObjectId) -> Option<ErrorKind> {
+        (!self
+            .row(owner)
+            .is_some_and(|row| row.source.is_some() && row.valid))
+        .then_some(ErrorKind::InvalidOwner)
     }
     fn input_valid(&self, input: ObjectId) -> Option<bool> {
         self.row(input).map(|row| row.source.is_none() && row.valid)

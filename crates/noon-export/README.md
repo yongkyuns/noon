@@ -327,6 +327,10 @@ wide-gamut profile is claimed. Broader color-management/player qualification
 remains part of #1896; lossy video is compared with explicit pixel tolerances,
 not bit-identical expectations.
 
+Both compatibility capture and the named HDR-to-SDR capture format are accepted:
+the latter has already applied Reinhard and sRGB transfer once. This remains SDR
+video output; the file adapter does not apply another tone/transfer conversion.
+
 ## Capture-only use
 
 `capture_frames` gives a fallible consumer borrowed tightly packed RGBA pixels
@@ -362,6 +366,13 @@ videos, compares the PNG sequence byte-for-byte against a fresh native capture,
 and retains media, logs, tool versions and tested revision. Process and file
 failure tests are separate from visual/timing checks. Existing architecture,
 workspace, native viewer, browser and product gates are not waived.
+
+The all-feature proof keeps the original three camera cases and adds ordinary
+shader FadeIn and material-emission/camera-Bloom sources at `30000/1001`.
+Every frame, including the shortened final packet at the seven-/five-second
+source boundary, is decoded and checked. The original codec/color bounds remain
+unchanged; frozen raw references cannot certify animated output. Local macOS
+proofs use Metal; hosted correctness uses software Vulkan.
 
 ## Session-owned native hosts
 

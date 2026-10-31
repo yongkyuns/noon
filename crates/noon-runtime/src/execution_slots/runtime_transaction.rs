@@ -552,17 +552,21 @@ impl SceneInstance {
                                         == Some(effect)
                                 })
                             })
-                            && noon_compile::CompiledEffect::PARAMETER_PROPERTIES
-                                .into_iter()
-                                .all(|property| {
-                                    self.compiled
-                                        .channel_tracks(noon_compile::CompiledChannelKey::effect(
-                                            index as u32,
-                                            property,
-                                            attachment,
-                                        ))
-                                        .is_empty()
-                                })
+                            && current.and_then(|stack| stack.get(attachment)).is_some_and(
+                                |effect| {
+                                    effect.parameter_properties().all(|property| {
+                                        self.compiled
+                                            .channel_tracks(
+                                                noon_compile::CompiledChannelKey::effect(
+                                                    index as u32,
+                                                    property,
+                                                    attachment,
+                                                ),
+                                            )
+                                            .is_empty()
+                                    })
+                                },
+                            )
                             && self.transient_glow_attachment(*object) == Some((attachment, true))
                     })
                 } else {
@@ -833,7 +837,7 @@ mod tests {
     }
 
     fn stack(effect: Arc<noon_compile::CompiledEffect>) -> Arc<noon_compile::CompiledEffectStack> {
-        Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
+        Arc::new(noon_compile::CompiledEffectStack::new([effect.as_ref().clone()]).unwrap())
     }
 
     fn enroll_temporary_glow(
@@ -852,7 +856,7 @@ mod tests {
             .prepare_click_glow_pulse(
                 object,
                 noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false),
-                *glow,
+                glow.as_ref().clone(),
                 true,
                 proposed,
             )
@@ -1203,7 +1207,7 @@ mod tests {
         let attachment = noon_core::SemanticNodeId::new(90, 1);
         enroll_temporary_glow(&mut instance, object, attachment);
         let (property, values) = neutral_glow(attachment)
-            .parameter_channels(noon_core::EffectUpdate::default().radius(0.3))
+            .parameter_channels(&noon_core::EffectUpdate::default().radius(0.3))
             .unwrap()
             .pop()
             .unwrap();

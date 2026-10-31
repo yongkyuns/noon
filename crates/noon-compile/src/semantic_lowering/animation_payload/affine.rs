@@ -3203,7 +3203,7 @@ fn rotation_payload_error(
     }
 }
 
-pub(super) type DriverKey = (u64, u8, Option<SemanticNodeId>);
+pub(super) type DriverKey = (u64, u16, Option<SemanticNodeId>);
 pub(super) type DriverMap<T> = BTreeMap<DriverKey, T>;
 
 /// Ordered object prefixes make cross-parameter conflict queries local even
@@ -3239,18 +3239,17 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     let (_, reveal_slot, _) = driver_key(object, Property::Reveal);
     let (_, morph_slot, _) = driver_key(object, Property::Morph);
     let (_, transform_slot, _) = driver_key(object, Property::Transform);
-    let glow_slots =
-        crate::CompiledEffect::PARAMETER_PROPERTIES.map(|property| driver_key(object, property).1);
+    let (_, first_effect_slot, _) = driver_key(object, Property::EffectColor);
     if property == Property::Morph {
         object_drivers(driven, object).find_map(|(key, &owner)| {
             (key.1 != reveal_slot
-                && (key.1 < morph_slot || glow_slots.contains(&key.1))
+                && (key.1 < morph_slot || key.1 >= first_effect_slot)
                 && owner != animation)
                 .then_some(owner)
         })
     } else if property == Property::Transform {
         object_drivers(driven, object).find_map(|(key, &owner)| {
-            (key.1 != reveal_slot && (key.1 <= morph_slot || glow_slots.contains(&key.1)))
+            (key.1 != reveal_slot && (key.1 <= morph_slot || key.1 >= first_effect_slot))
                 .then_some(owner)
         })
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
@@ -3343,6 +3342,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
         Property::EffectSize => 22,
         Property::EffectThreshold => 23,
         Property::Emission => 24,
+        Property::EffectShader(index) => 25 + u16::from(index),
     };
     (object.get(), slot, None)
 }

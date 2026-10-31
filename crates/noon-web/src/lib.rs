@@ -124,6 +124,8 @@ mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+mod gpu_effect_programs;
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod gpu_timestamps;
 mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
@@ -148,6 +150,12 @@ mod pointer_selection_smoke;
 mod prepared_canvas_playback;
 #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
 mod prepared_execution_player;
+#[cfg(all(
+    feature = "renderer-smoke",
+    feature = "wgsl-effects",
+    any(target_arch = "wasm32", test)
+))]
+mod shader_worker_smoke;
 #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
 pub use prepared_execution_player::PreparedExecutionPlayer;
 #[cfg(all(

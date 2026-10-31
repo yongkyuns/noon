@@ -5,12 +5,16 @@ import { fileURLToPath } from "node:url";
 import { productMeasurement } from "../../scripts/playground-product-fps.mjs";
 
 export function validateProductPerformanceAnchor(value) {
-  assert.equal(value?.schemaVersion, 1, "unsupported product performance anchor schema");
+  assert.equal(value?.schemaVersion, 2, "unsupported product performance anchor schema");
   assert.match(value?.source ?? "", /^[0-9a-f]{40}$/, "product performance anchor source must be a commit SHA");
   assert.ok(typeof value?.label === "string" && value.label.length > 0,
     "product performance anchor must have a label");
   assert.equal(value?.policy, "same-run-alternating-pairs",
     "product performance anchor must use the same-run alternating-pair policy");
+  assert.equal(value?.dependencyLock?.file, "product-performance-anchor.Cargo.lock",
+    "product performance anchor dependency lock path changed");
+  assert.match(value?.dependencyLock?.sha256 ?? "", /^[0-9a-f]{64}$/,
+    "product performance anchor dependency lock must have a SHA-256");
   assert.deepEqual(value?.workloads,
     ["parity-square-and-circle", "showcase-camera-follows-path",
       "showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths"],

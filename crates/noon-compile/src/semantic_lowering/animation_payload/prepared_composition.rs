@@ -322,7 +322,7 @@ where
             .iter()
             .find(|attachment| attachment.name.authored() == Some("glow"))
         {
-            let definition = attachment.definition;
+            let definition = &attachment.definition;
             if attachment.name.authored() == Some("glow")
                 && definition
                     .as_glow()

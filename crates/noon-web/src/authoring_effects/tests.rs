@@ -50,7 +50,7 @@ fn offset_shape_units_and_validation_reach_the_shared_shadow_value() {
         true,
     )
     .unwrap();
-    let shadow = noon_core::Shadow::new(update).unwrap();
+    let shadow = noon_core::Shadow::new(update.clone()).unwrap();
     assert_eq!(
         shadow.offset(),
         noon_core::EffectOffset::Pixels([-3.25, 4.5])
@@ -59,15 +59,15 @@ fn offset_shape_units_and_validation_reach_the_shared_shadow_value() {
     for offset in [vec![], vec![1.0], vec![1.0, 2.0, 3.0], vec![f64::NAN, 0.0]] {
         assert!(effect_update(&[], None, false, None, None, &offset, true).is_err());
     }
-    assert!(Glow::new(update).is_err());
-    assert!(noon_core::Blur::new(update).is_err());
+    assert!(Glow::new(update.clone()).is_err());
+    assert!(noon_core::Blur::new(update.clone()).is_err());
 }
 
 #[test]
 fn defaults_and_empty_updates_are_resolved_by_shared_rust() {
     let update = effect_update(&[], None, false, None, None, &[], false).unwrap();
     assert_eq!(update, EffectUpdate::default());
-    let value = Glow::new(update).unwrap();
+    let value = Glow::new(update.clone()).unwrap();
     assert_eq!(value, Glow::default());
     let custom = Glow::new(EffectUpdate::default().intensity(1.4).radius(0.3)).unwrap();
     assert_eq!(update.apply_to(custom).unwrap(), custom);
