@@ -35,9 +35,9 @@ impl PreparedExecutionPlayer {
     /// Move the independent reader into its worker host. The producer stays with
     /// its caller. No runtime, authoring context or history is cloned/transferred
     /// across WASM instances by this typed in-process constructor.
-    pub fn from_reader(reader: PrefixReader, transport_session: u32) -> Self {
-        Self {
-            playback: PreparedCanvasPlayback::new(reader),
+    pub fn from_reader(reader: PrefixReader, transport_session: u32) -> Result<Self, String> {
+        Ok(Self {
+            playback: PreparedCanvasPlayback::new(reader).map_err(str::to_owned)?,
             clock: BrowserExecutionWakeClock::default(),
             encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             snapshot_sent: false,
@@ -46,7 +46,7 @@ impl PreparedExecutionPlayer {
             binding: None,
             sequence: 0,
             source: None,
-        }
+        })
     }
 
     pub fn reserve_object_capacity(&mut self, total: usize) -> Result<usize, PrefixError> {

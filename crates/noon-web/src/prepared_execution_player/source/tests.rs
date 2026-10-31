@@ -33,7 +33,7 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
         source.publish_prepared_prefix(segment, &mut publisher)
     }
     .unwrap();
-    let mut player = PreparedExecutionPlayer::from_reader(reader, session);
+    let mut player = PreparedExecutionPlayer::from_reader(reader, session).unwrap();
     player.set_prepared_playing(false);
     player
         .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)

@@ -267,10 +267,22 @@ fn retention_limit_and_discard_do_not_interrupt_valid_forward_visual_edits() {
 
 #[cfg(feature = "prepared-prefix")]
 #[test]
-fn root_audio_history_does_not_grant_unqualified_prefix_output() {
+fn root_audio_history_admits_bounded_reader_but_not_immutable_output() {
     let mut scene = Scene::new();
     soundtrack(&mut scene);
     let mut session = scene.execution_session().unwrap();
     session.begin_replay_retention(Default::default()).unwrap();
-    assert!(session.validate_prepared_source_domain().is_err());
+    session.validate_prepared_source_domain().unwrap();
+    assert!(!session.supports_immutable_playback());
+    let segment = session.wait_segment(1.0).unwrap();
+    session.advance_to(segment.end_time()).unwrap();
+    let (_, mut reader) = session.create_prepared_prefix(segment).unwrap();
+    reader.seek(0.5).unwrap();
+    assert!(reader.has_audio());
+    let sound = reader.audio_playback().unwrap().next().unwrap();
+    assert_eq!(
+        sound.duration, 0.5,
+        "only delivered visuals authorize the plan"
+    );
+    assert!(!session.supports_immutable_playback());
 }

@@ -9,13 +9,15 @@ pub use reader::PrefixReader;
 impl ExecutionSession {
     /// Reject source-only behavior before a cooperative producer drives time.
     /// This deliberately permits an unfinished ordinary segment, but not a
-    /// callback/causal route that would need sampled source execution.
+    /// callback/causal route that would need sampled source execution. A fixed
+    /// root soundtrack uses the existing budgeted history resource closure; this
+    /// admits headless preparation, not realtime or device playback.
     pub fn validate_prepared_source_domain(&self) -> Result<(), PrefixError> {
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
             || self.runtime.inset_2d_views().next().is_some()
-            || self.has_audio()
+            || (self.has_audio() && self.immutable_audio_root.is_none())
             || !self.interaction_bindings.is_empty()
             || !self.signal_timeline.is_empty()
             || !self.reactive_projection.is_empty()

@@ -216,7 +216,7 @@ fn interpreter_worker_failed_completion_cannot_retry_but_retains_playback() {
 fn interpreter_worker_raw_reader_has_no_implicit_source_authority() {
     let (mut context, _, _) = start();
     let (_, reader) = context.create_prepared_prefix().unwrap();
-    let mut player = PreparedExecutionPlayer::from_reader(reader, 904);
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 904).unwrap();
     context.begin_ordinary_wait(0.25).unwrap();
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
     assert!(context
