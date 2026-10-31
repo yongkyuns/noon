@@ -269,10 +269,105 @@ fn compare_pixels(
     );
 }
 
+fn qualify_batched_blurs(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let size = [43, 37];
+    let sources = (0..5)
+        .map(|i| {
+            primitive_capture(
+                device,
+                queue,
+                size,
+                i % 2 == 0,
+                Color::rgba(0.31, 0.57, 0.83, 0.2 + i as f32 * 0.15),
+                Vec2::new(i as f32 * 0.15 - 0.3, i as f32 * -0.1),
+            )
+        })
+        .collect::<Vec<_>>();
+    let pixels = sources
+        .iter()
+        .map(|s| readback(device, queue, &s.texture))
+        .collect::<Vec<_>>();
+    let mut scopes = (0..5).map(|_| GlowScope::default()).collect::<Vec<_>>();
+    let mut filter = GlowFilter::default();
+    for step in 0..4 {
+        let parameters = [0.25, 1.5, 3.25, 6.0, 12.0]
+            .map(|sigma| super::parameters(sigma + if step > 1 { 0.125 } else { 0.0 }));
+        let mut jobs = Vec::new();
+        for (i, scope) in scopes.iter_mut().enumerate() {
+            // Readback-derived support is independent of the renderer's bounds.
+            // First use full captures, then change only the support, edit radius,
+            // and finally require clean reuse for all four batched masks/remainder.
+            let mut bounds = EffectPixelBounds {
+                min: size.map(f64::from),
+                max: [0.0; 2],
+            };
+            for (pixel, rgba) in pixels[i].as_chunks::<4>().0.iter().enumerate() {
+                if rgba[3] != 0 {
+                    let point = [pixel as u32 % size[0], pixel as u32 / size[0]];
+                    for (axis, coordinate) in point.into_iter().enumerate() {
+                        bounds.min[axis] = bounds.min[axis].min(f64::from(coordinate));
+                        bounds.max[axis] = bounds.max[axis].max(f64::from(coordinate + 1));
+                    }
+                }
+            }
+            assert!(bounds.max[1] - bounds.min[1] < f64::from(size[1] - 4));
+            let work = filter
+                .prepare_inner(
+                    device,
+                    queue,
+                    scope,
+                    GlowCapture {
+                        source: &sources[i].texture,
+                        silhouette: None,
+                        revision: 1,
+                    },
+                    parameters[i],
+                    true,
+                    (step > 0).then_some(bounds),
+                )
+                .unwrap();
+            if step == 3 {
+                assert_eq!(
+                    work.bytes_uploaded + work.texture_allocations + work.pipeline_compiles,
+                    0
+                );
+            }
+            if let Some(job) = GlowFilter::take_blur_job(scope) {
+                jobs.push(job);
+            }
+        }
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let work = filter.encode_blur_jobs(device, &mut encoder, jobs);
+        assert_eq!(
+            work.blur_passes,
+            if step < 3 { 4 } else { 0 },
+            "four masks share a pair; fifth stays independent"
+        );
+        for scope in &mut scopes {
+            let composite = filter.encode(&mut encoder, scope);
+            assert_eq!(composite.blur_passes, 0);
+            assert_eq!(composite.composite_passes, usize::from(step < 3));
+        }
+        queue.submit([encoder.finish()]);
+        for i in 0..5 {
+            compare_pixels(
+                device,
+                queue,
+                &scopes[i],
+                &pixels[i],
+                &pixels[i],
+                size,
+                parameters[i],
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires a native raster adapter; run explicitly, never qualifies via noop"]
 fn native_gaussian_pixels_and_retained_updates() {
     let (device, queue) = device();
+    qualify_batched_blurs(&device, &queue);
     let mut filter = GlowFilter::default();
     // Includes fractional transforms, nonuniform object scale, capture edges,
     // low alpha amplified by intensity, transparent silhouette and sigma limit.

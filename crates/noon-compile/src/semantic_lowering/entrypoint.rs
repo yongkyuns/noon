@@ -202,8 +202,8 @@ pub fn lower_semantic_execution_root(
 
 /// Lower one scene and an explicit initial animation root at time zero.
 ///
-/// Exact property tracks retain their absolute timing. Neutral family animation
-/// compositions use the shared scheduler before runtime construction.
+/// Exact property tracks retain their absolute timing. Affine/effect targets and
+/// neutral family animations use shared scheduling/lowering before runtime construction.
 pub fn lower_semantic_execution_root_with_animation_root(
     store: &SemanticStore,
     root: SemanticNodeId,
@@ -213,7 +213,7 @@ pub fn lower_semantic_execution_root_with_animation_root(
     lower_semantic_execution_root_with_animation_root_at(store, root, index, animation_root, 0.0)
 }
 
-/// Activate initial family compositions at an explicit finite origin.
+/// Activate initial targets and family compositions at an explicit finite origin.
 /// Negative origins allow an imported animation to be in progress at time zero.
 /// Exact property tracks already own absolute timing and are not shifted by this origin.
 pub fn lower_semantic_execution_root_with_animation_root_at(

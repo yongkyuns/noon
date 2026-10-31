@@ -167,7 +167,7 @@ jobs:
       - name: Qualify native HDR pixels, capture equivalence and recovery
         env:
           NOON_NATIVE_HDR_ARTIFACTS: ${{ github.workspace }}/native-hdr-proof
-        run: cargo test -p noon-native --lib view_output::native_hdr -- --include-ignored --nocapture
+        run: cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture
       - name: Present authored camera Bloom through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

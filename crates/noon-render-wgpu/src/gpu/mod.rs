@@ -2907,7 +2907,7 @@ mod tests {
             &device,
             &queue,
             WEBGL_FORMAT,
-            OutputTransfer::BrowserWebGlSrgb,
+            OutputTransfer::SrgbStore,
         );
         let camera =
             Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
@@ -2959,7 +2959,7 @@ mod tests {
             &device,
             &queue,
             WEBGL_FORMAT,
-            OutputTransfer::BrowserWebGlSrgb,
+            OutputTransfer::SrgbStore,
         );
         renderer.set_viewport(&device, &queue, 64, 64);
         assert_eq!(renderer.target_format, WEBGL_FORMAT);
