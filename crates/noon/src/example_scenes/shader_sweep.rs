@@ -269,9 +269,46 @@ fn build_program(introduction: Option<Introduction>) -> Result<LiveProgram<Shade
         .map_err(message)
 }
 
-/// A shader reads canonical authored seconds during an ordinary bounded wait.
-/// Shared with shader_time.py and browser cadence/seek qualification.
+/// Canonical shader-time sampling fixture; the caller owns sampling.
+/// The material remains unbounded and does not grant finite native transport.
 pub fn authored_time_session() -> Result<crate::SceneExecution, String> {
+    let scene = authored_time_scene()?;
+    let mut session = scene.execution_session().map_err(message)?;
+    scene
+        .live(&mut session)
+        .declare_and_activate_composition(
+            &AnimationCompositionRequest::Wait { duration: 2.0 },
+            AnimationOptions::new(),
+        )
+        .map_err(message)?;
+    scene.into_execution_with_session(session).map_err(message)
+}
+
+/// Ordinary source-owned wait: shader time freezes when this program finishes.
+pub struct ShaderTime {
+    waiting: bool,
+}
+
+impl LiveContinuation for ShaderTime {
+    type Error = String;
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+        if self.waiting {
+            return Ok(ContinuationStep::Finished);
+        }
+        self.waiting = true;
+        live.wait_segment(2.0)
+            .map(ContinuationStep::Await)
+            .map_err(message)
+    }
+}
+
+pub fn authored_time_program() -> Result<LiveProgram<ShaderTime>, String> {
+    authored_time_scene()?
+        .into_live_program(ShaderTime { waiting: false })
+        .map_err(message)
+}
+
+fn authored_time_scene() -> Result<Scene, String> {
     let program = WgslEffectProgram::prepare(
         ShaderSchema {
             profile: ShaderProfile::PaintedPointwiseV1,
@@ -292,13 +329,5 @@ pub fn authored_time_session() -> Result<crate::SceneExecution, String> {
     scene
         .add_effect(&panel, ShaderEffect::new(program), "clock")
         .map_err(message)?;
-    let mut session = scene.execution_session().map_err(message)?;
-    scene
-        .live(&mut session)
-        .declare_and_activate_composition(
-            &AnimationCompositionRequest::Wait { duration: 2.0 },
-            AnimationOptions::new(),
-        )
-        .map_err(message)?;
-    scene.into_execution_with_session(session).map_err(message)
+    Ok(scene)
 }

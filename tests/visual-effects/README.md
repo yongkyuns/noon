@@ -22,6 +22,13 @@ See [the animated material lesson](../../web/python/examples/showcase_shader_mat
 an independent coverage reference, different presentation cadences and seek/replay
 on WebGPU and WebGL2. It requires a clean renderer-smoke browser package.
 
+`cargo run -p noon-native --features wgsl-effects --example shader_sweep -- --time`
+runs the same authored-time material through a normal source-owned two-second
+wait. Native/offscreen and direct Rust/WASM–Python tests qualify that program,
+including source completion and settled sleep. The raw sampling session remains
+unbounded and cannot gain immutable native viewer seek merely from a wait;
+arbitrary live-source seek retains its separate admission gate.
+
 Late Rust attachments use `live.prepare_effect_attachments(...)`; shader-bearing
 scene/family edits use `prepare_membership`/`prepare_family_membership`; an ordinary
 shader-bearing introducer uses `prepare_composition`. These yield
@@ -2176,7 +2183,7 @@ before replacing those targets.
 pixels against an independent f64 uniform-interior reference, live/finite source
 modes, exact seek/restoration and resize admission. The native full-field oracle
 remains `cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored`.
-The same CI step also compares 17 ordinary Rust appearance programs through the
+The same CI step also compares 18 ordinary Rust appearance programs through the
 native source adapter and offscreen exporter at four authored samples per second,
 including source completion, two view sizes and the authored camera. It requires
 changing pixels and a maximum two-byte channel difference. The same step compares
