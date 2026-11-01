@@ -43,7 +43,7 @@ function fixture(
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0, canUndoDrag = false;
-  let created = 0, resumed = 0, discarded = 0, completedSegments = 0, drained = 0, committedPhases = 0;
+  let created = 0, resumed = 0, discarded = 0, completedSegments = 0, drained = 0, committedPhases = 0, completedSources = 0;
   let leased = false;
   let initialSnapshots = 0, resourceBundles = 0;
   const callbackReads = [];
@@ -135,9 +135,10 @@ function fixture(
     setSourcePlaybackPlaying: value => { assert.equal(leased, false); if (value) player.resume(); else player.pause(); },
     liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
+    completeSourcePlayback: () => { assert.equal(leased, false); leased = true; completedSources++; player.pause(); return player; },
   };
   return { control, render, player, context, stats: () => ({
-    returned, returnedPlayer, stopped, nativeInputs, created, resumed, discarded, completedSegments,
+    returned, returnedPlayer, stopped, nativeInputs, created, resumed, discarded, completedSegments, completedSources,
     initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
     authoredSampleTimes,
     drained, committedPhases,
@@ -847,8 +848,8 @@ for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]
       assert.equal(f.stats().resumed, 1);
       const beforeDebug = f.stats();
       const debug = await request(f.control.port2, "debug_frame", 65);
-      assert.deepEqual(debug.debugFrame, { time: 2, source: "returned" });
-      assert.deepEqual(f.stats(), beforeDebug, "completed-source diagnostics use the returned owner");
+      assert.deepEqual(debug.debugFrame, { time: 2, source: "active" });
+      assert.deepEqual(f.stats(), beforeDebug, "completed-source diagnostics use the same retained player");
     } finally { endpoint?.stop(); f.close(); }
   });
 }
@@ -2268,7 +2269,12 @@ test("source result waits for final edits without another segment or callback dr
     f.render.port2.postMessage({ type: "tick", timestamp: 1 });
     await finished;
     assert.equal(f.stats().returned, 1);
-    f.player.drainDeltaJson = () => f.player.seekDeltaJson(1);
+    let dirty = true;
+    f.player.drainDeltaJson = () => {
+      if (!dirty) return null;
+      dirty = false;
+      return f.player.seekDeltaJson(1);
+    };
     const changed = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     let resultReady = false;
     const result = endpoint.publishContinuationResult(27).then(() => { resultReady = true; });
@@ -2276,10 +2282,12 @@ test("source result waits for final edits without another segment or callback dr
     f.render.port2.postMessage({ type: "execution_ack", session: finalDelta.session, sequence: finalDelta.sequence });
     await turn();
     assert.equal(resultReady, false);
+    assert.equal(f.stats().completedSources, 0, "transport acceptance cannot retake the completed owner");
     assert.equal(finalDelta.sequence, initialDelta.sequence + 1);
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(finalDelta).json).time, 1);
     f.render.port2.postMessage({ type: "execution_presented", session: finalDelta.session, sequence: finalDelta.sequence });
     await result;
+    assert.equal(f.stats().completedSources, 1);
     const afterCompletion = await request(f.control.port2, "resume", 900);
     assert.equal(afterCompletion.type, "resume");
     assert.equal(afterCompletion.sourcePlaybackControllable, false);
@@ -2293,6 +2301,34 @@ test("source result waits for final edits without another segment or callback dr
   } finally { endpoint?.stop(); f.close(); }
 });
 
+
+for (const afterRetake of [false, true]) test(`stopping during source completion releases the actual owner (retaken=${afterRetake})`, async () => {
+  let completed;
+  const completion = new Promise(resolve => { completed = resolve; });
+  const f = fixture("transferable", null, { generation: 28, onComplete: completed, onError() {} });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await attachPresented(f); await ready;
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await completion;
+    let dirty = afterRetake ? 2 : 1;
+    f.player.drainDeltaJson = () => { if (!dirty) return null; dirty--; return f.player.seekDeltaJson(1); };
+    const delta = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    const finishing = endpoint.publishContinuationResult(28);
+    const rejected = assert.rejects(finishing, /stopped before renderer publication/);
+    const final = await delta;
+    if (afterRetake) {
+      const tail = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      present(f.render.port2, final);
+      await tail;
+    }
+    endpoint.stop(); await rejected;
+    assert.equal(f.stats().completedSources, Number(afterRetake));
+    assert.equal(f.stats().returned, afterRetake ? 2 : 1);
+    assert.equal(f.stats().created, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
 
 test("live state reports elapsed time without presenting a segment horizon as the total duration", async () => {
   const f = fixture("transferable", null, { generation: 81, onComplete() {}, onError() {} });
