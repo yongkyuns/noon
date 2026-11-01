@@ -462,3 +462,17 @@ test("packet limit and retirement reject work without growing or reviving the ma
   assert.equal(reader.drain(() => assert.fail("retired packet reached apply")), 0);
   assert.throws(() => writer.send(delta(1)), /closed/);
 });
+
+
+test("a retired shared writer consumes its one-shot metadata instead of retaining source JSON", () => {
+  const { writer } = sharedPair(); writer.close();
+  const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 1, sequence: 0, snapshot: true };
+  const carrier = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\nnot JSON`);
+  assert.throws(() => writer.send(carrier.json, carrier.metadata), /closed/);
+  const { port1, port2 } = new MessageChannel();
+  try {
+    const sender = new TransferableExecutionDeltaSender(port1);
+    assert.throws(() => sender.send(carrier.json, carrier.metadata), /invalid JSON/,
+      "rejected handoff must not leave a retained validation association");
+  } finally { port1.close(); port2.close(); }
+});

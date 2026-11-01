@@ -162,8 +162,12 @@ export class SharedExecutionDeltaWriter {
   }
 
   send(json, validatedMetadata = null) {
-    if (this.#closed) throw new Error("shared execution writer is closed");
+    if (this.#closed) {
+      validatedDeltaJson.delete(validatedMetadata);
+      throw new Error("shared execution writer is closed");
+    }
     if (typeof json === "string" && json.length > MAX_SHARED_EXECUTION_DELTA_BYTES) {
+      validatedDeltaJson.delete(validatedMetadata);
       throw new Error("shared execution delta exceeds packet byte limit");
     }
     const metadata = metadataForSend(json, validatedMetadata);
