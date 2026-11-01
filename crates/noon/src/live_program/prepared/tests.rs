@@ -268,7 +268,7 @@ fn cooperative_source_foreign_delivery_retains_the_same_suffix_for_correct_reade
     assert_eq!(reader.frontier(), 2.0);
 }
 #[test]
-fn cooperative_source_retention_failure_does_not_publish_a_false_final_range() {
+fn cooperative_source_retention_failure_preserves_the_unadvanced_program() {
     let (mut source, calls, drops) = fixture(
         false,
         false,
@@ -280,11 +280,26 @@ fn cooperative_source_retention_failure_does_not_publish_a_false_final_range() {
     );
     source.prepare_next().unwrap();
     let reader = source.take_reader().unwrap();
-    assert!(source.prepare_next().is_err());
-    assert_eq!(source.status(), PreparedSourceStatus::Failed);
+    let required = PreparedSourceStatus::ExecutionRequired(
+        SourceExecutionRequirement::ReplayUnavailable(ReplayError::RetentionLimit),
+    );
+    assert_eq!(source.prepare_next().unwrap(), required);
+    assert_eq!(source.prepare_next().unwrap(), required);
     assert_eq!(calls.get(), 2);
+    assert_eq!(drops.get(), 0);
+    let mut program = source.take_execution_program().unwrap();
+    assert_eq!(program.session().frame().time, 1.0);
+    assert!(!program.session().replay_scope_active());
+    assert!(matches!(program.status(), LiveProgramStatus::Awaiting(_)));
+    program
+        .drive_to(&mut crate::RustHostCallbackTable::new(), 1.5)
+        .unwrap();
+    assert_eq!(program.session().frame().time, 1.5);
+    assert_eq!(calls.get(), 2);
+    drop(program);
     assert_eq!(drops.get(), 1);
     assert_eq!(reader.end_time(), None);
+    assert_eq!(reader.frontier(), 1.0);
 }
 #[test]
 fn cooperative_source_retains_initial_reactive_execution_without_invoking_source() {
@@ -535,3 +550,5 @@ fn zero_only_source_yields_then_retains_final_edits_at_exact_endpoint() {
 }
 
 mod handoff;
+
+mod profile;
