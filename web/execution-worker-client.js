@@ -221,9 +221,6 @@ export class ExecutionWorkerClient {
     }
     const initialPointerView = options.initialPointerView === undefined ? undefined
       : validatedBrowserPointerView(options.initialPointerView.revision, options.initialPointerView.width, options.initialPointerView.height);
-    if (initiallyPaused && continuationGeneration !== null && !preparedPlayback) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationGeneration === null) {
       throw new Error("external sample pacing requires a source-owned semantic continuation");
     }

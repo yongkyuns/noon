@@ -350,6 +350,12 @@ test("normal runs retain their existing source-owned controls and completed repl
   assert.equal(f.inspect().busyDepth, 0); assert.equal(f.inspect().playbackControls.controllable, true);
 });
 
+test("observed pause beyond the initial segment does not claim the unfinished source is finished", () => {
+  const f = fixture();
+  assert.deepEqual(f.playbackPresentation({ time: 10, playing: false, sourcePlaybackControllable: true }, 1), { label: "Paused", state: "ready" });
+  assert.deepEqual(f.playbackPresentation({ time: 10, playing: true, sourcePlaybackControllable: true }, 1), { label: "Playing", state: "running" });
+});
+
 for (const options of [{ preparedPlayback: "yes" }, { preparationLookaheadSeconds: 0 },
   { preparationLookaheadSeconds: NaN }]) {
   test(`invalid qualification options reject before authoring (${JSON.stringify(options)})`, async () => {

@@ -39,6 +39,7 @@ export class PlaygroundPlaybackControls {
   #playing = true;
   #externalBusy = false;
   #controllable = true;
+  #forwardPlayback = false;
   #unavailableReason = null;
   #canUndoTranslationDrag = false;
   #undoDragSupported = false;
@@ -227,6 +228,7 @@ export class PlaygroundPlaybackControls {
     // A continuation's current play/wait endpoint is not its full duration.
     // Only the completed source result may set the replay range via setDuration.
     else this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag,
+      sourcePlaybackControllable: state.sourcePlaybackControllable,
       hasAudio: state.hasAudio, audioReady: state.audioReady, audioMuted: state.audioMuted,
       audioVolume: state.audioVolume, sections: state.sections, sectionState: state.sectionState,
       ...(state.hasAudio ? { durationSeconds: state.durationSeconds } : {}),
@@ -257,6 +259,9 @@ export class PlaygroundPlaybackControls {
     if (canUndoTranslationDrag !== undefined && typeof canUndoTranslationDrag !== "boolean") {
       throw new TypeError("canUndoTranslationDrag must be boolean when provided");
     }
+    if (state.sourcePlaybackControllable !== undefined && typeof state.sourcePlaybackControllable !== "boolean") {
+      throw new TypeError("sourcePlaybackControllable must be boolean when provided");
+    }
     const prepared = state.preparedPlayback === true || this.#preparedFrontier !== null;
     let duration = this.#durationSeconds;
     if (prepared) {
@@ -268,6 +273,7 @@ export class PlaygroundPlaybackControls {
       duration = validateDuration(durationSeconds);
     }
     this.#durationSeconds = duration;
+    this.#forwardPlayback = state.sourcePlaybackControllable === true;
     if (prepared) {
       this.#preparedFrontier = state.preparedFrontier;
       this.#buffering = state.buffering;
@@ -349,7 +355,7 @@ export class PlaygroundPlaybackControls {
     void this.#runCommand(async (generation) => {
       const result = this.#playing ? await this.#player.pause() : await this.#player.resume();
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
-    });
+    }, true);
   };
 
   #handleRestart = () => {
@@ -439,8 +445,8 @@ export class PlaygroundPlaybackControls {
     void this.#drainSeek();
   };
 
-  async #runCommand(operation) {
-    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending || this.#seekActive) return;
+  async #runCommand(operation, allowForward = false) {
+    if (this.#destroyed || (!this.#controllable && !(allowForward && this.#forwardPlayback)) || this.#externalBusy || this.#commandPending || this.#seekActive) return;
     const generation = this.#controlGeneration;
     this.#commandPending = true;
     this.#renderDisabled();
@@ -503,13 +509,14 @@ export class PlaygroundPlaybackControls {
 
   #render() {
     if (this.#destroyed) return;
-    this.#playButton.textContent = this.#unavailableReason !== null ? "Complete" : !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
+    this.#playButton.textContent = this.#forwardPlayback ? (this.#playing ? "Pause" : "Play")
+      : this.#unavailableReason !== null ? "Complete" : !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
     if (this.#hasAudio && this.#controllable && !this.#playing && !this.#audioReady) {
       this.#playButton.textContent = "Play with sound";
     }
     this.#playButton.setAttribute(
       "aria-label",
-      !this.#controllable ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
+      !this.#controllable && !this.#forwardPlayback ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
     );
     const open = this.#preparedFrontier !== null && this.#durationSeconds === null;
     this.#scrubber.hidden = !this.#controllable || open;
@@ -583,7 +590,7 @@ export class PlaygroundPlaybackControls {
     );
     this.#timeOutput.value = known
       ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
-      : this.#unavailableReason !== null ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
+      : this.#unavailableReason !== null && !this.#forwardPlayback ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
   }
 
   #renderDisabled() {
@@ -592,7 +599,8 @@ export class PlaygroundPlaybackControls {
     // scene stays disabled without displaying an indefinite wait cursor/aria-busy.
     const busy = this.#externalBusy || this.#commandPending || this.#seekActive;
     const blockCommands = !this.#controllable || busy;
-    this.#playButton.disabled = blockCommands || this.#durationSeconds === 0;
+    this.#playButton.disabled = busy || (!this.#controllable && !this.#forwardPlayback) ||
+      (this.#controllable && this.#durationSeconds === 0);
     this.#restartButton.disabled = blockCommands;
     this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
     this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending || this.#durationSeconds === null || this.#durationSeconds === 0;

@@ -1366,9 +1366,6 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
 }
 
 async function attachObservedSemanticExecution(request, entry, continuation, continuationOnly, pyodide) {
-  if (request.initiallyPaused && continuationOnly) {
-    throw new Error("source-owned semantic continuations cannot start paused");
-  }
   if (request.callbackSessionId !== null && request.callbackSessionId !== undefined) {
     if (entry.callbackSessionId !== undefined && entry.callbackSessionId !== request.callbackSessionId) {
       throw new Error("semantic callback session does not belong to this execution context");

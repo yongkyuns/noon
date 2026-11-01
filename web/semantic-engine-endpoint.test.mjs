@@ -131,6 +131,8 @@ function fixture(
     discardExecutionPlayer: (value) => { assert.equal(value, player); leased = false; discarded += 1; },
     retireExecutionSource: () => { assert.equal(leased, false); },
     liveHandoffDuration: () => leased ? undefined : Math.max(time, 1),
+    sourcePlaybackPlaying: () => { assert.equal(leased, false); return player.isPlaying(); },
+    setSourcePlaybackPlaying: value => { assert.equal(leased, false); if (value) player.resume(); else player.pause(); },
     liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
   };
@@ -399,13 +401,10 @@ test("semantic continuation returns one completed player before resuming and ret
       session: initialDelta.session,
       sequence: initialDelta.sequence,
     });
-    const paused = await request(f.control.port2, "pause", 80);
-    assert.equal(paused.type, "error");
-    assert.match(paused.message, /Python source continuation owns execution/);
     const sought = await request(f.control.port2, "seek", 81, { time: 0.75 });
     assert.equal(sought.type, "error");
     assert.match(sought.message, /Python source continuation owns execution/);
-    assert.equal(f.player.isPlaying(), true, "rejected pause must not change presentation state");
+    assert.equal(f.player.isPlaying(), true);
     assert.equal(f.player.time(), 0, "rejected seek must not bypass the live segment barrier");
     const foreignWorkerTimestamp = 9_000_000_000;
     f.render.port2.postMessage({ type: "tick", timestamp: foreignWorkerTimestamp });
@@ -424,10 +423,11 @@ test("semantic continuation returns one completed player before resuming and ret
     assert.deepEqual(wakes, ["idle", "animation_frame", "idle"]);
     const idleState = await request(f.control.port2, "state", 90);
     assert.equal(idleState.time, 1);
-    assert.equal(idleState.playing, false);
-    const idleResume = await request(f.control.port2, "resume", 91);
-    assert.equal(idleResume.type, "error");
-    assert.match(idleResume.message, /Python source continuation owns execution/);
+    assert.equal(idleState.playing, true, "the returned player retains source intent");
+    const idlePause = await request(f.control.port2, "pause", 91);
+    assert.equal(idlePause.type, "pause"); assert.equal(idlePause.playing, false);
+    const idleResume = await request(f.control.port2, "resume", 92);
+    assert.equal(idleResume.type, "resume"); assert.equal(idleResume.playing, true);
 
     endpoint.startContinuation(9);
     assert.equal(f.stats().created, 1, "only the first attachment may bootstrap transport");
@@ -2258,8 +2258,10 @@ test("source result waits for final edits without another segment or callback dr
   });
   let endpoint;
   try {
+    const ready = next(f.control.port2);
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     endpoint = await f.attach();
+    await ready;
     const initialDelta = await initial;
     f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
     f.render.port2.postMessage({ type: "execution_presented", session: initialDelta.session, sequence: initialDelta.sequence });
@@ -2278,6 +2280,11 @@ test("source result waits for final edits without another segment or callback dr
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(finalDelta).json).time, 1);
     f.render.port2.postMessage({ type: "execution_presented", session: finalDelta.session, sequence: finalDelta.sequence });
     await result;
+    const afterCompletion = await request(f.control.port2, "resume", 900);
+    assert.equal(afterCompletion.type, "resume");
+    assert.equal(afterCompletion.sourcePlaybackControllable, false);
+    assert.equal(afterCompletion.playing, false);
+    assert.equal(f.player.isPlaying(), false, "a late resume cannot revive completed source intent");
     assert.equal(f.stats().completedSegments, 1);
     assert.equal(f.stats().continuationDriveTimes.length, 1);
     assert.equal(f.stats().returned, 1);
@@ -2348,7 +2355,7 @@ for (const pacing of ["realtime", "external_samples"]) {
       f.context.liveHandoffDuration = () => 100;
       const state = await request(f.control.port2, "state", 701);
       assert.equal(state.time, 1);
-      assert.equal(state.playing, false);
+      assert.equal(state.playing, pacing === "realtime");
       assert.equal(state.durationSeconds, null);
       assert.equal(f.stats().continuationDriveTimes.length, reads);
       if (sampled) {
@@ -2362,8 +2369,8 @@ for (const pacing of ["realtime", "external_samples"]) {
   });
 }
 
-// Input must observe the active Rust wake owner, not the independently paused
-// ordinary playback clock. Cover animation and pure-wait leases on every lane.
+// Source input observes its segment wake, including pure waits. It must not use
+// the generic finite/looping wake instead. Cover each input/transport lane.
 const continuationWakeInputCases = [
   ["native_state_input", {
     source: { kind: "control", name: "opacity" },
@@ -2392,9 +2399,7 @@ for (const [inputType, fields] of continuationWakeInputCases) {
       let segmentReads = 0;
       let delay = 250;
       try {
-        // A real live drive pauses the ordinary clock while its segment remains
-        // active. A generic executionWake would therefore report idle here.
-        f.player.pause();
+        // Distinct finite and segment wake answers expose accidental routing.
         f.player.executionWake = () => {
           ordinaryReads += 1;
           return { cadence: "idle", timerAfterMilliseconds: undefined };

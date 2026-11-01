@@ -3528,7 +3528,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
         self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
+            .live_clock_at(self.session.frame().time, end_time, self.clock.is_playing())
             .expect("validated execution segment must produce a valid presentation clock");
         // This is another interval in the same active source. Internal
         // authoring handoffs do not restart the wall-to-authored epoch.
@@ -3561,7 +3561,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
         self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
+            .live_clock_at(self.session.frame().time, end_time, self.clock.is_playing())
             .expect("validated execution segment must produce a valid presentation clock");
         // This is another interval in the same active source. Internal
         // authoring handoffs do not restart the wall-to-authored epoch.
@@ -3619,7 +3619,7 @@ impl SemanticExecutionPlayer {
     fn admit_live_segment(&mut self, segment: noon::ExecutionSegment) -> f64 {
         let end_time = segment.end_time();
         self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
+            .live_clock_at(self.session.frame().time, end_time, self.clock.is_playing())
             .expect("validated execution segment must produce a valid presentation clock");
         // This is another interval in the same active source. Internal
         // authoring handoffs do not restart the wall-to-authored epoch.
@@ -3860,7 +3860,7 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)?;
         let end_time = segment.end_time();
         self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
+            .live_clock_at(self.session.frame().time, end_time, self.clock.is_playing())
             .expect("validated execution segment must produce a valid presentation clock");
         // This is another interval in the same active source. Internal
         // authoring handoffs do not restart the wall-to-authored epoch.
@@ -3911,6 +3911,19 @@ impl SemanticExecutionPlayer {
     ) -> Result<WasmExecutionWake, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
+        if !wall_time_ms.is_finite() {
+            return Err("invalid browser wall timestamp".into());
+        }
+        if !self.clock.is_playing() {
+            let mut wake = self.session.wake_state().without_timeline_wake();
+            if self.session.interactions_active() {
+                wake = wake.with_additional_timeline(TimelineWakeState::Continuous);
+            }
+            return Ok(WasmExecutionWake::from_plan(
+                BrowserExecutionWakePlan::from_runtime(wake),
+                None,
+            ));
+        }
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
         let directive = self
             .live_wake_clock
@@ -4039,6 +4052,15 @@ impl SemanticExecutionPlayer {
     ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
+        if !wall_time_ms.is_finite() {
+            return Err("invalid browser wall timestamp".into());
+        }
+        if !self.clock.is_playing() {
+            return Ok(WasmLiveSegmentDrive {
+                callback_phase_json: None,
+                reached_endpoint: false,
+            });
+        }
         let requested_time = self
             .live_wake_clock
             .scene_time_at(wall_time_ms)
@@ -4046,7 +4068,7 @@ impl SemanticExecutionPlayer {
         let requested_time = self
             .session
             .initial_continuous_segment_sample(segment, requested_time);
-        self.live_drive_segment_to(segment, requested_time)
+        self.live_drive_segment_to(segment, requested_time, true)
     }
 
     /// Drive the active continuation segment toward one externally supplied
@@ -4069,7 +4091,7 @@ impl SemanticExecutionPlayer {
             ).into());
         }
         let segment = self.live_segment()?;
-        self.live_drive_segment_to(segment, requested_time)
+        self.live_drive_segment_to(segment, requested_time, false)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4077,9 +4099,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         segment: noon::ExecutionSegment,
         requested_time: f64,
+        playing: bool,
     ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         let current_time = self.session.frame().time;
-        let mut clock = self.live_clock_at(current_time, segment.end_time(), false)?;
+        let mut clock = self.live_clock_at(current_time, segment.end_time(), playing)?;
         match self
             .session
             .advance_segment_to_callback_barrier(segment, requested_time)
@@ -4115,7 +4138,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<bool, AuthoringFailure> {
         self.reject_required_callback_segment()?;
         let segment = self.live_segment()?;
-        let drive = self.live_drive_segment_to(segment, requested_time)?;
+        let drive = self.live_drive_segment_to(segment, requested_time, false)?;
         debug_assert!(drive.callback_phase_json.is_none());
         // Preserve the established wrapper contract: this reports completion
         // reconciliation, not merely reaching an animation endpoint. The async
@@ -4131,7 +4154,11 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        let clock = self.live_clock_at(self.session.frame().time, segment.end_time(), false)?;
+        let clock = self.live_clock_at(
+            self.session.frame().time,
+            segment.end_time(),
+            self.clock.is_playing(),
+        )?;
         noon::LiveSession::new(
             &semantics,
             self.semantic_root
@@ -6150,6 +6177,12 @@ impl SemanticExecutionPlayer {
         self.clock.pause();
     }
     pub fn resume(&mut self) {
+        #[cfg(any(target_arch = "wasm32", test))]
+        if !self.clock.is_playing() && self.live_segment.is_some() {
+            // User pause gives up elapsed wall debt. The next admitted source
+            // wake anchors at its current coherent authored sample.
+            self.live_wake_clock = BrowserExecutionWakeClock::default();
+        }
         self.clock.resume();
     }
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = isPlaying))]
