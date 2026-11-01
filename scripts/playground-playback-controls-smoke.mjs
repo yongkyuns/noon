@@ -372,7 +372,13 @@ class Lesson(Scene):
       });
     }
   });
-  await keyPoints.selectOption("0");
+  const cueMarkers = page.getByRole("group", { name: "Lesson key points", exact: true }).getByRole("button");
+  assert.equal(await cueMarkers.count(), 3);
+  await cueMarkers.nth(1).click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  assert.equal(await keyPoints.inputValue(), "1");
+  assert.equal(await panel.getAttribute("data-playing"), "false");
+  await cueMarkers.nth(0).press("Enter");
   await waitForMetricNear(page, 0);
   assert.equal(await previous.isDisabled(), true);
   await panel.press("ArrowRight");
@@ -393,14 +399,14 @@ class Lesson(Scene):
     return controls.dataset.playing === "true" && controls.dataset.busy === "false"
       && Number(controls.dataset.elapsedSeconds) > duration * 0.65;
   }, Number(initial.scrubberMax));
-  await next.click();
+  await cueMarkers.nth(2).click();
   await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
   assert.equal(await keyPoints.inputValue(), "2");
   assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "true");
   await panel.press("Space");
   await keyPoints.selectOption("0");
   await waitForMetricNear(page, 0);
-  diagnostics.keyPoints = { count: 3, nextTime: Number(initial.scrubberMax) + 1, silent: true, staticWaitClock: true };
+  diagnostics.keyPoints = { count: 3, clickableMarkers: true, nextTime: Number(initial.scrubberMax) + 1, silent: true, staticWaitClock: true };
   await panel.press("ArrowRight");
   await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   await panel.press("Home");
@@ -422,6 +428,8 @@ class Lesson(Scene):
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await cueMarkers.nth(2).click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
   const mobile = await playbackSnapshot(page);
   diagnostics.mobile = mobile;
   assert.ok(
