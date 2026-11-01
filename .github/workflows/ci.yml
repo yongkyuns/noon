@@ -207,6 +207,13 @@ jobs:
         if: github.event_name != 'pull_request'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Reclaim unused Android SDK space
+        # Native workspace linking needs space occupied by this unused SDK.
+        run: |
+          df -h .
+          sudo rm -rf -- /usr/local/lib/android/sdk
+          df -h .
+
       - name: Test workspace
         run: cargo test --workspace --all-features
 
