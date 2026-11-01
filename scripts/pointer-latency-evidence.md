@@ -25,8 +25,11 @@ IDs and unchanged sequence strings. It preserves the product promise, messages,
 errors and input behavior. Suppressed DOM occurrences, failed posts, ambiguous
 joins and bounded-record loss remain explicit. `stop()` removes its own hooks.
 
-The observer records presentation receipts but leaves control-to-presentation
-association unknown: the existing reply supplies no exact required receipt.
+When a control reply supplies `sceneControlPresentation`, the observer joins its
+complete receipt to the raw presentation stream. Older protocols and unavailable
+receipts remain explicitly unknown. A picture already visible before the request
+post keeps its original timestamp separately; it never becomes an invented zero
+latency sample. Nearby frames and different views cannot satisfy the join.
 Its reply reading precedes the existing client message handler. These limitations,
 observer overhead, full provenance and a frozen scoring plan must be addressed
 before its traces can qualify performance; an installed observer is not a gate.
@@ -68,8 +71,9 @@ deferred-Play completion. A true `applied` value requires this acknowledgement.
 The same endpoint, timestamp, and receipt must exist in the raw `presentations`
 stream. An acknowledgement may arrive before the control reply. Never choose the
 next/latest presentation or assume an arbitrary received frame belongs to the
-control. The current production control reply does not by itself establish all
-such links; missing links remain unknown. This reducer does not change that API.
+control. Missing links remain unknown. `preexistingPresentation` requires the
+same complete expected receipt and exact raw observation before the post; it is
+counted separately from new presentations and contributes no latency value.
 
 ## Reporting rules and limitations
 

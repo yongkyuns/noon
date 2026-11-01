@@ -71,7 +71,8 @@ test("collector preserves the product promise and joins DOM, exact post, reply a
   assert.deepEqual([row.requestId, row.controlRequestId, row.outcome, row.applied], [1, 2, "accepted", true]);
   assert.deepEqual(trace.presentations, [{ endpoint: row.endpoint, clockId: "navigation-1", atMs: 110, receipt }]);
   assert.equal(row.presentedMs, undefined, "a nearby presentation cannot be assigned to a control");
-  assert.equal(trace.presentationJoin, "unknown");
+  assert.equal(trace.presentationJoin, "exact-receipt-when-supplied");
+  assert.equal(row.presentationLink, "protocol-absent");
   assert.deepEqual(trace.observerErrors, []);
   assert.deepEqual(f.port.messages[0].input, f.input);
   assert.equal(f.port.messages.length, 2, "observation cannot send extra messages");
@@ -157,5 +158,45 @@ test("a failed native post remains an attempt without a fabricated successful se
   assert.equal(row.postedMs, undefined);
   assert.equal(row.requestId, undefined);
   assert.equal(f.port.messages.length, 1);
+  f.resolve();
+});
+
+for (const atMs of [101, 104, 106]) {
+  test(`control pictures join only their complete receipt, preserving the original time (${atMs})`, t => {
+    const f = fixture(t);
+    const receipt = { session: 1, sequence: 7, presentation: 4, view_revision: 2 };
+    f.dom(); f.client.submitBrowserPointerInput(f.input);
+    const picture = () => { f.clock(atMs); f.port.reply({ type: "pointer_presented", receipt }); };
+    if (atMs < 102) picture();
+    f.clock(102); f.post();
+    if (atMs >= 102 && atMs < 105) picture();
+    f.clock(105); f.port.reply({ type: "browser_pointer_input", requestId: 1,
+      pointerInputAccepted: true, sceneControlApplied: true, sceneControlPresentation: receipt });
+    if (atMs > 105) picture();
+    const [row] = f.snapshot().attempts;
+    assert.deepEqual(row.expectedReceipt, receipt);
+    if (atMs < 102) {
+      assert.deepEqual(row.preexistingPresentation, { atMs, receipt });
+      assert.equal(row.presentedMs, undefined);
+    } else {
+      assert.deepEqual(row.observedReceipt, receipt);
+      assert.equal(row.presentedMs, atMs);
+    }
+    assert.deepEqual(f.snapshot().observerErrors, []);
+    f.resolve();
+  });
+}
+
+test("a nearby receipt with a different view cannot satisfy a control presentation", t => {
+  const f = fixture(t);
+  const receipt = { session: 1, sequence: 7, presentation: 4, view_revision: 2 };
+  f.dom(); f.client.submitBrowserPointerInput(f.input); f.post();
+  f.clock(104); f.port.reply({ type: "pointer_presented", receipt: { ...receipt, view_revision: 3 } });
+  f.clock(105); f.port.reply({ type: "browser_pointer_input", requestId: 1,
+    pointerInputAccepted: true, sceneControlApplied: true, sceneControlPresentation: receipt });
+  const [row] = f.snapshot().attempts;
+  assert.equal(row.presentationLink, "pending");
+  assert.equal(row.presentedMs, undefined);
+  assert.equal(row.preexistingPresentation, undefined);
   f.resolve();
 });

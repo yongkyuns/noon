@@ -233,3 +233,21 @@ test("mixed Window/navigation identities are rejected even for equal numeric tim
     { clockId: "navigation-2", endpoint: "a", atMs: 120, receipt: receipt() },
   ] })), /another Window/);
 });
+
+test("a control retaining an already visible picture preserves its raw time without a zero-latency sample", () => {
+  const prior = { atMs: 101, receipt: receipt() };
+  const evidence = trace({ attempts: [attempt({ kind: "release", applied: true, controlReplyMs: 125,
+    expectedReceipt: receipt(), preexistingPresentation: prior })],
+    presentations: [{ clockId: "navigation-1", endpoint: "engine-generation-1", ...prior }] });
+  const summary = summarizePointerLatency(evidence);
+  assert.equal(summary.all.appliedAlreadyVisible, 1);
+  assert.equal(summary.all.domToMatchedPresentedAck.count, 0);
+  assert.equal(summary.all.appliedPresentationNotObservedByEnd, 0);
+  assert.throws(() => summarizePointerLatency({ ...evidence, presentations: [] }), /raw receipt stream/);
+  for (const invalid of [
+    { ...prior, atMs: 112 },
+    { ...prior, receipt: receipt(1, 2, 3) },
+  ]) assert.throws(() => summarizePointerLatency({ ...evidence, attempts: [
+    { ...evidence.attempts[0], preexistingPresentation: invalid },
+  ] }));
+});

@@ -106,6 +106,14 @@ function validateAttempt(row, index) {
   } else {
     assert.ok(!present(row.observedReceipt), `${label}: receipt without an observation time`);
   }
+  if (present(row.preexistingPresentation)) {
+    assert.equal(row.applied, true, `${label}: a retained picture requires an applied control`);
+    assert.ok(!present(row.presentedMs), `${label}: retained and newly observed pictures are distinct`);
+    requireTime(row.preexistingPresentation.atMs, `${label}.preexistingPresentation.atMs`);
+    assert.ok(row.preexistingPresentation.atMs < row.postedMs, `${label}: retained picture must precede the post`);
+    assert.equal(receiptKey(row.expectedReceipt, "expected retained receipt"),
+      receiptKey(row.preexistingPresentation.receipt, "retained receipt"));
+  }
 }
 
 export function summarizePointerLatency(trace) {
@@ -133,7 +141,9 @@ export function summarizePointerLatency(trace) {
     notAppliedControls: rows.filter(row => row.applied === false).length,
     postNotObservedByEnd: rows.filter(row => !usable(row.postedMs)).length,
     replyNotObservedByEnd: rows.filter(row => !usable(row.replyMs)).length,
-    appliedPresentationNotObservedByEnd: rows.filter(row => row.applied === true && !usable(row.presentedMs)).length,
+    appliedAlreadyVisible: rows.filter(row => present(row.preexistingPresentation)).length,
+    appliedPresentationNotObservedByEnd: rows.filter(row => row.applied === true &&
+      !present(row.preexistingPresentation) && !usable(row.presentedMs)).length,
     // These are conditional distributions with explicit denominators above.
     // They must never be presented as all-input performance acceptance.
     domToPost: distribution(rows.filter(row => usable(row.postedMs)).map(row => row.postedMs - row.domMs)),
@@ -159,10 +169,12 @@ export function summarizePointerLatency(trace) {
     rows.push(row);
     groups.set(group, rows);
   }
-  for (const row of trace.attempts.filter(row => present(row.presentedMs))) {
+  for (const row of trace.attempts.filter(row => present(row.presentedMs) || present(row.preexistingPresentation))) {
+    const atMs = row.presentedMs ?? row.preexistingPresentation.atMs;
+    const receipt = row.observedReceipt ?? row.preexistingPresentation.receipt;
     assert.ok(trace.presentations.some(observation => observation.endpoint === row.endpoint &&
-      observation.atMs === row.presentedMs && receiptKey(observation.receipt, "presentation") ===
-      receiptKey(row.observedReceipt, "matched receipt")),
+      observation.atMs === atMs && receiptKey(observation.receipt, "presentation") ===
+      receiptKey(receipt, "matched receipt")),
       "matched presentation must exist in the raw receipt stream");
   }
   const intervals = [], sequenceGaps = [];

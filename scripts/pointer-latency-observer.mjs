@@ -7,11 +7,18 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
   }
   const attempts = [], presentations = [], observerErrors = [];
   const inputs = new Map(), requests = new Map(), controls = new Map();
+  const pictures = new Map(), awaitingPictures = new Map();
   const ports = new Map();
   let current = null, action = "unlabelled", serial = 0, dropped = 0, stopped = false;
   const now = () => performance.now();
   const inputKey = input => JSON.stringify(input);
   const requestKey = (port, id) => `${port}:${id}`;
+  const pictureKey = (port, receipt) => {
+    const fields = ["session", "sequence", "presentation", "view_revision"];
+    if (!receipt || !fields.every(field => Number.isSafeInteger(receipt[field]) && receipt[field] >= 0) ||
+        receipt.presentation === 0) throw new Error("incomplete control presentation receipt");
+    return JSON.stringify([port, ...fields.map(field => receipt[field])]);
+  };
   const originalSubmit = ExecutionWorkerClient.prototype.submitBrowserPointerInput;
   const originalPost = MessagePort.prototype.postMessage;
   const originalListen = MessagePort.prototype.addEventListener;
@@ -36,11 +43,28 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
   });
   for (const type of ["pointerdown", "pointerup"]) document.addEventListener(type, onDom, true);
 
+  function joinPicture(row, observation) {
+    if (observation.atMs < row.postedMs) {
+      row.preexistingPresentation = { atMs: observation.atMs, receipt: observation.receipt };
+      row.presentationLink = "already-visible";
+    } else {
+      row.presentedMs = observation.atMs;
+      row.observedReceipt = observation.receipt;
+      row.presentationLink = "matched";
+    }
+  }
+
   function onReply(port, message) {
     if (message?.channel !== "noon.engine") return;
     const atMs = now();
     if (message.type === "pointer_presented") {
-      record(presentations, { endpoint: port, clockId, atMs, receipt: structuredClone(message.receipt) });
+      const observation = { endpoint: port, clockId, atMs, receipt: structuredClone(message.receipt) };
+      if (!record(presentations, observation)) return;
+      const key = pictureKey(port, observation.receipt);
+      if (pictures.has(key)) { error("duplicate presentation receipt"); return; }
+      pictures.set(key, observation);
+      for (const row of awaitingPictures.get(key) ?? []) joinPicture(row, observation);
+      awaitingPictures.delete(key);
       return;
     }
     const key = requestKey(port, message.requestId);
@@ -65,6 +89,20 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
     if (typeof message.sceneControlApplied === "boolean") {
       row.applied = message.sceneControlApplied;
       row.controlReplyMs = atMs; // Window receipt, never internal worker apply time.
+      if (row.applied === true) {
+        const receipt = message.sceneControlPresentation;
+        row.presentationLink = receipt === undefined ? "protocol-absent" : receipt === null ? "unavailable" : "pending";
+        if (receipt != null) {
+          row.expectedReceipt = structuredClone(receipt);
+          const key = pictureKey(port, receipt);
+          const observation = pictures.get(key);
+          if (observation) joinPicture(row, observation);
+          else {
+            const rows = awaitingPictures.get(key) ?? [];
+            rows.push(row); awaitingPictures.set(key, rows);
+          }
+        }
+      }
     }
   }
 
@@ -176,9 +214,7 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
     snapshot(metadata) {
       return structuredClone({ ...metadata, schema: 1, clock: "window-performance-now", clockId,
         attempts, presentations, dropped, observerErrors,
-        // The current control protocol does not identify an exact required
-        // presentation. Do not infer one from the latest/nearest receipt.
-        presentationJoin: "unknown", replyObservation: "before-existing-client-message-handler" });
+        presentationJoin: "exact-receipt-when-supplied", replyObservation: "before-existing-client-message-handler" });
     },
     stop() {
       if (stopped) return;
