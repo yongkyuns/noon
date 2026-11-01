@@ -9,11 +9,27 @@ Run deterministic schema/aggregation tests:
 
 ```sh
 node --test scripts/pointer-latency-evidence.test.mjs
+node --test scripts/pointer-latency-observer.test.mjs
 ```
 
 The module exports `summarizePointerLatency(trace)` and
 `comparePointerLatency(baseline, candidate)`. The tests show complete synthetic
 inputs. They exercise the reducer; they do not simulate browser qualification.
+
+`observePointerLatency(ExecutionWorkerClient, { clockId, capacity })` is a separate
+Window-only qualification observer. Install it before gestures, label each
+physical action with `observer.action(name)`, then retain `snapshot(metadata)`.
+It joins a synchronous canvas DOM occurrence to its exact normalized input and
+MessagePort request, then matches replies and deferred controls by their issued
+IDs and unchanged sequence strings. It preserves the product promise, messages,
+errors and input behavior. Suppressed DOM occurrences, failed posts, ambiguous
+joins and bounded-record loss remain explicit. `stop()` removes its own hooks.
+
+The observer records presentation receipts but leaves control-to-presentation
+association unknown: the existing reply supplies no exact required receipt.
+Its reply reading follows the existing client message handler. These limitations,
+observer overhead, full provenance and a frozen scoring plan must be addressed
+before its traces can qualify performance; an installed observer is not a gate.
 
 ## Evidence requirements
 
@@ -81,7 +97,7 @@ reported instead of intersecting them away. A failed/aborted run remains failed/
 aborted in a descriptive pair; it is not excluded to improve the candidate.
 
 The output always says `acceptance: "not-evaluated"`. No threshold or performance
-pass is defined. #2298 still needs a passive live collector, source-matched paired
+pass is defined. #2298 still needs source-matched paired
 Firefox/WebGL2 measurements, observer-overhead assessment, complete stage joins,
 and an explicitly agreed acceptance rule. Existing 15-case audio reports lack
 these timestamps and must not be converted to invented latency evidence. Preserve
