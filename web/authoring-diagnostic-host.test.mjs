@@ -14,7 +14,8 @@ const start = worker.indexOf("async function runAuthoringSource(");
 const end = worker.indexOf("async function runCanonicalCallbackPhase(", start);
 assert.ok(start >= 0 && end > start, "production source entrypoint must exist");
 const run = new Function("withAuthoringDiagnostics", "diagnosedHostCode", "prepareAuthoringDependencies",
-  `${worker.slice(start, end)}; return runAuthoringSource;`,
+  `const activeAuthoringRun = {}; let authoringLibrariesPristine = true;
+  ${worker.slice(start, end)}; return runAuthoringSource;`,
 )(withAuthoringDiagnostics, diagnosedHostCode, async () => {});
 
 const scripts = {};
@@ -24,7 +25,10 @@ const constructor = () => globals;
 constructor.destroy = () => {};
 await run({
   globals: { get: () => constructor },
-  runPython(code) { scripts.compile = code; },
+  runPython(code) {
+    if (code.includes("source_is_scene_only(__noon_source)")) return false;
+    scripts.compile = code;
+  },
   runPythonAsync(code) { scripts.execute = code; return "fixture"; },
 }, "from noon import Scene\nresult=Scene()\n", {
   playground: { selection_generation: 1, run_generation: 7 },

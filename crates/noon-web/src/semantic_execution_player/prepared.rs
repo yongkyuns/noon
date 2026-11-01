@@ -48,10 +48,16 @@ impl SemanticExecutionPlayer {
         }
         Ok(())
     }
-    pub(crate) fn begin_observed_prepared_source(&mut self) -> Result<bool, AuthoringFailure> {
+    pub(crate) fn begin_observed_prepared_source(
+        &mut self,
+        effects: noon::ContinuationEffects,
+    ) -> Result<bool, AuthoringFailure> {
         self.live_segment()?;
+        // An interpreter invocation may perform arbitrary host work after this
+        // await. Scene replay metadata is not a source-purity proof. Keep its
+        // original stack behind the ordinary observed completion protocol.
         self.session
-            .begin_observed_prepared_source()
+            .begin_observed_prepared_source(effects)
             .map(|requirement| requirement.is_some())
             .map_err(prefix_error)
     }
