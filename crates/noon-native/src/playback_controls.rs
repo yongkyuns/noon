@@ -14,10 +14,11 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use crate::{NativeApp, NativeHostError};
 
 impl NativeApp {
-    fn ensure_playback_controls(&self) -> Result<f64, NativeHostError> {
-        self.execution
-            .finite_transport_end()
-            .ok_or(NativeHostError::PlaybackControlsUnavailable)
+    fn ensure_playback_controls(&self) -> Result<Option<f64>, NativeHostError> {
+        if !self.execution.playback_controls_available() {
+            return Err(NativeHostError::PlaybackControlsUnavailable);
+        }
+        Ok(self.execution.finite_transport_end())
     }
 
     fn observed_playback_time(&mut self, now: Instant) -> f64 {
@@ -39,7 +40,9 @@ impl NativeApp {
         let target = self.observed_playback_time(now);
         // A sleeping static interval still has elapsed authored time. Observe it
         // through the existing runtime before dropping the common wall anchor.
-        self.execution.advance_to(target)?;
+        if self.execution.presentation_ready() {
+            self.execution.advance_to(target)?;
+        }
         self.playback_paused = true;
         self.realtime_clock = None;
         #[cfg(feature = "audio")]
@@ -50,7 +53,10 @@ impl NativeApp {
 
     pub(super) fn resume_playback(&mut self) -> Result<(), NativeHostError> {
         let end = self.ensure_playback_controls()?;
-        if self.execution.frame_time() >= end {
+        if end.is_some_and(|end| self.execution.frame_time() >= end) {
+            if !self.execution.can_seek_to(0.0) {
+                return Ok(());
+            }
             self.seek_playback(0.0)?;
         } else if !self.playback_paused {
             return Ok(());
@@ -100,7 +106,7 @@ impl NativeApp {
             .target(observed, direction)
             .map_err(NativeHostError::Program)?
             .map(|(_, section)| section.time);
-        if let Some(time) = target {
+        if let Some(time) = target.filter(|&time| self.execution.can_seek_to(time)) {
             self.seek_playback(time)?;
         }
         Ok(())
@@ -114,7 +120,8 @@ impl NativeApp {
         let end = self.ensure_playback_controls()?;
         match control {
             PlaybackControl::TogglePlayback => {
-                if self.playback_paused || self.execution.frame_time() >= end {
+                if self.playback_paused || end.is_some_and(|end| self.execution.frame_time() >= end)
+                {
                     self.resume_playback()
                 } else {
                     self.pause_playback(now)
@@ -126,7 +133,8 @@ impl NativeApp {
             PlaybackControl::NextSection => {
                 self.seek_playback_section(SectionNavigation::Next, now)
             }
-            PlaybackControl::Restart => self.seek_playback(0.0),
+            PlaybackControl::Restart if self.execution.can_seek_to(0.0) => self.seek_playback(0.0),
+            PlaybackControl::Restart => Ok(()),
             PlaybackControl::ToggleAudioMuted => self.set_viewer_muted(!self.viewer_muted),
         }
     }
@@ -175,11 +183,10 @@ impl NativeApp {
             if let Some(window) = &self.window {
                 let state = if self.playback_paused {
                     "Paused"
-                } else if self
-                    .finite_transport_end
-                    .is_some_and(|end| self.execution.frame_time() >= end)
-                {
+                } else if self.execution.playback_finished() {
                     "Finished"
+                } else if self.execution.buffering() || !self.execution.presentation_ready() {
+                    "Loading"
                 } else {
                     "Playing"
                 };
@@ -188,7 +195,16 @@ impl NativeApp {
                 } else {
                     format!("Volume {:.0}%", self.viewer_volume * 100.0)
                 };
-                window.set_title(&format!("{} — {state} · {audio}", self.config.title));
+                let seeking =
+                    if self.execution.presentation_ready() && !self.execution.can_seek_to(0.0) {
+                        " · Seeking unavailable"
+                    } else {
+                        ""
+                    };
+                window.set_title(&format!(
+                    "{} — {state}{seeking} · {audio}",
+                    self.config.title
+                ));
             }
         }
     }
@@ -242,8 +258,11 @@ impl NativeApp {
             KeyCode::ArrowLeft | KeyCode::ArrowRight => {
                 let end = self.ensure_playback_controls()?;
                 let step = if key == KeyCode::ArrowLeft { -5.0 } else { 5.0 };
-                let target = (self.observed_playback_time(now) + step).clamp(0.0, end);
-                self.seek_playback(target)?;
+                let target = (self.observed_playback_time(now) + step).max(0.0);
+                let target = end.map_or(target, |end| target.min(end));
+                if self.execution.can_seek_to(target) {
+                    self.seek_playback(target)?;
+                }
             }
             KeyCode::ArrowUp | KeyCode::ArrowDown => {
                 let step = if key == KeyCode::ArrowUp { 0.05 } else { -0.05 };

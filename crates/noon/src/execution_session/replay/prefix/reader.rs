@@ -25,6 +25,33 @@ impl PrefixReader {
         Self { session, receiver }
     }
 
+    pub(crate) fn session(&self) -> &ExecutionSession {
+        &self.session
+    }
+
+    pub(crate) fn set_native_state_input(
+        &mut self,
+        source: noon_core::NativeStateSource,
+        value: noon_core::NativeInputValue,
+    ) -> Result<(), crate::ExecutionSessionInputError> {
+        // Source admission excludes semantic input routes. Preserve ordinary
+        // validation and ambient platform occurrence ordering in this session.
+        self.session
+            .set_native_state_input(source, value)
+            .map(|_| ())
+    }
+
+    pub(crate) fn emit_native_event(
+        &mut self,
+        event: noon_core::NativeEventOccurrence,
+    ) -> Result<(), crate::ExecutionSessionInputError> {
+        self.session.emit_native_event(event).map(|_| ())
+    }
+
+    pub fn contains_time(&self, time: f64) -> bool {
+        self.receiver.contains_time(time)
+    }
+
     pub fn runtime_identity(&self) -> RuntimeIdentity {
         self.session.runtime_identity()
     }

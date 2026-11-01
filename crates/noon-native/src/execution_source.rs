@@ -1,12 +1,9 @@
-use noon::integration::{
-    ExecutionViewportQuery, ForwardSample, ForwardSampleStatus, RendererPublication,
-    TimelineWakeState,
-};
+use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::{
-    ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
+    ExecutionSession, LiveContinuation, LiveProgram, PlaybackProgram, RustHostCallbackTable,
     SceneExecution,
 };
 use noon_core::{
@@ -23,11 +20,35 @@ mod viewport_tests;
 
 /// The narrow execution surface consumed by the native platform loop.
 ///
-/// Both implementations retain their canonical runtime owner. This trait only
+/// Shared Rust owners retain execution and playback admission. This trait only
 /// lets the common event loop drive time, deliver normalized input, query
 /// visibility, and acknowledge a publication after the renderer has retained it.
 /// Physical presentation is a separate, potentially coalesced operation.
 pub(crate) trait NativeExecutionSource {
+    fn prepare_until(&mut self, _target: f64) -> Result<bool, NativeHostError> {
+        self.resume_ready()
+    }
+    fn presentation_ready(&self) -> bool {
+        true
+    }
+    fn buffering(&self) -> bool {
+        false
+    }
+    fn take_clock_reanchor(&mut self) -> bool {
+        false
+    }
+    fn playback_controls_available(&self) -> bool {
+        self.finite_transport_end().is_some()
+    }
+    fn playback_finished(&self) -> bool {
+        self.finite_transport_end()
+            .is_some_and(|end| self.frame_time() >= end)
+    }
+    fn can_seek_to(&self, time: f64) -> bool {
+        time.is_finite()
+            && time >= 0.0
+            && self.finite_transport_end().is_some_and(|end| time <= end)
+    }
     fn frame_time(&self) -> f64;
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError>;
     fn retire_execution_source(&mut self) -> Result<(), NativeHostError>;
@@ -93,8 +114,8 @@ pub(crate) trait NativeExecutionSource {
     fn seek_to(&mut self, _time: f64) -> Result<(), NativeHostError> {
         Err(NativeHostError::PlaybackControlsUnavailable)
     }
-    /// Resume one authoring continuation when its shared program is ready.
-    /// Source execution latency does not start a new playback epoch.
+    /// Continue one cooperative preparation/source step. Ordinary observed
+    /// source latency stays in its epoch; data buffering has a separate signal.
     fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
     fn configure_native_pointer_input(
         &mut self,
@@ -330,29 +351,31 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 }
 
-pub(crate) struct LiveProgramExecutionSource<C: LiveContinuation> {
-    program: LiveProgram<C>,
+pub(crate) struct PlaybackExecutionSource<C: LiveContinuation> {
+    program: PlaybackProgram<C>,
     callbacks: RustHostCallbackTable,
 }
 
-impl<C> LiveProgramExecutionSource<C>
+impl<C> PlaybackExecutionSource<C>
 where
     C: LiveContinuation,
     C::Error: std::fmt::Display,
 {
     pub(crate) fn new(
-        mut program: LiveProgram<C>,
-        callbacks: RustHostCallbackTable,
+        program: LiveProgram<C>,
+        mut callbacks: RustHostCallbackTable,
     ) -> Result<Self, NativeHostError> {
-        program.require_effect_resource_preparation();
+        let mut program = program
+            .into_playback()
+            .map_err(|e| NativeHostError::Program(e.to_string()))?;
         program
-            .resume()
-            .map_err(|error| NativeHostError::Program(error.to_string()))?;
+            .prepare_ready(&mut callbacks)
+            .map_err(|e| NativeHostError::Program(e.to_string()))?;
         Ok(Self { program, callbacks })
     }
 }
 
-impl<C> NativeExecutionSource for LiveProgramExecutionSource<C>
+impl<C> NativeExecutionSource for PlaybackExecutionSource<C>
 where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
@@ -371,7 +394,7 @@ where
     }
 
     fn frame_time(&self) -> f64 {
-        self.program.session().frame().time
+        self.session().frame().time
     }
 
     fn scroll_inspection_view(
@@ -387,74 +410,65 @@ where
     }
 
     fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
-        let queries = bounds
-            .iter()
-            .copied()
-            .map(|bounds| self.program.query_viewport(bounds))
-            .collect::<Vec<_>>();
         self.program
-            .session()
-            .renderer_viewport_query_union(queries)
-            .expect("fresh viewport queries share this publication")
+            .query_viewports(bounds)
+            .expect("native rendering requires a ready presentation")
     }
 
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {
-        self.program
-            .session()
+        self.session()
             .inset_2d_views()
             .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
     fn timeline(&self) -> TimelineWakeState {
-        self.program.wake_state().timeline()
+        self.program
+            .wake_state()
+            .map_or(TimelineWakeState::Quiescent, |state| state.timeline())
     }
-
     fn frame_pending(&self) -> bool {
-        self.program.session().wake_state().frame_pending()
+        self.program.presentation_ready()
+            && self
+                .program
+                .wake_state()
+                .is_some_and(|state| state.frame_pending())
     }
-
+    fn presentation_ready(&self) -> bool {
+        self.program.presentation_ready()
+    }
+    fn buffering(&self) -> bool {
+        self.program.buffering()
+    }
+    fn take_clock_reanchor(&mut self) -> bool {
+        self.program.take_clock_reanchor()
+    }
+    fn playback_controls_available(&self) -> bool {
+        true
+    }
+    fn playback_finished(&self) -> bool {
+        self.program.finished()
+    }
+    fn can_seek_to(&self, time: f64) -> bool {
+        self.program.can_seek_to(time)
+    }
+    fn finite_transport_end(&self) -> Option<f64> {
+        self.program.end_time()
+    }
+    fn seek_to(&mut self, time: f64) -> Result<(), NativeHostError> {
+        self.program
+            .seek(time)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
+    }
     fn source_active(&self) -> bool {
-        !matches!(
-            self.program.status(),
-            LiveProgramStatus::Finished | LiveProgramStatus::Terminal
-        )
+        self.program.source_active()
     }
-
     fn pending_endpoint(&self) -> Option<PublicationContext> {
-        match self.program.status() {
-            LiveProgramStatus::PublicationPending(context) => Some(context),
-            _ => None,
-        }
+        self.program.pending_endpoint()
     }
-
     fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
-        // Reuse the same shared forward-sampling protocol as offline Rust
-        // output. It alone orders callbacks, clipped endpoints, continuations,
-        // and same-time edits. No host-side segment schedule is introduced.
-        const MAX_STEPS: u32 = 64;
-        let mut sample = ForwardSample::new(
-            &mut self.program,
-            &mut self.callbacks,
-            requested_time,
-            MAX_STEPS,
-        )
-        .map_err(|error| NativeHostError::Program(error.to_string()))?;
-        for _ in 0..MAX_STEPS {
-            match sample
-                .advance()
-                .map_err(|error| NativeHostError::Program(error.to_string()))?
-            {
-                ForwardSampleStatus::Progress => {}
-                ForwardSampleStatus::ResourcePreparationPending
-                | ForwardSampleStatus::PublicationPending(_)
-                | ForwardSampleStatus::Ready(_)
-                | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
-            }
-        }
-        // Yield before ForwardSample's transition limit would be exceeded.
-        // The canonical program keeps its phase; the next host wake continues
-        // toward the SAME epoch's elapsed time rather than discarding lateness.
-        Ok(())
+        self.program
+            .advance_to(&mut self.callbacks, requested_time)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
     }
 
     fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
@@ -466,14 +480,15 @@ where
             .map(|_| ())
             .map_err(|e| NativeHostError::Program(e.to_string()))
     }
+    fn prepare_until(&mut self, target: f64) -> Result<bool, NativeHostError> {
+        self.program
+            .prepare_until(&mut self.callbacks, target)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
+    }
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
-        if self.program.status() == LiveProgramStatus::ReadyToResume {
-            self.program
-                .resume()
-                .map_err(|error| NativeHostError::Program(error.to_string()))?;
-            return Ok(true);
-        }
-        Ok(false)
+        self.program
+            .prepare_ready(&mut self.callbacks)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
     }
 
     fn configure_native_pointer_input(
@@ -519,24 +534,18 @@ where
     }
 
     fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.program.take_renderer_publication()
+        self.program
+            .take_renderer_publication()
+            .expect("native rendering requires a ready presentation")
     }
 
     fn admit_retained_publication(
         &mut self,
         publication: PublicationContext,
     ) -> Result<(), NativeHostError> {
-        if let LiveProgramStatus::PublicationPending(expected) = self.program.status() {
-            if publication != expected {
-                return Err(NativeHostError::Program(format!(
-                    "retained publication {publication:?} does not match live endpoint {expected:?}"
-                )));
-            }
-            self.program
-                .admit_publication(publication)
-                .map_err(|error| NativeHostError::Program(error.to_string()))?;
-        }
-        Ok(())
+        self.program
+            .admit_publication(publication)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
     }
 
     fn refresh_pointer_hover(
@@ -550,6 +559,8 @@ where
     }
 
     fn session(&self) -> &ExecutionSession {
-        self.program.session()
+        self.program
+            .session()
+            .expect("native source errors terminate the host before further session use")
     }
 }

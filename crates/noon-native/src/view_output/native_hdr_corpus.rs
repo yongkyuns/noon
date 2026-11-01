@@ -43,8 +43,7 @@ where
             "{name}: source must provide real temporal coverage"
         );
         let mut source =
-            LiveProgramExecutionSource::new(factory().unwrap(), RustHostCallbackTable::new())
-                .unwrap();
+            PlaybackExecutionSource::new(factory().unwrap(), RustHostCallbackTable::new()).unwrap();
         let mut draw = Draw::new(device, queue);
         let mut output = AuthoredViewOutput::new(
             adapter,
@@ -53,13 +52,41 @@ where
             noon_render_wgpu::OutputTransfer::Direct,
         );
         let mut prepared_modules = None;
+        let mut incarnation = source.session().runtime_identity();
+        let mut force_full_redraw = false;
         let mut maximum = 0;
         let mut changing_frames = 0;
         let first = &frames[0].1;
         for (observation, expected) in &frames {
             let mut observed = None;
             for _ in 0..64 {
+                source
+                    .prepare_until(observation.requested_time + 1.0)
+                    .unwrap();
                 source.advance_to(observation.requested_time).unwrap();
+                let current = source.session().runtime_identity();
+                let changed_source = current != incarnation;
+                if changed_source {
+                    let format = if draw.profile == ViewColorProfile::LinearHdr {
+                        wgpu::TextureFormat::Rgba16Float
+                    } else {
+                        FORMAT
+                    };
+                    reset_renderer_source(
+                        device,
+                        queue,
+                        format,
+                        size,
+                        &mut draw.preparer,
+                        &mut draw.renderer,
+                        &mut draw.text,
+                    );
+                    force_full_redraw = true;
+                }
+                incarnation = current;
+                if source.buffering() {
+                    continue;
+                }
                 if let Some(programs) = source.pending_effect_programs() {
                     let request = draw.renderer.effect_module_preparation(device, programs);
                     let prepared = pollster::block_on(request.prepare()).unwrap();
@@ -78,7 +105,10 @@ where
                     .unwrap();
                 draw.visible = Some(source.query_viewports(&[bounds]).object_indices().to_vec());
                 let endpoint = source.pending_endpoint();
-                let publication = source.take_renderer_publication();
+                let mut publication = source.take_renderer_publication();
+                if force_full_redraw {
+                    publication.invalidate_all();
+                }
                 let context = publication.context();
                 let pixels = draw
                     .frame(
@@ -92,6 +122,7 @@ where
                     )
                     .0;
                 drop(prepared_modules.take());
+                force_full_redraw = false;
                 if endpoint.is_some() {
                     source.admit_retained_publication(context).unwrap();
                     continue;

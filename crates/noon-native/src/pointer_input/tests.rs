@@ -1,5 +1,5 @@
 use super::*;
-use crate::{execution_source::LiveProgramExecutionSource, NativeViewportConfig};
+use crate::{execution_source::PlaybackExecutionSource, NativeViewportConfig};
 use noon_core::{
     NativeEventOccurrence, NativeEventSource, ReactiveValue, SemanticMutationTransaction,
     SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticSignalValue,
@@ -607,7 +607,7 @@ fn pending_callback_rejects_bursts_without_acknowledging_or_overwriting_position
 fn idle_callback_only_program_does_not_activate_pointer_ingress() {
     let (program, callbacks) =
         noon::example_scenes::ordinary_callback_continuation_program().unwrap();
-    let source = LiveProgramExecutionSource::new(program, callbacks).unwrap();
+    let source = PlaybackExecutionSource::new(program, callbacks).unwrap();
     let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
     assert!(!app.execution.session().has_native_pointer_subscribers());
     app.rebind_pointer_view().unwrap();
