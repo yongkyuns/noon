@@ -35,6 +35,9 @@ on:
       - "scripts/prepared-construct-qualification.mjs"
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
+      - "scripts/prepared-audio-qualification.mjs"
+      - "scripts/browser-audio-observation.mjs"
+      - "tests/fixtures/fourier_audio/**"
       - "scripts/playground-prepared-lifecycle-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/shader-time-qualification.mjs"
@@ -76,6 +79,9 @@ on:
       - "scripts/prepared-construct-qualification.mjs"
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
+      - "scripts/prepared-audio-qualification.mjs"
+      - "scripts/browser-audio-observation.mjs"
+      - "tests/fixtures/fourier_audio/**"
       - "scripts/playground-prepared-lifecycle-qualification.mjs"
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/shader-time-qualification.mjs"
@@ -153,6 +159,8 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: Qualify unchanged ordinary audio and complete Fourier playback
+        run: node scripts/prepared-audio-qualification.mjs
       - name: Qualify actual DOM samples and paused click-selection pixels
         run: |
           node scripts/shader-time-qualification.mjs
@@ -218,6 +226,7 @@ jobs:
             browser-smoke-artifacts/playground-wait-clock-webgpu
             browser-smoke-artifacts/playground-playback-dynamic
             browser-smoke-artifacts/playground-playback-dynamic-webgpu
+            browser-smoke-artifacts/prepared-audio
           if-no-files-found: error
           retention-days: 3
 

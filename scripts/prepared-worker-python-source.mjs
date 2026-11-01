@@ -42,7 +42,7 @@ assert source_context.liveExecutionOwnership() == "active"
     const capacity = player.pendingSourceObjectCapacity();
     if (capacity === undefined) throw new Error("source segment failed to retain its suffix");
     player.reservePrefixObjectCapacity(capacity);
-    if (!player.deliverSourcePrefix()) throw new Error("retained suffix was not adopted");
+    if (!player.deliverSourcePrefix(performance.now())) throw new Error("retained suffix was not adopted");
   }
   return {
     createWorkerPlayer(session) {

@@ -247,6 +247,7 @@ fn prepared_worker_unavailable_seek_is_atomic_and_buffered_wall_time_is_not_char
     assert!(f.player.tick_delta_json(1_500.0).unwrap().is_none());
     assert!(f.player.playback.buffering());
     assert_eq!(f.player.playback.reader.frame(), &frame);
+    assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 1.0);
     assert_eq!(f.player.execution_wake(90_000.0).unwrap().cadence(), "idle");
     assert!(f.player.needs_preparation(0.125).unwrap());
     let batch = f.next(false);
@@ -256,11 +257,25 @@ fn prepared_worker_unavailable_seek_is_atomic_and_buffered_wall_time_is_not_char
             .execution_wake(100_000.0)
             .unwrap()
             .timer_after_milliseconds(),
-        Some(500.0)
+        Some(0.0)
     );
-    assert!(f.player.tick_delta_json(100_250.0).unwrap().is_none());
-    assert_eq!(f.player.playback.reader.frame(), &frame);
-    assert_eq!(f.player.playback.reader.publication_context(), publication);
+    assert!(f.player.prepared_needs_frame());
+    assert_eq!(
+        f.player.playback.reader.frame(),
+        &frame,
+        "append is not a selection"
+    );
+    assert!(f.player.tick_delta_json(100_250.0).unwrap().is_some());
+    assert_eq!(f.player.prepared_time(), 1.0);
+    assert!(!f.player.prepared_needs_frame());
+    assert!(
+        f.player.clock.scene_time_at(200_000.0).is_none(),
+        "the catch-up tick is not presentation"
+    );
+    // A separate picture-qualified wake starts at the held boundary, not at
+    // the old 0.5-second picture and not at a time charged for the long stall.
+    f.player.execution_wake(200_000.0).unwrap();
+    assert_eq!(f.player.prepared_playback_time_at(200_250.0).unwrap(), 1.25);
 }
 
 #[test]
@@ -484,21 +499,25 @@ fn prepared_worker_pause_at_open_frontier_buffers_without_selecting_an_epsilon_f
     assert_eq!(f.player.playback.reader.frame(), &frame);
     assert_eq!(f.player.playback.reader.publication_context(), publication);
     assert!(f.player.drain_delta_json().unwrap().is_none());
-    assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 0.5);
+    assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 1.0);
     let batch = f.next(false);
     f.deliver(batch);
     assert!(!f.player.prepared_buffering());
     assert!(!f.player.prepared_playing());
     f.player.set_prepared_playing(true);
-    assert_eq!(f.player.prepared_playback_time_at(100_000.0).unwrap(), 0.5);
+    assert_eq!(f.player.prepared_playback_time_at(100_000.0).unwrap(), 1.0);
     assert_eq!(
         f.player
             .execution_wake(100_000.0)
             .unwrap()
             .timer_after_milliseconds(),
-        Some(500.0)
+        Some(0.0)
     );
-    assert_eq!(f.player.prepared_playback_time_at(100_250.0).unwrap(), 0.75);
+    assert_eq!(f.player.prepared_playback_time_at(100_250.0).unwrap(), 1.0);
+    f.player.tick_delta_json(100_250.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.0);
+    f.player.execution_wake(200_000.0).unwrap();
+    assert_eq!(f.player.prepared_playback_time_at(200_250.0).unwrap(), 1.25);
 }
 
 #[test]

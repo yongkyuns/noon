@@ -3,7 +3,39 @@
 use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SourcePreparation {
+    Realtime,
+    AutomaticAudio,
+    Prepared,
+}
+
 impl CanonicalAuthoringScene {
+    /// Select source-only admission before the first ordinary segment. This is
+    /// an invocation policy, not the reusable realtime run/refresh boundary.
+    pub fn select_prepared_source(&mut self) -> Result<(), AuthoringFailure> {
+        self.select_source_preparation(SourcePreparation::Prepared)
+    }
+
+    pub fn allow_prepared_audio_source(&mut self) -> Result<(), AuthoringFailure> {
+        self.select_source_preparation(SourcePreparation::AutomaticAudio)
+    }
+
+    fn select_source_preparation(
+        &mut self,
+        preparation: SourcePreparation,
+    ) -> Result<(), AuthoringFailure> {
+        if !self.player_ownership.is_unstarted() || self.scene.time() != 0.0 {
+            return Err(AuthoringFailure::new(
+                "ownership",
+                "prepared.source_already_started",
+                "select headless source preparation before canonical execution begins",
+            ));
+        }
+        self.source_preparation = preparation;
+        Ok(())
+    }
+
     pub(crate) fn validate_prepared_publisher(
         &mut self,
         publisher: &PrefixPublisher,

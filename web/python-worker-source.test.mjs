@@ -4,6 +4,33 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("prepared worker selects headless admission when creating its canonical context", () => {
+  const begin = source.indexOf("  self.noonCreateCanonicalAuthoringSceneContext =");
+  const end = source.indexOf("  self.noonCreateAuthoringValueTrackerHandle =", begin);
+  assert.ok(begin >= 0 && end > begin);
+  for (const preparedPlayback of [undefined, false, true]) {
+    const worker = {}, events = [], milestones = { firstSceneContextCreatedAtMs: null };
+    const context = {
+      selectPreparedSource() { events.push("headless"); },
+      allowPreparedAudioSource() { events.push("automatic-audio"); },
+    };
+    new Function("self", "authoringStore", "activeAuthoringRun", "authoringMilestones", "performance", "invokePreparedEngine", source.slice(begin, end))(
+      worker, { createSceneContext() { events.push("create"); return context; } },
+      preparedPlayback === undefined ? null : { preparedPlayback }, milestones,
+      { now: () => 42 }, operation => { events.push("guard"); return operation(); },
+    );
+    assert.equal(worker.noonCreateCanonicalAuthoringSceneContext(), context);
+    assert.deepEqual(events, preparedPlayback ? ["create", "guard", "headless"]
+      : preparedPlayback === false ? ["create", "guard", "automatic-audio"] : ["create"]);
+    assert.equal(milestones.firstSceneContextCreatedAtMs, 42);
+    if (preparedPlayback) {
+      delete context.selectPreparedSource;
+      assert.throws(() => worker.noonCreateCanonicalAuthoringSceneContext(), /prepared-prefix enabled engine/);
+      assert.equal(milestones.firstSceneContextCreatedAtMs, 42);
+    }
+  }
+});
+
 test("source disposal retires canonical input before releasing its retained context", async () => {
   const begin = source.indexOf("function retireSemanticContext(");
   const end = source.indexOf("\nasync function prepareAuthoringDependencies", begin);

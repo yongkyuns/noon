@@ -1,0 +1,25 @@
+{
+  "issue": 2358,
+  "original_runtime_revision": "926bdbf45faf32a03751c412063255655b8aa77a",
+  "source_inspection_revision": "f28993dc2f9315811db5ccd9c1d2d135b4dc96a6",
+  "fixtures": [
+    {
+      "path": "fourier_epicycles.py",
+      "bytes": 14180,
+      "sha256": "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9",
+      "profile": "ordinary-native-motion"
+    },
+    {
+      "path": "music_preview.py",
+      "bytes": 2572,
+      "sha256": "573d4e94e81707925632f158bdb5d99f0c044eaf86ab0d25a4420fc4735013d4",
+      "profile": "finite-immutable-audio"
+    },
+    {
+      "path": "audio_ordinary_play.py",
+      "bytes": 336,
+      "sha256": "a898089e0534e31a5a149daaff4fec95ffc7ba5d108125d8ba93b4e252e5a60b",
+      "profile": "unsupported-audio-source-history"
+    }
+  ]
+}

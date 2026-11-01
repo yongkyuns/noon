@@ -14,6 +14,7 @@ function fixture(mode = "transferable", options = {}) {
   let sequence = 0, requestId = 0, endpoint, reader;
   let time = 0, frontier = 4, end, playing = !options.initiallyPaused, buffering = false;
   let observation = null, pendingDelta = false, tickDelta = false, tickFailure = null, payloadPadding;
+  let audioSequence = 0, tickState = null, needsFrame = false;
   function changed() {
     for (const waiter of [...waiters]) {
       if (waiter.predicate()) { waiters.delete(waiter); waiter.resolve(); }
@@ -41,6 +42,12 @@ function fixture(mode = "transferable", options = {}) {
     tickDeltaJson(wallTime) {
       record("tick", wallTime);
       if (tickFailure) throw tickFailure;
+      needsFrame = false;
+      if (tickState !== null) {
+        if (tickState.time !== undefined) time = tickState.time;
+        if (tickState.buffering !== undefined) buffering = tickState.buffering;
+        tickState = null;
+      }
       return tickDelta ? json() : null;
     },
     seekDeltaJson(value) {
@@ -55,6 +62,7 @@ function fixture(mode = "transferable", options = {}) {
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
     preparedBuffering: () => buffering,
+    preparedNeedsFrame: () => needsFrame && playing && !buffering,
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
     pausePreparedAt(wallTime) {
       record("pause-at", wallTime); time = observation ?? time; playing = false;
@@ -73,6 +81,15 @@ function fixture(mode = "transferable", options = {}) {
     stopSourcePreparation() { record("stop-source"); },
     free() { record("free"); },
   };
+  if (options.audio) Object.assign(player, {
+    hasAudio: () => true,
+    audioResourceBundleBytes() { record("audio-resources"); return new Uint8Array([2]); },
+    audioAnchorJson(sampledEpochMs, wallTime) {
+      record("audio-anchor", wallTime);
+      return JSON.stringify({ session: 7, time, playing: playing && !buffering && time < frontier,
+        sampledEpochMs, availableUntil: frontier, audioSequence: ++audioSequence });
+    },
+  });
   const receive = payload => { deltas.push(JSON.parse(payload)); changed(); return true; };
   render.port2.on("message", message => {
     messages.push(message);
@@ -120,6 +137,8 @@ function fixture(mode = "transferable", options = {}) {
     publishOnTick(value = true) { tickDelta = value; },
     oversizePayload() { payloadPadding = "x".repeat(4096); },
     setTickFailure(error) { tickFailure = error; },
+    setTickState(value) { tickState = value; },
+    holdFrontier() { needsFrame = true; },
     makeDirty() { pendingDelta = true; },
     deliver(value, terminal = false) {
       frontier = value; if (terminal) end = value; buffering = false;
@@ -392,3 +411,187 @@ for (const stage of ["bootstrap", "tick", "control", "state", "notification"]) {
     }
   });
 }
+
+for (const mode of ["transferable", "shared"]) {
+  test(`prepared audio ${mode} remains silent until its actual picture and explicit resume`, { timeout: 3000 }, async () => {
+    const f = fixture(mode, { audio: true });
+    try {
+      await f.attach();
+      const ready = f.replies.find(value => value.type === "ready");
+      assert.equal(ready.hasAudio, true);
+      assert.equal(ready.playing, false);
+      assert.equal(ready.durationSeconds, null);
+      assert.deepEqual(ready.audioResources, new Uint8Array([2]));
+      assert.equal(f.count("audio-anchor"), 0);
+      const resumed = f.request("resume");
+      f.acknowledge();
+      await f.request("state");
+      assert.equal(f.count("audio-anchor"), 0, "transport consumption cannot admit audio");
+      await f.present();
+      const result = await resumed;
+      assert.equal(result.playing, true);
+      assert.equal(result.audioAnchor.playing, true);
+      assert.equal(result.audioAnchor.time, 0);
+      assert.equal(result.audioAnchor.availableUntil, 4);
+      assert.ok(Number.isFinite(f.calls.find(value => value[0] === "audio-anchor")[1]));
+
+      const seeking = f.request("seek", { time: 1 });
+      await f.when(() => f.deltas.length === 2);
+      const count = f.count("audio-anchor");
+      f.acknowledge(f.deltas[1]);
+      await f.request("state");
+      assert.equal(f.count("audio-anchor"), count);
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[1].sequence });
+      const sought = await seeking;
+      assert.equal(sought.playing, true);
+      assert.equal(sought.audioAnchor.time, 1);
+      assert.ok(sought.audioAnchor.audioSequence > result.audioAnchor.audioSequence);
+
+      f.observe(1.5);
+      const paused = await f.request("pause");
+      assert.equal(paused.audioAnchor.time, 1.5);
+      assert.equal(paused.audioAnchor.playing, false);
+      const quiet = f.count("audio-anchor");
+      f.deliver(6);
+      await f.request("state");
+      assert.equal(f.count("audio-anchor"), quiet, "preparation cannot restart a paused soundtrack");
+    } finally { f.close(); }
+  });
+}
+
+test("prepared audio frontier changes use the latest displayed picture and preserve buffering intent", { timeout: 3000 }, async () => {
+  const f = fixture("transferable", { audio: true });
+  try {
+    await f.attach(); f.acknowledge(); await f.present();
+    await f.request("resume");
+    f.publishOnTick(); f.setTickState({ time: 1 }); f.tick();
+    await f.when(() => f.deltas.length === 2);
+    const count = f.count("audio-anchor");
+    f.publishOnTick(false);
+    f.deliver(8);
+    await f.request("state");
+    assert.equal(f.count("audio-anchor"), count);
+    f.acknowledge(f.deltas[1]);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[1].sequence });
+    await f.when(() => f.replies.some(value => value.type === "audio_state"));
+    const extended = f.replies.findLast(value => value.type === "audio_state");
+    assert.equal(extended.audioAnchor.availableUntil, 8);
+    assert.equal(extended.audioAnchor.time, 1);
+    assert.equal(extended.audioAnchor.playing, true);
+
+    f.publishOnTick(false); f.setTickState({ buffering: true }); f.tick();
+    await f.when(() => f.replies.filter(value => value.type === "audio_state").length === 2);
+    const buffered = f.replies.findLast(value => value.type === "audio_state");
+    assert.equal(buffered.playing, true, "missing history does not change user intent");
+    assert.equal(buffered.audioAnchor.playing, false);
+    f.deliver(10);
+    await f.when(() => f.replies.filter(value => value.type === "audio_state").length === 3);
+    assert.equal(f.replies.findLast(value => value.type === "audio_state").audioAnchor.playing, true);
+
+    f.deliver(10, true);
+    await f.request("state");
+    f.setTickState({ time: 10 }); f.tick();
+    await f.when(() => f.replies.some(value => value.type === "audio_state" && value.audioAnchor.time === 10));
+    assert.equal(f.replies.findLast(value => value.type === "audio_state").audioAnchor.playing, false);
+    assert.equal(f.replies.findLast(value => value.type === "audio_state").playing, false);
+    const restart = f.request("resume");
+    await f.when(() => f.deltas.at(-1).time === 0);
+    f.acknowledge(f.deltas.at(-1));
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas.at(-1).sequence });
+    assert.equal((await restart).audioAnchor.time, 0);
+  } finally { f.close(); }
+});
+
+test("prepared audio extension samples an unexpired animation before its new anchor", { timeout: 3000 }, async () => {
+  const f = fixture("transferable", { audio: true });
+  try {
+    await f.attach(); f.acknowledge(); await f.present();
+    await f.request("resume");
+    const count = f.count("audio-anchor");
+    f.publishOnTick(); f.setTickState({ time: 1.5 });
+    f.deliver(8);
+    await f.when(() => f.deltas.length === 2);
+    assert.equal(f.deltas[1].time, 1.5);
+    assert.equal(f.count("audio-anchor"), count);
+    f.acknowledge(f.deltas[1]);
+    await f.request("state");
+    assert.equal(f.count("audio-anchor"), count, "a selected frame still requires its picture");
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[1].sequence });
+    await f.when(() => f.replies.some(value => value.type === "audio_state"));
+    const anchor = f.replies.findLast(value => value.type === "audio_state").audioAnchor;
+    assert.equal(anchor.time, 1.5, "source work cannot rewind sound to the preceding animation sample");
+    assert.equal(anchor.availableUntil, 8);
+  } finally { f.close(); }
+});
+
+test("backpressure cannot publish an audio extension before its requested ordinary tick", { timeout: 3000 }, async () => {
+  const f = fixture("transferable", { audio: true });
+  try {
+    await f.attach(); f.acknowledge(); await f.present();
+    await f.request("resume");
+    f.publishOnTick(); f.setTickState({ time: 0.25 }); f.tick();
+    await f.when(() => f.deltas.length === 2);
+    f.setTickState({ time: 0.5 }); f.tick();
+    await f.when(() => f.deltas.length === 3);
+    const anchors = f.count("audio-anchor"), ticks = f.count("tick");
+    f.setTickState({ time: 1.5 }); f.deliver(8);
+    await f.request("state");
+    assert.equal(f.count("tick"), ticks, "two in-flight packets apply actual transport backpressure");
+    f.acknowledge(f.deltas[1]);
+    await f.when(() => f.deltas.length === 4);
+    assert.equal(f.deltas[3].time, 1.5);
+    f.acknowledge(f.deltas[2]);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[2].sequence });
+    await f.request("state");
+    assert.equal(f.count("audio-anchor"), anchors, "a preceding picture cannot authorize the new audio plan");
+    f.acknowledge(f.deltas[3]);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[3].sequence });
+    await f.when(() => f.replies.some(value => value.type === "audio_state"));
+    assert.equal(f.replies.findLast(value => value.type === "audio_state").audioAnchor.time, 1.5);
+  } finally { f.close(); }
+});
+
+test("further source delivery cannot admit a clock while its held picture is pending", { timeout: 3000 }, async () => {
+  for (const resumeControl of [false, true]) {
+    const f = fixture("transferable", { audio: true });
+    try {
+      await f.attach(); f.acknowledge(); await f.present();
+      await f.request("resume");
+      if (resumeControl) await f.request("pause");
+      const anchors = f.count("audio-anchor");
+      f.holdFrontier(); f.publishOnTick(); f.setTickState({ time: 4 });
+      f.deliver(8);
+      const resumed = resumeControl ? f.request("resume") : null;
+      await f.when(() => f.deltas.length === 2);
+      const wakes = f.count("wake");
+      f.publishOnTick(false);
+      f.deliver(10);
+      await f.request("state");
+      assert.equal(f.count("wake"), wakes, "suffix availability is not the pending boundary's picture");
+      assert.equal(f.count("audio-anchor"), anchors);
+      f.acknowledge(f.deltas[1]);
+      await f.request("state");
+      assert.equal(f.count("wake"), wakes, "transport consumption cannot admit its clock");
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[1].sequence });
+      if (resumed) await resumed;
+      else await f.when(() => f.replies.some(value => value.type === "audio_state"));
+      assert.ok(f.count("wake") > wakes);
+      const anchor = f.replies.findLast(value => value.audioAnchor)?.audioAnchor;
+      assert.equal(anchor.time, 4);
+      assert.equal(anchor.availableUntil, 10);
+    } finally { f.close(); }
+  }
+});
+
+test("cancellation while a prepared audio picture is pending cannot emit a late anchor", { timeout: 3000 }, async () => {
+  const f = fixture("transferable", { audio: true });
+  try {
+    await f.attach();
+    f.post("resume");
+    await f.request("state");
+    f.endpoint.stop();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.count("audio-anchor"), 0);
+    assert.equal(f.count("free"), 1);
+  } finally { f.close(); }
+});

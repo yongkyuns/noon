@@ -64,7 +64,8 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
           assert.equal(capacity, 2);
           attempt(record.pending.terminal ? "terminal-reserve" : "reserve", id);
         },
-        deliverSourcePrefix() {
+        deliverSourcePrefix(wallTime) {
+          assert.ok(Number.isFinite(wallTime) && wallTime >= 0);
           attempt(record.pending.terminal ? "terminal-deliver" : "deliver", id);
           if (record.pending.terminal) record.finished = true;
           else history.push("new readable prefix");

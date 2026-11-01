@@ -258,8 +258,7 @@ export class PlaygroundPlaybackControls {
     this.#confirmedTimeSeconds = this.#controllable && duration !== null ? Math.min(time, duration) : time;
     this.#timeSeconds = this.#confirmedTimeSeconds;
     this.#playing = playing;
-    if (prepared) this.#hasAudio = false;
-    else if (hasAudio !== undefined) this.#hasAudio = hasAudio === true;
+    if (prepared || hasAudio !== undefined) this.#hasAudio = hasAudio === true;
     if (audioReady !== undefined) this.#audioReady = audioReady === true;
     if (audioMuted !== undefined) this.#audioMuted = audioMuted === true;
     if (audioVolume !== undefined) this.#volume.value = String(audioVolume);

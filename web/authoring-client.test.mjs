@@ -126,19 +126,71 @@ test("prepared continuation metadata permits initial pause and prevents source r
   }
 });
 
-test("preparation metadata cannot cross a different source run mode", async () => {
-  for (const preparedPlayback of [false, true]) {
+test("explicit prepared source cannot be downgraded to realtime by registration", async () => {
     const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
     worker.emit("message", workerMessage("ready")); await client.ready();
-    const result = client.run("source", {}, { preparedPlayback, onSemanticContinuation() {} });
+    const result = client.run("source", {}, { preparedPlayback: true, onSemanticContinuation() {} });
     await Promise.resolve();
     worker.emit("message", workerMessage("semantic_continuation_registered", {
       requestId: 0, generation: 1, duration: 1,
-      semanticExecution: { context_id: "context", continuation_generation: 1, prepared_playback: !preparedPlayback },
+      semanticExecution: { context_id: "context", continuation_generation: 1, prepared_playback: false },
     }));
     await assert.rejects(result, /preparation mode/);
     assert.equal(client.terminated, true);
+});
+
+test("normal source adopts prepared audio only from its current continuation registration", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  let registration;
+  const result = client.run("ordinary audio source", {}, {
+    preparationLookaheadSeconds: 0.5,
+    onSemanticContinuation(value) { registration = value; },
+  });
+  await Promise.resolve();
+  assert.equal("preparedPlayback" in worker.messages[0], false);
+  assert.equal(worker.messages[0].preparationLookaheadSeconds, 0.5);
+  const descriptor = { context_id: "audio-source", continuation_generation: 7, prepared_playback: true };
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0, generation: 7, duration: 1, semanticExecution: descriptor,
+  }));
+  await Promise.resolve();
+  assert.equal(registration.semanticExecution.preparedPlayback, true);
+  worker.emit("message", workerMessage("result", { requestId: 0,
+    resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: descriptor, duration: 3 }) }));
+  assert.equal((await result).semanticExecution.preparedPlayback, true);
+  client.terminate();
+});
+
+test("automatically prepared result cannot change registered mode, context or generation", async () => {
+  for (const mutation of [{ prepared_playback: false }, { context_id: "foreign" }, { continuation_generation: 8 }]) {
+    const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+    worker.emit("message", workerMessage("ready")); await client.ready();
+    const result = client.run("ordinary audio source", {}, { onSemanticContinuation() {} });
+    await Promise.resolve();
+    const descriptor = { context_id: "audio-source", continuation_generation: 7, prepared_playback: true };
+    worker.emit("message", workerMessage("semantic_continuation_registered", {
+      requestId: 0, generation: 7, duration: 1, semanticExecution: descriptor,
+    }));
+    await Promise.resolve();
+    worker.emit("message", workerMessage("result", { requestId: 0,
+      resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: { ...descriptor, ...mutation }, duration: 3 }) }));
+    await assert.rejects(result, /registered continuation/);
+    assert.equal(client.terminated, true);
   }
+});
+
+test("a final result cannot introduce prepared audio without its registered continuation", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  const result = client.run("ordinary source", {}, { onSemanticContinuation() {} });
+  await Promise.resolve();
+  worker.emit("message", workerMessage("result", { requestId: 0,
+    resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: {
+      context_id: "unregistered", continuation_generation: 7, prepared_playback: true,
+    }, duration: 3 }) }));
+  await assert.rejects(result, /registered continuation/);
+  assert.equal(client.terminated, true);
 });
 
 test("prepared descriptors retain continuation identity and reject required callbacks", () => {

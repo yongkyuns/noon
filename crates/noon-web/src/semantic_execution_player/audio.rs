@@ -24,11 +24,13 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioResourceBundleBytes))]
     pub fn audio_resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
+        Self::require_worker_execution_profile(&self.session)?;
         crate::worker_audio::encode(&self.session, self.encoder.session())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
     pub fn audio_anchor_json(&self, sampled_epoch_ms: f64) -> Result<String, String> {
+        Self::require_worker_execution_profile(&self.session)?;
         if !sampled_epoch_ms.is_finite() {
             return Err("audio anchor requires a finite host timestamp".into());
         }

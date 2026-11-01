@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Element, dom, flush } from "./playground-dom-fixture.mjs";
 
@@ -63,6 +64,33 @@ test("open history permits controls without inventing a final duration or a perc
   f.seek(2.5); await flush();
   assert.deepEqual(f.calls, [["seek", 2.5]]);
   assert.equal(f.output.value, "2.50 / — s");
+});
+
+test("normal gallery constructs audio controls before prepared total duration is known", async () => {
+  const { document, preview } = dom();
+  globalThis.document = document;
+  const player = Object.fromEntries(["pause", "resume", "seek", "restartPlayback"]
+    .map(method => [method, async () => prepared()]));
+  const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  const begin = main.indexOf("function updatePlaybackControls(");
+  const end = main.indexOf("function ensureRuntimePreparation(", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const errors = [];
+  const update = new Function("PlaygroundPlaybackControls", "document", "showPlaybackError", `
+    const status = { dataset: {} };
+    let playbackControls = null, busyDepth = 0;
+    ${main.slice(begin, end)}
+    return options => { updatePlaybackControls(options); return playbackControls; };
+  `)(PlaygroundPlaybackControls, document, error => errors.push(error));
+  const controls = update({ supported: true, player, durationSeconds: 1,
+    playbackState: prepared({ time: 0, hasAudio: true, audioReady: true }) });
+  assert.equal(controls.durationSeconds, null);
+  assert.equal(preview.querySelector(".playback-time").value, "0.00 / — s");
+  assert.equal(preview.querySelector(".playback-scrubber").hidden, true);
+  assert.equal(preview.querySelector(".playback-toggle").textContent, "Play");
+  assert.equal(preview.querySelector(".playback-audio-controls").hidden, false);
+  assert.deepEqual(errors, []);
+  controls.destroy();
 });
 
 test("buffering is not a command lock and pausing preserves the observed time", async () => {
@@ -291,4 +319,22 @@ test("admitting prepared history clears a previous scene's audio controls", () =
   assert.equal(f.controls.durationSeconds, null);
   assert.equal(f.input.hidden, false);
   assert.deepEqual(f.calls, []);
+});
+
+test("prepared audio exposes sound controls while total duration remains unknown", async () => {
+  const f = fixture(prepared({ hasAudio: true, audioReady: false, sections: [] }));
+  assert.equal(f.preview.querySelector(".playback-audio-controls").hidden, false);
+  assert.equal(f.toggle.textContent, "Play with sound");
+  assert.equal(f.controls.durationSeconds, null);
+  assert.equal(f.input.hidden, false);
+  assert.equal(f.range.hidden, true);
+  f.toggle.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, [["resume", undefined]]);
+  f.setState(prepared({ hasAudio: true, audioReady: true, playing: true, buffering: true }));
+  assert.equal(f.toggle.textContent, "Pause");
+  assert.match(f.status.textContent, /^Buffering/);
+  assert.equal(f.preview.querySelector(".playback-audio-controls").hidden, false);
+  f.setState(prepared({ hasAudio: true, audioReady: true, preparedFrontier: 3, durationSeconds: 3 }));
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.controls.durationSeconds, 3);
 });

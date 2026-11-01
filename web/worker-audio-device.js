@@ -1,4 +1,4 @@
-// Disposable Window output for the authoring worker's finite audio profile.
+// Disposable Window output for the authoring worker's accepted audio profile.
 // Rust validates the immutable resource bundle, computes clip phase/envelopes,
 // and owns Web Audio scheduling. This adapter owns only browser lifecycle.
 let audioModule;
@@ -18,6 +18,8 @@ export class WorkerAudioDevice {
   #started = false;
   #volume = 1;
   #muted = false;
+  #lastAudioSequence = 0;
+  #requiresHorizon = false;
   #onInterrupted;
 
   constructor(onInterrupted) {
@@ -42,6 +44,7 @@ export class WorkerAudioDevice {
     try {
       output.setVolume(this.#volume);
       output.setMuted(this.#muted);
+      this.#requiresHorizon = output.requiresHorizon();
       this.#context = output.audioContext();
       this.#context.addEventListener("statechange", this.#stateChanged);
       this.#output = output;
@@ -60,14 +63,36 @@ export class WorkerAudioDevice {
     if (!anchor || anchor.session !== session || typeof anchor.playing !== "boolean") {
       throw new Error("worker audio anchor belongs to a different playback session");
     }
+    const bounded = anchor.availableUntil !== undefined;
+    if (this.#requiresHorizon && !bounded) {
+      throw new Error("prepared audio requires an adopted history horizon");
+    }
+    if (bounded) {
+      if (!Number.isSafeInteger(anchor.audioSequence) || anchor.audioSequence <= 0 ||
+          !Number.isFinite(anchor.time) || anchor.time < 0 ||
+          !Number.isFinite(anchor.sampledEpochMs) || anchor.sampledEpochMs < 0 ||
+          !Number.isFinite(anchor.availableUntil) || anchor.availableUntil < anchor.time ||
+          (anchor.playing && anchor.time === anchor.availableUntil)) {
+        throw new Error("invalid prepared audio anchor");
+      }
+      if (anchor.audioSequence <= this.#lastAudioSequence) return false;
+    }
     if (!anchor.playing) {
       this.pause();
-      return;
+      if (bounded) this.#lastAudioSequence = anchor.audioSequence;
+      return true;
     }
     if (!this.ready) throw new Error("Play with sound to enable audio output");
-    this.#output.start(session, anchor.time, anchor.sampledEpochMs,
-      performance.timeOrigin + performance.now());
+    const receivedEpochMs = performance.timeOrigin + performance.now();
+    if (bounded) {
+      this.#output.startBounded(session, anchor.time, anchor.sampledEpochMs,
+        receivedEpochMs, anchor.availableUntil);
+      this.#lastAudioSequence = anchor.audioSequence;
+    } else {
+      this.#output.start(session, anchor.time, anchor.sampledEpochMs, receivedEpochMs);
+    }
     this.#started = true;
+    return true;
   }
 
   pause() {
@@ -96,6 +121,8 @@ export class WorkerAudioDevice {
 
   dispose() {
     this.#generation += 1;
+    this.#lastAudioSequence = 0;
+    this.#requiresHorizon = false;
     this.#context?.removeEventListener("statechange", this.#stateChanged);
     this.#context = null;
     this.stop();
