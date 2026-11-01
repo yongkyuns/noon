@@ -280,10 +280,10 @@ export async function attachSemanticEngine(
     }
     const firstPresentation = lastPresentedPublication === null;
     lastPresentedPublication = publication;
-    if (publication.pointerReceipt && player !== null) {
+    if (publication.pointerReceipt) {
       // The render port is ordered. An invalidation received before this repaint
       // must cancel the old gesture before the repaint can authorize any input.
-      if (pendingPointerInvalidation !== null) {
+      if (player === null || pendingPointerInvalidation !== null) {
         pendingPointerPresentation = publication.pointerReceipt;
       } else {
         acknowledgePointerReceipt(publication.pointerReceipt);
@@ -389,7 +389,7 @@ export async function attachSemanticEngine(
     emitExecutionWake(cadence, timerAfterMilliseconds, force);
   };
   const observeExternalInteractionWake = (force = false) => {
-    const active = continuationActive && player !== null && player.interactionsActive();
+    const active = player !== null && player.interactionsActive();
     if (!active) {
       externalInteractionWallTime = null;
       externalInteractionTickTime = null;
@@ -646,16 +646,18 @@ export async function attachSemanticEngine(
   }
 
   function applyPointerInvalidation() {
-    if (pendingPointerInvalidation === null || player === null) return false;
-    const receipt = pendingPointerInvalidation;
-    pendingPointerInvalidation = null;
+    if (player === null) return false;
+    let changed = false;
+    if (pendingPointerInvalidation !== null) {
+      const receipt = pendingPointerInvalidation;
+      pendingPointerInvalidation = null;
+      // A callback/sequence failure is not recovery. Stop rather than acknowledging
+      // a replacement image while the old gesture remains live.
+      try { changed = player.invalidatePointerPresentationJson(JSON.stringify(receipt)); }
+      catch (error) { terminateProgression(error); throw error; }
+    }
     const presented = pendingPointerPresentation;
     pendingPointerPresentation = null;
-    // A callback/sequence failure is not recovery. Stop rather than acknowledging
-    // a replacement image while the old gesture remains live.
-    let changed;
-    try { changed = player.invalidatePointerPresentationJson(JSON.stringify(receipt)); }
-    catch (error) { terminateProgression(error); throw error; }
     if (presented !== null) acknowledgePointerReceipt(presented);
     return changed;
   }
@@ -900,7 +902,7 @@ export async function attachSemanticEngine(
         }
         if (stopped) return;
         if (next === null) {
-          const authoredTime = context.liveHandoffDuration();
+          const authoredTime = player.time();
           if (!Number.isFinite(authoredTime) || authoredTime < 0) {
             throw new Error("completed semantic continuation has no valid authored time");
           }
@@ -1191,7 +1193,7 @@ export async function attachSemanticEngine(
                 observeExecutionWake(performance.now());
                 prepared.wakeSource();
               }
-            } else if (continuationActive && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+            } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && player !== null) {
               if (player.interactionsActive()) {
                 const publication = send(
                   player.advanceInteractionsDeltaJson(advanceExternalInteractionClock(performance.now())),
@@ -1454,7 +1456,7 @@ export async function attachSemanticEngine(
         if (pacing === SEMANTIC_PACING_REALTIME && executionWakeCadence !== "idle") {
           latestTick = message.timestamp;
           void drain();
-        } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationActive &&
+        } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES &&
                    player !== null && executionWakeCadence === "animation_frame" &&
                    player.interactionsActive()) {
           latestTick = message.timestamp;
@@ -1587,8 +1589,17 @@ export async function attachSemanticEngine(
       // through the exact returned encoder without another segment or callback.
       const publication = send(context.drainReturnedPublicationJson());
       await awaitPresentation(publication);
-      context.setSourcePlaybackPlaying(false);
+      if (stopped) throw new Error("source completed after its endpoint stopped");
+      player = context.completeSourcePlayback();
       sourceFinished = true;
+      if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
+      applyPointerInvalidation();
+      if (stopped) throw new Error("source completion lost its pointer presentation");
+      // A view change received while Python held the player still needs its
+      // ordinary presentation. No runtime, transport or contact is reconstructed.
+      const tail = drainAndSendDelta();
+      observeExecutionWake(performance.now(), true);
+      await awaitPresentation(tail);
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;

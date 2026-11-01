@@ -3881,6 +3881,18 @@ impl SemanticExecutionPlayer {
         matches!(self.live_segment, Some(LiveSegmentReceipt::Pending(_)))
     }
 
+    /// Successful interpreter completion retains this player for input. It is
+    /// not a new segment, replay admission or a renderer acknowledgement.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn finish_source_playback(&mut self) -> Result<(), AuthoringFailure> {
+        self.require_callback_progression_available()?;
+        if !matches!(self.live_segment, Some(LiveSegmentReceipt::Completed(_))) {
+            return Err("source completion requires its completed continuation segment".into());
+        }
+        self.pause();
+        Ok(())
+    }
+
     /// Callback wrapper finalizers may associate their resolved handles only
     /// after the session-owned callback phase has committed.
     #[cfg(any(target_arch = "wasm32", test))]

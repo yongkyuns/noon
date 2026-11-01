@@ -4301,6 +4301,19 @@ impl CanonicalAuthoringScene {
         self.player_ownership.transfer()
     }
 
+    /// After source cleanup, move the same completed player back to presentation.
+    /// Preserve its encoder, publications, native contacts and semantic store.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn complete_source_playback(&mut self) -> Result<crate::SemanticExecutionPlayer, String> {
+        let PlayerOwnership::Returned(player) = &mut self.player_ownership else {
+            return Err("source completion requires its returned execution player".into());
+        };
+        player
+            .finish_source_playback()
+            .map_err(|error| error.to_string())?;
+        self.player_ownership.transfer()
+    }
+
     /// Encode final authored changes through the returned player's existing worker
     /// transport. This neither leases nor advances the completed runtime.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -12435,6 +12448,13 @@ mod wasm {
             self.inner.resume_execution_player().map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = completeSourcePlayback)]
+        pub fn complete_source_playback(
+            &mut self,
+        ) -> Result<crate::SemanticExecutionPlayer, JsValue> {
+            self.inner.complete_source_playback().map_err(js_error)
+        }
+
         /// Final publication at the genuine authoring/render worker boundary.
         #[wasm_bindgen(js_name = drainReturnedPublicationJson)]
         pub fn drain_returned_publication_json(&mut self) -> Result<Option<String>, JsValue> {
@@ -16605,6 +16625,59 @@ mod tests {
         assert!(zero_wait.live_segment_wake(1_000.0).is_err());
         context.return_execution_player(zero_wait).unwrap();
         assert!(context.resume_execution_player().is_err());
+    }
+
+    #[test]
+    fn source_completion_transfers_only_its_original_completed_player() {
+        let mut context = CanonicalAuthoringScene::default();
+        let target = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &target).unwrap();
+        context.begin_ordinary_wait(1.0).unwrap();
+        assert!(
+            context.complete_source_playback().is_err(),
+            "only the returned owner can complete"
+        );
+        let player = context.take_execution_player(1.0, 301).unwrap();
+        let identity = player.ownership_identity();
+        context.return_execution_player(player).unwrap();
+        assert!(
+            context.complete_source_playback().is_err(),
+            "the pending segment is still owed"
+        );
+        assert_eq!(context.live_execution_ownership(), "returned");
+        let mut player = context.resume_execution_player().unwrap();
+        player.live_advance_segment_to(1.0).unwrap();
+        player.live_complete_segment().unwrap();
+        let first: serde_json::Value =
+            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+        context.return_execution_player(player).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&target, 2.0, 0.0)
+            .unwrap();
+        let final_delta = context.drain_returned_publication_json().unwrap().unwrap();
+        let delta: serde_json::Value = serde_json::from_str(&final_delta).unwrap();
+        let mut player = context.complete_source_playback().unwrap();
+        assert_eq!(player.ownership_identity(), identity);
+        assert!(!player.is_playing());
+        assert_eq!(player.time(), 1.0);
+        assert_eq!(delta["session"], first["session"]);
+        assert_eq!(
+            delta["sequence"].as_u64().unwrap(),
+            first["sequence"].as_u64().unwrap() + 1
+        );
+        assert!(
+            player.drain_delta_json().unwrap().is_none(),
+            "transfer must not invent a new snapshot"
+        );
+        assert_eq!(target.center().unwrap(), (2.0, 0.0));
+        assert!(
+            context.complete_source_playback().is_err(),
+            "a leased player cannot be completed twice"
+        );
+        context.return_execution_player(player).unwrap();
+        context.retire_execution_source().unwrap();
     }
 
     #[test]

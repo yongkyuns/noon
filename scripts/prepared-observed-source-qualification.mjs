@@ -58,6 +58,7 @@ const causalSource = source.slice(0, source.indexOf("class OriginalSource")) + `
         self.on_click(target, Indicate(target, color=RED, run_time=0.5))
         mark("start")
         self.wait(2)
+        target.shift(RIGHT)
         mark("end")
     def tear_down(self):
         mark("cleanup")
@@ -67,23 +68,37 @@ class FinalPicture(Scene):
     def construct(self):
         self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0).shift(2 * RIGHT))
 `;
+const causalReference = `from noon import *
+class FinalInputPicture(Scene):
+    def construct(self):
+        self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0).shift(RIGHT))
+        self.add(Circle(radius=0.2, color=BLUE, fill_opacity=1, stroke_width=0).shift(5 * RIGHT))
+`;
+const heldSource = causalSource.replace("        target.shift(RIGHT)\n", "");
+const heldReference = causalReference.replace(".shift(RIGHT))", ")");
 const report = {
-  status: "running", scope: "initial observed admission and pause/resume; original interpreter, independent paused click and final pixels; no late handoff, recovery, latency or default-cutover claim",
+  status: "running", scope: "observed admission, pause/resume and completed-source input; original interpreter, pointer receipts and final pixels; no late handoff, recovery, latency or default-cutover claim",
   sourceSha256: hash(source), referenceSha256: hash(reference), cases: [],
   causalSourceSha256: hash(causalSource),
+  causalReferenceSha256: hash(causalReference),
+  heldSourceSha256: hash(heldSource), heldReferenceSha256: hash(heldReference),
   harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
   gallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_always_redraw.py"))),
 };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let server, unisolatedServer, browser;
 
-async function start(page, transportMode, preparedPlayback, staticReference, causal = false) {
+async function start(page, transportMode, arm) {
+  const sources = { ordinary: source, incremental: source, reference, causal: causalSource, "causal-reference": causalReference,
+    held: heldSource, "held-reference": heldReference };
   await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
-  await page.evaluate(async ({ source, transportMode, preparedPlayback, staticReference, causal }) => {
+  await page.evaluate(async ({ source, transportMode, preparedPlayback, initiallyPaused }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
     const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
     const host = { errors: [], events: [], samples: [], registrations: 0, outcome: null, attached: false };
+    host.failure = new Promise((_, reject) => { host.rejectFailure = reject; });
+    void host.failure.catch(() => {});
     globalThis.observedAuthoring = host;
     const worker = new Worker("./python-worker.js", { type: "module" });
     worker.addEventListener("message", event => {
@@ -102,7 +117,7 @@ async function start(page, transportMode, preparedPlayback, staticReference, cau
     async function attach(descriptor, duration) {
       const ready = await host.execution.startSemanticExecution(descriptor, {
         authoringClient: host.authoring, transportMode, loopDurationSeconds: Math.max(1, duration),
-        initiallyPaused: preparedPlayback && !staticReference,
+        initiallyPaused,
       });
       const preview = document.createElement("section"); document.body.append(preview);
       host.controls = new PlaygroundPlaybackControls(host.execution, preview);
@@ -121,17 +136,17 @@ async function start(page, transportMode, preparedPlayback, staticReference, cau
     void host.run.then(async result => {
       if (host.registrations === 0) await attach(result.semanticExecution, result.duration);
       host.outcome = { status: "finished", duration: result.duration };
-    }).catch(error => { host.outcome = { status: "failed", error: String(error) }; });
-  }, { source: staticReference ? reference : causal ? causalSource : source, transportMode, preparedPlayback, staticReference, causal });
+    }).catch(error => { host.outcome = { status: "failed", error: String(error) }; host.rejectFailure(error); });
+  }, { source: sources[arm], transportMode, preparedPlayback: arm !== "ordinary", initiallyPaused: ["incremental", "causal", "held"].includes(arm) });
 }
 
 async function observeSource(page) {
   return page.evaluate(async () => {
     const h = observedAuthoring;
-    const state = h.attached ? await h.execution.state() : null;
+    const state = h.attached ? await Promise.race([h.execution.state(), h.failure]) : null;
     if (state) h.controls.observe(state);
     return { attached: h.attached, outcome: h.outcome, errors: h.errors, events: h.events, samples: h.samples, registrations: h.registrations,
-      ...(state ? { state, metrics: (await h.execution.metrics({ includeGpuIdentity: true })).metrics } : {}) };
+      ...(state ? { state, metrics: (await Promise.race([h.execution.metrics({ includeGpuIdentity: true }), h.failure])).metrics } : {}) };
   });
 }
 
@@ -147,6 +162,35 @@ async function untilSource(page, predicate) {
   assert.fail(`source observation deadline: ${encode(await observeSource(page))}`);
 }
 
+async function clickWhileFrozen(page, prefix, x) {
+  const before = await observeSource(page);
+  assert.equal(before.state.playing, false);
+  const capture = async name => {
+    const bytes = await page.locator("#scene").screenshot();
+    await writeFile(path.join(output, `${prefix}-${name}.png`), bytes);
+    return PNG.sync.read(bytes);
+  };
+  const baseline = await capture("before");
+  const rect = await page.locator("#scene").boundingBox();
+  await page.mouse.click(rect.x + x, rect.y + 200);
+  await untilSource(page, s => s.metrics.presentedFrames > before.metrics.presentedFrames + 1);
+  await page.waitForTimeout(120);
+  assert.ok(!(await capture("during")).data.equals(baseline.data), "click must animate while authored time is frozen");
+  // Cold GPU work and bounded interaction catch-up can delay completion.
+  const deadline = Date.now() + 10_000;
+  let restored;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    restored = await capture("after");
+    if (restored.data.equals(baseline.data)) break;
+  }
+  assert.ok(restored.data.equals(baseline.data), "click must restore exact pixels");
+  const after = await observeSource(page);
+  assert.equal(after.state.time, before.state.time);
+  assert.deepEqual(after.events, before.events); assert.deepEqual(after.samples, before.samples);
+  return { before, after };
+}
+
 await mkdir(output, { recursive: true });
 try {
   report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
@@ -160,44 +204,34 @@ try {
     });
     report.browserVersion = browser.version();
     for (const transportMode of ["transferable", "shared"]) {
-      const pictures = [];
-      for (const arm of ["ordinary", "incremental", "reference", "causal"]) {
+      const pictures = new Map();
+      for (const arm of ["ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
         const entry = { backend, transportMode, arm, status: "running", observations: [] };
         report.cases.push(entry);
         const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
         page.setDefaultTimeout(180_000); await cache.install(page.context());
         const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
+        const watchdog = setTimeout(async () => {
+          try {
+            const diagnostic = await page.evaluate(() => {
+              const h = observedAuthoring;
+              return { attached: h.attached, outcome: h.outcome, errors: h.errors, events: h.events, samples: h.samples,
+                controls: { ...document.querySelector(".playback-controls")?.dataset } };
+            });
+            await writeFile(path.join(output, `${backend}-${transportMode}-${arm}-pending.json`), encode(diagnostic));
+            await page.screenshot({ path: path.join(output, `${backend}-${transportMode}-${arm}-pending.png`) });
+          } catch (error) { process.stderr.write(`diagnostic failed: ${error}\n`); }
+        }, 30_000);
         try {
-          await start(page, transportMode, arm !== "ordinary", arm === "reference", arm === "causal");
-          if (arm === "incremental" || arm === "causal") {
-            const captureClick = async name => {
-              const bytes = await page.locator("#scene").screenshot();
-              await writeFile(path.join(output, `${backend}-${transportMode}-click-${name}.png`), bytes);
-              return PNG.sync.read(bytes);
-            };
+          process.stdout.write(`starting ${backend}/${transportMode}/${arm}\n`);
+          await start(page, transportMode, arm);
+          if (["incremental", "causal", "held"].includes(arm)) {
             const paused = await untilSource(page, s => s.attached && s.metrics?.ready && s.metrics.presentedFrames > 0 && !s.metrics.needsPresent);
             assert.equal(paused.state.time, 0); assert.equal(paused.state.playing, false);
             assert.equal(paused.state.sourcePlaybackControllable, true);
             assert.deepEqual(paused.events, ["start"]);
-            if (arm === "causal") {
-              const baseline = await captureClick("before");
-              const rect = await page.locator("#scene").boundingBox();
-              await page.mouse.click(rect.x + 400, rect.y + 200);
-              await untilSource(page, s => s.metrics.presentedFrames > paused.metrics.presentedFrames + 1);
-              await page.waitForTimeout(120);
-              const highlighted = await captureClick("during");
-              assert.ok(!highlighted.data.equals(baseline.data), "click must animate while authored time is paused");
-              // Interaction catch-up is bounded; cold GPU work may delay its
-              // ticks. Observe actual restoration instead of assuming scanout
-              // exactly 500 ms after the DOM event.
-              const restoreDeadline = Date.now() + 10_000;
-              let restored;
-              while (Date.now() < restoreDeadline) {
-                await page.waitForTimeout(100);
-                restored = await captureClick("after");
-                if (restored.data.equals(baseline.data)) break;
-              }
-              assert.ok(restored.data.equals(baseline.data), "paused click must restore exact pixels");
+            if (arm === "causal" || arm === "held") {
+              entry.pausedClick = await clickWhileFrozen(page, `${backend}-${transportMode}-${arm}-paused-click`, 400);
             } else await page.waitForTimeout(220);
             const idle = await observeSource(page);
             assert.equal(idle.state.time, 0); assert.deepEqual(idle.samples, paused.samples);
@@ -213,6 +247,15 @@ try {
             assert.equal(frozen.metrics.presentedFrames, mid.metrics.presentedFrames, "paused source should settle without new pictures");
             entry.pause = { initial: paused, interaction: idle, mid, frozen };
             await page.getByRole("button", { name: "Play animation", exact: true }).click();
+            if (arm === "held") {
+              const rect = await page.locator("#scene").boundingBox();
+              await page.mouse.move(rect.x + 600, rect.y + 200);
+              await page.mouse.down();
+              await page.mouse.move(rect.x + 625, rect.y + 200);
+              entry.heldContact = await observeSource(page);
+              assert.equal(entry.heldContact.outcome, null, "gesture starts before source completion");
+              process.stdout.write(`held ${backend}/${transportMode} at ${entry.heldContact.state.time}\n`);
+            }
           }
           // Async predicates must be awaited here, not passed as truthy Promises
           // to Playwright's waitForFunction.
@@ -235,15 +278,32 @@ try {
           assert.equal(observed.metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
           assert.equal(observed.metrics.transportMode, transportMode);
           entry.gpu = classifyRendererGpuIdentity(observed.metrics.rendererGpuIdentity, backend);
-          if (arm !== "reference") {
+          if (!["reference", "causal-reference", "held-reference"].includes(arm)) {
             assert.equal(observed.registrations, 1);
-            assert.deepEqual(observed.events, arm === "causal" ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"]);
+            assert.deepEqual(observed.events, ["causal", "held"].includes(arm) ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"]);
             assert.equal(observed.state.sourceExecution, "observed");
             assert.equal(observed.state.replaySupported, false);
             assert.notEqual(observed.state.preparedPlayback, true);
             assert.equal(observed.state.time, 2);
             assert.equal(observed.state.sourcePlaybackControllable, false);
-            if (arm !== "causal") assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
+            if (!["causal", "held"].includes(arm)) assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
+          }
+          if (arm === "causal" || arm === "held") {
+            const rect = await page.locator("#scene").boundingBox();
+            if (arm === "causal") {
+              await page.mouse.move(rect.x + 600, rect.y + 200);
+              await page.mouse.down();
+            }
+            await page.mouse.move(rect.x + 650, rect.y + 200);
+            await page.mouse.up();
+            await untilSource(page, s => !s.metrics.needsPresent && s.metrics.bufferedDeltas === 0);
+            entry.completedClick = await clickWhileFrozen(page, `${backend}-${transportMode}-${arm}-completed-click`, arm === "held" ? 400 : 450);
+            entry.afterInput = await observeSource(page);
+            assert.equal(entry.afterInput.state.time, 2);
+            assert.deepEqual(entry.afterInput.events, ["start", "end", "cleanup"]);
+            assert.equal(entry.afterInput.metrics.gpuGeneration, observed.metrics.gpuGeneration);
+            assert.equal(entry.afterInput.metrics.rendererRebuilds, observed.metrics.rendererRebuilds);
+            assert.equal(entry.afterInput.metrics.presentedSession, observed.metrics.presentedSession);
           }
           await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const bytes = await page.locator("#scene").screenshot();
@@ -254,20 +314,22 @@ try {
           let bluePixels = 0;
           for (let i = 0; i < image.data.length; i += 4) if (image.data[i + 2] > image.data[i] + 30) bluePixels++;
           assert.ok(bluePixels > 100, "blank output cannot prove callback rendering");
-          if (arm !== "causal") pictures.push(image);
+          pictures.set(arm, image);
           assert.deepEqual(pageErrors, []);
           entry.status = "passed";
           process.stdout.write(`passed ${backend}/${transportMode}/${arm}\n`);
         } catch (error) { entry.status = "failed"; entry.error = String(error.stack ?? error); throw error; }
         finally {
+          clearTimeout(watchdog);
           await page.evaluate(() => { observedAuthoring.execution.terminate(); observedAuthoring.authoring.terminate(); }).catch(() => {});
           await page.close();
           await writeFile(path.join(output, "report.json"), encode(report));
         }
       }
-      for (const image of pictures.slice(0, 2)) {
-        assert.equal(image.width, pictures[2].width); assert.equal(image.height, pictures[2].height);
-        assert.ok(image.data.equals(pictures[2].data), `${backend}/${transportMode} observed final pixels must equal the static reference`);
+      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"]]) {
+        const image = pictures.get(actual), expected = pictures.get(reference);
+        assert.equal(image.width, expected.width); assert.equal(image.height, expected.height);
+        assert.ok(image.data.equals(expected.data), `${backend}/${transportMode}/${actual} final pixels must equal the static reference`);
       }
       const entry = { backend, transportMode, arm: "original-always-redraw-gallery", status: "running" };
       report.cases.push(entry);
