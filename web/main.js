@@ -1104,10 +1104,9 @@ async function runScene() {
         selection_generation: runToken.selectionGeneration,
         run_generation: runToken.runGeneration,
       } }), source);
-      // Exercise the existing worker option through the normal gallery lifecycle.
-      // This qualification hook is not a user mode switch. #2211 owns removal
-      // of the temporary gate and old branch after the default-cutover gates pass.
-      const { preparedPlayback = false, preparationLookaheadSeconds = 1 } =
+      // Rust admits incremental playback or preserves the original source path.
+      // The hook keeps live/prepared comparisons on this same viewer lifecycle.
+      const { preparedPlayback = true, preparationLookaheadSeconds = 1 } =
         await runPlaygroundTestHook("authoringRunOptions", {
           exampleId: example.id, runGeneration: runToken.runGeneration,
         }) ?? {};

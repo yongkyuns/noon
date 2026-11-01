@@ -47,12 +47,13 @@ test("optimized identity rejects debug, no-opt and unrelated feature overrides",
   assert.throws(() => validateBuildEnvironment({}, "replay"));
 });
 
-test("release fixture export is opt-in without enabling renderer diagnostics", async () => {
+test("production playback keeps replay fixtures and renderer diagnostics opt-in", async () => {
   const cargo = await source("crates/noon-web/Cargo.toml");
   const defaults = cargo.match(/^default = \[(.*)\]$/m)?.[1];
   assert.equal(typeof defaults, "string");
   assert.match(defaults, /"renderer"/);
-  assert.doesNotMatch(defaults, /"(?:renderer-smoke|replay-smoke|prepared-prefix)"/);
+  assert.match(defaults, /"prepared-prefix"/);
+  assert.doesNotMatch(defaults, /"(?:renderer-smoke|replay-smoke)"/);
   assert.match(cargo, /^replay-smoke = \[\]$/m);
   assert.match(cargo, /^renderer-smoke = \[[^\n]*"renderer"[^\n]*\]$/m);
   const rust = await source("crates/noon-web/src/determinism.rs");

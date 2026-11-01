@@ -58,6 +58,7 @@ test("open history permits controls without inventing a final duration or a perc
   assert.equal(f.input.type, "number");
   assert.equal(f.input.max, "4");
   assert.match(f.status.textContent, /Prepared before 4 s · total unknown/);
+  assert.equal(f.status.title, f.status.textContent);
   assert.equal(f.controls.element.dataset.durationKnown, "false");
   assert.equal(f.toggle.textContent, "Play");
   f.seek(2.5); await flush();

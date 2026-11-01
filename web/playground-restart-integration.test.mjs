@@ -111,6 +111,7 @@ function navigationFixture() {
   const window = new EventTarget();
   const diagnostics = { hidden: false };
   const context = {
+    __NOON_PLAYGROUND_TEST_HOOKS__: { authoringRunOptions: () => ({ preparedPlayback: false }) },
     window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,
@@ -328,7 +329,7 @@ test("delayed startup options admit one authoring request and unchanged Runs joi
     await f.waitForAuthoring(run);
     assert.equal(f.requests.length, 1);
     assert.equal(f.requests[0].source, "source");
-    assert.equal(f.requests[0].options.preparedPlayback, false);
+    assert.equal(f.requests[0].options.preparedPlayback, true);
     assert.equal(f.requests[0].options.preparationLookaheadSeconds, 1);
     assert.equal(f.requests[0].sourceContext.playground.run_generation, payload.runGeneration);
   } finally {

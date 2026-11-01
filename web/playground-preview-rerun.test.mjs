@@ -28,7 +28,7 @@ function deferred() {
 // Exercise the actual Run/retirement functions with an already-completed source
 // that is replaying. No input/edit event occurs before this explicit Run.
 function fixture({ retire = () => Promise.resolve(), started = true, prepared = false,
-  authoringRunOptions } = {}) {
+  authoringRunOptions = () => ({ preparedPlayback: false }) } = {}) {
   const events = [], errors = [], authorRequests = [];
   const retireEntered = deferred();
   const failure = new Error("second run fails");
@@ -166,16 +166,6 @@ test("Run waits for the retire acknowledgement and concurrent requests join the 
   assert.equal(f.context.sceneRunPromise, null);
 });
 
-
-test("ordinary Run without qualification hooks preserves worker defaults", async () => {
-  const f = fixture();
-  assert.equal(Object.hasOwn(f.context, "__NOON_PLAYGROUND_TEST_HOOKS__"), false);
-  assert.equal((await f.context.runScene()).error, f.failure);
-  assert.equal(f.authorRequests.length, 1);
-  assert.equal(f.authorRequests[0].options.preparedPlayback, false);
-  assert.equal(f.authorRequests[0].options.preparationLookaheadSeconds, 1);
-  assert.deepEqual(f.errors, [f.failure]);
-});
 
 test("concurrent Runs await one options hook and one retire before authoring", async () => {
   const options = deferred(), retired = deferred();
