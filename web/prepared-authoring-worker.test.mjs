@@ -11,6 +11,7 @@ const section = (start, end) => {
 };
 const lifecycle = [
   section("function registerSemanticExecution", "function continuationEvent"),
+  section("function continuationEvent", "function failContinuation("),
   section("function failContinuation(", "function isContinuationControl"),
   section("function isContinuationControl", "function retireSemanticContext"),
   section("function retireSemanticContext", "async function prepareAuthoringDependencies"),
@@ -28,7 +29,7 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true] } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -49,6 +50,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     free() { alive(); freed = true; counters.freed++; events.push("free"); },
   };
   const context = {
+    beginObservedPreparedSource() { return observed; },
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
     createFinishedPreparedExecutionPlayer(session) { assert.equal(session, 3); events.push("static-reader"); return player; },
     retireExecutionSource() { events.push("retire-source"); },
@@ -58,15 +60,20 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   let endpoint;
   const attachSemanticEngine = async (_context, _request, onStop, ...args) => {
     assert.equal(_context, context);
-    assert.deepEqual(args.slice(0, 5), [null, null, null, null, null]);
-    assert.equal(args[5].player, player);
+    if (!observed) {
+      assert.deepEqual(args.slice(0, 5), [null, null, null, null, null]);
+      assert.equal(args[5].player, player);
+    }
     let stopped = false;
     endpoint = {
+      startContinuation(generation) { events.push("observe-segment"); assert.equal(generation, args[1].generation); },
+      async publishContinuationResult(generation) { assert.equal(generation, args[1].generation); events.push("final-publication"); },
       sourcePrefixDelivered() { assert.equal(stopped, false); counters.delivered++; args[5].wakeSource(); },
       stop() {
         if (stopped) return;
         stopped = true;
-        events.push("stop"); onStop(); player.stopSourcePreparation(); player.free();
+        events.push("stop"); onStop();
+        if (!observed) { player.stopSourcePreparation(); player.free(); }
       },
     };
     if (attachGate) await attachGate.promise;
@@ -88,6 +95,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     }
     ${lifecycle}
     return { registerSemanticExecution, failAuthoringWorker, awaitSemanticContinuation, handleRequest, handleContinuationControl,
+      completeContinuation, requestContinuationCallback, completeContinuationCallback,
       failContinuation, contexts: semanticContexts, run: () => activeAuthoringRun,
       fatal: () => fatalAuthoringFailure };
   `)(options => createPreparedInterpreterDriver({ ...options,
@@ -281,17 +289,82 @@ test("first-segment rejection fails attachment and source without retrying compl
   assert.equal(h.contexts.size, 0);
 });
 
-test("prepared attachment rejects replacement and callbacks before completing its first segment", async () => {
+test("initial observed admission relays callbacks to the original stack without creating history", async () => {
+  const h = host({ observed: true });
+  let invocations = 0, callbacks = 0, statements = 0;
+  const done = h.start(async api => {
+    invocations++;
+    const event = JSON.parse(await api.awaitSemanticContinuation(h.context));
+    assert.equal(event.kind, "callback");
+    callbacks++;
+    const complete = await api.completeContinuationCallback(h.context, JSON.stringify(event.phase.token), "{\"patches\":[]}");
+    assert.equal(JSON.parse(complete).kind, "complete");
+    statements++;
+    assert.equal(JSON.parse(await api.awaitSemanticContinuation(h.context)).kind, "complete");
+    statements++;
+    return h.result();
+  });
+  await microtasks();
+  const initial = h.tick();
+  await h.attach({ initiallyPaused: false, callbackSessionId: 9 });
+  assert.equal(h.errors.length, 0);
+  const continuation = h.run().continuation;
+  const phase = { token: { sequence: 7 } };
+  assert.equal(await h.requestContinuationCallback(continuation, phase, {}), '{"patches":[]}');
+  await initial;
+  h.completeContinuation(continuation, continuation.generation);
+  await microtasks();
+  const second = h.tick();
+  h.completeContinuation(continuation, continuation.generation);
+  await second; await done;
+  assert.equal(invocations, 1); assert.equal(callbacks, 1); assert.equal(statements, 2);
+  assert.equal(h.counters.initial, 0); assert.equal(h.counters.segments, 0);
+  assert.equal(h.counters.terminal, 0); assert.equal(h.counters.adopted, 0);
+  assert.deepEqual(h.events, ["observe-segment", "final-publication"]);
+  assert.equal(h.tasks.size, 0);
+});
+
+test("prepared attachment rejects replacement and invalid transport before completing its first segment", async () => {
   const h = host();
   const done = h.start(async api => { await api.awaitSemanticContinuation(h.context); return h.result(); });
   await microtasks();
   await h.attach({ replaceExistingEndpoint: true });
-  await h.attach({ callbackSessionId: 9 });
   await h.attach({ pacing: "external_samples" });
   await h.attach({ session: 0x100000000 });
   assert.equal(h.counters.initial, 0);
-  assert.equal(h.errors.length, 4);
+  assert.equal(h.errors.length, 3);
   await h.cancel(); await done;
+});
+
+test("failure in the original observed stack retires its endpoint without freeing a nonexistent reader", async () => {
+  const h = host({ observed: true });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    throw new Error("original callback failed");
+  });
+  await microtasks(); const initial = h.tick();
+  await h.attach({ initiallyPaused: false });
+  const continuation = h.run().continuation;
+  const callback = h.requestContinuationCallback(continuation, { token: { sequence: 1 } }, {});
+  const rejected = assert.rejects(callback, /Python authoring continuation failed/);
+  await initial; await done; await rejected;
+  assert.equal(h.contexts.size, 0);
+  assert.equal(h.counters.freed, 0); assert.equal(h.counters.stopped, 0);
+  assert.deepEqual(h.events, ["stop", "retire-source"]);
+  assert.match(String(h.errors[0].error), /original callback failed/);
+});
+
+test("cancellation during observed attachment stops a late endpoint without reviving its source", async () => {
+  const gate = deferred(), h = host({ observed: true, attachGate: gate });
+  let resumed = false;
+  const done = h.start(async api => { await api.awaitSemanticContinuation(h.context); resumed = true; return h.result(); });
+  await microtasks(); const initial = h.tick();
+  const attachment = h.attach({ initiallyPaused: false });
+  await microtasks(); await h.cancel(); await done;
+  gate.resolve(); await attachment; await initial;
+  assert.equal(resumed, false); assert.equal(h.contexts.size, 0);
+  assert.equal(h.events.filter(event => event === "stop").length, 1);
+  assert.equal(h.counters.freed, 0); assert.equal(h.counters.initial, 0);
 });
 
 for (const trapAt of ["initial", "reader", "segment", "terminal", "reserve", "adopt", "demand"]) {

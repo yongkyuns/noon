@@ -46,8 +46,17 @@ export function createPreparedInterpreterDriver(options) {
         phase = "preparing";
         // Includes initial asynchronous canvas creation when necessary. The host
         // must observe the signal before publishing after an asynchronous wait.
-        await prepareSegment(barrier.context, abort.signal);
+        const event = await prepareSegment(barrier.context, abort.signal);
         if (failed || pending !== barrier) return;
+        // Observed execution services this same interpreter suspension through
+        // its existing callback/completion protocol. Do not manufacture complete.
+        if (event !== undefined) {
+          if (typeof event !== "string") throw new TypeError("observed continuation event must be a string");
+          pending = null;
+          phase = "running";
+          barrier.resolve(event);
+          return;
+        }
         barrier.prepared = true;
       }
       const needed = demand();
