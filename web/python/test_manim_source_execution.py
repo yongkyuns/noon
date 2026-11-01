@@ -328,6 +328,44 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "RasterImage.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_effect_showcases_with_sections_use_portable_continuations(self):
+        examples = Path(__file__).with_name("examples")
+        for filename, scene_name in (
+            ("showcase_wave_interference.py", "WaveInterference"),
+            ("showcase_editorial_cover.py", "EditorialCover"),
+        ):
+            with self.subTest(filename=filename):
+                _, pairs = compile_authoring_source(examples.joinpath(filename).read_text(), filename=filename)
+                self.assertEqual(len(pairs), 1)
+                original, portable = next(iter(pairs.items()))
+                self.assertEqual(original.co_qualname, scene_name + ".construct")
+                self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_section_overrides_cannot_hide_uncompiled_barriers(self):
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertIs(methods.get("next_section"), noon.Scene.next_section)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        scene.next_section = lambda *args: scene.wait(1)
+        self.assertFalse(has_portable_scene_methods(scene, **methods))
+
+        class Override(noon.Scene):
+            def next_section(self, *args):
+                return self.wait(1)
+
+        class Descriptor(noon.Scene):
+            @property
+            def next_section(self):
+                raise AssertionError("admission invoked authored descriptor")
+
+        for scene_type in (Override, Descriptor):
+            with self.subTest(scene_type=scene_type):
+                self.assertFalse(has_portable_scene_methods(object.__new__(scene_type), **methods))
+
     def test_zoomed_scene_gallery_uses_portable_continuation(self):
         source = Path(__file__).with_name("examples").joinpath("zoomed_scene.py").read_text()
         _, pairs = compile_authoring_source(source, filename="zoomed_scene.py")

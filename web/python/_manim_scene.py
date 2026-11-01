@@ -909,6 +909,7 @@ def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
         "add_foreground_mobjects": _base.Scene.add_foreground_mobjects,
         "on_click": _base.Scene.on_click,
         "set_drag_targets": _base.Scene.set_drag_targets,
+        "next_section": _base.Scene.next_section,
     }
     # Keep this conservative and descriptor-safe, like the base-method
     # admission below.  The source compiler admits direct scene calls from its
