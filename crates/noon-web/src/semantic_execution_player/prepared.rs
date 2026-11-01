@@ -8,6 +8,14 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
 }
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn begin_observed_prepared_source(&mut self) -> Result<bool, AuthoringFailure> {
+        self.live_segment()?;
+        self.session
+            .begin_observed_prepared_source()
+            .map(|requirement| requirement.is_some())
+            .map_err(prefix_error)
+    }
+
     pub(crate) fn validate_prepared_publisher(
         &self,
         publisher: &PrefixPublisher,
@@ -21,9 +29,24 @@ impl SemanticExecutionPlayer {
     /// This does not resume source, publish a renderer delta or authorize input.
     /// A rejected source domain leaves its pending segment at the original time.
     pub(crate) fn live_prepare_segment(&mut self) -> Result<f64, AuthoringFailure> {
-        self.session
-            .validate_prepared_source_domain()
-            .map_err(prefix_error)?;
+        self.live_prepare_prefix_segment(None)
+    }
+
+    pub(crate) fn live_prepare_prefix_segment(
+        &mut self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<f64, AuthoringFailure> {
+        if let Some(requirement) = self
+            .session
+            .preflight_prepared_source(publisher)
+            .map_err(prefix_error)?
+        {
+            return Err(AuthoringFailure::new(
+                "unsupported_domain",
+                "prepared.execution_required",
+                format!("source requires observed execution: {requirement:?}"),
+            ));
+        }
         let segment = self.live_segment()?;
         self.live_advance_segment_to(segment.end_time())?;
         self.live_complete_segment()?;

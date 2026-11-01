@@ -165,7 +165,8 @@ for (const [label, terminal] of [
 ]) {
   test(`prepared completion rejects ${label} without promoting source state`, async () => {
     const f = completionFixture({ terminal });
-    await assert.rejects(f.run(), /no matching adopted terminal history/);
+    await assert.rejects(f.run(), label === "different endpoint profile"
+      ? /does not match its original observed endpoint/ : /no matching adopted terminal history/);
     assert.deepEqual(f.calls, [["state"]]);
   });
 }

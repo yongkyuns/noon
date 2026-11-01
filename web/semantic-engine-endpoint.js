@@ -341,6 +341,8 @@ export async function attachSemanticEngine(
       }
       return {
         type, time, playing: false, nextPatchSequence: "0", durationSeconds: null,
+        sourceExecution: "observed", replaySupported: false,
+        replayUnavailable: "source execution is not retained for replay",
         canUndoTranslationDrag: false,
       };
     }
@@ -357,7 +359,8 @@ export async function attachSemanticEngine(
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null
         ? { replaySupported: replayUnavailable === null, replayUnavailable }
-        : { durationSeconds: null }),
+        : { durationSeconds: null, sourceExecution: "observed", replaySupported: false,
+          replayUnavailable: "source execution is not retained for replay" }),
     };
   };
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {

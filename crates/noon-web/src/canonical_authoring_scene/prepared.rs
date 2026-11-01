@@ -4,6 +4,20 @@ use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
 impl CanonicalAuthoringScene {
+    /// Initial admission only: keep the original pending segment and player for
+    /// observed execution, releasing open history before any reader is created.
+    pub fn begin_observed_prepared_source(&mut self) -> Result<bool, AuthoringFailure> {
+        self.active_live_player()?.begin_observed_prepared_source()
+    }
+
+    pub(crate) fn prepare_prefix_segment(
+        &mut self,
+        publisher: &PrefixPublisher,
+    ) -> Result<f64, AuthoringFailure> {
+        self.active_live_player()?
+            .live_prepare_prefix_segment(Some(publisher))
+    }
+
     pub(crate) fn validate_prepared_publisher(
         &mut self,
         publisher: &PrefixPublisher,

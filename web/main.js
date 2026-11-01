@@ -677,7 +677,9 @@ async function ensureRuntimeReady({
       if (runToken !== null && !isCurrentRun(runToken)) {
         throw new Error("runtime attachment belongs to a superseded source run");
       }
-      if ((initialState.preparedPlayback === true) !== (semanticExecution.preparedPlayback === true)) {
+      if ((initialState.preparedPlayback === true && semanticExecution.preparedPlayback !== true) ||
+          (semanticExecution.preparedPlayback === true && initialState.preparedPlayback !== true &&
+           initialState.sourceExecution !== "observed")) {
         throw new Error("runtime playback profile does not match its source registration");
       }
 
@@ -1218,10 +1220,14 @@ async function runScene() {
         }
         if (semanticExecution.preparedPlayback === true) {
           result = await player.state();
-          if (result.preparedPlayback !== true || result.durationSeconds !== authored.duration) {
+          if (result.preparedPlayback === true && result.durationSeconds !== authored.duration) {
             throw new Error("prepared source completion has no matching adopted terminal history");
           }
-          // Do not seek, resume, replace the reader, or reconfigure its input.
+          if (result.preparedPlayback !== true &&
+              (result.sourceExecution !== "observed" || result.time !== authored.duration)) {
+            throw new Error("source completion does not match its original observed endpoint");
+          }
+          // Preserve the selected reader or original observed endpoint and input.
           // The final source result is not another presentation authority.
         } else {
           const replayExecution = {
@@ -1275,7 +1281,7 @@ async function runScene() {
       }
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
-      if (result.preparedPlayback !== true) await applyExampleInteraction(example);
+      if (result.preparedPlayback !== true && result.sourceExecution !== "observed") await applyExampleInteraction(example);
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-interaction-config");
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;

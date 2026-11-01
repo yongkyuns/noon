@@ -320,7 +320,6 @@ for (const explicit of [true, false]) test(`prepared reader refuses destructive 
 test("invalid prepared startup profiles reject before allocating a renderer", async () => {
   for (const options of [
     { preparedPlayback: "true", continuationGeneration: 1 },
-    { preparedPlayback: true, callbackSessionId: 4 },
     { preparedPlayback: true, continuationGeneration: 1, pacing: "external_samples" },
   ]) {
     const canvas = new FakeCanvas();

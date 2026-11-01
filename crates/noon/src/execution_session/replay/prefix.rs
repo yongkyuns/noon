@@ -45,7 +45,9 @@ impl ExecutionSession {
         }
     }
 
-    pub(crate) fn preflight_prepared_source(
+    /// Check the existing source scope and (when present) its delivered cursor
+    /// before completing a segment. Capability denial leaves execution untouched.
+    pub fn preflight_prepared_source(
         &self,
         publisher: Option<&PrefixPublisher>,
     ) -> Result<Option<SourceExecutionRequirement>, PrefixError> {
@@ -73,6 +75,22 @@ impl ExecutionSession {
         );
         self.runtime.discard_replay_retention();
         self.release_replay_slots();
+    }
+
+    /// Before creating any reader, retain this same source for observed execution
+    /// when preparation needs callbacks, input or another unsupported domain.
+    /// This releases only open history; it never samples, completes or resets input.
+    pub fn begin_observed_prepared_source(
+        &mut self,
+    ) -> Result<Option<SourceExecutionRequirement>, PrefixError> {
+        if self.runtime.replay_is_sealed() {
+            return Err(PrefixError::NotReady);
+        }
+        let requirement = self.preflight_prepared_source(None)?;
+        if requirement.is_some() {
+            self.release_prepared_source_history();
+        }
+        Ok(requirement)
     }
 
     /// Pure completed-prefix admission remains separate from observed execution.

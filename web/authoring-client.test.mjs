@@ -113,9 +113,9 @@ test("prepared continuation metadata permits initial pause and prevents source r
     worker.emit("message", workerMessage("semantic_execution_attached", { requestId: request.requestId }));
     await attached;
     for (const override of [{ replaceExistingEndpoint: true }, { continuationGeneration: null },
-      { callbackSessionId: 2 }, { pacing: "external_samples" }]) {
+      { pacing: "external_samples" }]) {
       await assert.rejects(client.attachSemanticExecution("prepared", control.port1, render.port1,
-        { ...options, ...override }), /reattach|replace|without Python callbacks/);
+        { ...options, ...override }), /reattach|replace|realtime pacing/);
     }
     assert.equal(worker.messages.length, 2);
     worker.emit("message", workerMessage("result", { requestId: 0,
@@ -141,14 +141,13 @@ test("preparation metadata cannot cross a different source run mode", async () =
   }
 });
 
-test("prepared descriptors preserve optional continuation identity and reject required callbacks", () => {
+test("prepared descriptors retain the callback identity for Rust source admission", () => {
   const descriptor = { context_id: "context", continuation_generation: 1, prepared_playback: true };
   assert.deepEqual(validateSemanticExecutionDescriptor(descriptor), {
     contextId: "context", continuationGeneration: 1, preparedPlayback: true,
   });
-  for (const change of [{ prepared_playback: "true" }, { callback_session_id: 4 }]) {
-    assert.throws(() => validateSemanticExecutionDescriptor({ ...descriptor, ...change }), /boolean|without Python callbacks/);
-  }
+  assert.equal(validateSemanticExecutionDescriptor({ ...descriptor, callback_session_id: 4 }).callbackSessionId, 4);
+  assert.throws(() => validateSemanticExecutionDescriptor({ ...descriptor, prepared_playback: "true" }), /boolean/);
 });
 
 test("ready exposes a validated immutable build identity across the worker boundary", async () => {
